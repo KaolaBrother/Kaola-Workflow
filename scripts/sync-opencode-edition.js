@@ -153,7 +153,7 @@ function renderAgent(canonContent, agentName) {
   const hasBash = toolSet.has('bash');
 
   const lines = ['---'];
-  lines.push('description: ' + (fm.description || ''));
+  lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
   lines.push('mode: subagent');
   // No model field: standard tier inherits opencode.json "model"; reasoning tier
   // is resolved by the opencode.json agent.<role>.model override. Keeping generated
@@ -170,7 +170,9 @@ function renderAgent(canonContent, agentName) {
   // planner ships the "Re-derive" prose only). Other agents are verbatim (rewriteClaudeScriptPaths
   // is a no-op when the patterns are absent). Applied to the RENDERED body so canonical agents/*.md
   // are never touched (additive D-530-02); A6 parity holds because both sides go through renderAgent.
-  const bodyText = rewriteClaudeScriptPaths(body).trim().replace(/\s+$/, '');
+  // #609: also rewrite B2 Claude model-noun prose ("Opus"/"Sonnet" used as if they were THIS
+  // runtime's models) to neutral tier vocabulary — same additive-generation-only discipline.
+  const bodyText = rewriteClaudeModelNouns(rewriteClaudeScriptPaths(body)).trim().replace(/\s+$/, '');
   const suffix = opencodeAgentSuffix(agentName);
   lines.push(suffix ? bodyText + '\n' + suffix.replace(/\s+$/, '') : bodyText);
   return lines.join('\n') + '\n';
@@ -229,6 +231,42 @@ function rewriteClaudeScriptPaths(text) {
     /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
     '(prefer `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts`, then `./scripts`)'
   );
+  return text;
+}
+
+// Rewrite Claude model-NOUN prose (issue #609, the opencode twin of #537's codex companion).
+// Two vocabularies exist in canonical bodies: B1 — the closed plan `model`-column tier tokens
+// (`{opus, sonnet}`, always lowercase and backtick-wrapped, e.g. the workflow-planner's "Model
+// assignment" guidance and the frozen-plan example row) — the portable cross-edition contract,
+// untouched here. B2 — "Opus"/"Sonnet" used as descriptive prose AS IF they were this runtime's
+// actual models (e.g. "The Opus orchestrator", "a separate Sonnet role") — wrong on opencode,
+// which resolves effort centrally via reasoning-EFFORT VARIANTS (mapTier), never a Claude model
+// name. Each pattern below targets one exact B2 noun-phrase shape (never a blanket `/Opus/`
+// or `/Sonnet/`, so the lowercase B1 tokens are never at risk); replacement text never
+// reintroduces "Opus"/"Sonnet", so repeated application is a no-op (idempotent). Applied to BOTH
+// agent bodies/descriptions (via renderAgent) and command bodies (via transformCommandBody) —
+// canonical sources are NEVER touched (additive D-530-02), only the generated outputs.
+function rewriteClaudeModelNouns(text) {
+  // "Reasoning-class (Opus)" / "reasoning-class (Opus)" — synthesizer's description + floor note
+  // (case-preserving on the leading letter so both the frontmatter and body forms rewrite cleanly).
+  text = text.replace(/\b([Rr])easoning-class \(Opus\)/g, (m, first) => first + 'easoning-tier (top effort variant)');
+  // "reasoning-class **Opus**-floor `synthesizer`" — plan-run's merge-conflict repair prose
+  // (whitespace-flexible \s+ so the mid-sentence line wrap still matches).
+  text = text.replace(/reasoning-class\s+\*\*Opus\*\*-floor/g, 'reasoning-tier-floor');
+  // "Opus orchestrator" — workflow-planner + contractor both use this exact noun phrase.
+  text = text.replace(/\bOpus orchestrator\b/g, 'reasoning-tier orchestrator');
+  // "separate Sonnet role" — contractor's hard-boundary heading prose.
+  text = text.replace(/\bseparate Sonnet role\b/g, 'separate standard-tier role');
+  // "stay on **Sonnet** even under" / "never promoted to Opus" — contractor's floor-pin bullet.
+  text = text.replace(/\bstay on \*\*Sonnet\*\* even under\b/g, 'stay on the **standard tier** even under');
+  text = text.replace(/\bnever promoted to Opus\b/g, 'never promoted to the reasoning tier');
+  // "Opus front end" — workflow-next's router-rules prose.
+  text = text.replace(/\bOpus front end\b/g, 'reasoning-tier front end');
+  // "**`workflow-planner`** (Opus)" / "**`workflow-planner`** subagent (Opus)" — adapt's two
+  // Phase-0 mentions (one bare, one via the word "subagent" — both collapse to the same form).
+  text = text.replace(/\*\*`workflow-planner`\*\*( subagent)? \(Opus\)/g, '**`workflow-planner`**$1 (reasoning tier)');
+  // "belongs on Sonnet per CLAUDE.md model rules" — doc-updater's vendor local-override note.
+  text = text.replace(/\bbelongs on Sonnet per\b/g, 'belongs on the standard tier per');
   return text;
 }
 
@@ -359,6 +397,9 @@ function transformCommandBody(body) {
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped above) is
   // rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text);
+  // #609: rewrite B2 Claude model-noun prose ("Opus"/"Sonnet" used as if they were THIS runtime's
+  // models) to neutral tier vocabulary — the command-body twin of the renderAgent rewrite above.
+  text = rewriteClaudeModelNouns(text);
   return text;
 }
 
@@ -800,7 +841,7 @@ if (require.main === module) main();
 
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderAdaptiveConfig, renderNeutralConfig,
-  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
+  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, rewriteClaudeModelNouns, OPENCODE_KAOLA_SCRIPT,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,
   higherProfileRoles, topTierRoles, standardTierRoles,
   parseModelProvider, detectInheritModel, buildAdaptOpts,

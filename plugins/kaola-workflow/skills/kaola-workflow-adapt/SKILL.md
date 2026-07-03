@@ -21,13 +21,15 @@ Each node is one row of the `## Nodes` table:
 - **role** must be in the installed library (the nine canonical roles + any
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
   an unknown role.
-- **model** (optional) — the planner-assigned tier `{opus|sonnet}` (no haiku). Assign `opus`
+- **model** (optional) — the planner-assigned tier token from the closed set `{opus|sonnet}` — the
+  two portable rank tokens translated to a per-spawn reasoning effort at dispatch (on Codex the
+  reasoning tier -> `xhigh`, the standard tier -> `high` on the configured model). Assign the reasoning tier
   to reasoning-bound nodes (architecture/design that constrains downstream work, adversarial gates on
-  high-risk changes, security review, root-cause of non-obvious bugs); `sonnet` to carry-out nodes
+  high-risk changes, security review, root-cause of non-obvious bugs); the standard tier to carry-out nodes
   (implementation against a spec, mechanical ports, docs, sweeps, evidence). When unsure, prefer
-  `sonnet` and strengthen the gate to `opus`. The plan tier beats the install profile. An out-of-vocab
+  the standard tier and strengthen the gate to the reasoning tier. The plan tier beats the install profile. An out-of-vocab
   cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a model; absent/`—`
-  falls back to the role-static model (on Codex, the parent session's reasoning effort — base profiles omit a pinned `model_reasoning_effort` and inherit the session).
+  falls back to the role-static effort (on Codex, the parent session's reasoning effort — base profiles omit a pinned `model_reasoning_effort` and inherit the session).
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
   instances of one role over pairwise-disjoint declared write sets — author N as wide as the
   subtasks are genuinely independent; `FANOUT_CAP` caps only *runtime concurrency*, not authored
@@ -143,7 +145,7 @@ When the issue is a **question without a settled answer** ("which approach?", "i
 ## Front end: claim + author (the `workflow-planner` agent role)
 
 The adaptive path opens by delegating to ONE subagent. **You MUST delegate the starting contract
-and the DAG authoring to the `workflow-planner` agent role** (Opus) — do NOT run the claim or author
+and the DAG authoring to the `workflow-planner` agent role** — do NOT run the claim or author
 the `## Nodes` table inline in this session. In Codex, delegate to the `workflow-planner` agent role when its
 profile is present at EITHER the project-local `.codex/agents/kaola-workflow/` path OR the global
 `~/.codex/agents/kaola-workflow/` path (the `--global` install target) — a global install satisfies

@@ -72,8 +72,8 @@ and must run from the main root, above.)
 ## Dispatch
 
 Reasoning effort and identity: the xhigh effort-variant profiles are retired — always
-delegate to the base `dispatch.agent_type` profile (= the node's role). The descriptor maps explicit
-planner tiers to per-spawn effort: `model: opus` -> `xhigh`, `model: sonnet` -> `high`; only an
+delegate to the base `dispatch.agent_type` profile (= the node's role). The descriptor maps the explicit
+planner tier RANK tokens (cross-edition ranks, not runtime model names) to per-spawn effort on this Codex runtime: `model: opus` -> `xhigh`, `model: sonnet` -> `high`; only an
 absent/blank model tier leaves `dispatch.codex_reasoning_effort` null and inherits the base
 profile/session default. Never append a max-effort profile suffix and never emit a variant-missing
 note.
@@ -294,7 +294,7 @@ consent ceremony REMAINS authorable: set `speculative_open_policy: consent` to r
   `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
   bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.
   Repair each first by its own recovery (re-dispatch the leg · `revert-overflow` · a reasoning-class
-  **Opus**-floor `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
+  (non-lowerable floor) `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
   the K-th failure escalate via `write-halt --reason merge_conflict`. Routed exactly like `test_thrash`
   (a schema constant the orchestrator applies — NO script counter on the adaptive path); the
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely

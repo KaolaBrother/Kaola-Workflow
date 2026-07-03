@@ -508,6 +508,15 @@ for (const file of initFiles) {
     file + ': injected ## Kaola-Workflow template must not use "phase file/artifact" durable-state framing (#572)');
 }
 
+// #609: the injected ## Kaola-Workflow template must FORBID vendor-model embellishment of the
+// role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md
+// files; a consumer block is read by EVERY runtime (Codex reads CLAUDE.md too), so a Claude model
+// noun there is a first-class cross-runtime leak. The generated section must stay runtime-neutral
+// (tier vocabulary), so the constraint sentence is pinned on all six workflow-init surfaces.
+for (const file of initFiles) {
+  assertIncludes(file, 'never by a vendor model name');
+}
+
 // #606: the Claude dispatch-posture config-audit line must be present in all three workflow-init
 // COMMAND surfaces (root + gitlab + gitea) — outside the KW-CLAUDE-TEMPLATE region, so this check
 // does not touch the initFiles SKILL entries (they stay byte-identical to their template blocks).
@@ -871,6 +880,47 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
         assert(false,
           rel + ':' + (i + 1) + ': PROVENANCE_BAN — provenance token "' + m[0] +
           '" must not appear in agent-facing prompt surfaces; see docs/conventions.md');
+      }
+    }
+  }
+}
+
+// B2 model-noun purge (#609, the codex twin of #537): Codex prompt surfaces (agents/*.toml,
+// config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as if
+// they were this runtime's models ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku",
+// "opus ~= 5x sonnet"). Those read as nonsense on the Codex runtime, where the plan tier tokens
+// translate at dispatch to a per-spawn reasoning_effort. The ONLY permitted opus/sonnet are the B1
+// plan model-column tier tokens phrased as ranks: the closed `{opus|sonnet}` set literal and the
+// `model: opus`/`model: sonnet` -> effort mapping tokens. Strip those, then any surviving
+// opus/sonnet/haiku is a B2 leak. (Claude-edition commands/*.md legitimately name models and are
+// out of scope — this validator does not scan them.)
+{
+  const B2_MODEL_NOUN = /\b(?:opus|sonnet|haiku)\b/i;
+  const scrubB1TierTokens = line => line
+    .replace(/\{opus\|sonnet\}/g, '')            // the closed model-column set literal (rank tokens)
+    .replace(/model:\s*(?:opus|sonnet)\b/g, ''); // the `model: opus`/`model: sonnet` effort-map tokens
+  const b2AgentFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+    .filter(f => f.endsWith('.toml'))
+    .map(f => pluginRoot + '/agents/' + f);
+  const b2SkillFiles = fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
+    .filter(e => e.isDirectory())
+    .map(e => pluginRoot + '/skills/' + e.name + '/SKILL.md')
+    .filter(f => exists(f));
+  const b2Surfaces = [
+    ...b2AgentFiles,
+    ...(exists(`${pluginRoot}/config/agents.toml`) ? [`${pluginRoot}/config/agents.toml`] : []),
+    ...b2SkillFiles
+  ];
+  for (const rel of b2Surfaces) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = scrubB1TierTokens(lines[i]).match(B2_MODEL_NOUN);
+      if (m) {
+        assert(false,
+          rel + ':' + (i + 1) + ': B2 model-noun "' + m[0] + '" — a Claude model name must not appear ' +
+          'as runtime-model prose on a Codex surface; use tier/effort vocabulary (only the B1 ' +
+          '`{opus|sonnet}` column-token set and the `model: opus`/`model: sonnet` effort mapping are ' +
+          'allowed). See docs/conventions.md.');
       }
     }
   }

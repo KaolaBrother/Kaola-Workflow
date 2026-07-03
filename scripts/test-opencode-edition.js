@@ -493,17 +493,22 @@ for (const target of emittedCommandTargets) {
 }
 
 // ---------------------------------------------------------------------------
-// S2 (issue #537): neutral tier labels — no Claude-tier-name leak at the opencode
-// DISPLAYED surface (Surface 1). The leak sources are generator string constants
-// ONLY — OPENCODE_BADGE_BLOCK's `mapTier` line, the three transformCommandBody
-// rewrite strings (the "opus-tier"/"sonnet-tier" labels), and opencodeAgentSuffix.
-// It is NOT the canonical command/agent bodies: their "Opus" MODEL-name mentions
-// (e.g. the workflow-planner "(Opus)" and the "Opus-floor synthesizer") are verbatim
-// canonical prose outside this node's write set, and NOT tier-label leaks. So the
-// no-leak check is SECTION-scoped to the badge block + the unambiguous opus-tier/
-// sonnet-tier rewrite markers (canonical prose never uses those) — the #534
-// no-over-broad-regex discipline. The canonical NODE_MODEL_TIERS {opus,sonnet}
-// stays the cross-edition internal token (untouched).
+// S2 (issue #537, narrowed by #609): neutral tier labels. Originally scoped to
+// generator string constants ONLY (OPENCODE_BADGE_BLOCK's `mapTier` line, the
+// transformCommandBody "opus-tier"/"sonnet-tier" rewrite markers, and
+// opencodeAgentSuffix) and explicitly TOLERATED Claude "Opus"/"Sonnet" MODEL-name
+// prose surviving from canonical bodies (e.g. the workflow-planner "(Opus)" and
+// the "Opus-floor synthesizer"). #609 added a pure rewriteClaudeModelNouns()
+// rewrite (applied in renderAgent + transformCommandBody) that purges those B2
+// sites at generation time, so this guard is now BODY-WIDE: it forbids the
+// capitalized proper-noun forms "Opus"/"Sonnet" ANYWHERE in a generated agent or
+// command file, not just inside the badge section or the rewrite-marker strings.
+// The check stays CASE-SENSITIVE and whole-word, so the B1 exemption — the closed
+// plan `model`-column tier tokens (the lowercase `` `opus` ``/`` `sonnet` ``
+// mentions in the workflow-planner's "Model assignment" guidance and the
+// frozen-plan example row) — is preserved automatically: the canonical
+// NODE_MODEL_TIERS {opus,sonnet} stays the cross-edition internal token
+// (untouched, and never capitalized).
 // ---------------------------------------------------------------------------
 {
   // Extract the `## Effort Variant Resolution` badge block (heading line through
@@ -547,6 +552,27 @@ for (const target of emittedCommandTargets) {
     'S2: workflow-planner opencodeAgentSuffix carries no Claude-tier-name (opus/sonnet) leak');
   assert(/reasoning tier|standard tier/i.test(suffix),
     'S2: workflow-planner opencodeAgentSuffix names tiers by role (neutral labels)');
+
+  // (d) #609: body-wide B2 sweep — the narrowed exemption. Every generated agent
+  // and command file must carry ZERO capitalized "Opus"/"Sonnet" proper-noun
+  // mentions (case-sensitive, whole-word), not just inside the badge section or
+  // the generator's own rewrite-marker strings. This is the check the ORIGINAL S2
+  // comment (above) used to explicitly tolerate failing on; rewriteClaudeModelNouns()
+  // (sync-opencode-edition.js) is what makes it pass now.
+  const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
+  const ocAgentRels = fs.readdirSync(sync.OUT_AGENT_DIR).filter(f => f.endsWith('.md')).map(f => '.opencode/agent/' + f);
+  const ocCommandRels = fs.readdirSync(sync.OUT_COMMAND_DIR).filter(f => f.endsWith('.md')).map(f => '.opencode/command/' + f);
+  for (const rel of [...ocAgentRels, ...ocCommandRels]) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(B2_MODEL_NOUN);
+      if (m) {
+        assert(false,
+          'S2 (#609): ' + rel + ':' + (i + 1) + ': Claude model noun "' + m[0] +
+          '" leaked into generated opencode prose (B2 — use reasoning-tier/standard-tier vocabulary; B1 lowercase `opus`/`sonnet` tier tokens are exempt)');
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
