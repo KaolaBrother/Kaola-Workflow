@@ -220,6 +220,19 @@ The `workflow-state.md` file contains several key blocks:
     age exceeds the threshold is classified `stale` (safe to resume as a leftover); a `claim_ts`
     within the threshold is `ambiguous` (prompt before overwriting a potential active co-tenant).
 
+  A fourth field in the same block, **`codex_dispatch_mode`** (issue #603), is **optional** —
+  written only when the startup surface (`cmdStartup`) receives `--codex-dispatch-mode`,
+  immediately after the three claim-time session fields above. The flag is value-validated
+  BEFORE any claim mutation via `resolveCodexDispatchModeFlag` (`kaola-workflow-claim.js`): the
+  legal set is exactly two literals, `v2-task-name` or `v1-thread-id`; any other value, or one
+  carrying a newline, refuses the claim with `invalid_codex_dispatch_mode` and zero mutation
+  (the same newline-injection fence as `worktree_path`/`branch`, via `assertNoNewline`). When
+  absent, the field is omitted entirely (byte-identical to pre-#603 state files) and the
+  adaptive dispatch-card builder (`resolveCodexDispatchMode` in `kaola-workflow-adaptive-node.js`)
+  falls back to the `KAOLA_CODEX_DISPATCH_MODE`/`CODEX_DISPATCH_MODE` environment override, then
+  to the `v1-thread-id` fail-closed default. Like the three fields above, it is written once at
+  claim time and never refreshed.
+
   `cmdStatus` annotates each active-folder item with a `lane_bucket` field (output of
   `classifyLane` from `kaola-workflow-classifier.js`). Four possible values, applied via a
   top-down precedence ladder (first match wins):
@@ -446,6 +459,25 @@ surface.
   content lives in the project's own committed repo, it survives both regeneration
   and plugin updates — unlike a hand-edit of the generated mirror (wiped on regen)
   or an edit of the shared `RULES_BLOCK` (leaks into every project).
+- `kaola-workflow/{project}/.cache/run-progress.json` (issue #605) is a **generated,
+  non-authoritative** snapshot of the frozen plan's `## Node Ledger`, written at the MAIN repo
+  root by `kaola-workflow-adaptive-node.js` after every successful ledger-mutating subcommand
+  (`open-next`, `open-ready`, `close-node`, `close-and-open-next`, `reconcile-running-set`,
+  `reopen-node`, `repair-node`, `write-halt`, `clear-halt`) — but only on a linked-worktree run
+  (the resolved `main_root` differs from the executing repo root); a serial in-repo run's ledger
+  is already root-visible, so the mirror is never written for it. Treat it exactly like
+  `ROADMAP.md`: a mirror, never a source, never hand-edited.
+- Schema: `{ plan_hash, updated_at, op, node_ledger: [{ id, role, status }], in_progress, all_done }`.
+  `node_ledger` preserves `## Node Ledger` row order (`role` looked up from `## Nodes`, `null` if
+  not found); `in_progress` is the subset of ids with `status: in_progress`; `all_done` is `true`
+  only when every row is `complete` or `n/a` in a non-empty ledger; `op` is the triggering
+  subcommand name; `plan_hash` (or `null`) lets a consumer detect staleness against the live
+  frozen plan.
+- The mirror is **write-only and fail-open**: no script ever reads it back to make a decision, and
+  a write failure never blocks or refuses the triggering node operation — it only adds a
+  `run_progress_mirror: "failed"` warn field to that operation's result envelope. It is absent
+  whenever no worktree is linked or before the first ledger-mutating op runs, and is removed with
+  the rest of the project's `.cache/` at finalize/archive (not separately preserved).
 
 ## Legacy Or Transitional State
 
