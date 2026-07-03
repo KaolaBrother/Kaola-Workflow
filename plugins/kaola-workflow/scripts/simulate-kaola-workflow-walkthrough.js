@@ -1179,6 +1179,59 @@ function testCodexDispatchPosture598() {
 }
 
 // ---------------------------------------------------------------------------
+// #611 AC6: MultiAgentV2 concurrency + wait-timeout bounds — extends the #598
+// dispatch-posture report above with the effective v2 slot budget and wait-timeout
+// knobs, version-guarded the same way. ATTESTATION-STYLE / NON-FATAL: every case
+// below must still exit 0 and must NEVER change the install's own exit code.
+// ---------------------------------------------------------------------------
+function testCodexMultiAgentV2Bounds611() {
+  const boundsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-611-bounds-home-'));
+  const boundsProj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-611-bounds-proj-'));
+  try {
+    const fresh = runInstallProfiles(boundsProj, { HOME: boundsHome });
+    assert(/status: ok/.test(fresh.stdout), '#611 AC6: existing "status: ok" output must be unchanged: ' + fresh.stdout);
+    // v2 not enabled by default -> the recommended-config note (documentation) is always
+    // printed, but no concrete width line (nothing to report yet).
+    assert(/multi_agent_v2:.*Recommended \[features\.multi_agent_v2\] config/.test(fresh.stdout),
+      '#611 AC6: fresh install must document the recommended [features.multi_agent_v2] config: ' + fresh.stdout);
+    assert(!/effective subagent width/.test(fresh.stdout),
+      '#611 AC6: v2 not enabled -> must NOT print a concrete effective-width line: ' + fresh.stdout);
+    assert(/0\.142\.5/.test(fresh.stdout), '#611 AC6: report must carry the version-guard note (0.142.5): ' + fresh.stdout);
+    assert(/\[agents\]\.max_threads.*cannot be set/.test(fresh.stdout),
+      '#611 AC6: note must state agents.max_threads is invalid under v2: ' + fresh.stdout);
+
+    // Enable v2 with explicit bounds ahead of the managed block, re-install (idempotent
+    // update) — the report must now print the concrete width + every configured bound.
+    const boundsConfigPath = path.join(boundsProj, '.codex', 'config.toml');
+    const beforeV2 = fs.readFileSync(boundsConfigPath, 'utf8');
+    fs.writeFileSync(boundsConfigPath, beforeV2 + '\n[features.multi_agent_v2]\nenabled = true\n'
+      + 'max_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\n'
+      + 'default_wait_timeout_ms = 60000\n');
+    const v2Install = runInstallProfiles(boundsProj, { HOME: boundsHome });
+    assert(/effective subagent width 2 \(max_concurrent_threads_per_session=3 \[config\]\)/.test(v2Install.stdout),
+      '#611 AC6: configured threads=3 must report width=2 (threads-1) and source=config: ' + v2Install.stdout);
+    assert(/min_wait_timeout_ms=1000/.test(v2Install.stdout), '#611 AC6: must report configured min_wait_timeout_ms: ' + v2Install.stdout);
+    assert(/max_wait_timeout_ms=1800000/.test(v2Install.stdout), '#611 AC6: must report configured max_wait_timeout_ms: ' + v2Install.stdout);
+    assert(/default_wait_timeout_ms=60000/.test(v2Install.stdout), '#611 AC6: must report configured default_wait_timeout_ms: ' + v2Install.stdout);
+
+    // Pure-function unit coverage on the exported deriveMultiAgentV2Bounds (same module the
+    // installer's REPORT step calls) — the observed default (absent key) case.
+    const mod = require(installProfilesScript);
+    const notApplicable = mod.deriveMultiAgentV2Bounds('[features]\nmulti_agent_v2 = false\n', false);
+    assert(notApplicable.max_concurrent_threads_per_session === null,
+      '#611: v2 disabled must derive max_concurrent_threads_per_session null, got ' + JSON.stringify(notApplicable));
+    const observedDefault = mod.deriveMultiAgentV2Bounds('[features]\nmulti_agent_v2 = true\n', true);
+    assert(observedDefault.max_concurrent_threads_per_session === 4 && observedDefault.effective_subagent_width === 3,
+      '#611: absent threads value must derive the observed default 4 (width 3), got ' + JSON.stringify(observedDefault));
+
+    console.log('testCodexMultiAgentV2Bounds611 (#611 AC6 installer report): PASSED');
+  } finally {
+    fs.rmSync(boundsProj, { recursive: true, force: true });
+    fs.rmSync(boundsHome, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // #571: global-first preflight gate — install once to ~/.codex, all repos pass.
 // ---------------------------------------------------------------------------
 function testCodexPreflight571() {
@@ -1833,6 +1886,7 @@ function main() {
     testCodexGeneratedPortSplit431();
     testCodexPreflight266();
     testCodexDispatchPosture598();
+    testCodexMultiAgentV2Bounds611();
     testCodexPreflight571();
     testCodexPreflight332();
     testCodexTaskMirror266();
