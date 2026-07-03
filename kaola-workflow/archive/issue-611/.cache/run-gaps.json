@@ -1,0 +1,10 @@
+{
+  "project": "issue-611",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n1-engine",
+      "count": 1
+    }
+  ]
+}

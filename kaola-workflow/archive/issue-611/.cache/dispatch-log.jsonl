@@ -1,0 +1,14 @@
+{"ts":"2026-07-03T16:48:53Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow"}
+{"ts":"2026-07-03T16:53:28Z","agent_type":"n1-engine","agent_id":"an1-engine-064f15eaa044eb5e","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T17:50:08Z","agent_type":"n1-engine","agent_id":"an1-engine-064f15eaa044eb5e","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T17:51:02Z","agent_type":"n4-adversarial","agent_id":"an4-adversarial-3757d4f1d544c2ea","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T18:11:39Z","agent_type":"n1-engine","agent_id":"an1-engine-064f15eaa044eb5e","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T18:22:15Z","agent_type":"n4-adversarial","agent_id":"an4-adversarial-3757d4f1d544c2ea","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T18:28:46Z","agent_type":"n2-preflight","agent_id":"an2-preflight-b388a6ca2c06175e","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T18:29:15Z","agent_type":"n3-prose","agent_id":"an3-prose-f8eeb61a218c0637","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T18:55:02Z","agent_type":"n5-docs-611","agent_id":"an5-docs-611-3df1950635d7da25","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T19:10:32Z","agent_type":"n6-review-611","agent_id":"an6-review-611-0690a9c85eb74b9d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T19:19:38Z","agent_type":"n6-review-611","agent_id":"an6-review-611-0690a9c85eb74b9d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T22:47:16Z","agent_type":"n6-review-611","agent_id":"an6-review-611-0690a9c85eb74b9d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":""}
+{"ts":"2026-07-03T22:51:17Z","agent_type":"contractor","agent_id":"a32effc66c5c76138","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-03T22:52:32Z","agent_type":"contractor","agent_id":"finalize-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-611"}

@@ -1,0 +1,1 @@
+{"result":"ok","closed":"n7-finalize","opened":null,"allDone":true,"taskTransitions":[{"id":"n7-finalize","status":"completed","ledger_status":"complete","reason":"close-and-open-next"}],"taskMirror":{"status":"updated","path":"kaola-workflow/issue-611/workflow-tasks.json"}}
