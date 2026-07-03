@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -1191,10 +1191,16 @@ function buildDispatch(nodeInfo, context) {
     codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model),
     // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
-    // effort variant (opus→top, sonnet→second) when ctx.opencode_provider is set (opencode
+    // effort variant (reasoning→top, standard→second) when ctx.opencode_provider is set (opencode
     // runtime). null/absent provider → role_default (the agent's configured variant wins).
     ...dispatchEffortOpencode(nodeInfo.model, ctx.opencode_provider),
   };
+  // #609/#610: the runtime-native display for the node's model, so a dispatch-card echo reads natively on
+  // every runtime (claude alias / codex effort phrase / opencode variant phrase) instead of a Claude noun.
+  // Conditionally attached (like goal_line/leg_path): null only when nodeInfo.model resolves to no tier (a
+  // model-less role / a genuinely untiered direct call) ⇒ that descriptor stays byte-identical to pre-#610.
+  const nodeModelDisplay = modelDisplay(nodeInfo.model);
+  if (nodeModelDisplay) d.model_display = nodeModelDisplay;
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
   }
@@ -1210,6 +1216,22 @@ function buildDispatch(nodeInfo, context) {
     d.leg_branch = String(ctx.leg_branch);
   }
   return d;
+}
+
+// #609/#610: the advisory frontier/newly-ready preview descriptor (orient's frontier, the #472 read-
+// frontier, the top-up newlyReady lists). Carries the runtime-native tier display alongside the raw
+// `model` echo so a Codex/opencode narrative echoing a preview reads natively. model_display is
+// conditionally attached (like the dispatch card): absent when the node has no explicit tier, so an
+// untiered preview list is byte-identical to pre-#610. Ignores map's index/array args (uses only n).
+function frontierNode(n) {
+  const md = modelDisplay(n.model);
+  return {
+    id: n.id,
+    role: n.role,
+    model: n.model,
+    ...(md ? { model_display: md } : {}),
+    declared_write_set: n.declared_write_set,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1708,7 +1730,7 @@ function runOrient(opts) {
     // #434: present only when an in_progress node needs re-dispatch (absent or incomplete evidence).
     ...(requires_redispatch ? { requires_redispatch: true } : {}),
     frontier: enterBatch
-      ? delegable.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+      ? delegable.map(frontierNode)
       : [],
   };
 }
@@ -1908,7 +1930,7 @@ function runOpenNext(opts) {
         result: 'ok',
         opened: null,
         enterBatch: true,
-        frontier: delegable472.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set })),
+        frontier: delegable472.map(frontierNode),
         taskTransitions: [],
       };
     }
@@ -2001,6 +2023,8 @@ function runOpenNext(opts) {
       id: targetNode.id,
       role: targetNode.role,
       model: targetNode.model,
+      // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
+      ...(modelDisplay(targetNode.model) ? { model_display: modelDisplay(targetNode.model) } : {}),
       declared_write_set: targetNode.declared_write_set,
       // #433: evidence metadata for the dispatcher (seeded path + required token classes).
       // #516: the top-level mirror stays the BARE on-disk relative path (the #444 back-compat vestige;
@@ -2483,6 +2507,8 @@ function runCloseAndOpenNext(opts) {
       id: nextNode.id,
       role: nextNode.role,
       model: nextNode.model,
+      // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
+      ...(modelDisplay(nextNode.model) ? { model_display: modelDisplay(nextNode.model) } : {}),
       declared_write_set: nextNode.declared_write_set,
       // #411 BUG A: surface the per-open evidence-binding nonce for the node the fused advance just
       // opened, with the SAME derivation runOpenNext (~1098) and runOpenReady (~2228) use — the first
@@ -4475,7 +4501,9 @@ function runOpenReady(opts) {
           codex_dispatch_mode: codexDispatchMode || null,
         }
       );
-      return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
+      // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
+      const memberDisplay = modelDisplay(n.model);
+      return { id: n.id, role: n.role, model: n.model || null, ...(memberDisplay ? { model_display: memberDisplay } : {}), kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
     }),
     runningSet: finalSet.nodes.map(n => n.id),
     // #437 (D-419 P2 §1.2): surface the formed lane group descriptor so the orchestrator/tests can
@@ -4764,7 +4792,7 @@ function runCloseNode(opts) {
   const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
   const newlyReady = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
     ? nextAction.readyPending.filter(n => n.role !== 'main-session-gate')
-        .map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+        .map(frontierNode)
     : [];
 
   // #439 (D-419 Part 4, settlement 3): a GATE closing verdict:fail surfaces the speculative members that
@@ -5019,7 +5047,7 @@ function closeGroupMember(ctx) {
   const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
   const newlyReady = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
     ? nextAction.readyPending.filter(n => n.role !== 'main-session-gate')
-        .map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+        .map(frontierNode)
     : [];
 
   return {

@@ -1365,11 +1365,13 @@ function validatePlan(content, opts) {
       }
     }
     // #382: optional per-node model tier — minimal freeze-time validation. An absent/'—' cell parses
-    // to '' (role-static fallback, no check). A non-empty cell must be a closed tier token; a
-    // main-session-gate must never carry a model (it is never dispatched as a subagent).
+    // to '' (role-static fallback, no check). A non-empty cell must resolve to a closed tier token; a
+    // main-session-gate must never carry a model (it is never dispatched as a subagent). #610: validate
+    // via normalizeTier — a neutral token (reasoning|standard) OR a legacy alias (opus|sonnet, for a
+    // frozen/legacy plan) resolves; only an out-of-vocab token is model_invalid.
     if (n.model) {
-      if (schema.NODE_MODEL_TIERS.indexOf(n.model) === -1) {
-        errors.push(`node ${n.id} model "${n.model}" is not a valid tier (model_invalid) — use one of: ${schema.NODE_MODEL_TIERS.join(', ')}`);
+      if (schema.normalizeTier(n.model) === null) {
+        errors.push(`node ${n.id} model "${n.model}" is not a valid tier (model_invalid) — use one of: ${schema.NODE_MODEL_TIERS.join(', ')} (legacy aliases opus/sonnet are also accepted)`);
       }
       if (n.role === MAIN_SESSION_GATE) {
         errors.push(`node ${n.id} is a main-session-gate and must not declare a model (it is never dispatched as a subagent)`);

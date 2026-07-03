@@ -39,11 +39,40 @@ const LEDGER_HEADING = 'Node Ledger';
 // Node Ledger status enum (single authoritative table inside the plan artifact).
 const LEDGER_STATUSES = Object.freeze(['pending', 'in_progress', 'complete', 'n/a']);
 
-// #382: the closed vocabulary for the optional per-node `model` column in `## Nodes`. Two TIER
-// tokens only (no haiku) — Claude editions map them to the Agent(model=…) param; Codex maps them to
-// a reasoning-effort variant profile. `—`/absent ⇒ today's role-static resolution. Defined here (the
-// ×4 byte-identical drift anchor) so the validator, the executor, and every edition share one list.
-const NODE_MODEL_TIERS = Object.freeze(['opus', 'sonnet']);
+// #382/#610: the closed vocabulary for the optional per-node `model` column in `## Nodes`. Two
+// runtime-NEUTRAL reasoning-weight tier tokens (no haiku) — no edition consumes them as literal model
+// names at dispatch: Claude maps `reasoning`→Opus / `standard`→Sonnet on the Agent(model=…) param;
+// Codex maps them to per-spawn reasoning-effort; opencode to a provider effort variant. `—`/absent ⇒
+// today's role-static resolution. New plans author these neutral tokens. Defined here (the ×4
+// byte-identical drift anchor) so the validator, the executor, and every edition share one list.
+const NODE_MODEL_TIERS = Object.freeze(['reasoning', 'standard']);
+
+// #610: the legacy→neutral tier alias map. Frozen/archived plans keep their BYTES — a legacy `opus`/
+// `sonnet` cell validates at parse (no rewrite, plan_hash unchanged, resume unaffected) by normalizing
+// to the neutral token here. New plans author `reasoning`/`standard` directly. normalizeTier() is the
+// single alias-resolution seam every tier consumer (TIER_RANK lookup, dispatchEffort, mapTier,
+// dispatchEffortOpencode, dispatchModelClaude, the reasoning-floor check) routes through, so a token is
+// interpreted identically everywhere. A neutral token passes through; a legacy alias resolves; an
+// out-of-vocab token (e.g. `haiku`) or an absent/blank cell → null (the model_invalid / role-static
+// signal — callers guard on `if (node.model)` before treating null as "invalid").
+const TIER_ALIASES = Object.freeze({ opus: 'reasoning', sonnet: 'standard' });
+function normalizeTier(token) {
+  const t = String(token == null ? '' : token).trim().toLowerCase();
+  if (t === '') return null;
+  if (NODE_MODEL_TIERS.indexOf(t) !== -1) return t;   // neutral token passes through
+  if (Object.prototype.hasOwnProperty.call(TIER_ALIASES, t)) return TIER_ALIASES[t]; // legacy alias
+  return null;                                          // out-of-vocab → null
+}
+
+// #610: the Claude-executor mapping made mechanical (not prose) — a neutral tier resolves to the
+// Agent(model=…) alias the Claude runtime dispatches with (`reasoning`→`opus`, `standard`→`sonnet`).
+// Legacy aliases pass through the normalizer, so a frozen-plan `opus`/`sonnet` cell yields the same
+// Claude model as before. No tier / out-of-vocab → null (role-static resolution). Pure — ×4 anchor.
+const TIER_MODEL_CLAUDE = Object.freeze({ reasoning: 'opus', standard: 'sonnet' });
+function dispatchModelClaude(tier) {
+  const t = normalizeTier(tier);
+  return t ? TIER_MODEL_CLAUDE[t] : null;
+}
 
 // #405 (#382 deferred half): the node-dispatchable roles for which a `model: opus` tier earns a
 // dedicated Codex `<role>-max` xhigh effort-variant profile. Derived from the #382 planner rubric
@@ -51,28 +80,29 @@ const NODE_MODEL_TIERS = Object.freeze(['opus', 'sonnet']);
 // architecture/design, adversarial gates, security review, root-cause of non-obvious bugs) ∩ the
 // Codex per-node reasoning effort (#451/#582, supersedes #405): base role profiles OMIT
 // `model_reasoning_effort`, and explicit planner tiers travel as per-spawn `reasoning_effort`
-// overrides. The planner's per-node tier maps to a portable dispatch signal here — `opus` asks for
-// `xhigh`, `sonnet` asks for `high`, and only absent/blank model tiers inherit the standing session
-// effort. No `<role>-max` variant profiles exist anymore (the matrix was retired); `agent_type` is
-// always the base role.
+// overrides. The planner's per-node tier maps to a portable dispatch signal here — `reasoning` asks
+// for `xhigh`, `standard` asks for `high`, and only absent/blank model tiers inherit the standing
+// session effort. #610: normalizeTier() first, so a frozen-plan legacy `opus`/`sonnet` cell resolves to
+// the SAME effort as before (opus→xhigh, sonnet→high) — byte-identical dispatch across the rename. No
+// `<role>-max` variant profiles exist anymore (the matrix was retired); `agent_type` is always the base role.
 function dispatchEffort(model) {
-  const tier = String(model || '').trim().toLowerCase();
-  if (tier === 'opus') {
+  const tier = normalizeTier(model);
+  if (tier === 'reasoning') {
     return { codex_reasoning_effort: 'xhigh', codex_reasoning_effort_source: 'planner_model' };
   }
-  if (tier === 'sonnet') {
+  if (tier === 'standard') {
     return { codex_reasoning_effort: 'high', codex_reasoning_effort_source: 'planner_model' };
   }
   return { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
 }
 
 // #382-opencode (#544 contract-keyed): the GENERAL tier→effort mapping for provider-open
-// runtimes (opencode). Claude Code's {opus, sonnet} are reasoning-weight RANKS, not models;
+// runtimes (opencode). The {reasoning, standard} tokens are reasoning-weight RANKS, not models;
 // opencode is provider-open, so the migration is a two-level compose that never assumes a provider:
-//   Level 1 (fixed):        opus → 'top' rank · sonnet → 'second' rank.
+//   Level 1 (fixed):        reasoning → 'top' rank · standard → 'second' rank.
 //   Level 2 (per contract): rank → that contract's effort variant (top = highest,
 //                           second = 2nd-highest), per the provider's API CONTRACT.
-//   mapTier(tier, provider) = CONTRACT_EFFORT_TABLE[ contractForProvider(provider) ][ TIER_RANK[tier] ].
+//   mapTier(tier, provider) = CONTRACT_EFFORT_TABLE[ contractForProvider(provider) ][ TIER_RANK[normalizeTier(tier)] ].
 // #544: the effort KNOB is determined by the provider's API CONTRACT, not its brand name.
 // contractForProvider() maps a provider id to one of four contracts (anthropic|openai|google|
 // default); the table is keyed by CONTRACT, so GLM-5.2 via z.ai (served under the Anthropic API
@@ -86,7 +116,7 @@ function dispatchEffort(model) {
 // Variant NAMES are provider-relative and preserved across the contract-keying flip (GLM stays
 // max/high) — only the OPTIONS payload changes. Pure data + pure helpers (no I/O) — qualifies
 // for this ×4 byte-identical drift anchor.
-const TIER_RANK = Object.freeze({ opus: 'top', sonnet: 'second' });
+const TIER_RANK = Object.freeze({ reasoning: 'top', standard: 'second' });
 
 // Each entry: { top: {variant, options}, second: {variant, options} }. `variant` is the
 // opencode variant NAME (referenced by agent.<role>.variant); `options` is the provider
@@ -132,10 +162,11 @@ function effortForProvider(providerId) {
   return CONTRACT_EFFORT_TABLE[contractForProvider(id)];      // unknown → 'default' (never null)
 }
 
-// The general mapper: Claude tier → {variant, options} for a provider, or null.
-// `tier` is a NODE_MODEL_TIERS token (opus|sonnet); unknown tier / provider → null.
+// The general mapper: tier → {variant, options} for a provider, or null.
+// `tier` is a NODE_MODEL_TIERS token (reasoning|standard) or a legacy alias (opus|sonnet); #610:
+// normalizeTier() first so a frozen-plan legacy cell resolves to the SAME rank. Unknown tier / provider → null.
 function mapTier(tier, providerId) {
-  const rank = TIER_RANK[String(tier || '').toLowerCase()];
+  const rank = TIER_RANK[normalizeTier(tier)];
   if (!rank) return null;
   const profile = effortForProvider(providerId);
   if (!profile) return null;
@@ -169,6 +200,7 @@ function resolveOpencodeProvider(env) {
 // is passed, the active provider is PURE-resolved from KAOLA_OPENCODE_INHERIT_MODEL (see
 // resolveOpencodeProvider) — the gap closed by #537 Surface 2: the runtime caller never
 // populated ctx.opencode_provider, so a declared tier now still reaches a concrete variant.
+// #610: mapTier() normalizes, so a legacy `opus`/`sonnet` cell resolves to the same variant.
 function dispatchEffortOpencode(model, providerId, env) {
   let pid = providerId;
   if (pid == null || String(pid).trim() === '') pid = resolveOpencodeProvider(env);
@@ -176,6 +208,26 @@ function dispatchEffortOpencode(model, providerId, env) {
   return mapped
     ? { opencode_variant: mapped.variant, opencode_variant_source: 'planner_model' }
     : { opencode_variant: null, opencode_variant_source: 'role_default' };
+}
+
+// #609/#610: the runtime-native DISPLAY for a per-node tier, so a payload echo of the raw tier
+// (e.g. handoff `first_node.model`, the dispatch descriptor) reads natively on every runtime instead
+// of surfacing a Claude noun ("sonnet") on Codex/opencode. ADDITIVE — the raw tier stays in the
+// payload; consumers attach this alongside it. Each runtime reads its own key:
+//   claude   — the Agent(model=…) alias (dispatchModelClaude: reasoning→"opus" / standard→"sonnet"),
+//   codex    — "<effort> reasoning effort" (dispatchEffort: reasoning→"xhigh …" / standard→"high …"),
+//   opencode — "<rank> effort variant" (TIER_RANK: reasoning→"top …" / standard→"second …",
+//              provider-agnostic — the Level-1 rank of the opencode mapping, always available).
+// A legacy alias normalizes first (a frozen-plan `opus` cell displays identically to `reasoning`).
+// No tier / out-of-vocab → null (nothing to display natively; the raw `model: null` inherit echo stands).
+function modelDisplay(tier) {
+  const t = normalizeTier(tier);
+  if (!t) return null;
+  return {
+    claude:   TIER_MODEL_CLAUDE[t],
+    codex:    dispatchEffort(t).codex_reasoning_effort + ' reasoning effort',
+    opencode: TIER_RANK[t] + ' effort variant',
+  };
 }
 
 // Caps (verified first-party): FANOUT_CAP default 4 (env KAOLA_FANOUT_CAP);
@@ -1024,6 +1076,11 @@ module.exports = {
   LEDGER_HEADING,
   LEDGER_STATUSES,
   NODE_MODEL_TIERS,
+  TIER_ALIASES,
+  normalizeTier,
+  TIER_MODEL_CLAUDE,
+  dispatchModelClaude,
+  modelDisplay,
   TIER_RANK,
   CONTRACT_EFFORT_TABLE,
   contractForProvider,

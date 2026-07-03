@@ -31,8 +31,15 @@ const DEFAULT_AGENT_MODELS = {
 // tier is a freeze/dispatch refusal, never a silent downgrade). The synthesizer's conflict-resolution
 // path reasons about intent; a non-reasoning tier would compose bytes without understanding them.
 const REASONING_FLOOR_ROLES = new Set(['synthesizer']);
+// #610: the reasoning-class tier is `reasoning` (neutral), whose only legacy alias is `opus`. Accept
+// BOTH so a Claude-default `opus` AND a plan-authored `reasoning` tier satisfy the floor; `standard`/
+// `sonnet` (or inherit) is non-reasoning → refuse. This mirrors the schema's normalizeTier() alias map
+// (kaola-workflow-adaptive-schema.js is the canonical source), but is inlined DELIBERATELY: the
+// subagent-dispatch-log hook copies THIS resolver standalone (no schema sibling on disk), so a require
+// of the schema would break its isolated invocation — the resolver must stay dependency-free.
 function isReasoningClass(model) {
-  return String(model || '').trim().toLowerCase() === 'opus';
+  const m = String(model || '').trim().toLowerCase();
+  return m === 'reasoning' || m === 'opus';
 }
 
 // #463 Slice 1 (AC14): ENFORCE the reasoning-class floor. For a REASONING_FLOOR_ROLES role, the

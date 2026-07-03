@@ -7856,6 +7856,49 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TIER-RENAME (#610) + ENVELOPE-DISPLAY (#609): buildDispatch carries a runtime-native
+// model_display alongside the raw tier, NEUTRAL tokens dispatch identically to their legacy
+// aliases (back-compat), and an untiered node's dispatch card is byte-identical (no display key).
+// ---------------------------------------------------------------------------
+{
+  const ctx = { nonce: 'n', evidence_file: '.cache/x.md', required_tokens: ['evidence-binding'], working_dir: '/w', forge_rider: null };
+  const mk = model => buildDispatch({ id: 'nX', role: 'code-reviewer', model, declared_write_set: 'scripts/x.js' }, ctx);
+
+  // NEUTRAL reasoning tier: same effort as legacy opus + a native display object.
+  const dR = mk('reasoning');
+  assert(dR.codex_reasoning_effort === 'xhigh', 'TIER-RENAME: reasoning → xhigh effort');
+  assert(dR.model === 'reasoning', 'TIER-RENAME: raw tier stays in the dispatch card');
+  assert(dR.model_display && dR.model_display.claude === 'opus'
+    && dR.model_display.codex === 'xhigh reasoning effort'
+    && dR.model_display.opencode === 'top effort variant',
+    'ENVELOPE-DISPLAY: reasoning model_display is runtime-native, got ' + JSON.stringify(dR.model_display));
+
+  // NEUTRAL standard tier: same effort as legacy sonnet + a native display object.
+  const dS = mk('standard');
+  assert(dS.codex_reasoning_effort === 'high', 'TIER-RENAME: standard → high effort');
+  assert(dS.model_display && dS.model_display.claude === 'sonnet'
+    && dS.model_display.codex === 'high reasoning effort'
+    && dS.model_display.opencode === 'second effort variant',
+    'ENVELOPE-DISPLAY: standard model_display is runtime-native, got ' + JSON.stringify(dS.model_display));
+
+  // BACK-COMPAT: a legacy opus/sonnet cell (frozen plan) dispatches with the SAME effort AND the
+  // SAME display as its neutral token — a resumed legacy plan is behavior-identical.
+  const dLegacyOpus = mk('opus'), dLegacySonnet = mk('sonnet');
+  assert(dLegacyOpus.codex_reasoning_effort === dR.codex_reasoning_effort,
+    'BACK-COMPAT: legacy opus effort == reasoning effort');
+  assert(JSON.stringify(dLegacyOpus.model_display) === JSON.stringify(dR.model_display),
+    'BACK-COMPAT: legacy opus display == reasoning display');
+  assert(dLegacySonnet.codex_reasoning_effort === dS.codex_reasoning_effort
+    && JSON.stringify(dLegacySonnet.model_display) === JSON.stringify(dS.model_display),
+    'BACK-COMPAT: legacy sonnet effort+display == standard');
+
+  // UNTIERED (no tier): NO model_display key — the untiered dispatch card stays byte-identical to pre-#610.
+  const dNone = mk(null);
+  assert(!('model_display' in dNone), 'ENVELOPE-DISPLAY: untiered node carries no model_display key');
+  assert(dNone.codex_reasoning_effort === null, 'TIER-RENAME: untiered node still role_default effort');
+}
+
 // ===========================================================================
 // #466 — worktree-authority split guard. The adaptive lifecycle resolves the
 // project folder (plan / ledger / .cache / baselines) cwd-relative via getRoot().

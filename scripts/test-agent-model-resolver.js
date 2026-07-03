@@ -118,6 +118,11 @@ try {
   assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorOk, enforceFloor: true }), 'opus',
     'enforceFloor passes the opus default through unchanged');
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'opus').ok, true, 'opus satisfies the synthesizer floor');
+  // #610: the floor check normalizes — a plan-authored NEUTRAL `reasoning` tier satisfies the floor
+  // exactly as the legacy `opus` alias does; the non-reasoning `standard`/`sonnet` tokens do NOT.
+  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'reasoning').ok, true, 'neutral reasoning tier satisfies the floor');
+  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'standard').ok, false, 'neutral standard tier violates the floor');
+  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'sonnet').ok, false, 'legacy sonnet violates the floor');
   // A non-floor role is NEVER constrained by the floor.
   assert.strictEqual(resolver.enforceReasoningFloor('code-reviewer', 'sonnet').ok, true, 'non-floor role unaffected');
   assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpFloorOk, enforceFloor: true }), 'sonnet',

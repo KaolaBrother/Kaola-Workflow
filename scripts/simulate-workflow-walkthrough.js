@@ -1878,6 +1878,66 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'refuse' && /finalize sink and must not declare a model/.test((v.errors||[]).join(';')),
       '#390(c): the finalize sink carrying a model must refuse at freeze, got: ' + JSON.stringify(v));
 
+    // #610: the model-column tokens are now runtime-NEUTRAL (reasoning|standard); legacy {opus,sonnet}
+    // stay accepted as aliases so a frozen/archived plan resumes UNCHANGED. NEUTRAL-TOKEN scenario:
+    // reasoning/standard (+ absent) freeze green.
+    v = vModel([
+      '| arch | code-architect | — | — | 1 | sequence | reasoning |',
+      '| impl | implementer | arch | lib/foo.js | 1 | sequence | standard |',
+      '| review | code-reviewer | impl | — | 1 | sequence | |',
+      '| done | finalize | review | — | 1 | sequence | |',
+    ]);
+    assert(v.result === 'in-grammar', '#610: neutral {reasoning,standard} tiers (+ absent) must freeze green, got: ' + JSON.stringify(v));
+
+    // #610: the model_invalid message names the NEUTRAL vocabulary AND notes the legacy aliases are accepted.
+    v = vModel([
+      '| impl | implementer | — | lib/foo.js | 1 | sequence | gpt5 |',
+      '| review | code-reviewer | impl | — | 1 | sequence | |',
+      '| done | finalize | review | — | 1 | sequence | |',
+    ]);
+    {
+      const msg = (v.errors||[]).join(';');
+      assert(v.result === 'refuse' && /model_invalid/.test(msg) && /reasoning/.test(msg)
+        && /standard/.test(msg) && /legacy aliases/i.test(msg),
+        '#610: model_invalid names the neutral vocabulary + legacy-alias note, got: ' + JSON.stringify(v));
+    }
+
+    // #610 LEGACY-ALIAS FIXTURE: an archived plan with legacy {opus,sonnet} cells resumes green with
+    // UNCHANGED bytes / plan_hash, computeNextAction accepts it (point-of-use tier wall), and its dispatch
+    // efforts are byte-identical to the neutral tokens (opus≡reasoning≡xhigh, sonnet≡standard≡high) — zero
+    // behavior change across the rename.
+    {
+      const pv = require('./kaola-workflow-plan-validator');
+      const schema = require('./kaola-workflow-adaptive-schema');
+      const na = require('./kaola-workflow-next-action');
+      const legacyBody = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+        '|---|---|---|---|---|---|---|',
+        '| arch | code-architect | — | — | 1 | sequence | opus |',
+        '| impl | implementer | arch | lib/foo.js | 1 | sequence | sonnet |',
+        '| review | code-reviewer | impl | — | 1 | sequence | |',
+        '| done | finalize | review | — | 1 | sequence | |', '',
+        '## Node Ledger', '',
+        '| id | status |', '|---|---|',
+        '| arch | pending |', '| impl | pending |', '| review | pending |', '| done | pending |', ''].join('\n');
+      const hash = pv.computePlanHash(legacyBody);
+      const frozenLegacy = '<!-- plan_hash: ' + hash + ' -->\n' + legacyBody;
+      const resume = pv.revalidateForResume(frozenLegacy);
+      assert(resume.ok === true, '#610: a frozen legacy {opus,sonnet} plan must PASS --resume-check unchanged, got: ' + JSON.stringify(resume));
+      assert(pv.computePlanHash(legacyBody) === hash, '#610: plan_hash is stable — legacy cells are not rewritten');
+      // point-of-use tier wall accepts the legacy tokens and preserves them verbatim.
+      const rNa = na.computeNextAction(frozenLegacy, { resolveModel: () => 'sonnet' });
+      assert(rNa.result === 'ok' && rNa.nextNode && rNa.nextNode.model === 'opus',
+        '#610: computeNextAction accepts the legacy plan and preserves its opus cell, got: ' + JSON.stringify(rNa));
+      // dispatch efforts identical across the alias rename.
+      assert(schema.dispatchEffort('opus').codex_reasoning_effort === schema.dispatchEffort('reasoning').codex_reasoning_effort
+        && schema.dispatchEffort('opus').codex_reasoning_effort === 'xhigh',
+        '#610: legacy opus dispatches with the SAME xhigh effort as neutral reasoning');
+      assert(schema.dispatchEffort('sonnet').codex_reasoning_effort === schema.dispatchEffort('standard').codex_reasoning_effort
+        && schema.dispatchEffort('sonnet').codex_reasoning_effort === 'high',
+        '#610: legacy sonnet dispatches with the SAME high effort as neutral standard');
+    }
+
     // #597: speculative_open_policy tier acceptance at freeze. off / consent / auto (the new default
     // tier) ALL freeze green, and an ABSENT field is back-compat (freezes green, resumes off); an
     // UNKNOWN value STILL refuses with the typed speculative_policy_unsupported reason (AC6 — the

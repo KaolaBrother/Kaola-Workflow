@@ -517,6 +517,13 @@ function runHandoff(opts) {
   // -------------------------------------------------------------------------
   const mirrorResult = shell(adaptiveNodePath, ['mirror-project', '--project', project, '--json']);
 
+  // #609/#610: the runtime-native display for the first node's model. ADDITIVE — the raw value stays in
+  // `first_node.model`; model_display lets a Codex/opencode narrative echo read natively instead of
+  // surfacing a Claude noun. next-action resolves firstNode.model to the explicit plan tier OR the role-
+  // static alias, so this covers a role-static `sonnet` echo too. Conditionally attached (like the
+  // dispatch-descriptor sibling): null only when the node resolves to no model (a model-less role).
+  const firstNodeDisplay = schemaMod.modelDisplay(firstNode.model);
+
   // -------------------------------------------------------------------------
   // Return — ready_to_run (plan-run owns node lifecycle incl. first node)
   // -------------------------------------------------------------------------
@@ -533,6 +540,7 @@ function runHandoff(opts) {
       id:                   firstNode.id,
       role:                 firstNode.role,
       model:                firstNode.model,
+      ...(firstNodeDisplay ? { model_display: firstNodeDisplay } : {}),
       declared_write_set:   firstNode.declared_write_set,
     },
     decision,

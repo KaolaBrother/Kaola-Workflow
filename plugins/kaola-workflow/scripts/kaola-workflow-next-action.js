@@ -26,7 +26,7 @@
 const fs = require('fs');
 const { parseNodes, parseLedger, parseSpeculativePolicy, uniqueSink, hasUnresolvableEntry } = require('./kaola-workflow-plan-validator');
 const { parseWriteSetCell, isProtected } = require('./kaola-workflow-classifier');
-const { LEDGER_STATUSES, NODE_MODEL_TIERS, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
+const { LEDGER_STATUSES, NODE_MODEL_TIERS, normalizeTier, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
 const { enforceReasoningFloor } = require('./kaola-workflow-resolve-agent-model');
 
 // Terminal statuses: a node in either state counts as "done" for dependency
@@ -72,11 +72,13 @@ function computeNextAction(content, opts) {
   // a real harness alias the dispatch prose would pass verbatim on every Agent(model=…) call.
   // revalidateForResume deliberately stays untouched (the #381 freeze-only landmine: a legacy
   // plan must still resume-check), so the tier wall lives HERE, where the model is consumed.
+  // #610: validate via normalizeTier — a neutral token (reasoning|standard) OR a legacy alias
+  // (opus|sonnet, on a frozen/archived plan) resolves; only an out-of-vocab cell (e.g. haiku) refuses.
   for (const node of nodes) {
-    if (node.model && !NODE_MODEL_TIERS.includes(node.model)) {
+    if (node.model && normalizeTier(node.model) === null) {
       return {
         result: 'refuse',
-        errors: ['node ' + node.id + ' model "' + node.model + '" is not in NODE_MODEL_TIERS (model_invalid) — use one of: ' + NODE_MODEL_TIERS.join(', ')],
+        errors: ['node ' + node.id + ' model "' + node.model + '" is not in NODE_MODEL_TIERS (model_invalid) — use one of: ' + NODE_MODEL_TIERS.join(', ') + ' (legacy aliases opus/sonnet are also accepted)'],
       };
     }
   }

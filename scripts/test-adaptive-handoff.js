@@ -275,6 +275,83 @@ const PLAN_HASH_64 = ('a').repeat(64);
   assert(!('risk_authorized' in result), 'T1: NO risk_authorized key in result');
   assert(result.first_node !== undefined, 'T1: first_node present');
   assert(result.first_node.id === 'explore', 'T1: first_node.id===explore');
+  // #609/#610: T1's node declares no tier, so first_node.model is the ROLE-STATIC resolved alias
+  // ('sonnet' from resolveModel) — the exact echo that reads wrong on Codex. model_display gives it a
+  // runtime-native rendering so the narrative echo reads natively even for a role-static default.
+  assert(result.first_node.model === 'sonnet', 'T1: first_node.model is the role-static resolved alias');
+  assert(result.first_node.model_display && result.first_node.model_display.claude === 'sonnet'
+    && result.first_node.model_display.codex === 'high reasoning effort'
+    && result.first_node.model_display.opencode === 'second effort variant',
+    'T1: role-static first_node carries a runtime-native model_display, got ' + JSON.stringify(result.first_node.model_display));
+}
+
+// ---------------------------------------------------------------------------
+// T1-DISPLAY (#609/#610): a first node that DECLARES a neutral tier surfaces a runtime-native
+// model_display alongside the raw `first_node.model`, so a Codex/opencode narrative echo reads
+// natively. A legacy `opus`/`sonnet` cell displays identically (back-compat). Reuses the T1 harness
+// with a 7-column ## Nodes table (model column present).
+// ---------------------------------------------------------------------------
+{
+  const tieredPlan = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| explore | code-explorer | — | — | 1 | sequence | reasoning |',
+    '| finalize | finalize | explore | CHANGELOG.md | 1 | sequence | |',
+    '',
+    '## Node Ledger', '',
+    '| id | status | notes |', '| --- | --- | --- |',
+    '| explore | pending | |', '| finalize | pending | |',
+  ].join('\n') + '\n';
+  const runDisplay = (planContent) => {
+    const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+    let readCallCount = 0;
+    const shellStub = makeShellStub({
+      'kaola-workflow-plan-validator.js:--freeze-checked': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: false,
+        governance: { decision: 'auto-run', risk: {} }, risk: {},
+      },
+      'kaola-workflow-plan-validator.js:--freeze': {
+        exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, resumeOk: true, risk: {},
+      },
+      'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+      'git:add': { exitCode: 0 },
+      'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
+    });
+    return runHandoff({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', json: true, shell: shellStub,
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) { readCallCount++; return readCallCount <= 1 ? planContent : frozenPlanContent; }
+        if (fpath.endsWith('workflow-state.md')) return makeStateContent({ issueNumber: 77 });
+        return '';
+      },
+      writeFile: () => {},
+      stateMtime: undefined,
+    });
+  };
+
+  const rNeutral = runDisplay(tieredPlan);
+  assert(rNeutral.first_node.model === 'reasoning', 'T1-DISPLAY: raw neutral tier stays in first_node.model');
+  assert(rNeutral.first_node.model_display
+    && rNeutral.first_node.model_display.claude === 'opus'
+    && rNeutral.first_node.model_display.codex === 'xhigh reasoning effort'
+    && rNeutral.first_node.model_display.opencode === 'top effort variant',
+    'T1-DISPLAY: reasoning first_node carries a runtime-native model_display, got ' + JSON.stringify(rNeutral.first_node.model_display));
+
+  // BACK-COMPAT: a legacy `sonnet` cell (frozen plan) resolves to the SAME display as neutral `standard`.
+  const rLegacy = runDisplay(tieredPlan.replace('| reasoning |', '| sonnet |'));
+  assert(rLegacy.first_node.model === 'sonnet', 'T1-DISPLAY: legacy cell preserved verbatim in first_node.model');
+  assert(rLegacy.first_node.model_display
+    && rLegacy.first_node.model_display.claude === 'sonnet'
+    && rLegacy.first_node.model_display.codex === 'high reasoning effort'
+    && rLegacy.first_node.model_display.opencode === 'second effort variant',
+    'T1-DISPLAY: legacy sonnet cell displays as the standard tier, got ' + JSON.stringify(rLegacy.first_node.model_display));
 }
 
 // ---------------------------------------------------------------------------

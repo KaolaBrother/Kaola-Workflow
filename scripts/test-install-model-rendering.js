@@ -83,6 +83,11 @@ try {
     .map(name => readInstalledCommand(name))
     .join('\n');
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(allCommands), 'installed commands must not keep model placeholders');
+  // #610: the plan-column tier rename (opus/sonnet → reasoning/standard) is the PLAN vocabulary only —
+  // it must NOT leak into the Claude Agent(model=…) rendering, which stays the concrete Claude aliases
+  // (they feed the harness verbatim). A neutral token as an Agent model value would be a dispatch bug.
+  assert(!/model="(reasoning|standard)"/.test(allCommands),
+    'installed commands must render concrete Claude model aliases, never the neutral plan-tier tokens');
 
   const requiredAgents = ['code-explorer','knowledge-lookup','planner','code-architect','tdd-guide',
     'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor','workflow-planner','synthesizer'];

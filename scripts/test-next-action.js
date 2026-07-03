@@ -488,7 +488,7 @@ function makeModelPlan(nodesRows, ledgerRows) {
   assert(rh.errors.join(';').includes('node a'),
     'test14 (#390b): refusal must name the offending node, got ' + JSON.stringify(rh.errors));
 
-  // (b) opus + sonnet + absent all pass through (no false refusal).
+  // (b) #610 BACK-COMPAT: legacy opus + sonnet + absent all pass through (a frozen plan resumes green).
   const ok = makeModelPlan(
     ['| a | tdd-guide | — | scripts/foo.js | 1 | sequence | opus |',
      '| b | tdd-guide | a | scripts/bar.js | 1 | sequence | sonnet |',
@@ -496,8 +496,23 @@ function makeModelPlan(nodesRows, ledgerRows) {
      '| finalize | finalize | c | — | 1 | sequence | |'],
     ['| a | pending |', '| b | pending |', '| c | pending |', '| finalize | pending |']);
   const ro = computeNextAction(ok, { resolveModel: stub });
-  assert(ro.result === 'ok', 'test14 (#390b): opus/sonnet/absent must pass, got ' + JSON.stringify(ro));
-  assert(ro.nextNode.model === 'opus', 'test14 (#390b): nextNode.model honors opus cell, got ' + JSON.stringify(ro.nextNode && ro.nextNode.model));
+  assert(ro.result === 'ok', 'test14 (#390b): legacy opus/sonnet/absent must pass, got ' + JSON.stringify(ro));
+  assert(ro.nextNode.model === 'opus', 'test14 (#390b): nextNode.model honors legacy opus cell, got ' + JSON.stringify(ro.nextNode && ro.nextNode.model));
+
+  // (c) #610: NEUTRAL tokens (reasoning/standard) are the authored vocabulary — must pass.
+  const neutral = makeModelPlan(
+    ['| a | tdd-guide | — | scripts/foo.js | 1 | sequence | reasoning |',
+     '| b | tdd-guide | a | scripts/bar.js | 1 | sequence | standard |',
+     '| finalize | finalize | b | — | 1 | sequence | |'],
+    ['| a | pending |', '| b | pending |', '| finalize | pending |']);
+  const rn = computeNextAction(neutral, { resolveModel: stub });
+  assert(rn.result === 'ok', 'test14 (#610): neutral reasoning/standard tokens must pass, got ' + JSON.stringify(rn));
+  assert(rn.nextNode.model === 'reasoning', 'test14 (#610): nextNode.model honors the neutral reasoning cell, got ' + JSON.stringify(rn.nextNode && rn.nextNode.model));
+
+  // (d) #610: the model_invalid message lists the NEUTRAL tokens AND notes legacy aliases are accepted.
+  assert(rh.errors.join(';').includes('reasoning') && rh.errors.join(';').includes('standard')
+    && /legacy aliases/i.test(rh.errors.join(';')),
+    'test14 (#610): model_invalid names neutral tokens + notes legacy aliases, got ' + JSON.stringify(rh.errors));
 }
 
 // -----------------------------------------------------------------------
