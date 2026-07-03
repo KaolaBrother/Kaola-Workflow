@@ -35,7 +35,7 @@ None blocking. Noise-level observations recorded in gate evidence (n4: pre-exist
 None needed — no deferred items, no partial implementation, no user-decision items. Both issues' acceptance criteria verified MET by n6-review (12/12). Bundle closure all_or_nothing: #607 + #608.
 
 ## Commit And Push
-Pending final Git gate (contractor Step 8 + sink-merge --sink; final hash reported after push).
+Archive commit done: `chore: archive bundle-607-608` (8acdb791), authored by `cmdFinalize --keep-worktree` (contractor Step 8b, atomic archive+roadmap+closure commit). Push/sink (test + merge + remote issue close) still pending — routes to `sink-merge --sink` (orchestrator Step 9), not run by this contractor pass.
 
 ## GitHub Issue
 #607, #608 — to be closed by the bundle sink (--issue 607 --issue-numbers 607,608).
@@ -44,7 +44,7 @@ Pending final Git gate (contractor Step 8 + sink-merge --sink; final hash report
 Regenerated at closure by cmdFinalize (no .roadmap/issue-607.md / issue-608.md sources existed — filed post-v6.19.0; closure unlink no-op expected).
 
 ## Archive
-Pending — kaola-workflow/archive/bundle-607-608/ via cmdFinalize.
+Done — kaola-workflow/archive/bundle-607-608/ via cmdFinalize (commit 8acdb791 `chore: archive bundle-607-608`).
 
 ## Mid-run plan governance (recorded)
 n5's write set was widened mid-run (docs/api.md, README.md, .env.example) after n5 flagged stale env-var docs; the .env.example write classified n5 sensitive (G2), so n5s-envsec (security-reviewer, verdict: pass, 0 blocking) was added post-dominating n5; plan re-frozen in-grammar, hash eccb0611… → 057e8481… (refused, no write) → b7f3b5b7… (in-grammar, stamped).
@@ -55,9 +55,9 @@ n5's write set was widened mid-run (docs/api.md, README.md, .env.example) after 
 | doc-updater | subagent-invoked (n5-docs plan node) | .cache/n5-docs.md | |
 | documentation docking | invoked | .cache/doc-docking.md | |
 | final-validation fix executors | N/A | | no final-validation failure |
-| roadmap refresh | pending cmdFinalize | kaola-workflow/ROADMAP.md | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status clean except workflow band; upstream origin | final gate runs after this file is committed |
+| roadmap refresh | done | kaola-workflow/ROADMAP.md (unchanged — no active work before/after; roadmap_source_removed: absent) | |
+| archive completed folder | done | kaola-workflow/archive/bundle-607-608/ (commit 8acdb791) | |
+| final commit and push | archive commit done; sink pending | commit 8acdb791 `chore: archive bundle-607-608`; git status clean | sink-merge --sink (push/merge/close) is orchestrator Step 9, not run by this contractor pass |
 
 ## Status
 ARCHIVED AFTER FINAL GIT GATE
