@@ -3789,6 +3789,12 @@ function testGitlabDispatchPosture598() {
     assert.ok(/model_reasoning_effort = "ultra"/.test(fresh.stdout),
       '#598 gl AC1: non-proactive posture must print the exact remediation: ' + fresh.stdout);
     assert.ok(/0\.142\.5/.test(fresh.stdout), '#598 gl AC1/AC2: report must carry the version-guard note: ' + fresh.stdout);
+    // #601: the remediation must LEAD with the always-available, always-documented in-session
+    // ask, before the effort-gated (undocumented/server-gated) ultra clause.
+    const askIdx601 = fresh.stdout.indexOf('explicitly ask for sub-agents');
+    const ultraIdx601 = fresh.stdout.indexOf('model_reasoning_effort = "ultra"');
+    assert.ok(askIdx601 !== -1 && ultraIdx601 !== -1 && askIdx601 < ultraIdx601,
+      '#601 gl: remediation must lead with the in-session ask before the effort-gated ultra clause: ' + fresh.stdout);
 
     const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
     const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');

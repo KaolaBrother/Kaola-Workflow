@@ -25,7 +25,7 @@
 # keyed to its stable title; post-#538 canonical adapt is itself adaptive-only — "NEVER
 # downgrade to fast/full" — so no adapt-fallback strip is needed; see docs/opencode-edition.md
 # § Path selection). The install-time COMMAND-SET partition mirrors install.sh's #538 target:
-#   - DEFAULT install deploys the ADAPTIVE-CORE command set only (6 files: adapt, auto,
+#   - DEFAULT install deploys the ADAPTIVE-CORE command set only (5 files: adapt,
 #     finalize, plan-run, workflow-init, workflow-next). No fast, no phase1-5.
 #   - --with-fast  adds kaola-workflow-fast.md.
 #   - --with-full  adds kaola-workflow-phase1..5.md.

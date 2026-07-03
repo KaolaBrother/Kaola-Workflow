@@ -1143,6 +1143,12 @@ function testCodexDispatchPosture598() {
     assert(/codex -c model_reasoning_effort=ultra/.test(fresh.stdout),
       '#598 AC1: remediation must also name the per-session codex -c override: ' + fresh.stdout);
     assert(/0\.142\.5/.test(fresh.stdout), '#598 AC1/AC2: report must carry the version-guard note (0.142.5): ' + fresh.stdout);
+    // #601: the remediation must LEAD with the always-available, always-documented in-session
+    // ask, before the effort-gated (undocumented/server-gated) ultra clause.
+    const askIdx601 = fresh.stdout.indexOf('explicitly ask for sub-agents');
+    const ultraIdx601 = fresh.stdout.indexOf('model_reasoning_effort = "ultra"');
+    assert(askIdx601 !== -1 && ultraIdx601 !== -1 && askIdx601 < ultraIdx601,
+      '#601: remediation must lead with the in-session ask before the effort-gated ultra clause: ' + fresh.stdout);
 
     // Flip to effort="ultra" ahead of the managed block, re-install (idempotent update) —
     // the posture must flip to proactive and the non-proactive remediation must disappear.
