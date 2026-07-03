@@ -38,16 +38,16 @@ None blocking. Noise-level notes for the audit phase: n6 R1 (parseDelegationOutc
 None needed — no deferred items, no partial implementation, no user-decision items. All 7 ACs verified MET by n6.
 
 ## Commit And Push
-Pending final Git gate (contractor Step 8 + sink-merge --sink).
+Committed by cmdFinalize as `e1f0b03e chore: archive issue-611` (--keep-worktree, atomic archive rename + roadmap regen + closure stamp). Working tree clean afterward — no separate implementation delta remained for a Step 8 commit; this bookkeeping update lands in `chore: finalize issue-611`. Push/sink not yet run (contractor scope ends before Step 9).
 
 ## GitHub Issue
-#611 — to be closed by the sink (--issue 611).
+#611 — closure_receipt `remote_issue_closed: close_pending`, `close_disposition: close_pending` (deferred to the sink, `--issue 611`; contractor does not close issues).
 
 ## Roadmap
-Regenerated at closure by cmdFinalize (.roadmap/issue-611.md source exists from the claim — closure removes it).
+`roadmap_source_removed: absent` (no `.roadmap/issue-611.md` source existed to remove) and `roadmap_regenerated: regenerated` per cmdFinalize's closure_receipt; `kaola-workflow/ROADMAP.md` carries no issue-611 entry post-regen (byte-identical to the pre-run mirror, so no diff landed in the archive commit).
 
 ## Archive
-Pending — kaola-workflow/archive/issue-611/ via cmdFinalize.
+Done — renamed to `kaola-workflow/archive/issue-611/` by cmdFinalize (dest confirmed, `archive_state_stamped: not_needed`); main-root copy of `kaola-workflow/issue-611/` cleaned up atomically per the linked-worktree cleanup contract.
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -55,9 +55,9 @@ Pending — kaola-workflow/archive/issue-611/ via cmdFinalize.
 | doc-updater | subagent-invoked (n5-docs plan node) | .cache/n5-docs.md | |
 | documentation docking | invoked | .cache/n5-docs.md + n6 prose↔impl pass | |
 | final-validation fix executors | subagent-invoked (n1 reopen via adversarial gate) | .cache/n4-adversarial.md + .cache/n1-engine.md | |
-| roadmap refresh | pending cmdFinalize | kaola-workflow/ROADMAP.md | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status clean except workflow band; upstream origin | final gate runs after this file is committed |
+| roadmap refresh | done via cmdFinalize | kaola-workflow/ROADMAP.md (no-op diff; source was absent) | |
+| archive completed folder | done | kaola-workflow/archive/issue-611/ (commit e1f0b03e) | |
+| final commit and push | done (commit); push/sink pending | git status clean; commit e1f0b03e on workflow/issue-611 | push/sink is Step 9, out of contractor scope |
 
 ## Status
 ARCHIVED AFTER FINAL GIT GATE
