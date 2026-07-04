@@ -1,0 +1,15 @@
+{"node":"n1-prose","event":"leg_opened","ts":"2026-07-04T05:33:47.869Z"}
+{"node":"n2-docs","event":"leg_opened","ts":"2026-07-04T05:33:48.329Z"}
+{"node":"n1-prose","event":"opened","ts":"2026-07-04T05:33:48.626Z"}
+{"node":"n2-docs","event":"opened","ts":"2026-07-04T05:33:48.916Z"}
+{"node":"n1-prose","event":"closed","ts":"2026-07-04T05:56:53.471Z"}
+{"node":"n1-prose","event":"leg_committed","ts":"2026-07-04T05:57:00.060Z"}
+{"node":"n2-docs","event":"leg_committed","ts":"2026-07-04T05:57:00.142Z"}
+{"node":"lg-n1-prose-n2-docs","event":"level_merged","ts":"2026-07-04T05:57:00.312Z"}
+{"node":"n2-docs","event":"closed","ts":"2026-07-04T05:57:00.417Z"}
+{"node":"n3-review","event":"opened","ts":"2026-07-04T05:57:10.555Z"}
+{"node":"n3-review","event":"evidence","ts":"2026-07-04T06:00:51.727Z"}
+{"node":"n3-review","event":"closed","ts":"2026-07-04T06:00:59.802Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-04T06:00:59.910Z"}
+{"node":"n4-finalize","event":"evidence","ts":"2026-07-04T06:03:32.072Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-04T06:03:37.841Z"}
