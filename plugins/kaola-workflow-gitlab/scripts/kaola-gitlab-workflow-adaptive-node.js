@@ -887,12 +887,19 @@ function buildRunProgress(planContent, op) {
   };
 }
 
-function writeRunProgressMirror(mainRoot, project, planPath, readFile, op) {
+function writeRunProgressMirror(mainRoot, project, planPath, readFile, op, mainRootTrusted) {
   try {
     const fs = require('fs');
+    const projectDir = path.join(mainRoot, 'kaola-workflow', project);
+    // #612: fail CLOSED. Only mirror when mainRoot is trustworthy — either affirmatively resolved from
+    // the project's own workflow-state.md main_root: field (mainRootTrusted), or a heuristic-resolved
+    // root that DEMONSTRABLY already owns this project (its frozen workflow-plan.md is present). A
+    // misresolved root that owns neither is skipped SILENTLY (returns 'skipped', never a warn) so it can
+    // never fabricate a foreign kaola-workflow/<project>/ tree — the run-progress leak class.
+    if (!mainRootTrusted && !fs.existsSync(path.join(projectDir, 'workflow-plan.md'))) return 'skipped';
     let planContent = '';
     try { planContent = readFile(planPath); } catch (_) { planContent = ''; }
-    const dir = path.join(mainRoot, 'kaola-workflow', project, '.cache');
+    const dir = path.join(projectDir, '.cache');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, RUN_PROGRESS_MIRROR_NAME), JSON.stringify(buildRunProgress(planContent, op), null, 2) + '\n');
     return true;
@@ -5788,11 +5795,17 @@ function main() {
   // the field is absent (pre-#579 states) or unreadable.
   let realRepoRoot = repoRoot;
   try { realRepoRoot = fs.realpathSync(repoRoot); } catch (_) {}
+  // #612: track whether mainRoot was AFFIRMATIVELY resolved from the project's own workflow-state.md
+  // main_root: field (an explicit, trusted source) vs. derived from the getMainRoot git-common-dir
+  // heuristic. The run-progress mirror (below) fails CLOSED on a heuristic root that does not
+  // demonstrably own this project, so a misresolved root can never fabricate a foreign
+  // kaola-workflow/<project>/ tree.
+  let mainRootFromField = false;
   let mainRoot = (() => {
     try {
       const stateContent = fs.readFileSync(statePath, 'utf8');
       const m = stateContent.match(/^main_root:\s*(.+)$/m);
-      if (m && m[1].trim()) return m[1].trim();
+      if (m && m[1].trim()) { mainRootFromField = true; return m[1].trim(); }
     } catch (_) {}
     return getMainRoot(repoRoot);
   })();
@@ -6049,14 +6062,15 @@ function main() {
 
   // #605: refresh the derived run-progress mirror at the MAIN root after a ledger mutation, but ONLY on
   // a linked-worktree run (mainRoot differs from the worktree cwd; a serial in-repo run's ledger is
-  // already root-visible) and only when the op did not refuse (no ledger write to mirror). FAIL-OPEN:
-  // a write failure surfaces a `run_progress_mirror: "failed"` warn field — never a refusal, never a
-  // nonzero exit; the barrier/close semantics are byte-unchanged.
+  // already root-visible) and only when the op did not refuse (no ledger write to mirror). #612: the
+  // write itself fails CLOSED on an untrusted mainRoot (see writeRunProgressMirror) — a skipped mirror
+  // is SILENT (no warn); only a genuine write FAILURE surfaces a `run_progress_mirror: "failed"` warn
+  // field — never a refusal, never a nonzero exit; the barrier/close semantics are byte-unchanged.
   if (LEDGER_MUTATING_SUBCOMMANDS.has(subcommand)
       && result && result.result !== 'refuse'
       && realRepoRoot !== mainRoot) {
-    const mirrored = writeRunProgressMirror(mainRoot, project, planPath, readFile, subcommand);
-    if (!mirrored) result.run_progress_mirror = 'failed';
+    const mirrored = writeRunProgressMirror(mainRoot, project, planPath, readFile, subcommand, mainRootFromField);
+    if (mirrored === false) result.run_progress_mirror = 'failed';
   }
 
   if (summaryMode) {

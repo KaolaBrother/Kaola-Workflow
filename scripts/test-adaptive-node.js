@@ -9889,6 +9889,117 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ===========================================================================
+// #612 — the run-progress mirror must fail CLOSED on an untrusted (heuristic-resolved) mainRoot.
+// The mirror may write ONLY when mainRoot is trustworthy: affirmatively resolved from the project's
+// own workflow-state.md `main_root:` field, OR a fallback (git-common-dir) root that DEMONSTRABLY
+// already owns the project (its frozen workflow-plan.md is present). A misresolved heuristic root must
+// never fabricate a foreign kaola-workflow/<project>/ tree (the leak class). Driven as REAL
+// subprocesses in REAL git repos + linked worktrees under $TMPDIR (the resolution reads git + fs).
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI_612 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_612 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  const plan612 = (proj) => [
+    '# Workflow Plan — ' + proj, '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| seed     | code-explorer | —     | —     | 1 | sequence |',
+    '| n1       | tdd-guide     | seed  | a.js  | 1 | sequence |',
+    '| review   | code-reviewer | n1    | —     | 1 | sequence |',
+    '| finalize | finalize      | review| —     | 1 | sequence |', '',
+    '## Node Ledger', '',
+    '| id | status |', '| --- | --- |',
+    '| seed | complete |',
+    '| n1 | pending |',
+    '| review | pending |',
+    '| finalize | pending |', '',
+  ].join('\n') + '\n';
+
+  const g612 = (root, a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  const rm612 = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} };
+  const runNode612 = (cwd, subArgs) => {
+    try {
+      const stdout = execFileSync('node', [NODE_CLI_612, ...subArgs], { cwd, encoding: 'utf8' });
+      let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...p };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let p = {}; try { p = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...p };
+    }
+  };
+  const seedProject612 = (root, proj) => {
+    const projDir = path.join(root, 'kaola-workflow', proj);
+    fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, plan612(proj));
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');   // NO main_root: → fallback path
+    try { execFileSync('node', [VALIDATOR_612, planPath, '--freeze', '--repair', '--json'], { cwd: root, encoding: 'utf8' }); } catch (_) {}
+  };
+
+  // ---- Fixture E (ESCAPE): mainRoot resolves (via the git-common-dir fallback, no main_root: field)
+  //      to a checkout that does NOT own the project → the mirror must be SKIPPED. Pre-fix (fail-open)
+  //      this fabricates kaola-workflow/<proj>/.cache/run-progress.json in the foreign main checkout.
+  {
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-612-esc-main-'));
+    g612(main, ['init']); g612(main, ['config', 'user.email', 'kw@test']); g612(main, ['config', 'user.name', 'kw']); g612(main, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(main, '.gitignore'), '.kw/\n');
+    fs.writeFileSync(path.join(main, 'README.md'), '# base\n');   // main has NO project of its own
+    g612(main, ['add', '-A']); g612(main, ['commit', '-m', 'base']);
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-612-esc-wt-')); rm612(wt);
+    let added = true;
+    try { g612(main, ['worktree', 'add', '-b', 'kw612esc', wt, 'HEAD']); } catch (_) { added = false; }
+    if (added) {
+      // The project lives ONLY in the worktree's branch; main's working tree never had it.
+      seedProject612(wt, 'issue-612e');
+      g612(wt, ['add', '-A']); g612(wt, ['commit', '-m', 'seed proj in wt']);
+      const r = runNode612(wt, ['open-next', '--project', 'issue-612e', '--json']);
+      assert(r.result === 'ok', 'T612-escape: in-worktree open-next proceeds (so the mirror trigger is reached), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+      const foreignMirror = path.join(main, 'kaola-workflow', 'issue-612e', '.cache', 'run-progress.json');
+      assert(!fs.existsSync(foreignMirror),
+        'T612-escape: the mirror must NOT be written to a heuristic-resolved main that does not own the project (fail-closed), but it appeared at ' + foreignMirror);
+      assert(r.run_progress_mirror === undefined,
+        'T612-escape: a skipped (untrusted-root) mirror surfaces NO run_progress_mirror warn field, got ' + JSON.stringify(r.run_progress_mirror));
+      try { g612(main, ['worktree', 'remove', '--force', wt]); } catch (_) { rm612(wt); }
+    } else {
+      assert(true, 'T612-escape: skipped (git worktree add unavailable in this environment)');
+      rm612(wt);
+    }
+    rm612(main);
+  }
+
+  // ---- Fixture L (LEGITIMATE): mainRoot (via the SAME fallback, no main_root: field) DOES own the
+  //      project (its frozen plan is present) → the mirror is STILL written. Guards that the fail-closed
+  //      fix does not regress the legitimate worktree mirror path (the #605 mirror behavior).
+  {
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-612-legit-main-'));
+    g612(main, ['init']); g612(main, ['config', 'user.email', 'kw@test']); g612(main, ['config', 'user.name', 'kw']); g612(main, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(main, '.gitignore'), '.kw/\n');
+    seedProject612(main, 'issue-612l');            // main OWNS the project (like the #605(a) fixture)
+    g612(main, ['add', '-A']); g612(main, ['commit', '-m', 'seed proj in main']);
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-612-legit-wt-')); rm612(wt);
+    let added = true;
+    try { g612(main, ['worktree', 'add', '-b', 'kw612legit', wt, 'HEAD']); } catch (_) { added = false; }
+    if (added) {
+      const r = runNode612(wt, ['open-next', '--project', 'issue-612l', '--json']);
+      assert(r.result === 'ok', 'T612-legit: in-worktree open-next proceeds, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+      const ownedMirror = path.join(main, 'kaola-workflow', 'issue-612l', '.cache', 'run-progress.json');
+      assert(fs.existsSync(ownedMirror),
+        'T612-legit: the legitimate worktree mirror (main owns the project) is STILL written — no regression, expected at ' + ownedMirror);
+      try { g612(main, ['worktree', 'remove', '--force', wt]); } catch (_) { rm612(wt); }
+    } else {
+      assert(true, 'T612-legit: skipped (git worktree add unavailable in this environment)');
+      rm612(wt);
+    }
+    rm612(main);
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
