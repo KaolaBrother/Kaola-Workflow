@@ -1,0 +1,16 @@
+{"node":"n1-fix612","event":"leg_opened","ts":"2026-07-04T00:04:47.530Z"}
+{"node":"n2-fix613","event":"leg_opened","ts":"2026-07-04T00:04:47.968Z"}
+{"node":"n1-fix612","event":"opened","ts":"2026-07-04T00:04:48.291Z"}
+{"node":"n2-fix613","event":"opened","ts":"2026-07-04T00:04:48.641Z"}
+{"node":"n2-fix613","event":"closed","ts":"2026-07-04T00:42:17.395Z"}
+{"node":"n1-fix612","event":"leg_committed","ts":"2026-07-04T01:52:50.387Z"}
+{"node":"n2-fix613","event":"leg_committed","ts":"2026-07-04T01:52:50.481Z"}
+{"node":"n1-fix612","event":"leg_committed","ts":"2026-07-04T01:53:46.448Z"}
+{"node":"n2-fix613","event":"leg_committed","ts":"2026-07-04T01:53:46.477Z"}
+{"node":"lg-n1-fix612-n2-fix613","event":"level_merged","ts":"2026-07-04T01:53:46.686Z"}
+{"node":"n1-fix612","event":"closed","ts":"2026-07-04T01:53:46.860Z"}
+{"node":"n3-docs","event":"opened","ts":"2026-07-04T01:54:01.695Z"}
+{"node":"n3-docs","event":"closed","ts":"2026-07-04T01:55:26.040Z"}
+{"node":"n4-review","event":"opened","ts":"2026-07-04T01:55:26.078Z"}
+{"node":"n4-review","event":"closed","ts":"2026-07-04T02:21:12.004Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-07-04T02:21:12.084Z"}

@@ -1,0 +1,23 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#612 fail-closed mirror correct; return-contract skipped/true/false matches mirrored===false call-site",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#613 self-SIGTERM shim reproduces err.signal===SIGTERM that closure-audit classifies as timeout; deterministic",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=out_of_scope action=document status=open severity=low fix_role=none rationale=n3 CHANGELOG #612/#613 entries present but UNCOMMITTED in working tree; commit before the receipt run to avoid chains_stale",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
