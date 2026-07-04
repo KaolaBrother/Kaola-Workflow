@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "4.19.0",
+  "version": "4.20.0",
   "description": "Kaola-Workflow for Codex, a public repo-backed workflow pack with resumable phase artifacts, automated Codex agent profiles, roadmap mirroring, TDD execution, review, and finalization gates.",
   "author": {
     "name": "KaolaBrother",
