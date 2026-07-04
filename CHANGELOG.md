@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **The six finalize surfaces no longer contradict their own shipped consumer-mode Validation Gate trade with an unconditional "full test suite + coverage >= 80%" mandate — #614.** The three Claude finalize commands and three Codex finalize SKILL packs already implement a consumer-mode Validation Gate where the agent owns verification via `.cache/final-validation.md` plus the plan's `validation_command`, accepting a focused test set in place of project coverage tooling — but several spots in those SAME files (the Step 1 instruction block, Operational Guardrails, the Validation Delegation Policy, and the Step 2 acceptance criteria / condensed SKILL line) still stated an unconditional "run the full test suite and confirm coverage >= 80%" mandate, directly contradicting the trade already shipped. The final-validation instruction is now explicitly dual-mode: self-host (npm) keeps the four-chain receipt gate unchanged, while a consumer repo runs the plan's `validation_command` once or cites fresh prior evidence, with the coverage target no longer a universal mandate. Prose-only: zero script/gate/behavior change — `scripts/`, `--finalize-check`, `run-chains.js`, and `sink-merge.js` are byte-identical. Cross-edition (#307): the three Claude finalize commands + the three Codex finalize SKILL packs (#400 six-surface propagation); all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green (run sequentially).
+
 ## [6.20.0] - 2026-07-04
 
 ### Added

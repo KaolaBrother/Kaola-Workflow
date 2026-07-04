@@ -138,7 +138,9 @@ If ambiguous, stop and ask.
 
 ## Operational Guardrails
 
-- Run or delegate fresh full validation before claiming completion.
+- Run or delegate the final validation appropriate to repo kind — the
+  four-chain receipt on self-host, or the plan's `validation_command` (or
+  cited fresh evidence) on a consumer repo — before claiming completion.
 - Do not repair inline. Final validation failures are routed unless the Trivial
   Inline Edit Exception applies.
 - Do not close a Gitea issue until acceptance criteria pass.
@@ -164,9 +166,10 @@ You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown �
 
 ## Validation Delegation Policy
 
-Finalization is the final validation gate. The required full relevant project
-commands must pass, but the main session does not need to personally run noisy
-commands in conversation.
+Finalization is the final validation gate. The required validation — the
+four-chain receipt on self-host, or the plan's `validation_command` (or cited
+fresh evidence) on a consumer repo — must pass, but the main session does not
+need to personally run noisy commands in conversation.
 
 Main session may run small targeted commands by default:
 
@@ -321,12 +324,16 @@ fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 ```
 
-Run or delegate the full relevant project commands:
+Run or delegate the final validation appropriate to repo kind:
 
-```bash
-# full test suite + type check + lint + build
-# coverage command when available; target >= 80%
-```
+- **Self-host (npm)**: the full relevant project commands are the four-chain
+  receipt gate (test suite, type check, lint, build via
+  `kaola-workflow-run-chains.js`); coverage applies only where the self-host
+  chains define a coverage gate.
+- **Consumer (non-npm)**: run the plan's `## Meta` `validation_command` once
+  against the final candidate state, OR cite fresh prior evidence under
+  Validation De-Duplication (state the actual reuse boundary). There is no
+  universal "full suite + coverage >= 80%" mandate on a consumer repo.
 
 Save raw delegated output to:
 
@@ -360,7 +367,9 @@ Verify:
 
 - deliverable matches Phase 1 success criteria
 - all Phase 3 tasks complete
-- tests pass and coverage target is met or justified
+- tests pass (per the validation_command / self-host chain result — not a
+  separately re-run universal test suite), and, only where the project itself
+  defines a coverage gate, the coverage target is met or justified
 - no type errors or lint errors
 - no CRITICAL or HIGH review findings remain
 - no debug statements remain
