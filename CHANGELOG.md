@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`plan-run`'s non-speculative serial-degrade now surfaces WHY it degraded — #616.** Follow-up to #615: on the speculative-write co-open path, an excluded write already carried `speculativeWriteExcluded: { reason: 'parent_dirty', ... }`, but the normal (non-speculative) co-open path's degrade to a single serial write was silent — a persistently broken or misconfigured `--parent-clean-check` fence could serialize every write frontier forever with no telemetry to notice it by. `runOpenReady` (`kaola-workflow-adaptive-node.js`) now threads `serialDegradeReason: 'parent_dirty'` onto that path's SUCCESSFUL-open return, set only when `parentCarriesProductionDirt()` actually caused the degrade (the same `--parent-clean-check` fence result is captured once and reused for both the group-formation gate and the label, avoiding a double fence-subprocess spawn); the pre-existing single-write-node / `!legCoupled` / `groupCeiling < 2` / `!grp.ok` degrade causes remain byte-identical (field absent). Cross-edition (#307): `kaola-workflow-adaptive-node.js` (canonical + codex twin + both forge ports); all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green (run sequentially).
+
 ## [6.20.2] - 2026-07-04
 
 ### Changed
