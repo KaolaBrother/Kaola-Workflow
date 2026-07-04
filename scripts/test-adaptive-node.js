@@ -6863,6 +6863,100 @@ function rtHarness(initialFiles, opts) {
     assert(ledgerStatus(planPath, openedId) === 'complete', '#588-TASKMIRROR-CLOSE: ledger advanced to complete despite mirror failure');
     cleanup(repoRoot);
   }
+
+  // -------------------------------------------------------------------------
+  // #615-MIXED-SERIAL-LANE-DEGRADE (D-615-01) — the mixed serial-write + lane-group deadlock, dissolved
+  //   at the SCHEDULING boundary. A plan whose DAG is two SERIAL write nodes (sA→sB) followed by a
+  //   disjoint PARALLEL write frontier (pA,pB) is the canonical trap: the serial siblings run first and,
+  //   per the finalize-owned-commit contract, never commit — their production writes sit UNCOMMITTED in
+  //   the parent tree. If a lane group co-opens over that dirt, its last-member close is unsatisfiable
+  //   (Horn A: --parent-clean-check refuses parent_dirty on the uncommitted serial file; Horn B:
+  //   committing it to clear the fence lands it in the merge commit → write_set_overflow at the
+  //   commit-based group barrier). The #615 fix gates group formation on parent cleanliness (reusing the
+  //   EXACT --parent-clean-check the last-member close applies) and DEGRADES to a single serial write
+  //   when the parent carries out-of-allowband production dirt.
+  //   RED (pre-fix): with sA's production file uncommitted, open-ready over {pA,pB} STILL forms a lane
+  //     group (opened.length===2, a laneGroup descriptor, legs provisioned) — the unsatisfiable state.
+  //   GREEN (post-fix): open-ready DEGRADES — opened.length===1, opened[0].kind==='write', NO laneGroup
+  //     descriptor, NO lane_group key in running-set.json. The serial per-node barrier tolerates prior
+  //     dirt (its base is a full-worktree snapshot at open), so the run completes correctly, serially.
+  //   Falsification: a pure-parallel/group-first plan has NO prior production dirt → the fence passes →
+  //     the group STILL forms (D437-OPEN-READY-DEFAULT-COOPEN above proves that path is unbroken). The
+  //     degrade bites ONLY the genuinely-mixed dirty-parent shape.
+  // -------------------------------------------------------------------------
+  {
+    // Build a mixed serial-write→parallel-write repo (mirrors makeLaneRepo's git-init + freeze pattern,
+    // but with the serial prefix makeLaneRepo's fixed DAG cannot express). sA,sB are complete; pA,pB are
+    // the ready parallel frontier; review (code-reviewer) post-dominates every write; finalize is the sink.
+    function makeMixedRepo() {
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd615-mixed-'));
+      const project = 'test-project';
+      const projDir = path.join(repoRoot, 'kaola-workflow', project);
+      const cacheDir = path.join(projDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      const plan = [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| sA       | tdd-guide     | —       | src/serial_a.js | 1 | sequence |',
+        '| sB       | tdd-guide     | sA      | src/serial_b.js | 1 | sequence |',
+        '| pA       | tdd-guide     | sB      | par_a.js        | 1 | sequence |',
+        '| pB       | tdd-guide     | sB      | par_b.js        | 1 | sequence |',
+        '| review   | code-reviewer | pA,pB   | —               | 1 | sequence |',
+        '| finalize | finalize      | review  | —               | 1 | sequence |', '',
+        '## Node Ledger', '',
+        '| id | status |', '| --- | --- |',
+        '| sA | complete |',
+        '| sB | complete |',
+        '| pA | pending |',
+        '| pB | pending |',
+        '| review | pending |',
+        '| finalize | pending |', '',
+      ].join('\n') + '\n';
+      fs.writeFileSync(planPath, plan);
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']);
+      g(['config', 'user.email', 'kw@test']);
+      g(['config', 'user.name', 'kw']);
+      g(['config', 'commit.gpgsign', 'false']);
+      const froze = execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+      // The disjoint mixed plan MUST freeze cleanly (open-ready's integrity --resume-check needs it).
+      assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse', '#615-MIXED: fixture must freeze, got ' + froze);
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']);
+      g(['commit', '-m', 'init']);
+      // The serial-accumulation state: sA ran and produced its declared file, but serial nodes never
+      // commit (finalize-owned-commit contract). Leave it UNCOMMITTED in the parent worktree.
+      fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(repoRoot, 'src', 'serial_a.js'), '// uncommitted serial production from sA\n');
+      return { repoRoot, project, planPath, projDir, cacheDir };
+    }
+
+    // GREEN assertion (this is what FAILS pre-fix = the RED signature, and PASSES post-fix).
+    const { repoRoot, cacheDir, planPath } = makeMixedRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok', '#615-MIXED: open-ready ok, got ' + JSON.stringify(r));
+    assert(!r.laneGroup,
+      '#615-MIXED: a parent carrying uncommitted serial production dirt MUST NOT co-open a lane group (it would deadlock at the last-member close) — expected serial-degrade, got laneGroup ' + JSON.stringify(r.laneGroup));
+    assert(Array.isArray(r.opened) && r.opened.length === 1,
+      '#615-MIXED: open-ready must DEGRADE to a single serial write, got opened ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    assert(r.opened[0].kind === 'write',
+      '#615-MIXED: the single opened node is a write, got ' + JSON.stringify(r.opened[0] && r.opened[0].kind));
+    assert(!r.opened[0].group_id,
+      '#615-MIXED: the degraded write carries NO group_id, got ' + JSON.stringify(r.opened[0].group_id));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group,
+      '#615-MIXED: running-set.json carries NO lane_group key on the degrade path, got ' + JSON.stringify(rs && rs.lane_group));
+    // Exactly one of the parallel writes is in_progress; the other stays pending (serial).
+    const openedId = r.opened[0].id;
+    assert((openedId === 'pA' || openedId === 'pB') && ledgerStatus(planPath, openedId) === 'in_progress',
+      '#615-MIXED: one parallel write opened serially (in_progress), got ' + openedId + '=' + ledgerStatus(planPath, openedId));
+    cleanup(repoRoot);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -8850,6 +8944,78 @@ function rtHarness(initialFiles, opts) {
     const overlap = node596.selectSpeculativeWriteGroup(twoCand, liveWriter, planPath, overlapShell, false, null);
     assert(overlap.excluded.join(',') === 'writerW1' && overlap.excludedReason === 'overlaps_live_writer',
       'T597-5 (O1): a genuine per-pair overlap keeps overlaps_live_writer, got ' + JSON.stringify(overlap));
+  }
+
+  // T615-SPEC-DIRTY-DEGRADE (D-615-01) — the SPECULATIVE-write mirror of #615-MIXED-SERIAL-LANE-DEGRADE.
+  //   The non-speculative co-open already gates lane-group formation on parent cleanliness; the
+  //   speculative-write arm (a write betting on an OPEN ancestor gate) forms a size-1 legged lane_group
+  //   TOO, so its last-member close runs the IDENTICAL commit-based group barrier + parent-clean fence and
+  //   must carry the SAME precondition. Fixture: writerA(complete, its declared production file a.js left
+  //   UNCOMMITTED in the parent — the finalize-owned-commit serial-accumulation dirt) -> gate1 (the live
+  //   ancestor bet) -> writerW(write). At speculative_open_policy:auto, open-ready with NO
+  //   --speculative-consent would (pre-fix) open writerW in a provisioned leg over that dirt, whose
+  //   last-member close is the two-horned deadlock (Horn A --parent-clean-check refuses parent_dirty on
+  //   a.js; Horn B committing a.js → write_set_overflow at the commit-based group barrier).
+  //   RED (pre-fix): writerW opens with a lane_group / group_id.
+  //   GREEN (post-fix): writerW is EXCLUDED from this open — opened is empty, speculativeWriteExcluded
+  //     names parent_dirty, NO lane_group forms, and writerW's ledger row stays pending (it waits for gate1
+  //     normally, exactly like the non-speculative serial-degrade).
+  //   Falsification: T597-3b (clean parent, same shape) STILL opens writerW at auto — the exclusion bites
+  //     ONLY the dirty-parent speculative shape, never a clean-parent speculative open.
+  {
+    // make596Repo commits a.js; here writerA's production file must be left UNCOMMITTED, so build the same
+    // shape inline and leave a.js dirty AFTER the init commit (mirrors #615-MIXED-SERIAL-LANE-DEGRADE).
+    function make615SpecRepo() {
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-615spec-'));
+      const projDir = path.join(repoRoot, 'kaola-workflow', PROJECT_596);
+      const cacheDir = path.join(projDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      const plan = [
+        '# Workflow Plan — issue-596 (615-spec)', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', 'speculative_open_policy: auto', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| writerA | tdd-guide     | —       | a.js         | 1 | sequence |',
+        '| gate1   | code-reviewer | writerA | —            | 1 | sequence |',
+        '| writerW | tdd-guide     | gate1   | w.js         | 1 | sequence |',
+        '| gate2   | code-reviewer | writerW | —            | 1 | sequence |',
+        '| sink    | finalize      | gate2   | CHANGELOG.md | 1 | sequence |', '',
+        '## Node Ledger', '',
+        '| id | status |', '| --- | --- |',
+        '| writerA | complete |', '| gate1 | pending |', '| writerW | pending |', '| gate2 | pending |', '| sink | pending |', '',
+      ].join('\n') + '\n';
+      fs.writeFileSync(planPath, plan);
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']); g(['commit', '-m', 'init']);
+      // writerA ran and produced a.js, but serial nodes never commit (finalize-owned-commit contract) —
+      // leave it UNCOMMITTED in the parent worktree: the out-of-allowband production dirt the fence catches.
+      fs.writeFileSync(path.join(repoRoot, 'a.js'), '// uncommitted production from writerA\n');
+      return { repoRoot, cacheDir, planPath, project: PROJECT_596 };
+    }
+
+    const { repoRoot, cacheDir, planPath, project } = make615SpecRepo();
+    openGate1_596(repoRoot, project); // opens gate1 read-only (no parent-clean-check on a read open)
+    // GREEN assertion (FAILS pre-fix = the RED signature, PASSES post-fix).
+    const r = run596(repoRoot, ['open-ready', '--project', project, '--json']); // policy auto ⇒ NO --speculative-consent
+    assert(r.result === 'ok', 'T615-SPEC: open-ready ok, got ' + JSON.stringify(r));
+    assert(!(r.opened || []).some(n => n.id === 'writerW'),
+      'T615-SPEC: a speculative write over a parent carrying uncommitted production dirt MUST NOT open (its size-1 lane group would deadlock at the last-member close) — expected exclusion, got opened ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    assert(!r.laneGroup,
+      'T615-SPEC: NO lane_group descriptor forms on the dirty-parent speculative degrade, got ' + JSON.stringify(r.laneGroup));
+    assert(r.speculativeWriteExcluded && r.speculativeWriteExcluded.reason === 'parent_dirty' && (r.speculativeWriteExcluded.nodeIds || []).includes('writerW'),
+      'T615-SPEC: speculativeWriteExcluded names parent_dirty for writerW, got ' + JSON.stringify(r.speculativeWriteExcluded));
+    const rs = readRS596(cacheDir);
+    assert(!rs || !rs.lane_group,
+      'T615-SPEC: running-set.json carries NO lane_group key on the degrade, got ' + JSON.stringify(rs && rs.lane_group));
+    assert(ledgerStatus596(planPath, 'writerW') === 'pending',
+      'T615-SPEC: writerW ledger row stays pending (waits for gate1 normally), got ' + ledgerStatus596(planPath, 'writerW'));
+    rm596(repoRoot);
   }
 }
 

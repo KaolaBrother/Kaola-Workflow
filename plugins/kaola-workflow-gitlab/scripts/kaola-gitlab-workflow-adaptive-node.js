@@ -3693,6 +3693,29 @@ function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
 }
 
 // ---------------------------------------------------------------------------
+// #615 (D-615-01): true iff the parent (integration) worktree already carries out-of-allowband
+// PRODUCTION dirt — the precondition that makes a lane-group close structurally UNSATISFIABLE. In a
+// mixed plan (SERIAL write nodes followed by a parallel write frontier) the serial siblings run
+// FIRST and, per the finalize-owned-commit contract, never commit — their production writes sit
+// uncommitted in the parent tree. If a lane group co-opens over that dirt, its last-member close is
+// caught in a two-horned deadlock: the parent-clean fence (--parent-clean-check) refuses parent_dirty
+// on the uncommitted serial files, but committing them to clear the fence lands them in the merge
+// commit M → outside the group's declared union → write_set_overflow at the commit-based group
+// barrier. Serial-degrade avoids the trap entirely (the serial per-node barrier tolerates prior dirt:
+// its base is a full-worktree snapshot at open, so accumulated dirt is present on both sides and
+// invisible). Shells the SAME --parent-clean-check the last-member close runs (identical invocation
+// form, at :4994) so the producer/consumer classification can never drift. FAIL-CLOSED: any non-`pass`
+// result (parent_dirty, an unrelated refuse like root_mismatch, or a crash/no-JSON) is treated as
+// dirt → degrade to serial — never co-open on an uncertain parent. Parallelism is a means, not a goal.
+function parentCarriesProductionDirt(planPath, project, shell) {
+  const fence = shell(validatorPath, [planPath, '--parent-clean-check', '--project', project, '--json']);
+  // Mirror the last-member close-fence's OWN acceptance check literally (fence.exitCode !== 0 ||
+  // fence.result !== 'pass') so the two dirt classifications can never drift. shellNode always returns
+  // an object (exitCode set last), so no `fence &&` null-guard is needed here.
+  return fence.exitCode !== 0 || fence.result !== 'pass';
+}
+
+// ---------------------------------------------------------------------------
 // #463 Slice 2 (D-419 P2 write-axis) — per-leg `.kw` git-worktree provisioning for the write-lane
 // scheduler (ADR-0010: containment, not construction — legs isolate write scope; they do not
 // redirect the dispatched member's working_dir, which stays parent-side (routing into legs landed in Slice 3, #463 AC18)). Legs are
@@ -4246,6 +4269,20 @@ function runOpenReady(opts) {
     if (!legCoupled) {
       toOpen = [];
       speculativeWriteExcluded = { reason: 'no_leg_capability', nodeIds: writeNodes.map(n => n.id) };
+    } else if (parentCarriesProductionDirt(planPath, project, shell)) {
+      // #615 (D-615-01): the SAME parent-clean precondition that gates the non-speculative co-open
+      // (:4286 branch) applies here. A speculative write ALWAYS opens WITH a provisioned leg (even a lone
+      // candidate forms a size-1 lane_group), so its last-member close runs the IDENTICAL commit-based
+      // group barrier + parent-clean fence — and over a parent carrying out-of-allowband production dirt
+      // (uncommitted work from already-closed SERIAL siblings) it hits the SAME two-horned deadlock
+      // (Horn A parent_dirty vs Horn B write_set_overflow). Speculation is a PURE optimization: refusing
+      // to speculatively open a write over a dirty parent is always safe — the write just waits for its
+      // gate normally, exactly like the non-speculative serial-degrade. Exclude ALL write candidates from
+      // THIS open (mirror the sibling no_leg_capability exclusion above; read speculation is unaffected).
+      // Short-circuited AFTER legCoupled so the fence subprocess only spawns when a speculative write
+      // could actually form a group.
+      toOpen = [];
+      speculativeWriteExcluded = { reason: 'parent_dirty', nodeIds: writeNodes.map(n => n.id) };
     } else {
       const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
       toOpen = sel.chosen;
@@ -4280,7 +4317,23 @@ function runOpenReady(opts) {
     //   + no PROTECTED file), and disjoint green short-circuits — the validator relaxes/short-circuits
     //   all three before any consent check. Only a genuine overlap (exact / case-collision) or a
     //   coarse pair with a non-resolvable directory/glob entry serial-degrades, and no consent overrides.
-    if (legCoupled && writeNodes.length >= 2) {
+    // #615 (D-615-01): a lane group cannot co-open over a parent worktree that already carries
+    // out-of-allowband production dirt (uncommitted work from already-closed SERIAL siblings — the
+    // finalize-owned-commit accumulation). Such a group's last-member close is structurally
+    // unsatisfiable (parent-clean fence demands the dirt committed/removed; committing it → the merge
+    // commit carries it → write_set_overflow at the commit-based group barrier). Gate group formation
+    // on parent cleanliness, reusing the EXACT fence the last-member close applies (:4994) so the
+    // producer/consumer classification can never drift; on dirt (or any uncertain non-`pass` result)
+    // fall into the EXISTING single-serial-write else branch, which the serial per-node barrier
+    // tolerates. Parallelism is a means, not a goal (CLAUDE.md precedence #3): this loses NO
+    // currently-safe parallelism (a pure-parallel / group-first plan has no prior production dirt →
+    // the fence passes → the group forms normally); it bites ONLY the genuinely-mixed shape, turning a
+    // hard deadlock into a correct serial completion.
+    // N1: short-circuit — evaluate the parent-clean fence (a validator subprocess) ONLY when a lane
+    // group could actually form (legCoupled AND a ≥2 disjoint frontier). When either fails the group is
+    // never attempted, so spawning the fence would be pure waste. && is left-to-right, so
+    // parentCarriesProductionDirt runs last, exactly when its result can change the outcome.
+    if (legCoupled && writeNodes.length >= 2 && !parentCarriesProductionDirt(planPath, project, shell)) {
       const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {
         // #437 §1.3 cap: a write lane group respects the WRITE cap (resolveFanoutCap, not the read
