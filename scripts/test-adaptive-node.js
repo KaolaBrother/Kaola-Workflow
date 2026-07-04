@@ -6955,6 +6955,33 @@ function rtHarness(initialFiles, opts) {
     const openedId = r.opened[0].id;
     assert((openedId === 'pA' || openedId === 'pB') && ledgerStatus(planPath, openedId) === 'in_progress',
       '#615-MIXED: one parallel write opened serially (in_progress), got ' + openedId + '=' + ledgerStatus(planPath, openedId));
+    // #616 (D-616-01): the successful-open envelope MUST label WHY it degraded to serial — the
+    // parent-dirty fence, not an ordinary single-candidate/overlap serial choice. RED (pre-fix):
+    // serialDegradeReason is absent from a successful degrade-open even though the degrade was
+    // caused by parentCarriesProductionDirt() returning true.
+    assert(r.serialDegradeReason === 'parent_dirty',
+      '#616-SERIAL-DEGRADE-TELEMETRY: a parent-dirty-caused serial degrade must carry serialDegradeReason:"parent_dirty" on the SUCCESSFUL open, got ' + JSON.stringify(r.serialDegradeReason));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #616-PLAIN-SERIAL-DEGRADE (D-616-01) — the ORDINARY single-write serial degrade (unrelated to
+  //   parent dirt: the explicit KAOLA_PARALLEL_WRITES=0 kill-switch short-circuits legCoupled to false
+  //   BEFORE parentCarriesProductionDirt is ever invoked) must NOT be mislabeled parent_dirty. This is
+  //   the negative-space companion to #616-SERIAL-DEGRADE-TELEMETRY above — proves the two serial-degrade
+  //   causes stay distinguishable rather than collapsed onto one always-on field.
+  //   RED (pre-fix): serialDegradeReason is simply absent everywhere (no such field exists yet), so this
+  //     assertion is vacuously true pre-fix — it only becomes a meaningful guard AFTER the field is wired,
+  //     which is why it is verified alongside (not instead of) the positive #616 case above.
+  //   GREEN (post-fix): serialDegradeReason is present (positive case) XOR absent-or-non-parent_dirty here.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 1,
+      '#616-PLAIN-SERIAL-DEGRADE: KAOLA_PARALLEL_WRITES=0 degrades to a single serial write, got ' + JSON.stringify(r));
+    assert(r.serialDegradeReason !== 'parent_dirty',
+      '#616-PLAIN-SERIAL-DEGRADE: an ordinary serial-write choice (clean parent, kill-switch forced) must NOT carry serialDegradeReason:"parent_dirty", got ' + JSON.stringify(r.serialDegradeReason));
     cleanup(repoRoot);
   }
 }

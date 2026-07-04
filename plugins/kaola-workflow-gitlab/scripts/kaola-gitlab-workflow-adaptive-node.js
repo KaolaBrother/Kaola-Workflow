@@ -4251,6 +4251,15 @@ function runOpenReady(opts) {
   // speculative fallback even fires) is the ONLY exclusivity invariant that still applies. Named ONLY
   // as an explanatory field on the response (never a hard refuse) so read speculation stays unaffected.
   let speculativeWriteExcluded = null;
+  // #616 (D-616-01): the non-speculative co-open sibling of speculativeWriteExcluded — labels WHY a
+  // normal write frontier degraded to a single serial write, so a persistently dirty parent (a stuck
+  // or misconfigured --parent-clean-check fence) is visible instead of silently serializing every write
+  // frontier forever. Set ONLY on the branch below where parentCarriesProductionDirt() is the reason the
+  // group never even attempted to form (:4335) — NOT on the pre-existing plain single-write-node case,
+  // nor on a group attempt that failed for an unrelated reason (grp.ok===false / groupCeiling<2), so the
+  // two serial-degrade causes stay distinguishable. null ⇒ no field on the response (byte-identical to
+  // pre-#616 for every other degrade cause).
+  let serialDegradeReason = null;
   if (readOnly.length > 0) {
     // #607: a live main-session-gate (kind:'gate') is a MAIN-SESSION-run marker, NOT a subagent fan-out
     // slot occupant — exclude it from the read-slot base so speculative reads behind a gate get the full
@@ -4331,9 +4340,12 @@ function runOpenReady(opts) {
     // hard deadlock into a correct serial completion.
     // N1: short-circuit — evaluate the parent-clean fence (a validator subprocess) ONLY when a lane
     // group could actually form (legCoupled AND a ≥2 disjoint frontier). When either fails the group is
-    // never attempted, so spawning the fence would be pure waste. && is left-to-right, so
-    // parentCarriesProductionDirt runs last, exactly when its result can change the outcome.
-    if (legCoupled && writeNodes.length >= 2 && !parentCarriesProductionDirt(planPath, project, shell)) {
+    // never attempted, so spawning the fence would be pure waste. Evaluated ONCE into parentDirty (rather
+    // than inline in the `if` below) so #616's serialDegradeReason can reuse the SAME verdict instead of
+    // re-spawning the fence subprocess a second time.
+    const parentDirty = (legCoupled && writeNodes.length >= 2)
+      ? parentCarriesProductionDirt(planPath, project, shell) : false;
+    if (legCoupled && writeNodes.length >= 2 && !parentDirty) {
       const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {
         // #437 §1.3 cap: a write lane group respects the WRITE cap (resolveFanoutCap, not the read
@@ -4370,6 +4382,10 @@ function runOpenReady(opts) {
     } else {
       toOpen = [writeNodes[0]];
       openKind = 'write';
+      // #616: this else fires for THREE distinct causes (!legCoupled, writeNodes.length<2, or
+      // parentDirty) — label it ONLY when parentDirty is the actual cause (the other two never even
+      // evaluated the fence, so parentDirty is false there and this stays a no-op).
+      if (parentDirty) serialDegradeReason = 'parent_dirty';
     }
   } else {
     // Only write nodes are ready but the running set is non-empty (read-only members live):
@@ -4593,6 +4609,11 @@ function runOpenReady(opts) {
     // excluded this call (overlap with a live writer) — surface the explanatory field alongside the
     // success envelope so the operator sees the partial exclusion, not just the members that opened.
     ...(speculativeWriteExcluded ? { speculativeWriteExcluded } : {}),
+    // #616 (D-616-01): label a normal (non-speculative) co-open's serial degrade when
+    // parentCarriesProductionDirt() caused it, mirroring speculativeWriteExcluded's `parent_dirty` reason
+    // on this SUCCESSFUL-open path. Absent (undefined) for every other degrade cause and for a formed
+    // lane group — the pre-#616 byte-identical shape.
+    ...(serialDegradeReason ? { serialDegradeReason } : {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
