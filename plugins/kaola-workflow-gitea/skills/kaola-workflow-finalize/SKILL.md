@@ -119,7 +119,7 @@ choices, or ambiguity that blocks correctness.
 
 ## Required Steps
 
-1. Final validation: run the full relevant project commands once against the final candidate state. Save output to `.cache/final-validation.md`.
+1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build); on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence. Save output to `.cache/final-validation.md`.
 <!-- PIN: fast-compliance-backstop -->
 2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a real delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real evidence path or skip\_reason — not `pending`, `invoked` without evidence, or bare `N/A` without skip\_reason — whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` with a documented skip\_reason is allowed only for the trivial band (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script refusal enforces this fail-closed at `summary-write` time; this step is a second-line gate.
    ```bash
