@@ -309,6 +309,24 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   (a) the group barrier at the last close, and (b) the `--finalize-check` attribution sweep
   (#424). The `KAOLA_LANE_CONTAINMENT` `PreToolUse` hook (#376) emits warnings but is fail-open.
 
+  **Parent-cleanliness precondition on formation (D-615-01).** Lane-group formation is additionally
+  gated on the parent worktree carrying no out-of-allowband production dirt — uncommitted writes
+  left behind by already-closed SERIAL write siblings (serial nodes never commit; commits are
+  finalize-owned). Without this gate, a group formed over such dirt hits a two-horned deadlock at
+  its last-member close: the parent-clean fence refuses `parent_dirty` on the uncommitted serial
+  file, but committing that file to clear the fence lands it in the merge commit and outside the
+  group's declared union, tripping `write_set_overflow` at the commit-based group barrier.
+  `parentCarriesProductionDirt(planPath, project, shell)` (`adaptive-node.js`) shells the SAME
+  `--parent-clean-check` fence the last-member close already runs (fail-closed: any non-`pass`
+  result — dirt, an unrelated refuse, or a crash/no-JSON — is treated as dirt), so the two checks
+  can never classify a parent differently. It gates both formation sites: on dirt, the normal
+  co-open path (`liveNodes.length === 0 && writeNodes.length > 0`) degrades to opening a single
+  serial write instead of forming a group, and the speculative-write path (`openingSpeculative`)
+  excludes all write candidates from that open via `speculativeWriteExcluded: { reason:
+  'parent_dirty' }` — the write then waits for its gate normally. A pure-parallel or group-first
+  plan carries no prior production dirt at formation time, so this loses no currently-safe
+  parallelism; it bites only the genuinely-mixed serial-then-lane-group shape.
+
   **Serial opt-out invariant (INV-6, re-anchored by D-542-01).** The co-open gate is now keyed on
   `legCoupled = parallelWritesDefaultOn(process.env)` (true by default; `false` only under
   `KAOLA_PARALLEL_WRITES=0`). The flag-OFF (serial) configuration is now the **opt-out** path, not
