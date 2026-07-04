@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=none status=deferred severity=low fix_role=none rationale=negative-space-test-asserts-not-parent_dirty-rather-than-strict-field-absence-documented-intent-non-blocking",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  }
+]

@@ -1,0 +1,7 @@
+{"node":"n1-telemetry","event":"opened","ts":"2026-07-04T19:01:39.079Z"}
+{"node":"n1-telemetry","event":"closed","ts":"2026-07-04T19:23:33.730Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-04T19:23:33.788Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-04T19:39:31.792Z"}
+{"node":"n3-docs","event":"opened","ts":"2026-07-04T19:39:31.860Z"}
+{"node":"n3-docs","event":"closed","ts":"2026-07-04T19:44:16.657Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-04T19:44:16.715Z"}

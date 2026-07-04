@@ -1,0 +1,7 @@
+{"timestamp":"2026-07-04T19:01:39.079Z","event":"open","nodeId":"n1-telemetry","nonce":"77fa0e7ecc32","by":"adaptive-node"}
+{"timestamp":"2026-07-04T19:23:33.731Z","event":"close","nodeId":"n1-telemetry","nonce":"77fa0e7ecc32","by":"adaptive-node"}
+{"timestamp":"2026-07-04T19:23:34.095Z","event":"open","nodeId":"n2-review","nonce":"976308c390c4","by":"adaptive-node"}
+{"timestamp":"2026-07-04T19:39:31.793Z","event":"close","nodeId":"n2-review","nonce":"976308c390c4","by":"adaptive-node"}
+{"timestamp":"2026-07-04T19:39:32.168Z","event":"open","nodeId":"n3-docs","nonce":"552e01eb4f5e","by":"adaptive-node"}
+{"timestamp":"2026-07-04T19:44:16.658Z","event":"close","nodeId":"n3-docs","nonce":"552e01eb4f5e","by":"adaptive-node"}
+{"timestamp":"2026-07-04T19:44:17.023Z","event":"open","nodeId":"n4-finalize","nonce":"946f5d0d43f6","by":"adaptive-node"}
