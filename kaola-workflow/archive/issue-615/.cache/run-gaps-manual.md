@@ -1,0 +1,2 @@
+gap: n2-observability — the non-speculative serial-degrade path in runOpenReady does not surface a reason field distinguishing a parent_dirty degrade from an ordinary serial choice; n3-review finding N2, deferred during the issue-615 repair as out of bounded-repair scope
+gap: n4-stale-comment — inline comments near the issue-615 fix cite pre-edit line numbers for the last-member close fence; n3-review finding N4, deferred, cosmetic, no functional impact
