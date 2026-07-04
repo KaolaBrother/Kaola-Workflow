@@ -10227,7 +10227,7 @@ function testClosureAuditStaleLabelsTimeout() {
   const binDir = path.join(tmp, 'bin');
   try {
     initGitRepo(tmp);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     assert(
       result.drift.stale_in_progress_labels === 'skipped_timeout',
@@ -10249,7 +10249,7 @@ function testClosureAuditUnresolvedClosedState() {
   try {
     initGitRepo(tmp);
     plantRoadmapIssue(tmp, 910, '');
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     const unresolved = result.drift.unresolved_closed_state;
     assert(
@@ -10353,7 +10353,7 @@ function testClosureAuditExecuteDetectionTimeoutPropagates() {
   const binDir = path.join(tmp, 'bin');
   try {
     initGitRepo(tmp);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit(['--execute'], tmp, binDir, probeTimeoutEnv());
     assert(
       result.repaired.labels_skipped_reason === 'detection_timeout',
@@ -10370,20 +10370,24 @@ function testClosureAuditExecuteDetectionTimeoutPropagates() {
 }
 
 function testClosureAuditExecuteLabelRemovalTimeoutBreaks() {
-  // #28a: label-removal SIGTERM mid-loop → labels_skipped_reason='timeout' + loop BREAKS.
-  // Shim returns 2 stale issues but HANGS on the first issue edit --remove-label.
+  // label-removal SIGTERM mid-loop → labels_skipped_reason='timeout' + loop BREAKS.
+  // Shim returns 2 stale issues (detection succeeds), then self-SIGTERMs on the first
+  // issue edit --remove-label so execFileSync throws the timeout error shape deterministically.
   // Result: labels_failed.length===1 (proves loop broke before processing 2nd issue).
+  // Uses the DEFAULT remote budget (no probeTimeoutEnv): the removal self-terminates instantly,
+  // so the detection 'issue list' call — which must SUCCEED — is never at risk of the tight probe
+  // budget killing it under CPU contention (which would wrongly report detection_timeout instead).
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-exec-label-timeout-'));
   const binDir = path.join(tmp, 'bin');
   try {
     initGitRepo(tmp);
     closureAuditShim(binDir, [
       "const a = process.argv.slice(2).join(' ');",
-      "if (a.includes('issue edit') && a.includes('--remove-label')) { setInterval(() => {}, 1 << 30); }",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) { process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30); }",
       "else if (a.includes('issue list')) { process.stdout.write('[{\"number\":91,\"title\":\"stale\",\"url\":\"http://x\"},{\"number\":92,\"title\":\"stale2\",\"url\":\"http://y\"}]\\n'); }",
       "else { process.stdout.write('{}\\n'); }"
     ]);
-    const result = runClosureAudit(['--execute'], tmp, binDir, probeTimeoutEnv());
+    const result = runClosureAudit(['--execute'], tmp, binDir);
     assert(
       result.repaired.labels_skipped_reason === 'timeout',
       'label-removal timeout must set labels_skipped_reason="timeout", got: ' + JSON.stringify(result.repaired.labels_skipped_reason)
@@ -10447,7 +10451,7 @@ function testClosureAuditPrFolderTimeout() {
     state = state.replace(/^sink:\s*.*$/m, 'sink: pr');
     if (!/^pr_url:/m.test(state)) state += 'pr_url: https://github.com/test/repo/pull/911\n';
     fs.writeFileSync(stateFile, state);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     assert(
       result.drift.unarchived_pr_folders === 'skipped_timeout',

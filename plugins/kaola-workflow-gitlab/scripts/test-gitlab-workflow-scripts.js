@@ -3056,7 +3056,7 @@ function testClosureAuditStaleLabelsTimeout() {
   const binDir = path.join(tmp, 'bin');
   try {
     initGitRepo(tmp);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     assert.strictEqual(
       result.drift.stale_in_progress_labels, 'skipped_timeout',
@@ -3078,7 +3078,7 @@ function testClosureAuditUnresolvedClosedState() {
   try {
     initGitRepo(tmp);
     plantClosureRoadmapSource(tmp, 920);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     const unresolved = result.drift.unresolved_closed_state;
     assert(
@@ -3238,7 +3238,7 @@ function testClosureAuditExecuteDetectionTimeoutPropagates() {
   const binDir = path.join(tmp, 'bin');
   try {
     initGitRepo(tmp);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit(['--execute'], tmp, binDir, probeTimeoutEnv());
     assert.strictEqual(
       result.repaired.labels_skipped_reason, 'detection_timeout',
@@ -3261,7 +3261,7 @@ function testClosureAuditMrFolderTimeout() {
     initGitRepo(tmp);
     writeState(tmp, 'issue-921', 921);
     makeMrSinkFolder(tmp, 'issue-921', 921);
-    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     assert.strictEqual(
       result.drift.unarchived_mr_folders, 'skipped_timeout',
