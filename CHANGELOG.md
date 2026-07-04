@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Project literature reframed around loop engineering.** The README opening, Philosophy lead-in, and a new "loop vocabulary, mapped to mechanisms" table now position Kaola-Workflow in the loop-engineering vocabulary (agent loop, verification loop/grader, exit condition, circuit breaker, durable state, outer loop, harness), each term mapped to the existing mechanism that backs it; `/goal` is framed as the outer loop, and the `CLAUDE.md` Project Overview and `docs/architecture.md` openings carry the same one-line reframe. The GitHub repository description was updated to match. Prose-only: zero script/gate/behavior change, no routing surfaces touched.
+
 ## [6.20.1] - 2026-07-04
 
 ### Fixed

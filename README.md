@@ -1,8 +1,14 @@
 # Kaola-Workflow
 
-An **adaptive**, multi-model development workflow that runs on three agent runtimes — **Claude Code, Codex, and [opencode](https://opencode.ai)** — across the **GitHub, GitLab, and Gitea** forges. By default the agent composes a **task-shaped DAG of role nodes** sized to the issue — inside a locked claim → worktree → *free design* → Finalization frame — with durable per-node artifacts and full resumability across sessions and context resets. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
+**Loop engineering for coding agents.** Instead of prompting an agent and hoping, you hand Kaola-Workflow an issue and it designs the loop that prompts the agent for you: a **task-shaped DAG of role nodes** sized to the issue, each node running inside a verified act → check → close cycle, with fail-closed **exit conditions**, adversarial **verification loops**, and **durable state** that survives sessions and context resets — all inside a locked claim → worktree → *free design* → Finalization frame. Runs on three agent runtimes — **Claude Code, Codex, and [opencode](https://opencode.ai)** — across the **GitHub, GitLab, and Gitea** forges. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
 
 ## Philosophy
+
+**You don't prompt the agent. You design the loop.**
+
+The leverage in agentic coding has moved from writing prompts to engineering the loops that run agents: what feeds them context, what verifies their output, and what decides whether to iterate, escalate, or stop. Kaola-Workflow is that loop, engineered with discipline — no *loopmaxxing*. Every loop has a grader, a circuit breaker, and a fail-closed exit condition, because an unverified iteration is just expensive noise. The point is not loops that run unattended; it is **loops that are safe to leave running**.
+
+That discipline comes from one creed:
 
 **Make coding agents do more — more automation, less manual toil, faster results — without ever trading away accuracy.**
 
@@ -24,8 +30,24 @@ A few beliefs follow from that order.
 
 **Humans decide what only humans should.** The system investigates and resolves questions of **fact** on its own. It escalates genuine matters of **judgment, value, and taste** to you.
 
+### The loop vocabulary, mapped to mechanisms
+
+Every loop-engineering concept here is backed by a concrete mechanism — nothing is framing without a script or gate behind it:
+
+| Loop-engineering concept | Kaola-Workflow mechanism |
+|---|---|
+| Agent loop | Per-node role execution via the running-set scheduler |
+| Verification loop / grader | Adversarial verifier + fail-closed quality gates |
+| Exit condition | Post-dominance gates and the finalization sink — nodes close on recorded evidence, not on exit-0 |
+| Circuit breaker | Bounded planner repair → discard + restart → stop and ask; never a silent fallback |
+| Durable state tracking | `workflow-state.md`, the frozen plan ledger, and per-node evidence — resumable across sessions and context resets |
+| Human-in-the-loop escalation | Consent-halt valve: facts are resolved autonomously, judgment goes to you |
+| Outer loop | `/goal` cross-turn autonomy toward one objective |
+| Harness | The locked claim → worktree → free design → finalization frame |
+
 ### What you get
 
+- **Engineered loops, not one-shot prompts** — every node runs act → verify → close, and the run iterates, escalates, or stops on explicit conditions, never on hope.
 - **Adaptive, task-shaped planning** sized to each issue — plus optional fast single-pass and full 6-phase paths.
 - **Multi-model** across Claude Code, Codex, and opencode, right-sizing the model for each step.
 - **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work. Write frontiers the planner proves **disjoint** co-open as isolated parallel legs **by default** (per-leg worktree isolation + a mandatory synthesizer reconcile are the correctness net); only genuinely-overlapping writes stay serial/consent-gated, and any host without worktree support degrades to serial.
@@ -65,9 +87,10 @@ A few beliefs follow from that order.
 
 ## Autonomy and goal contract
 
-Kaola-Workflow is goal-driven. Use `/goal` in either Claude Code or Codex
-to keep a session working on a single objective across many turns until
-the platform's stop condition is satisfied. The Kaola-Workflow Codex
+Kaola-Workflow is goal-driven — `/goal` is the **outer loop** around the
+per-issue workflow loop. Use it in either Claude Code or Codex to keep a
+session working on a single objective across many turns until the
+platform's stop condition is satisfied. The Kaola-Workflow Codex
 skills also embed a `## Goal Contract` for phase-level continuation that
 works even when `/goal` is not in play.
 

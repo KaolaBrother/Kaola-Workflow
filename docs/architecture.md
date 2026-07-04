@@ -1,6 +1,9 @@
 # Architecture
 
 Document system boundaries, major components, data flow, and deployment shape.
+Read it as the anatomy of an engineered agent loop: the harness frame, the
+verification loops, the exit conditions, and the durable state that make a run
+safe to leave running.
 
 ## Workflow Paths (fast / full / adaptive)
 

@@ -1,7 +1,7 @@
 # Kaola-Workflow — Claude Code Instructions
 
 ## Project Overview
-Kaola-Workflow is an adaptive, GitHub-issue-driven workflow system for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler (the `fast` and `full` six-phase paths are install-time opt-ins). The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
+Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, GitHub-issue-driven workflow for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler (the `fast` and `full` six-phase paths are install-time opt-ins). The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
 
 ## Durable State Contract
 
