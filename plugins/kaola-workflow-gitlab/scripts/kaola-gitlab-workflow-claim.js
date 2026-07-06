@@ -1696,7 +1696,14 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   };
 }
 
-function checkClosureInvariants(root, receipt, archiveDest) {
+// #617: opts.implRef/opts.sinkTarget let a merge-lane caller (sink-merge — the seam that
+// performs the real merge + close) wire the remote-closed-after-publish invariant declared in
+// kaola-workflow-closure-contract.js but never evaluated anywhere. When supplied, verifies the
+// recorded implementation commit is `git merge-base --is-ancestor` of the sink target and
+// records the verdict on the receipt (receipt.remote_closed_after_publish); a caller that omits
+// opts leaves this check a pure no-op (byte-identical to today — cmdFinalize's merge-lane defers
+// its own close, so it never has a genuine close to verify at this seam).
+function checkClosureInvariants(root, receipt, archiveDest, opts) {
   const violations = [];
   const issueNumber = receipt.issue_number;
   const abandoned = receipt && receipt.archive === 'abandoned';
@@ -1809,6 +1816,25 @@ function checkClosureInvariants(root, receipt, archiveDest) {
       description: (invMc ? invMc.description : 'bundle member(s) not closed') + ' (unclosed: ' + unclosedMembers.sort(function(a, b){ return a - b; }).join(',') + ')'
     });
   }
+  // #617: remote-closed-after-publish — a real incident closed an issue whose implementation
+  // commit never actually became an ancestor of the sink target (the merge sink died before it
+  // ran). Only evaluated when the caller supplies verification refs; see the function header.
+  if (opts && opts.implRef && opts.sinkTarget) {
+    let published = false;
+    try {
+      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', opts.implRef, opts.sinkTarget], { stdio: 'ignore' });
+      published = true;
+    } catch (_) { published = false; }
+    receipt.remote_closed_after_publish = published ? 'verified' : 'failed';
+    if (!published) {
+      const invPub = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'remote-closed-after-publish'; });
+      violations.push({
+        id: 'remote-closed-after-publish',
+        description: (invPub ? invPub.description : 'the remote issue was closed before the implementation was verified merged') +
+          ' (commit ' + opts.implRef + ' is not an ancestor of ' + opts.sinkTarget + ')'
+      });
+    }
+  }
   return { ok: violations.length === 0, violations };
 }
 
@@ -1891,6 +1917,20 @@ function cmdFinalize() {
     try {
       keepIssueOpen = field(fs.readFileSync(stateFile(root, args.project), 'utf8'), 'issue_action') === 'comment_keep_open';
     } catch (_) {}
+  }
+  // #617: merge-lane close-deferral must not rest ENTIRELY on the caller remembering
+  // --keep-worktree — mirror the keepIssueOpen derivation immediately above and read the
+  // durable `sink:` field too. sink defaults to 'merge' (the two-stage lane: cmdFinalize defers
+  // its own close and the merge sink — sink-merge or the legacy pipeline — performs the real
+  // close only AFTER the branch is verified merged); only an explicit `sink: mr` run defers
+  // solely to the flag. An unreadable/absent field fails TOWARD deferral (never a premature
+  // close) — a caller that forgot --keep-worktree on a merge-lane run can no longer close the
+  // issue before the merge, the exact 2026-07-06 incident (#617).
+  let mergeLaneDeferred = !!args.keepWorktree;
+  if (!mergeLaneDeferred) {
+    try {
+      mergeLaneDeferred = field(fs.readFileSync(stateFile(root, args.project), 'utf8'), 'sink') !== 'mr';
+    } catch (_) { mergeLaneDeferred = true; }
   }
   // #522: FINALIZE GATE — BEFORE any irreversible side effect (archive rename, worktree removal,
   // issue close). When a workflow-plan.md is present (adaptive run), shell the plan-validator's
@@ -2121,9 +2161,11 @@ function cmdFinalize() {
   }
   // #427: execute forge issue close for each open member. Probe-before-close: members already
   // closed or probed-unavailable are handled without a double-close attempt.
-  // ONLY when online, ONLY when not keep-open, ONLY for finalize-only flows (not merge-lane
-  // keep-worktree, where sink-merge is responsible for closing). Runs AFTER archive+verify+delete.
-  if (!keepIssueOpen && !OFFLINE && !args.keepWorktree) {
+  // ONLY when online, ONLY when not keep-open, ONLY for finalize-only flows (not a merge-lane
+  // run — #617 derives that from durable state via mergeLaneDeferred, not just the caller
+  // remembering --keep-worktree — where sink-merge is responsible for closing after the merge
+  // is verified). Runs AFTER archive+verify+delete.
+  if (!keepIssueOpen && !OFFLINE && !mergeLaneDeferred) {
     const forgeOpts = cmdFinalizeIsLinkedRun ? { cwd: cmdFinalizeMainRoot } : undefined;
     if (issueIids.length > 0) {
       // Bundle: close each member that is still open (i.e. in openIssues bucket)
@@ -2836,6 +2878,103 @@ function cmdSinkFallback() {
   output({ updated: true, project: args.project, sink: 'mr', reason });
 }
 
+// #617: pure helper — true iff implRef is an ancestor of sinkTarget in root. Shared by
+// checkClosureInvariants (the wired invariant) and cmdVerifySink (the standalone audit).
+function verifyImplPublished(root, implRef, sinkTarget) {
+  if (!implRef || !sinkTarget) return false;
+  try {
+    execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', implRef, sinkTarget], { stdio: 'ignore' });
+    return true;
+  } catch (_) { return false; }
+}
+
+// #617: cmdVerifySink — a standalone audit an operator (or a next session) can run independently
+// of the merge sink itself, to catch exactly the incident this issue fixes: an issue closed while
+// its implementation never actually landed on the sink target. Given --project P, checks:
+//   (a) the recorded implementation commit (from the live-or-archived sink-receipt.json, falling
+//       back to a still-lingering feature branch) is an ancestor of the resolved default branch;
+//   (b) no lingering .kw/worktrees/<project> and no lingering workflow branch;
+//   (c) the archive folder is present and the active folder is gone.
+// Exits non-zero with a typed `reasons` array on ANY failing leg; exits 0 with a clean report
+// otherwise. Pure read — never mutates anything.
+function cmdVerifySink() {
+  const root = getRoot();
+  const args = parseArgs(process.argv.slice(3));
+  assert(args.project, '--project required');
+  assert(isSafeName(args.project), 'unsafe project name');
+
+  const reasons = [];
+  const checks = {};
+
+  // (c) archive present + active folder gone.
+  const activeDir = projectDir(root, args.project);
+  const archiveDir = path.join(root, 'kaola-workflow', 'archive', args.project);
+  const activeGone = !fs.existsSync(activeDir);
+  const archivePresent = fs.existsSync(archiveDir);
+  checks.active_folder = activeGone ? 'gone' : 'present';
+  checks.archive_folder = archivePresent ? 'present' : 'missing';
+  if (!activeGone) reasons.push('active_folder_still_present');
+  if (!archivePresent) reasons.push('archive_folder_missing');
+
+  // (b) no lingering worktree / branch. Resolve the branch name from whichever state file exists.
+  let branchName = null;
+  for (const p of [stateFile(root, args.project), path.join(archiveDir, 'workflow-state.md')]) {
+    try { branchName = field(fs.readFileSync(p, 'utf8'), 'branch') || branchName; if (branchName) break; } catch (_) {}
+  }
+  const wtPath = worktreePathFor(root, args.project);
+  const worktreeLingering = fs.existsSync(wtPath);
+  checks.worktree = worktreeLingering ? 'lingering' : 'absent';
+  if (worktreeLingering) reasons.push('worktree_lingering');
+
+  let branchLingering = false;
+  if (branchName) {
+    try {
+      execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branchName],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+      branchLingering = true;
+    } catch (_) { branchLingering = false; }
+  }
+  checks.branch = branchLingering ? 'lingering' : 'absent';
+  if (branchLingering) reasons.push('branch_lingering');
+
+  // (a) the recorded implementation commit must be an ancestor of the sink target. Prefer the
+  // durable sink-receipt.json (live or archived) branch_head; fall back to resolving the branch
+  // name directly when it still exists.
+  let implRef = null;
+  for (const p of [
+    path.join(activeDir, '.cache', 'sink-receipt.json'),
+    path.join(archiveDir, '.cache', 'sink-receipt.json'),
+  ]) {
+    try {
+      const r = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (r && r.branch_head) { implRef = r.branch_head; break; }
+    } catch (_) {}
+  }
+  if (!implRef && branchLingering) {
+    try {
+      implRef = execFileSync('git', ['-C', root, 'rev-parse', branchName], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (_) {}
+  }
+  const sinkTarget = defaultBranch(root);
+  checks.impl_commit = implRef || null;
+  checks.sink_target = sinkTarget;
+  if (!implRef) {
+    // No trace of the implementation commit anywhere — the expected shape of a cleanly-completed
+    // sink (worktree AND branch both already gone). Only suspicious alongside a lingering
+    // worktree/branch (something survived but we cannot verify it), so only flag it then.
+    checks.merged_into_sink_target = 'unknown';
+    if (worktreeLingering || branchLingering) reasons.push('impl_commit_unresolvable_with_lingering_branch');
+  } else if (!verifyImplPublished(root, implRef, sinkTarget)) {
+    checks.merged_into_sink_target = 'not_ancestor';
+    reasons.push('impl_commit_not_ancestor');
+  } else {
+    checks.merged_into_sink_target = 'verified';
+  }
+
+  const ok = reasons.length === 0;
+  output({ project: args.project, ok, checks, reasons }, ok ? 0 : 1);
+}
+
 function cmdAuditLabels() {
   if (OFFLINE) { output({ stale: [], offline: true }); return; }
   const stale = forge.listIssues({ state: 'closed', labels: [CLAIM_LABEL] })
@@ -2981,7 +3120,7 @@ function cmdLegacyWorktreeCleanup() {
   }
 }
 
-const USAGE = 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>\n'
+const USAGE = 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|watch-mr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>\n'
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--mr-iid N]\n'
   + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr] [--workflow-path adaptive|full|fast]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
@@ -3019,6 +3158,7 @@ function main() {
   if (sub === 'worktree-status') return cmdWorktreeStatus();
   if (sub === 'worktree-finalize') return cmdWorktreeFinalize();
   if (sub === 'sink-fallback') return cmdSinkFallback();
+  if (sub === 'verify-sink') return cmdVerifySink();
   if (sub === 'stale-worktree-check') return cmdStaleWorktreeCheck();
   if (sub === 'stale-worktree-cleanup') return cmdStaleWorktreeCleanup();
   if (sub === 'legacy-worktree-cleanup') return cmdLegacyWorktreeCleanup();
@@ -3073,5 +3213,7 @@ module.exports = {
   readPriorityConfig,
   removeWorktree,
   watchMergeRequests,
-  worktreePathFor
+  worktreePathFor,
+  verifyImplPublished,
+  cmdVerifySink
 };

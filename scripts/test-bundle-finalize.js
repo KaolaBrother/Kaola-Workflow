@@ -260,6 +260,14 @@ function writeGhMockScript(binDir, opts) {
     '  process.exit(0);',
     '}',
     '',
+    '// #617: issue close N --comment ... -> logged as close:N (proves whether/when a real close was attempted)',
+    'const closeM = a.match(/^issue close (\\d+)/);',
+    'if (closeM) {',
+    '  log("close:" + closeM[1]);',
+    '  process.stdout.write("\\n");',
+    '  process.exit(0);',
+    '}',
+    '',
     '// issue edit N --remove-label',
     'if (a.includes("issue edit") && a.includes("--remove-label")) {',
     '  const em = a.match(/issue edit (\\d+)/);',
@@ -1198,6 +1206,222 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
     fs.rmSync(tmpRoot, { recursive: true, force: true });
     fs.rmSync(binDir, { recursive: true, force: true });
     if (remotePath) fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Issue #617 — a GitHub issue could be closed by cmdFinalize even though the merge sink (push to
+// main) never actually ran; the recorded implementation commit never became an ancestor of main.
+// ---------------------------------------------------------------------------
+
+// (A) cmdFinalize's issue-close guard must derive merge-lane deferral from durable state (the
+// `sink:` field), not solely from the caller remembering --keep-worktree.
+(function testMergeLaneFinalizeDefersActualClose() {
+  console.log('Test (#617 A): merge-lane finalize (sink:merge, no --keep-worktree) must NOT close an open issue online — defers to the merge sink');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  const project = 'issue-61701';
+  try {
+    initGitRepo(tmpRoot);
+    writeSingleStateFile(tmpRoot, project, 61701);
+    writeRoadmapFile(tmpRoot, 61701);
+    writeRoadmapMirror(tmpRoot, [61701]);
+    // Issue starts OPEN (never pre-closed) — a genuine close attempt is the observable bug.
+    writeGhMockScript(binDir, { logFile });
+
+    const result = runFinalize(['finalize', '--project', project], tmpRoot, binDir);
+    const out = parseOutput(result);
+
+    assert(result.status === 0, '#617 A: finalize exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out !== null, '#617 A: finalize emits JSON');
+
+    const calls = readLog(logFile);
+    assert(!calls.some(c => c.startsWith('close:')),
+      '#617 A: merge-lane finalize (no --keep-worktree) must NOT call `gh issue close` before the merge sink runs; calls=' + JSON.stringify(calls));
+
+    const receipt = out && out.closure_receipt;
+    assert(receipt != null, '#617 A: closure_receipt present');
+    assert(receipt && receipt.remote_issue_closed === 'close_pending',
+      '#617 A: receipt.remote_issue_closed must be close_pending (deferred to the merge sink), got ' + JSON.stringify(receipt && receipt.remote_issue_closed));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// (B) the --sink transaction: closure must run AFTER push_main, never before. Proven with the
+// existing KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL test hook — if closure ran before push_main (the
+// pre-fix SINK_STEPS order), a forced push_main failure would still have already closed the issue.
+(function testSinkTransactionClosureNeverBeforePushMain() {
+  console.log('Test (#617 B): --sink transaction — closure must run AFTER push_main; a forced push_main failure must NOT have already closed the issue');
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink617-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const project = 'issue-61702';
+  const branch = 'workflow/' + project;
+  let remotePath = null;
+  try {
+    remotePath = initGitRepoWithBareRemote(tmpRoot);
+
+    fs.writeFileSync(path.join(binDir, 'gh.js'), [
+      "'use strict';",
+      'const fs = require("fs");',
+      'const argv = process.argv.slice(2);',
+      'const a = argv.join(" ");',
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'function log(msg) { try { fs.appendFileSync(logFile, msg + "\\n"); } catch(_) {} }',
+      'if (a.includes("repo view")) {',
+      '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue view N -> always open (never pre-closed)',
+      'const viewM = a.match(/issue view (\\d+)/);',
+      'if (viewM) {',
+      '  process.stdout.write(JSON.stringify({state:"open"}) + "\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue close N -> logged as close:N',
+      'const closeM = a.match(/^issue close (\\d+)/);',
+      'if (closeM) {',
+      '  log("close:" + closeM[1]);',
+      '  process.stdout.write("\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue edit N --remove-label -> logged as label-removed:N',
+      'if (a.includes("issue edit") && a.includes("--remove-label")) {',
+      '  const em = a.match(/issue edit (\\d+)/);',
+      '  log("label-removed:" + (em ? em[1] : "?"));',
+      '  process.exit(0);',
+      '}',
+      'process.stdout.write("\\n");',
+      'process.exit(0);',
+    ].join('\n'));
+
+    // Feature branch carrying a deliverable — pushed upstream, mirrors the real sink shape.
+    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', branch], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'push', '-u', 'origin', branch], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+    spawnSync('git', ['-C', tmpRoot, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'push', 'origin', branch], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', branch, '--project', project, '--issue', '61702', '--sink', '--json',
+    ], {
+      cwd: tmpRoot,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+        KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL: '1',
+      }),
+    });
+    const out = parseOutput(result);
+
+    assert(result.status !== 0, '#617 B: forced push_main failure must exit non-zero; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'push_main',
+      '#617 B: refusal reason must be sink_incomplete at step push_main, got ' + JSON.stringify(out));
+
+    const calls = readLog(logFile);
+    assert(!calls.some(c => c.startsWith('close:')),
+      '#617 B: closure must NEVER run before push_main succeeds — the issue must not be closed when push_main fails; calls=' + JSON.stringify(calls));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    fs.rmSync(binDir, { recursive: true, force: true });
+    if (remotePath) fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+})();
+
+// (C) checkClosureInvariants — the remote-closed-after-publish invariant (declared in
+// kaola-workflow-closure-contract.js, previously never evaluated) must fire when the recorded
+// implementation commit is NOT an ancestor of the sink target, and clear once it actually is.
+(function testRemoteClosedAfterPublishInvariant() {
+  console.log('Test (#617 C): checkClosureInvariants — remote-closed-after-publish fires when the impl commit is not an ancestor of the sink target, clears once merged');
+  const tmpRoot = makeTmpRoot();
+  try {
+    initGitRepo(tmpRoot);
+    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', 'workflow/issue-61703'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmpRoot, 'feature.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmpRoot, 'add', 'feature.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: unmerged'], { encoding: 'utf8' });
+    const implSha = spawnSync('git', ['-C', tmpRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'issue-61703');
+    fs.mkdirSync(archiveDest, { recursive: true });
+    fs.writeFileSync(path.join(archiveDest, 'workflow-state.md'),
+      '# Kaola-Workflow State\nname: issue-61703\nstatus: closed\nstep: complete\n');
+
+    const receipt = {
+      project: 'issue-61703', issue_number: 61703,
+      archive: 'closed', roadmap_source_removed: 'absent', roadmap_regenerated: 'skipped',
+      remote_issue_closed: 'closed', claim_label_removed: 'removed',
+      worktree_removed: 'missing', branch_removed: 'kept',
+      claim_planner_attested: 'missing', finalize_contractor_attested: 'missing', warnings: []
+    };
+
+    // Not yet merged — the invariant must fire.
+    const bad = checkClosureInvariants(tmpRoot, receipt, archiveDest, { implRef: implSha, sinkTarget: 'main' });
+    assert(bad.ok === false, '#617 C: closure invariants must fail when the impl commit is not an ancestor of the sink target; got ' + JSON.stringify(bad.violations));
+    assert(bad.violations.some(v => v.id === 'remote-closed-after-publish'),
+      '#617 C: remote-closed-after-publish violation must fire, got ' + JSON.stringify(bad.violations));
+    assert(receipt.remote_closed_after_publish === 'failed',
+      '#617 C: receipt.remote_closed_after_publish must be failed, got ' + receipt.remote_closed_after_publish);
+
+    // Merge it — the SAME check must now pass.
+    spawnSync('git', ['-C', tmpRoot, 'merge', '--no-ff', 'workflow/issue-61703', '-m', 'merge'], { encoding: 'utf8' });
+    const receipt2 = Object.assign({}, receipt, { remote_closed_after_publish: undefined });
+    const good = checkClosureInvariants(tmpRoot, receipt2, archiveDest, { implRef: implSha, sinkTarget: 'main' });
+    assert(!good.violations.some(v => v.id === 'remote-closed-after-publish'),
+      '#617 C: after the real merge, remote-closed-after-publish must NOT fire, got ' + JSON.stringify(good.violations));
+    assert(receipt2.remote_closed_after_publish === 'verified',
+      '#617 C: receipt.remote_closed_after_publish must be verified once actually merged, got ' + receipt2.remote_closed_after_publish);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// (D) the standalone `verify-sink` subcommand — an audit an operator can run independently —
+// must detect an orphaned close: an archived (closed) project whose recorded branch was never
+// actually merged into the sink target.
+(function testVerifySinkDetectsOrphanedClose() {
+  console.log('Test (#617 D): verify-sink subcommand detects an orphaned close (archived project, commit not an ancestor of the sink target)');
+  const tmpRoot = makeTmpRoot();
+  try {
+    initGitRepo(tmpRoot);
+    const project = 'issue-61704';
+    // Unmerged feature branch — mirrors the incident: the implementation only ever landed on
+    // the stale branch, never merged into main.
+    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', 'workflow/' + project], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmpRoot, 'impl.txt'), 'implementation\n');
+    spawnSync('git', ['-C', tmpRoot, 'add', 'impl.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: unmerged implementation'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+
+    // Archived + closed — active folder gone, archive present — but the branch was NEVER merged.
+    const archiveDir = path.join(tmpRoot, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      'name: ' + project, 'status: closed', 'step: complete',
+      '## Sink', 'branch: workflow/' + project, 'issue_number: 61704', 'sink: merge'
+    ].join('\n') + '\n');
+
+    const result = spawnSync(process.execPath, [claimScript, 'verify-sink', '--project', project], {
+      cwd: tmpRoot, encoding: 'utf8', timeout: 30000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }),
+    });
+    const out = parseOutput(result);
+
+    assert(result.status !== 0, '#617 D: verify-sink must exit non-zero for an orphaned close, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out !== null, '#617 D: verify-sink emits JSON');
+    assert(out && out.ok === false, '#617 D: ok must be false, got ' + JSON.stringify(out));
+    assert(out && Array.isArray(out.reasons) && out.reasons.includes('impl_commit_not_ancestor'),
+      '#617 D: reasons must include impl_commit_not_ancestor, got ' + JSON.stringify(out && out.reasons));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 })();
 

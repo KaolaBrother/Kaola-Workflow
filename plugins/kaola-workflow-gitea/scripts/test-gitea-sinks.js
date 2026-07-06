@@ -1172,7 +1172,10 @@ console.log('Gitea #517 reopen-after-autoclose tests passed');
       assert.ok(rp, '#497-close-gitea: a sink-receipt must exist after the failed transaction');
       const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
       assert.notStrictEqual(receipt.steps.closure, 'done', '#497-close-gitea: closure must NOT be marked done after a hard close failure');
-      assert.strictEqual(receipt.steps.push_main, 'pending', '#497-close-gitea: push_main must still be pending (closure refuse returns before it)');
+      // #617: SINK_STEPS now runs closure LAST (after push_main), so push_main must already be
+      // 'done' by the time the closure step's close-failure short-circuit fires — the merge
+      // itself succeeded; only the issue-close call failed.
+      assert.strictEqual(receipt.steps.push_main, 'done', '#497-close-gitea: push_main must already be done (closure runs after push_main)');
     } finally {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       fs.rmSync(remote, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });

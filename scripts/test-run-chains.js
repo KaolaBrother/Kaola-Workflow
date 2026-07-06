@@ -65,6 +65,19 @@ function makeSleepScript(dir, name, ms) {
   return p;
 }
 
+// Write a tiny executable node script that SIGNAL-KILLS itself (#618 — simulating an external
+// OOM-kill / operator SIGKILL, NOT our own per-chain timeout). process.kill(pid, signal) on one's
+// own pid terminates the process via a real OS signal (status===null at the parent), the exact
+// condition an external kill produces — indistinguishable from it at the parent spawn/spawnSync API.
+function makeSelfKillScript(dir, name, signal) {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p,
+    '#!/usr/bin/env node\n\'use strict\';\nprocess.kill(process.pid, ' + JSON.stringify(signal || 'SIGKILL') + ');\n' +
+    'setInterval(function(){}, 1000);\n', // safety net: keep the event loop alive in case the signal is not instantaneous
+    { mode: 0o755 });
+  return p;
+}
+
 // ---------------------------------------------------------------------------
 // T1: valid receipt schema — headSha, workTreeHash, startedAt, completedAt,
 //     chains array with required fields, exit 0 on all-pass chain.
@@ -715,9 +728,135 @@ try {
   assert(rc25 !== null, 'T25: receipt written');
   if (rc25 !== null) {
     assert(rc25.chains[0].timed_out === false, 'T25: green chain records timed_out: false; got ' + JSON.stringify(rc25.chains[0]));
+    assert(rc25.chains[0].signal === null, 'T25: green chain records signal: null (#618 additive field); got ' + JSON.stringify(rc25.chains[0]));
   }
 } finally {
   try { fs.rmSync(repo25, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T26 (#618): a SIGNAL-KILLED chain on the SYNC (serial) dispatch path must map to exitCode 1 —
+// NEVER a false green. Before the fix, `(r.status != null) ? r.status : (r.error ? 1 : 0)` read a
+// pure signal death (status===null, no spawnSync `error`) as exitCode 0. A large timeout proves
+// this is NOT our own timer-kill (timed_out must stay false); the signal name must be recorded.
+// ---------------------------------------------------------------------------
+const repo26 = makeGitRepo();
+try {
+  const killMock = makeSelfKillScript(repo26, 'selfkill.js', 'SIGKILL');
+  const r26 = run(repo26, [
+    '--chains', 'claude',
+    '--mock-chain', 'claude:' + killMock,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
+  assert(r26.exitCode !== 0, 'T26: a signal-killed chain (sync path) stays RED (non-zero overall exit)');
+  const rc26 = r26.receipt;
+  assert(rc26 !== null, 'T26: receipt written on a signal death');
+  if (rc26 !== null) {
+    const ch = rc26.chains[0];
+    assert(ch.exitCode === 1, 'T26: sync-path signal death maps to exitCode 1 (never a false green); got ' + JSON.stringify(ch));
+    assert(ch.timed_out === false, 'T26: NOT our own timeout kill (large timeout headroom) — timed_out stays false; got ' + JSON.stringify(ch));
+    assert(ch.signal === 'SIGKILL', 'T26: the signal name SIGKILL is recorded in the receipt entry; got ' + JSON.stringify(ch.signal));
+  }
+} finally {
+  try { fs.rmSync(repo26, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T27 (#618): a SIGNAL-KILLED chain on the ASYNC (concurrent) dispatch path must map to exitCode 1.
+// Before the fix, `close(null, 'SIGKILL')` with timedOut===false fell through to
+// `(code != null) ? code : 0` and read as exitCode 0 — a false green. A sibling chain passes
+// independently in the SAME concurrent run (retry/dispatch stays per-spec).
+// ---------------------------------------------------------------------------
+const repo27 = makeGitRepo();
+try {
+  const killMock = makeSelfKillScript(repo27, 'selfkill.js', 'SIGKILL');
+  const passMock = makeExitScript(repo27, 'pass.js', 0);
+  const r27 = run(repo27, [
+    '--chains', 'claude,codex',
+    '--mock-chain', 'claude:' + killMock,
+    '--mock-chain', 'codex:' + passMock,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
+  assert(r27.exitCode !== 0, 'T27: a signal-killed chain (async/concurrent path) stays RED (non-zero overall exit)');
+  const rc27 = r27.receipt;
+  assert(rc27 !== null, 'T27: receipt written on a signal death');
+  if (rc27 !== null) {
+    const ch = rc27.chains.find(x => x.name === 'claude');
+    assert(!!ch && ch.exitCode === 1, 'T27: async-path signal death maps to exitCode 1 (never a false green); got ' + JSON.stringify(ch));
+    assert(!!ch && ch.timed_out === false, 'T27: NOT our own timeout kill (large timeout headroom) — timed_out stays false; got ' + JSON.stringify(ch));
+    assert(!!ch && ch.signal === 'SIGKILL', 'T27: the signal name SIGKILL is recorded in the receipt entry; got ' + JSON.stringify(ch && ch.signal));
+    const codexCh = rc27.chains.find(x => x.name === 'codex');
+    assert(!!codexCh && codexCh.exitCode === 0, 'T27: the sibling chain still passes independently in the same run');
+  }
+} finally {
+  try { fs.rmSync(repo27, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T28 (#618): distinguishes "our own timeout kill" (already handled since #608 — SIGTERM via the
+// per-chain timer, timed_out: true) from "external signal kill with timedOut===false" (the NEW
+// #618 fix). Both chains run CONCURRENTLY in ONE receipt so the two rows are directly comparable —
+// a regression that conflates the two (e.g. sets timed_out for every signal-killed chain, or fails
+// to fail-closed the external case) is caught here.
+// ---------------------------------------------------------------------------
+const repo28 = makeGitRepo();
+try {
+  const hangMock = path.join(repo28, 'hang.js');
+  fs.writeFileSync(hangMock, '#!/usr/bin/env node\n\'use strict\';\nsetInterval(function(){}, 1000);\n', { mode: 0o755 });
+  const killMock = makeSelfKillScript(repo28, 'selfkill.js', 'SIGKILL');
+  const r28 = run(repo28, [
+    '--chains', 'claude,codex',
+    '--mock-chain', 'claude:' + hangMock,   // killed by OUR timer -> SIGTERM, timed_out: true (unchanged, #608)
+    '--mock-chain', 'codex:' + killMock,    // self-SIGKILL, unrelated to our timer, timed_out: false (#618 fix)
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '600' });
+  assert(r28.exitCode !== 0, 'T28: both red chains fail the overall run (non-zero exit)');
+  const rc28 = r28.receipt;
+  assert(rc28 !== null, 'T28: receipt written');
+  if (rc28 !== null) {
+    const timeoutCh = rc28.chains.find(x => x.name === 'claude');
+    const signalCh = rc28.chains.find(x => x.name === 'codex');
+    assert(!!timeoutCh && timeoutCh.exitCode === 1 && timeoutCh.timed_out === true,
+      'T28: the TIMER-killed chain records timed_out: true (the #608 path, unchanged); got ' + JSON.stringify(timeoutCh));
+    assert(!!signalCh && signalCh.exitCode === 1 && signalCh.timed_out === false && signalCh.signal === 'SIGKILL',
+      'T28: the EXTERNALLY signal-killed chain records timed_out: false + signal: SIGKILL — distinct from a timeout; got ' + JSON.stringify(signalCh));
+  }
+} finally {
+  try { fs.rmSync(repo28, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T29 (#618): plan-validator --finalize-check must REFUSE a FRESH, HEAD-bound receipt whose
+// chains[] array is EMPTY, with a typed `chains_empty` reason — mirroring the PRODUCER's own
+// no_chains guard (T11 above) on the CONSUMER (gate) side. Before the fix, the redChains filter is
+// vacuously empty over an empty array, so `{headSha:<HEAD>, chains: []}` reads as "zero chains
+// verified" == "all chains green" and the gate wrongly PASSES.
+// ---------------------------------------------------------------------------
+{
+  const PLAN_VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const repo29 = makeGitRepo();
+  try {
+    // self-host marker: package.json declares an edition chain script, so the finalize discriminator
+    // classifies this repo as chain-receipt (self-host), not the consumer final-validation.md path.
+    fs.writeFileSync(path.join(repo29, 'package.json'), JSON.stringify({ scripts: {
+      'test:kaola-workflow:claude': 'true' } }) + '\n');
+    execFileSync('git', ['-C', repo29, 'add', 'package.json'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', repo29, 'commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
+    const proj = path.join(repo29, 'kaola-workflow', 'issue-618');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '# plan\n');
+    execFileSync('git', ['-C', repo29, 'add', '-A'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', repo29, 'commit', '-m', 'plan'], { encoding: 'utf8' });
+    const headSha = execFileSync('git', ['-C', repo29, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.cache', 'chain-receipt.json'), JSON.stringify({ headSha, chains: [] }));
+    const r = spawnSync(process.execPath, [PLAN_VALIDATOR, planPath, '--finalize-check', '--json'],
+      { cwd: repo29, encoding: 'utf8', timeout: 30000 });
+    let out = null;
+    try { out = JSON.parse(r.stdout.trim()); } catch (_) {}
+    assert(r.status === 1, 'T29: --finalize-check refuses (non-zero exit) on a fresh, empty chains[] receipt; got status ' + r.status + ' stdout=' + r.stdout);
+    assert(out && out.result === 'refuse' && out.reason === 'chains_empty', 'T29: typed chains_empty refusal on an empty chains[] receipt; got ' + JSON.stringify(out));
+  } finally {
+    try { fs.rmSync(repo29, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 // ---------------------------------------------------------------------------
