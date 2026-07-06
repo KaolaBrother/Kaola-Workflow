@@ -86,6 +86,10 @@ const OPERATOR_HINT_REGISTRY = {
   group_not_found: (ctx) => `No live lane_group "${ctx.nodeId || '(unknown)'}" in running-set.json. Ensure the group was opened before running the group barrier.`,
   chains_unverified: () => 'No chain receipt found. Run kaola-gitlab-workflow-run-chains.js after the last commit so HEAD is covered.',
   chains_stale: () => 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.',
+  // #618: a FRESH, HEAD-bound receipt whose chains[] array is EMPTY (zero chains verified) is
+  // distinct from chains_stale/chains_red — mirror the producer's own no_chains guard (run-chains.js
+  // refuses to WRITE an empty-chains receipt) with a typed refusal on the CONSUMER (gate) side too.
+  chains_empty: () => 'Chain receipt has an empty chains[] array — zero chains were verified. Regenerate the receipt with kaola-gitlab-workflow-run-chains.js over a resolved chain set (the producer itself refuses to write an empty chains[] receipt; see the no_chains refusal).',
   chains_red: (ctx) => {
     const timedOut = (ctx && Array.isArray(ctx.timedOutChains)) ? ctx.timedOutChains.filter(Boolean) : [];
     if (timedOut.length) {
@@ -2703,8 +2707,8 @@ function main() {
     // finalization (cmdFinalize), never per-node. Two coupled checks, precedence-ordered:
     //   (A) validation gate — DUAL-MODE by repo kind (#475 Pure option A):
     //       • SELF-HOST (npm): a machine-verifiable `.cache/chain-receipt.json` bound to HEAD must
-    //         exist, be fresh, and be all-green-or-waived (#432). chains_unverified > chains_stale >
-    //         chains_red. UNCHANGED.
+    //         exist, be fresh, non-empty, and be all-green-or-waived (#432). chains_unverified >
+    //         chains_stale > chains_empty (#618) > chains_red.
     //       • CONSUMER (non-npm product repo, e.g. Swift/Xcode): the agent OWNS verification (#44), so
     //         the gate is the agent's recorded `.cache/final-validation.md` (presence + a column-0
     //         `verdict: pass`) — NOT a re-executed chain receipt. A script that re-ran the suite the
@@ -2806,6 +2810,15 @@ function main() {
         }
       }
       chains = Array.isArray(receipt.chains) ? receipt.chains : [];
+      // #618: an EMPTY chains[] (e.g. `{codeTreeHash:<current>, chains: []}`) previously passed this
+      // gate with ZERO chains verified — the redChains filter below is vacuously empty over an empty
+      // array, so "no red chains" was indistinguishable from "no chains ran at all". Refuse it fail-
+      // closed with a typed reason BEFORE the red-chain check, mirroring the producer's own no_chains
+      // guard (run-chains.js refuses to WRITE an empty-chains receipt in the first place).
+      if (chains.length === 0) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_empty', operator_hint: getOperatorHint('chains_empty'), errors: ['chain receipt at ' + receiptPath + ' has an empty chains[] array — zero chains were verified; regenerate the receipt with kaola-gitlab-workflow-run-chains.js over a resolved chain set'] }) : 'typed refusal: chains_empty (empty chains[] at ' + receiptPath + ')') + '\n');
+        process.exitCode = 1; return;
+      }
       const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
       if (redChains.length) {
         const names = redChains.map(c => c.name || '(unnamed)').join(', ');

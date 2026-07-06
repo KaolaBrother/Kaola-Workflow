@@ -81,9 +81,16 @@
 //         "accepted_red_issue": null,
 //         "attempts": 1,                // #550: how many times this chain ran (>1 == a transient retry)
 //         "retried_transient": false,   // #550: true iff a transient signature triggered a re-run
-//         "timed_out": false            // #608: true iff the FINAL attempt was killed by the per-chain
+//         "timed_out": false,           // #608: true iff the FINAL attempt was killed by the per-chain
 //                                        // timeout (KAOLA_RUN_CHAINS_TIMEOUT_MS); absent on a legacy
 //                                        // receipt predating this field ⇒ treated as false by readers.
+//         "signal": null                // #618: the OS signal name (e.g. "SIGKILL") that terminated the
+//                                        // FINAL attempt's child process, or null on a normal exit. A
+//                                        // signal death (status===null) ALWAYS maps exitCode to 1 —
+//                                        // never a false green — whether it is our own timeout kill
+//                                        // (timed_out: true, signal usually "SIGTERM") or an EXTERNAL
+//                                        // kill unrelated to our timer (timed_out: false, e.g. an
+//                                        // OOM-kill / operator SIGKILL, signal "SIGKILL").
 //       }
 //     ]
 //   }
@@ -192,7 +199,13 @@ function runChainSync(spec, cwd, timeoutMs) {
     timeout: timeoutMs,
   });
   const duration_ms = Date.now() - t0;
-  const exitCode = (r.status != null) ? r.status : (r.error ? 1 : 0);
+  let exitCode = (r.status != null) ? r.status : (r.error ? 1 : 0);
+  // #618: a signal-killed child (status === null — e.g. an external OOM-kill or operator SIGKILL,
+  // NOT necessarily our own timeout, which is handled by r.error/ETIMEDOUT below via the SAME
+  // fail-closed rule) must never fall through to the `r.error ? 1 : 0` ternary's false-green 0
+  // branch when r.error is unset (a pure signal death raises no spawnSync `error`). ANY status===null
+  // with either a signal or an error present is a red, full stop.
+  if (r.status == null && (r.signal || r.error)) exitCode = 1;
   const timedOut = !!(r.signal === 'SIGTERM' || (r.error && r.error.code === 'ETIMEDOUT'));
   return {
     name: spec.name,
@@ -203,6 +216,7 @@ function runChainSync(spec, cwd, timeoutMs) {
     accepted_red_issue: spec.accepted_red_issue,
     _output: String(r.stdout || '') + String(r.stderr || '') + (r.error ? ('\n' + String((r.error && r.error.message) || r.error)) : ''),
     _timedOut: timedOut,
+    _signal: r.signal || null,
   };
 }
 
@@ -279,11 +293,17 @@ function runChainAsync(spec, cwd, timeoutMs) {
     child.on('error', (err) => done(Object.assign({}, base, {
       exitCode: 1, duration_ms: Date.now() - t0, _output: 'spawn error: ' + String((err && err.message) || err),
     })));
-    child.on('close', (code) => done(Object.assign({}, base, {
-      exitCode: timedOut ? 1 : ((code != null) ? code : 0),
+    child.on('close', (code, signal) => done(Object.assign({}, base, {
+      // #618: `close(null, SIGKILL)` with timedOut===false (an EXTERNAL signal death — an OOM-kill or
+      // an operator SIGKILL unrelated to our own per-chain timer) previously fell through to the
+      // `(code != null) ? code : 0` branch's false-green 0. code == null (no exit code — the process
+      // was terminated by a signal, not a normal exit) is now ALWAYS red, whether or not it was our
+      // own timeout kill (timedOut, already fail-closed) or an external one (the #618 fix).
+      exitCode: (timedOut || code == null) ? 1 : code,
       duration_ms: Date.now() - t0,
       _output: Buffer.concat(outBufs).toString('utf8'),
       _timedOut: timedOut,
+      _signal: signal || null,
     })));
   });
 }
@@ -606,6 +626,10 @@ async function main(argv) {
     attempts: (typeof ch.attempts === 'number' && ch.attempts >= 1) ? ch.attempts : 1,
     retried_transient: ch.retried_transient === true,
     timed_out: ch._timedOut === true,
+    // #618: the OS signal name that killed the FINAL attempt's child (e.g. "SIGKILL"/"SIGTERM"), or
+    // null on a normal exit — recorded so a reader can distinguish a signal death from a genuine
+    // non-zero test exit without re-running anything.
+    signal: (typeof ch._signal === 'string' && ch._signal) ? ch._signal : null,
   }));
 
   const completedAt = new Date().toISOString();
