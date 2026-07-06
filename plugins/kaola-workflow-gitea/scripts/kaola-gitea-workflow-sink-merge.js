@@ -464,6 +464,14 @@ function ffMergeLoop(args, mainRoot, defBranch) {
 }
 
 function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
+  // #617: capture the feature branch's commit SHA now, before Step 9 below deletes the branch
+  // ref — this is "the recorded implementation commit" the remote-closed-after-publish invariant
+  // (wired into checkClosureInvariants below) verifies is an ancestor of defBranch before the
+  // receipt is allowed to report a genuine close.
+  let implCommitSha = null;
+  try {
+    implCommitSha = execFileSync('git', ['-C', mainRoot, 'rev-parse', args.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {}
   // Step 7 — Push (with merge-impossible fallback)
   try {
     if (process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE) {
@@ -645,7 +653,9 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     receipt.failed_issue_closures = bundleBuckets.failed_issue_closures;
     receipt.open_issues = bundleBuckets.open_issues;
   }
-  const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
+  // #617: wire the remote-closed-after-publish invariant — verify the captured branch SHA is an
+  // ancestor of defBranch before trusting this receipt's close.
+  const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest, { implRef: implCommitSha, sinkTarget: defBranch });
   // #393a: surface the member-set source.
   const emit = { status: 'merged', closure_receipt: receipt, closure_invariants: invariants };
   if (args.member_source) emit.member_source = args.member_source;
@@ -800,7 +810,12 @@ function runDirectMerge(args, opts) {
 // ---------------------------------------------------------------------------
 
 const SINK_ABORT_AFTER = process.env.KAOLA_WORKFLOW_SINK_ABORT_AFTER || '';
-const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'worktree_sync', 'finalize', 'closure', 'stash_restore', 'archive_commit', 'push_main'];
+// #617: 'closure' (the issue-close step) runs LAST, after 'push_main' — matching the #429
+// transaction direction (an issue must never close before its implementation is verified
+// published). Before this fix closure ran three steps too early (before archive_commit/push_main),
+// so a crash between closure and push_main left an issue closed while the merge never reached the
+// remote — the exact 2026-07-06 incident.
+const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'worktree_sync', 'finalize', 'stash_restore', 'archive_commit', 'push_main', 'closure'];
 
 function writeSinkReceipt(receiptPath, receipt) {
   fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
@@ -1067,54 +1082,6 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       try { const { archiveProjectDir } = require('./kaola-gitea-workflow-claim'); archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false }); } catch (e) { if (e instanceof TypeError || e instanceof ReferenceError) throw e; /* #555: re-throw a missing-export programmer error (the #550 drift class); swallow only archive-already-exists idempotency */ }
       stepDone('finalize'); continue;
     }
-    if (step === 'closure') {
-      // Gitea: use forge.closeIssue / forge.updateIssueLabels (tea CLI nouns)
-      // #497: a HARD close failure (a member that genuinely won't close AND is not already-closed)
-      // must NOT report status:sinked. Bucket each member into closed/failed, record
-      // remote_issue_closed in the receipt, and on ANY genuine failure do NOT stepDone — emit a
-      // non-sinked refusal so the caller can retry.
-      // #592: the gate used to be `args.issue != null` only — a bundle sink invoked with ONLY
-      // `--issue-numbers A,B` (no primary `--issue`) tripped this gate false, skipping the ENTIRE
-      // close loop, yet execution still fell through to stepDone('closure') below — the receipt
-      // reported closure:done having closed zero issues. Run the loop whenever a primary OR any
-      // bundle member is present.
-      if (!OFFLINE && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0)) && !args.keepIssueOpen) {
-        const closed = [];
-        const failed = [];
-        const closeOne = (n) => {
-          if (probeIssueClosed(n, {})) { closed.push(n); return; }
-          try { forge.closeIssue(n, {}); closed.push(n); }
-          catch (e) {
-            if (probeIssueClosed(n, {})) { closed.push(n); }
-            else { failed.push(n); process.stderr.write('sink-merge --sink: WARNING: PR/issue close failed for ' + n + '; manually run: tea issues close ' + n + '\n'); }
-          }
-        };
-        if (args.issue != null) {
-          closeOne(args.issue);
-          try { forge.updateIssueLabels(null, args.issue, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
-        }
-        // Bundle members — includes the no-primary bundle shape (#592): when args.issue is
-        // absent, every member in args.issueNumbers is closed (none is "the primary" to skip).
-        if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > (args.issue != null ? 1 : 0)) {
-          for (const n of args.issueNumbers) {
-            if (n === args.issue) continue;
-            closeOne(n);
-            try { forge.updateIssueLabels(null, n, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
-          }
-        }
-        // #592: record the actually-closed set on the receipt (both the success and failure
-        // paths) so a resume can VERIFY-then-retry against it rather than silently skip.
-        if (closed.length > 0) receipt.closed_issues = closed.slice().sort((a, b) => a - b);
-        // #497: only the FAILURE path refuses — SUCCESS still falls straight through to
-        // stepDone('closure') below (now carrying receipt.closed_issues per #592).
-        if (failed.length > 0) {
-          receipt.remote_issue_closed = 'partial'; receipt.updated_at = new Date().toISOString(); writeSinkReceipt(receiptPath, receipt);
-          process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_incomplete', step: 'closure', remote_issue_closed: 'partial', closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), branch: args.branch, detail: 'the merge landed but ' + failed.length + ' issue(s) could not be closed on the forge (' + failed.join(', ') + '). Refusing to report status:sinked. The closure step is left NOT done so a re-run retries it. Manually close the issue(s) or resolve the forge fault, then re-run --sink.' }) + '\n');
-          process.exitCode = 1; return;
-        }
-      }
-      stepDone('closure'); continue;
-    }
     if (step === 'stash_restore') {
       if (receipt.stash_ref) {
         try {
@@ -1179,6 +1146,94 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         } catch (_) {}
       }
       continue;
+    }
+    if (step === 'closure') {
+      // #617: remote-closed-after-publish HARD GATE. SINK_STEPS now runs 'merge' + 'push_main'
+      // BEFORE this step, so the branch should already be an ancestor of defBranch by
+      // construction. Verify it explicitly and refuse LOUD (non-zero exit + a RED receipt field)
+      // rather than trust the ordering alone: a resumed/stale receipt, or any future reordering
+      // bug, must never be able to close an issue before the merge is verified actually published.
+      // This is the exact assertion the 2026-07-06 incident needed.
+      // NOTE: resolve the branch's CURRENT tip here (not receipt.branch_head, which is stamped at
+      // receipt init BEFORE the 'merge' step's doRebase runs) — a rebase rewrites the branch's
+      // commits, orphaning the pre-rebase SHA even though the (rebased) content did land on
+      // defBranch. The branch ref itself still exists at this point (teardown runs only after
+      // the whole step loop completes), so re-resolving it here is safe and always current.
+      {
+        let implRef = null;
+        try {
+          implRef = execFileSync('git', ['-C', mainRoot, 'rev-parse', args.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        } catch (_) {}
+        let published = false;
+        if (implRef) {
+          try {
+            execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', implRef, defBranch], { encoding: 'utf8', stdio: 'ignore' });
+            published = true;
+          } catch (_) { published = false; }
+        }
+        receipt.remote_closed_after_publish = published ? 'verified' : 'failed';
+        if (!published) {
+          receipt.updated_at = new Date().toISOString();
+          writeSinkReceipt(receiptPath, receipt);
+          process.stdout.write(JSON.stringify({
+            result: 'refuse',
+            reason: 'remote_closed_after_publish_unverified',
+            branch: args.branch,
+            default_branch: defBranch,
+            detail: 'refusing to close any issue: the recorded implementation commit (' + (implRef || '(unknown)') +
+              ') is not an ancestor of ' + defBranch + ' — the merge was never verified as actually published. ' +
+              'No issue was closed. The closure step is left NOT done so a re-run retries it once the merge state is resolved.',
+          }) + '\n');
+          process.exitCode = 1;
+          return;
+        }
+      }
+      // Gitea: use forge.closeIssue / forge.updateIssueLabels (tea CLI nouns)
+      // #497: a HARD close failure (a member that genuinely won't close AND is not already-closed)
+      // must NOT report status:sinked. Bucket each member into closed/failed, record
+      // remote_issue_closed in the receipt, and on ANY genuine failure do NOT stepDone — emit a
+      // non-sinked refusal so the caller can retry.
+      // #592: the gate used to be `args.issue != null` only — a bundle sink invoked with ONLY
+      // `--issue-numbers A,B` (no primary `--issue`) tripped this gate false, skipping the ENTIRE
+      // close loop, yet execution still fell through to stepDone('closure') below — the receipt
+      // reported closure:done having closed zero issues. Run the loop whenever a primary OR any
+      // bundle member is present.
+      if (!OFFLINE && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0)) && !args.keepIssueOpen) {
+        const closed = [];
+        const failed = [];
+        const closeOne = (n) => {
+          if (probeIssueClosed(n, {})) { closed.push(n); return; }
+          try { forge.closeIssue(n, {}); closed.push(n); }
+          catch (e) {
+            if (probeIssueClosed(n, {})) { closed.push(n); }
+            else { failed.push(n); process.stderr.write('sink-merge --sink: WARNING: PR/issue close failed for ' + n + '; manually run: tea issues close ' + n + '\n'); }
+          }
+        };
+        if (args.issue != null) {
+          closeOne(args.issue);
+          try { forge.updateIssueLabels(null, args.issue, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
+        }
+        // Bundle members — includes the no-primary bundle shape (#592): when args.issue is
+        // absent, every member in args.issueNumbers is closed (none is "the primary" to skip).
+        if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > (args.issue != null ? 1 : 0)) {
+          for (const n of args.issueNumbers) {
+            if (n === args.issue) continue;
+            closeOne(n);
+            try { forge.updateIssueLabels(null, n, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
+          }
+        }
+        // #592: record the actually-closed set on the receipt (both the success and failure
+        // paths) so a resume can VERIFY-then-retry against it rather than silently skip.
+        if (closed.length > 0) receipt.closed_issues = closed.slice().sort((a, b) => a - b);
+        // #497: only the FAILURE path refuses — SUCCESS still falls straight through to
+        // stepDone('closure') below (now carrying receipt.closed_issues per #592).
+        if (failed.length > 0) {
+          receipt.remote_issue_closed = 'partial'; receipt.updated_at = new Date().toISOString(); writeSinkReceipt(receiptPath, receipt);
+          process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_incomplete', step: 'closure', remote_issue_closed: 'partial', closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), branch: args.branch, detail: 'the merge landed but ' + failed.length + ' issue(s) could not be closed on the forge (' + failed.join(', ') + '). Refusing to report status:sinked. The closure step is left NOT done so a re-run retries it. Manually close the issue(s) or resolve the forge fault, then re-run --sink.' }) + '\n');
+          process.exitCode = 1; return;
+        }
+      }
+      stepDone('closure'); continue;
     }
   }
   // #484 FRESHNESS GUARD: a stale all-`done` receipt resumed from the tracked archive/<project>/.cache/

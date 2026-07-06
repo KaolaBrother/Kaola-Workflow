@@ -6148,8 +6148,10 @@ function testSinkRefusesOnCloseFailure() {
     assert(rp, '#497-close: a sink-receipt must exist after the failed transaction, looked in ' + receiptPaths.join(', '));
     const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
     assert(receipt.steps.closure !== 'done', '#497-close: closure must NOT be marked done after a hard close failure (else re-run never retries), got ' + receipt.steps.closure);
-    // The early return must fire BEFORE push_main — proving the close-fail short-circuit.
-    assert(receipt.steps.push_main === 'pending', '#497-close: push_main must still be pending (closure refuse returns before it), got ' + receipt.steps.push_main);
+    // #617: SINK_STEPS now runs closure LAST (after push_main), so push_main must already be
+    // 'done' by the time the closure step's close-failure short-circuit fires — the merge itself
+    // succeeded; only the issue-close call failed.
+    assert(receipt.steps.push_main === 'done', '#497-close: push_main must already be done (closure runs after push_main), got ' + receipt.steps.push_main);
     console.log('testSinkRefusesOnCloseFailure: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
