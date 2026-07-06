@@ -7,7 +7,20 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| none | No active work | — | — | — |
+| #617 | bug(finalize/sink): issue can close while the merge sink never runs — fail-loud closed⇒merged invariant | open | — | P1: state-derived close deferral + is-ancestor gate + closure-last SINK_STEPS (see audit diagnosis comment) |
+| #618 | bug(run-chains/finalize): chain-receipt greenness fails open (signal-kill exit 0; empty chains[]; test unwired) | open | — | P1: fail-closed signal mapping + chains_empty refusal + wire test-run-chains.js |
+| #619 | bug(sink-merge): receipt-integrity fail-opens (legacy close, post-probe, push_upstream, dead worktree_sync) | open | — | P2: mirror #497 on legacy path; probe-after-close; verified push; fix/remove dead step |
+| #620 | bug(claim/stale-cleanup): unconditional branch -D destroys unmerged closed-issue branches | open | — | P2: is-ancestor proof before -D; skipped_unmerged bucket |
+| #621 | bug(adaptive): baseline-first (#590) not mirrored in fused advance + reopen-node | open | — | P2: baseline-before-splice in both openers; idempotent reopen |
+| #622 | perf(adaptive/scheduler): reads cannot overlap leg-contained write lane groups (two-wave mixed frontiers) | open | — | P2: relax to leg-contained invariant (!liveHasWrite) + merge fence, per speculative-path precedent |
+| #623 | perf/docs(adaptive): rolling top-up into live lane group promised but unimplemented | open | — | P3: prose fix (decided 2026-07-07) — scope the three surfaces; admission only if #622 rework makes it free |
+| #624 | bug(routing/codex): forge-codex finalize SKILLs missing adaptive four-gate block; three-vs-four gate miscount | open | — | P1: port gate block to both forge SKILLs + fix count x3 + validator pin |
+| #625 | bug(agents): evidence contract inverted vs executor; security-reviewer Write/Edit; stale refs | open | — | P1: align 6 profiles to plan-run role-kind contract; drop gate Write/Edit (x3 toml) |
+| #626 | bug(agents): doc-updater/tdd-guide assume absent toolchains (codemaps, test:coverage) | open | — | P2: conditionalize on detection; name real doc surfaces / recorded validation_command |
+| #627 | chore(routing): plan-run/finalize debloat — restore ~150-line skeleton, fence runtime blocks | open | — | P3: re-stub ladder+speculative to cards; fence Teammate/Codex blocks; compress goal-attestation |
+| #628 | chore(docs): frontier-batch card predates speculative-auto; freeze-illegal example | open | — | P3: three-tier speculation rows; exact-path write-set example |
+| #629 | chore(guards): hooks.json family + config/agents.toml parity unguarded; edition-sync missing-mirror | open | — | P3: HOOKS_JSON_FAMILY + byte-triple agents.toml + create-on-missing |
+| #630 | feat(routing): generate the six routing surfaces from one canonical skeleton via edition-sync | open | — | P3: design+land AFTER #624/#627 (generation starts from corrected canonicals) |
 
 ## Rules
 
