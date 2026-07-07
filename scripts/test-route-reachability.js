@@ -486,6 +486,333 @@ for (const ed of codexEditions) {
   }
 }
 
+// ===========================================================================
+// #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
+// bidirectional orphan-sentinel, the superset proof, and the by-construction
+// RED-PROOF battery. ADDITIVE-SUPERSET: T1..T15 above stay byte-for-byte; the
+// existing pins remain as residual-additive assertions. The manifest is the
+// single source of the required-block presence contract; the surface UNIVERSE
+// each block obligates is COMPUTED from topic + tags (never hand-typed), so
+// obligating 4-of-6 surfaces by omission is structurally impossible.
+// ===========================================================================
+const { REQUIRED_BLOCKS } = require('../templates/routing/required-blocks.js');
+
+// Edition dirs reuse the existing edition tables (a rename / 7th edition flows
+// through automatically). command surfaces live on the claude editions, skill
+// surfaces on the codex editions.
+const MANIFEST_EDITIONS = {
+  command: claudeEditions.map(e => e.commandsDir),
+  skill: codexEditions.map(e => e.skillsDir),
+};
+
+// Topic basenames. plan-run is READ FROM THE SCHEMA REGISTRY (the same
+// PLAN_RUN_COMMAND/PLAN_RUN_SKILL that drives the T1/T2 emitted-target set) —
+// the no-drift anchor: a rename to the routed skill/command follows here for
+// free. finalize is symmetric; next is ASYMMETRIC (command basename
+// workflow-next vs skill basename kaola-workflow-next).
+const TOPIC_BASENAME = {
+  'plan-run': { command: stripSlash(schema.PLAN_RUN_COMMAND), skill: schema.PLAN_RUN_SKILL },
+  finalize: { command: 'kaola-workflow-finalize', skill: 'kaola-workflow-finalize' },
+  next: { command: 'workflow-next', skill: 'kaola-workflow-next' },
+};
+
+// Markers physically present on the in-scope surfaces that are managed by
+// contracts OUTSIDE the #630 required-block manifest (structural section cards,
+// not presence obligations, and unpinned by any validator). The reverse
+// orphan-sentinel skips these so it reds ONLY on a rogue or self-disarmed
+// marker (a manifest block deleted while its marker survives on the surface),
+// never on a legitimately-foreign one.
+const FOREIGN_MARKERS = new Set([
+  '<!-- CARD: frontier-batch -->',
+  '<!-- CARD: governance -->',
+  '<!-- CARD: reopen-complete-node -->',
+  '<!-- CARD: repair-routing -->',
+  '<!-- CARD: resume -->',
+].map(norm));
+
+// Legacy in-scope pin tokens the derived-universe manifest cannot fold cleanly
+// (present on a strict SUBSET of a block's obligated set): a forge-renamed noun,
+// and a github-command+skill-only finalize refusal (the gitlab/gitea finalize
+// COMMANDS are the 2:1 rewrite and lack it). These STAY as the existing
+// additive T-pins; the superset proof allow-lists them (superset-with-residual).
+const RESIDUAL_ALLOWLIST = new Set([
+  'watch-pr',
+  'final_validation_unverified',
+].map(norm));
+
+const isMarker = t => /^<!--\s*(?:PIN|CARD):/.test(String(t).trim());
+
+// deriveObligated — COMPUTE the exact obligated file set for a block from its
+// topic + tags. Returns { error, files }. A tag that is unknown, or a
+// runtime/surface-type inconsistency (claude-live carrying skill, or codex-live
+// carrying command), yields an orphan-manifest error (empty file set).
+function deriveObligated(block, editions, topicBasename) {
+  const rt = block.runtime_tag, st = block.surface_type_tag;
+  const okRt = rt === 'claude-live' || rt === 'codex-live' || rt === 'both';
+  const okSt = st === 'command' || st === 'skill' || st === 'both';
+  if (!okRt || !okSt || !topicBasename[block.topic]) return { error: 'bad-tag', files: [] };
+  if (rt === 'claude-live' && st === 'skill') return { error: 'orphan-manifest', files: [] };
+  if (rt === 'codex-live' && st === 'command') return { error: 'orphan-manifest', files: [] };
+  let types;
+  if (rt === 'claude-live') types = ['command'];
+  else if (rt === 'codex-live') types = ['skill'];
+  else types = st === 'both' ? ['command', 'skill'] : [st];
+  const files = [];
+  for (const stype of types) {
+    const base = topicBasename[block.topic][stype];
+    for (const dir of (editions[stype] || [])) {
+      files.push(stype === 'command' ? `${dir}/${base}.md` : `${dir}/${base}/SKILL.md`);
+    }
+  }
+  return { error: null, files };
+}
+
+// checkManifest — PURE (no fs / no exit). readSurface(rel) -> string|null is
+// injected (real: fs+exists; fixtures: an in-memory map). Returns
+// { failures:[], obligatedCount }.
+function checkManifest({ blocks, readSurface, editions, topicBasename, foreignMarkers }) {
+  const failures = [];
+  const foreign = foreignMarkers instanceof Set
+    ? foreignMarkers
+    : new Set((foreignMarkers || []).map(norm));
+  let obligatedCount = 0;
+  const markerToBlock = new Map();
+
+  // FORWARD — every content token present on every surface the block obligates.
+  for (const b of blocks) {
+    const { error, files } = deriveObligated(b, editions, topicBasename);
+    if (error || files.length === 0) {
+      failures.push(`orphan-manifest: block ${b.block_id} (${error || 'empty derived set'})`);
+      continue;
+    }
+    obligatedCount += files.length;
+    const first = b.content_tokens[0];
+    if (isMarker(first)) markerToBlock.set(norm(first), b);
+    for (const f of files) {
+      const content = readSurface(f);
+      if (content === null) {
+        failures.push(`absent-surface: block ${b.block_id} obligates ${f} (not found)`);
+        continue;
+      }
+      const nc = norm(content);
+      for (const tok of b.content_tokens) {
+        if (!nc.includes(norm(tok))) {
+          failures.push(`missing-token: block ${b.block_id} token ${JSON.stringify(tok)} absent from ${f}`);
+        }
+      }
+    }
+  }
+
+  // REVERSE orphan-sentinel — scan every in-scope surface for PIN/CARD markers;
+  // each MUST map to a manifest block whose first token is that marker AND whose
+  // obligated set includes this surface, else orphan-surface red (unless the
+  // marker is a declared foreign marker managed outside this manifest).
+  const inScope = [];
+  for (const topic of Object.keys(topicBasename)) {
+    for (const stype of ['command', 'skill']) {
+      const base = topicBasename[topic][stype];
+      for (const dir of (editions[stype] || [])) {
+        inScope.push(stype === 'command' ? `${dir}/${base}.md` : `${dir}/${base}/SKILL.md`);
+      }
+    }
+  }
+  for (const f of inScope) {
+    const content = readSurface(f);
+    if (content === null) continue;
+    const markers = content.match(/<!--\s*(?:PIN|CARD):[^>]*-->/g) || [];
+    for (const raw of markers) {
+      const m = norm(raw);
+      if (foreign.has(m)) continue;
+      const b = markerToBlock.get(m);
+      if (!b) {
+        failures.push(`orphan-surface: marker ${JSON.stringify(raw.trim())} on ${f} has no manifest block`);
+        continue;
+      }
+      const { files } = deriveObligated(b, editions, topicBasename);
+      if (!files.includes(f)) {
+        failures.push(`orphan-surface: marker ${JSON.stringify(raw.trim())} on ${f} not obligated by block ${b.block_id}`);
+      }
+    }
+  }
+
+  return { failures, obligatedCount };
+}
+
+// foldsGeneric — the superset-proof primitive: does a legacy (token,surfaces)
+// pin fold into a manifest block whose derived obligated set ⊇ the legacy
+// surfaces, or is it an accepted residual? Parameterized so both the real proof
+// and the red-proof fixture drive the identical logic.
+function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicBasename) {
+  if (allowlist.has(norm(token))) return true;
+  return blocks.some(b =>
+    b.content_tokens.some(t => norm(t) === norm(token)) &&
+    legacySurfaces.every(s => deriveObligated(b, editions, topicBasename).files.includes(s)));
+}
+
+// --- REAL-RUN invocation: manifest presence over the live surface tree -------
+{
+  const realResult = checkManifest({
+    blocks: REQUIRED_BLOCKS,
+    readSurface: rel => (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null),
+    editions: MANIFEST_EDITIONS,
+    topicBasename: TOPIC_BASENAME,
+    foreignMarkers: FOREIGN_MARKERS,
+  });
+  for (const msg of realResult.failures) assert(false, `MANIFEST ${msg}`);
+  assert(realResult.failures.length === 0,
+    `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
+}
+
+// --- SUPERSET PROOF: every legacy in-scope T-pin token folds into a manifest
+//     block (⊇ the legacy surface set) or is an accepted residual. Covers the
+//     #624-fix gate flags + workflow_path:adaptive explicitly. --------------
+{
+  const dirs = MANIFEST_EDITIONS;
+  const prCmd = dirs.command.map(d => `${d}/kaola-workflow-plan-run.md`);
+  const prSkill = dirs.skill.map(d => `${d}/kaola-workflow-plan-run/SKILL.md`);
+  const fnCmd = dirs.command.map(d => `${d}/kaola-workflow-finalize.md`);
+  const fnSkill = dirs.skill.map(d => `${d}/kaola-workflow-finalize/SKILL.md`);
+  const nxCmd = dirs.command.map(d => `${d}/workflow-next.md`);
+  const nxSkill = dirs.skill.map(d => `${d}/kaola-workflow-next/SKILL.md`);
+  const PR6 = [...prCmd, ...prSkill], FN6 = [...fnCmd, ...fnSkill], NX6 = [...nxCmd, ...nxSkill];
+
+  const LEGACY_PAIRS = [
+    // T5 / T8 / T9 / T15 / T12 — plan-run × 6 (both/both)
+    { token: 'frontier unit', surfaces: PR6 },
+    { token: '--write-overlap-consent', surfaces: PR6 },
+    { token: '--speculative-consent', surfaces: PR6 },
+    { token: 'KAOLA_GATE_WINDOW_FENCE=0', surfaces: PR6 },
+    { token: 'Every spawn parameter comes from the dispatch card.', surfaces: PR6 },
+    { token: '{node-id} → complete; opened: {next-id|—}', surfaces: PR6 },
+    // T5b — plan-run skills × 3 (codex-live)
+    { token: 'fork_turns: "none"', surfaces: prSkill },
+    { token: 'reasoning_effort: dispatch.codex_reasoning_effort', surfaces: prSkill },
+    { token: 'fresh child-session effort proof', surfaces: prSkill },
+    { token: 'codex_effort_override_unavailable', surfaces: prSkill },
+    { token: '`model: standard` -> `high`', surfaces: prSkill },
+    // T14 — plan-run commands × 3 (claude-live)
+    { token: "spawn each node's role agent as a NAMED teammate", surfaces: prCmd },
+    { token: 'send EXACTLY ONE request for the deliverable, then wait', surfaces: prCmd },
+    // T6 / #624 gate flags / bundle / final-validation — finalize
+    { token: 'closure-audit', surfaces: FN6 },
+    { token: '--resume-check', surfaces: FN6 },
+    { token: '--gate-verify', surfaces: FN6 },
+    { token: '--barrier-check', surfaces: FN6 },
+    { token: '--verdict-check', surfaces: FN6 },
+    { token: 'workflow_path: adaptive', surfaces: FN6 },
+    { token: '--issue-numbers', surfaces: FN6 },
+    { token: 'issue_numbers', surfaces: FN6 },
+    { token: 'fast_compliance_unresolved', surfaces: FN6 },
+    { token: 'final-validation.md', surfaces: FN6 },
+    // github command+skill-only finalize refusal — residual
+    { token: 'final_validation_unverified', surfaces: [fnCmd[0], fnSkill[0]] },
+    // T7-half / T4-half — next × 6 (both/both)
+    { token: 'result: escalate', surfaces: NX6 },
+    { token: 'kaola-workflow-plan-run', surfaces: NX6 },
+    { token: 'auto-bundle', surfaces: NX6 },
+    // T13-half — next skills × 3 (codex-live)
+    { token: '--codex-dispatch-mode', surfaces: nxSkill },
+    // router prose — next commands × 3 (claude-live)
+    { token: 'thin router', surfaces: nxCmd },
+    { token: 'active folders', surfaces: nxCmd },
+    { token: '--target-issue', surfaces: nxCmd },
+    { token: 'issue-scout', surfaces: nxCmd },
+    { token: 'Skip this entire step when `KAOLA_PATH=adaptive`', surfaces: nxCmd },
+    { token: 'path_not_installed', surfaces: nxCmd },
+    // forge-renamed noun (gitlab: watch-mr) — residual
+    { token: 'watch-pr', surfaces: nxCmd },
+  ];
+
+  for (const p of LEGACY_PAIRS) {
+    const ok = foldsGeneric(p.token, p.surfaces, REQUIRED_BLOCKS, RESIDUAL_ALLOWLIST, MANIFEST_EDITIONS, TOPIC_BASENAME);
+    assert(ok,
+      `SUPERSET-PROOF: legacy token ${JSON.stringify(p.token)} must fold into a manifest block (⊇ its ${p.surfaces.length} legacy surface(s)) or be an accepted residual`);
+  }
+}
+
+// --- RED-PROOF battery: by-construction self-tests over in-memory fixtures (NO
+//     real-tree mutation). Each plants a defect and asserts the checker reds. -
+{
+  // 1-edition, 1-topic synthetic universe.
+  const ED = { command: ['cmd'], skill: ['skl'] };
+  const TB = { t: { command: 'foo', skill: 'foo' } };
+  const mapSurface = surfaces => rel => (Object.prototype.hasOwnProperty.call(surfaces, rel) ? surfaces[rel] : null);
+
+  function expectRed(label, { blocks, surfaces, editions = ED, topicBasename = TB, foreignMarkers = new Set() }) {
+    const r = checkManifest({ blocks, readSurface: mapSurface(surfaces), editions, topicBasename, foreignMarkers });
+    assert(r.failures.length > 0, `RED-PROOF ${label}: checkManifest must report >=1 failure on the planted defect`);
+  }
+
+  // (1) DROPPED — surface present, one content token removed from an obligated
+  //     surface → missing-token red.
+  expectRed('dropped-block', {
+    blocks: [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
+      content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }],
+    surfaces: {
+      'cmd/foo.md': '<!-- PIN: a --> anchor-token',
+      'skl/foo/SKILL.md': '<!-- PIN: a -->', // anchor-token DROPPED here
+    },
+  });
+
+  // (2) HOLLOWED — marker kept, the distinctive 2nd token gone from every
+  //     obligated surface → red (proves bare markers are insufficient).
+  expectRed('hollowed-block', {
+    blocks: [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
+      content_tokens: ['<!-- PIN: a -->', 'deep-content'] }],
+    surfaces: {
+      'cmd/foo.md': 'prose <!-- PIN: a --> prose',
+      'skl/foo/SKILL.md': 'prose <!-- PIN: a --> prose',
+    },
+  });
+
+  // (3) NEW-SURFACE-MISSING — a 2nd synthetic edition y is auto-obligated by a
+  //     both/both block; its file is absent → absent-surface red (proves the
+  //     obligated set expands automatically, no hand-typed file list).
+  expectRed('new-surface-missing', {
+    blocks: [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
+      content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }],
+    editions: { command: ['x', 'y'], skill: ['sx'] },
+    surfaces: {
+      'x/foo.md': '<!-- PIN: a --> anchor-token',
+      'sx/foo/SKILL.md': '<!-- PIN: a --> anchor-token',
+      // y/foo.md deliberately absent
+    },
+  });
+
+  // (4) ORPHAN-MANIFEST — an inconsistent tag pair (claude-live + skill) yields
+  //     an empty/error derived set → orphan-manifest red.
+  expectRed('orphan-manifest', {
+    blocks: [{ block_id: 'b1', topic: 't', runtime_tag: 'claude-live', surface_type_tag: 'skill',
+      content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }],
+    surfaces: { 'cmd/foo.md': '<!-- PIN: a --> anchor-token' },
+  });
+
+  // (5) ORPHAN-SURFACE — the forward pass is clean, but a rogue marker with no
+  //     manifest block sits on a surface → reverse-sentinel red (catches R2
+  //     self-disarm: a deleted manifest block whose marker survives on-surface).
+  {
+    const blocks = [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
+      content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }];
+    const surfaces = {
+      'cmd/foo.md': '<!-- PIN: a --> anchor-token <!-- PIN: rogue -->',
+      'skl/foo/SKILL.md': '<!-- PIN: a --> anchor-token',
+    };
+    const r = checkManifest({ blocks, readSurface: mapSurface(surfaces), editions: ED, topicBasename: TB, foreignMarkers: new Set() });
+    assert(r.failures.length > 0 && r.failures.some(m => m.startsWith('orphan-surface')),
+      'RED-PROOF orphan-surface: a rogue marker with no manifest block must red the reverse orphan-sentinel');
+  }
+
+  // (6) SUPERSET-PROOF — a legacy pin whose token no manifest block carries and
+  //     which is not allow-listed must NOT fold → the superset proof reds.
+  {
+    const blocks = [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
+      content_tokens: ['<!-- PIN: a -->', 'anchor-token'] }];
+    const folded = foldsGeneric('unfoldable-needle', ['cmd/foo.md'], blocks, new Set(), ED, TB);
+    assert(folded === false,
+      'RED-PROOF superset-proof: an unfolded, non-allow-listed legacy token must fail the superset proof');
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
