@@ -132,6 +132,17 @@ here for the full contract.
     used to detect `stale:head_advanced` (the worktree advanced between baseline
     recording and the barrier check). Absent on disk → binding check is skipped
     (backward-compatible).
+  - `chain-receipt.json` — the self-host chain-verification receipt `run-chains.js` writes and
+    `--finalize-check` gates on (full schema and gate precedence in `docs/api.md` §
+    `kaola-workflow-run-chains.js`). **Fail-closed since #618** on two previously fail-open shapes: (1) a
+    per-chain child terminated by an OS signal (an external OOM-kill or operator `SIGKILL`, not
+    necessarily the run-chains own per-chain timeout) now always maps to `exitCode: 1` on both the
+    sync and async dispatch paths — never falling through to a false-green `0` — and the
+    terminating signal name is recorded in a new `signal` field (`null` on a normal exit); (2) a
+    fresh, HEAD-bound receipt whose `chains[]` array is empty (zero chains verified) is now a typed
+    `chains_empty` refusal in `--finalize-check`, precedence-ordered between `chains_stale` and
+    `chains_red`, mirroring the producer's own `no_chains` refusal to *write* an empty-chains
+    receipt in the first place. See `docs/decisions/D-617-01.md`.
 - `kaola-workflow/archive/{project}/` keeps completed, abandoned, or stale
   project folders after finalize or discard.
 - **Closure normalization (#324):** when `archiveProjectDir` archives a project with
@@ -205,6 +216,19 @@ here for the full contract.
     invoked with only `--issue-numbers` (no `--issue`) now closes every member instead of
     skipping the close loop while still recording the step `"done"`. See `docs/api.md` §
     Closure Contract for the full gate condition and JSON shape.
+
+  - **`remote_closed_after_publish: "verified" | "failed"`** (publish-before-close hard gate,
+    #617) — recorded by `checkClosureInvariants` whenever a caller supplies the implementation
+    commit and sink-target refs (`sink-merge`'s `postMergeCleanup`, and the `closure` step's own
+    re-check immediately before it), verifying via `git merge-base --is-ancestor` that the
+    implementation commit is actually an ancestor of the sink target before trusting the receipt's
+    close. A caller that supplies neither ref (`cmdFinalize`'s merge-lane, which defers its own
+    close) leaves the field unset — the invariant is a pure no-op there, unchanged from before
+    #617. Wires the `remote-closed-after-publish` closure invariant, declared since #164 but never
+    evaluated until this fix. `kaola-workflow-sink-merge.js`'s `SINK_STEPS` also reorders `closure`
+    to run **last** (after `push_main`, not three steps before it) — a merge sink can no longer
+    close an issue before its implementation has actually reached the pushed default branch. See
+    `docs/decisions/D-617-01.md`.
 
 ## Workflow State Fields
 
