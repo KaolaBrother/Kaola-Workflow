@@ -43,14 +43,19 @@ You do NOT decide whether the result is correct — the union barrier (the merge
 
 ## Output Contract
 
-Return a structured summary containing:
+Self-write this structured evidence into your seeded `.cache/{node-id}.md` (see Evidence
+ownership below), and summarize it in your final report:
 - **task**: the fan-out level + the legs being merged
 - **resolution**: per conflicted file, one sentence on how both legs' intent was preserved
 - **write_set**: the files actually touched by the resolution (must be ⊆ the legs' union)
 - **merged_sha**: the resolved merge commit SHA (after you stage + the scheduler commits, or as reported)
 - **unresolvable** (if applicable): the conflicted file(s) + why no intent-preserving resolution exists
 
-Evidence ownership: **RETURN** this record in your final report. Do NOT self-write `.cache/{node-id}.md` — the orchestrator records it parent-side via `record-evidence` (the canonical `kaola-workflow/{project}/.cache/{node-id}.md`).
+Evidence ownership: you are a **WRITE-role agent** — **SELF-WRITE** this record directly into
+the executor-seeded `.cache/{node-id}.md` file at the path you were given (the canonical
+`kaola-workflow/{project}/.cache/{node-id}.md`). The seeded file already carries an
+`evidence-binding: <node-id> <nonce>` header line — read it, preserve it verbatim, and never
+add, alter, or strip it; append your own content below it.
 
 ## Scope Discipline
 
