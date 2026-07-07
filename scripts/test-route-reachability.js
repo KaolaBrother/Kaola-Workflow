@@ -811,6 +811,34 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     assert(folded === false,
       'RED-PROOF superset-proof: an unfolded, non-allow-listed legacy token must fail the superset proof');
   }
+
+  // (7) CLOSURE-AUDIT VACUOUS-GUARD (#637) — the LIVE fn-closure-audit block
+  //     (imported straight from the real manifest, not a synthetic stand-in) is
+  //     exercised against a fixture where every real finalize surface's marker
+  //     is PRESERVED but its interior prose is GUTTED. Pre-fix, the block's 2nd
+  //     content_token ('closure-audit') is a bare SUBSTRING of its own marker
+  //     ('<!-- PIN: closure-audit -->'), so a marker-only surface trivially
+  //     satisfies it and the checker stays vacuous-green on the gut — this case
+  //     must RED. (Confirmed pre-fix: this assertion fails, proving the bug is
+  //     real; post-fix — a distinctive non-marker-substring token added to the
+  //     manifest — it passes.)
+  {
+    const closureAuditBlock = REQUIRED_BLOCKS.find(b => b.block_id === 'fn-closure-audit');
+    assert(!!closureAuditBlock,
+      'RED-PROOF closure-audit-vacuous-guard: fn-closure-audit block must exist in the manifest');
+    const obligated = deriveObligated(closureAuditBlock, MANIFEST_EDITIONS, TOPIC_BASENAME).files;
+    const guttedSurfaces = {};
+    for (const f of obligated) guttedSurfaces[f] = '<!-- PIN: closure-audit -->'; // marker kept, interior GUTTED
+    const r = checkManifest({
+      blocks: [closureAuditBlock],
+      readSurface: mapSurface(guttedSurfaces),
+      editions: MANIFEST_EDITIONS,
+      topicBasename: TOPIC_BASENAME,
+      foreignMarkers: FOREIGN_MARKERS,
+    });
+    assert(r.failures.length > 0,
+      'RED-PROOF closure-audit-vacuous-guard: gutting the closure-audit interior while keeping the bare PIN marker must red the derived-universe checker (a content_token that is a substring of its own marker is vacuous)');
+  }
 }
 
 if (failed) {
