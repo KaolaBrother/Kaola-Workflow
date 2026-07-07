@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R5 scope=pre_existing action=follow_up status=deferred severity=medium fix_role=none rationale=run-chains suites (claude test-run-chains.js, gitlab/gitea counterparts) flake on this host independent of this diff",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

@@ -1,0 +1,35 @@
+{
+  "project": "bundle-621-622-633",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n1-scheduler-fixes",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-review",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-adversary",
+      "count": 1
+    },
+    {
+      "reasonClass": "deferred_red_chain",
+      "sample": "claude:635",
+      "count": 1
+    },
+    {
+      "reasonClass": "deferred_red_chain",
+      "sample": "gitlab:635",
+      "count": 1
+    },
+    {
+      "reasonClass": "deferred_red_chain",
+      "sample": "gitea:635",
+      "count": 1
+    }
+  ]
+}

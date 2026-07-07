@@ -9,8 +9,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 |-------|-------|--------|------------------|-----------|
 | #619 | bug(sink-merge): receipt-integrity fail-opens (legacy close, post-probe, push_upstream, dead worktree_sync) | open | — | P2: mirror #497 on legacy path; probe-after-close; verified push; fix/remove dead step |
 | #620 | bug(claim/stale-cleanup): unconditional branch -D destroys unmerged closed-issue branches | open | — | P2: is-ancestor proof before -D; skipped_unmerged bucket |
-| #621 | bug(adaptive): baseline-first (#590) not mirrored in fused advance + reopen-node | open | — | P2: baseline-before-splice in both openers; idempotent reopen |
-| #622 | perf(adaptive/scheduler): reads cannot overlap leg-contained write lane groups (two-wave mixed frontiers) | open | — | P2: relax to leg-contained invariant (!liveHasWrite) + merge fence, per speculative-path precedent |
 | #623 | perf/docs(adaptive): rolling top-up into live lane group promised but unimplemented | open | — | P3: prose fix (decided 2026-07-07) — scope the three surfaces; admission only if #622 rework makes it free |
 | #627 | chore(routing): plan-run/finalize debloat — restore ~150-line skeleton, fence runtime blocks | open | — | P3: re-stub ladder+speculative to cards; fence Teammate/Codex blocks; compress goal-attestation |
 | #628 | chore(docs): frontier-batch card predates speculative-auto; freeze-illegal example | open | — | P3: three-tier speculation rows; exact-path write-set example |
@@ -18,7 +16,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #630 | feat(routing): generate the six routing surfaces from one canonical skeleton via edition-sync | open | — | P3: design+land AFTER #624/#627 (generation starts from corrected canonicals) |
 | #631 | bug(claim/verify-sink): false-alarms impl_commit_not_ancestor on a clean sink whose branch was rebased mid-flight | open | — | P2: stamp a post-publish ref (e.g. published_head) at the closure gate; have verify-sink prefer it over rebase-stale branch_head |
 | #632 | bug(release): chainReceiptGreenness still fails open on empty/missing chains[] (mirror #618's chains_empty fix) | open | — | P2: mirror chains_empty guard into release.js chainReceiptGreenness x4 editions; fix stale --cut comment |
-| #633 | bug(adaptive/scheduler): lane-group synthesizer merge refuses on untracked-vs-tracked evidence-file collision (would be overwritten by merge) | open | — | P2: seed lane-group evidence stubs tracked-on-parent at group-open, or make the leg's evidence-shape read leg-aware |
 
 ## Rules
 

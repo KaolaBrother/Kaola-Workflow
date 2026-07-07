@@ -1,0 +1,11 @@
+{"ts":"2026-07-07T03:35:10Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-07-07T03:40:50Z","agent_type":"tdd-guide","agent_id":"a8fd81fb886ba51eb","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T05:05:45Z","agent_type":"Explore","agent_id":"a01845bfcc8f2fd7a","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"","model_planned":""}
+{"ts":"2026-07-07T05:05:59Z","agent_type":"Explore","agent_id":"a58b1f5544b59c77a","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"","model_planned":""}
+{"ts":"2026-07-07T05:14:32Z","agent_type":"code-reviewer","agent_id":"a6d171c76e0fb3f48","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"opus"}
+{"ts":"2026-07-07T05:33:39Z","agent_type":"adversarial-verifier","agent_id":"a220e6c647e6a5412","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T06:01:11Z","agent_type":"tdd-guide","agent_id":"ad3956c6ee0543452","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T07:06:40Z","agent_type":"code-reviewer","agent_id":"ada6edc8c23a54f20","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"opus"}
+{"ts":"2026-07-07T07:52:11Z","agent_type":"adversarial-verifier","agent_id":"a45eecfaea4b9bf26","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T08:13:23Z","agent_type":"doc-updater","agent_id":"ab33dfe687f0cf2bf","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T09:15:39Z","agent_type":"contractor","agent_id":"a47223ddaaddb864c","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-621-622-633","model":"","model_planned":"sonnet"}
