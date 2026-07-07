@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=edition-dir tables duplicated between generate-routing-surfaces.js and the checker; drift fails closed via --check MISSING red",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=superset-proof LEGACY_PAIRS enumerates representative T12 announce-line tokens not all three; zero coverage loss (T1..T15 still run unchanged + those are manifest tokens pr-dispatch-card-visibility)",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
