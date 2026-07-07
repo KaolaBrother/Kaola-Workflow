@@ -639,10 +639,6 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ run
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');
 
-// #606: teammate-mode dispatch subsection + the one-nudge idle-race rule (github codex SKILL).
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "spawn each node's role agent as a NAMED teammate");
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'send EXACTLY ONE request for the deliverable, then wait');
-
 // #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
 // dispatch mode via the preflight doctor and thread it into the claim as an explicit flag.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
@@ -806,11 +802,10 @@ for (const planRunSurface of [
 }
 
 // #611: fork_turns:"none" is now mandated for EVERY role dispatch (not only tiered nodes) — pin
-// the unconditional mandate and ban the retired tiered-only qualifier on both surfaces this
-// validator owns.
+// the unconditional mandate and ban the retired tiered-only qualifier on the Codex SKILL surface
+// (Codex-runtime-only; this validator's Claude command surface never carries this dispatch mode).
 for (const planRunSurface of [
-  `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`,
-  'commands/kaola-workflow-plan-run.md'
+  `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`
 ]) {
   assertIncludes(planRunSurface, 'on EVERY dispatch, tiered or not');
   assertIncludes(planRunSurface, 'the unconditional mandate applies identically to this dispatch mode');

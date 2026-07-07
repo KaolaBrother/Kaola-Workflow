@@ -183,6 +183,7 @@ Immediately before every spawn, announce the dispatch:
 `{task_name}` is `dispatch.codex_task_name` on Codex, the agent name/description on Claude, the
 child task label on opencode.
 
+<!-- PIN: teammate-mode -->
 #### Teammate-Mode Dispatch
 
 When agent teams is enabled (Claude runtime; `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in the
@@ -218,27 +219,7 @@ All existing contracts — evidence-persistence per role-kind, the announcement 
 close-echo line, gate non-delegability — hold IDENTICALLY in both modes; teammate mode changes
 the transport, never the contract.
 
-For any non-null `dispatch.codex_reasoning_effort`, require a fresh child-session effort proof
-for that exact requested effort before dispatch. The proof must inspect the spawned child's session
-JSONL `turn_context.effort`; config text, `codex features list`, spawn arguments, and parent-side
-descriptors are not proof. This applies to both V2 and V1 tiered Codex dispatch. If proof is absent,
-stale, or failing, refuse before dispatch with `codex_effort_override_unavailable`.
-
-For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
-passes, pass `task_name: dispatch.codex_task_name`, `agent_type: dispatch.agent_type`, and
-`fork_turns: "none"` on EVERY dispatch, tiered or not — the dispatch card is self-contained by
-contract, so no role spawn ever forks the parent's history. When
-`dispatch.codex_reasoning_effort` is non-null, also pass
-`reasoning_effort: dispatch.codex_reasoning_effort`. When the effort is null, omit `reasoning_effort` and let the base
-profile/session default stand.
-
-For Codex v1 fallback (`"v1-thread-id"`), omit `task_name` and pass `fork_turns: "none"` — the
-unconditional mandate applies identically to this dispatch mode — then prefix the prompt with a
-compact identity header: `Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or
-default>`.
-V1 wait/close rows may still show thread IDs; the prompt and evidence carry the node mapping.
-Never append a max-effort profile suffix and never emit a
-variant-missing note. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
+Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 - Fill in token stubs from its work; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.

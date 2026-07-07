@@ -175,17 +175,16 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T5b: Codex tiered-effort dispatch prose must stay effective across the same 6
-// plan-run surfaces. A tiered node needs a real per-spawn effort override; v2 uses
-// fork_turns:"none", and unproven v1 refuses instead of silently inheriting.
+// T5b: Codex tiered-effort dispatch prose must stay effective across the 3
+// Codex SKILL plan-run surfaces (Codex-runtime-only; the Claude commands never
+// carry this dispatch mode). A tiered node needs a real per-spawn effort
+// override; v2 uses fork_turns:"none", and unproven v1 refuses instead of
+// silently inheriting.
 // ---------------------------------------------------------------------------
 {
   const planRunSurfaces = [
-    'commands/kaola-workflow-plan-run.md',
     'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
-    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
     'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
-    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
     'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md'
   ];
   for (const f of planRunSurfaces) {
@@ -443,18 +442,16 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T14: teammate-mode dispatch subsection must appear in each of the 6 plan-run surfaces (3
-// Claude commands + 3 Codex SKILLs): the NAMED-teammate sentinel sentence and the one-nudge
-// idle-race rule. Fail-closed: unconditional assert() per surface.
+// T14: teammate-mode dispatch subsection must appear in each of the 3 Claude command
+// plan-run surfaces (Claude-runtime-only; the Codex SKILLs never carry this dispatch
+// mode): the NAMED-teammate sentinel sentence and the one-nudge idle-race rule.
+// Fail-closed: unconditional assert() per surface.
 // ---------------------------------------------------------------------------
 {
   const planRunSurfaces = [
     'commands/kaola-workflow-plan-run.md',
-    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
     'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
-    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
     'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
-    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
   ];
   for (const f of planRunSurfaces) {
     const content = norm(fs.readFileSync(path.join(REPO, f), 'utf8'));

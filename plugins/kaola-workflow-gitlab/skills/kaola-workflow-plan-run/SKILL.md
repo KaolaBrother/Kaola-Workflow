@@ -71,6 +71,7 @@ and must run from the main root, above.)
 
 ## Dispatch
 
+<!-- PIN: codex-dispatch -->
 Reasoning effort and identity: the xhigh effort-variant profiles are retired — always
 delegate to the base `dispatch.agent_type` profile (= the node's role). The descriptor maps the explicit
 planner tier RANK tokens (cross-edition ranks, not runtime model names) to per-spawn effort on this Codex runtime: `model: reasoning` -> `xhigh`, `model: standard` -> `high` (the legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically); only an
@@ -237,29 +238,6 @@ Immediately before every spawn, announce the dispatch:
 
 `{task_name}` is `dispatch.codex_task_name` on Codex, the agent name/description on Claude, the
 child task label on opencode.
-
-#### Teammate-Mode Dispatch
-
-When agent teams is enabled (Claude runtime; `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in the
-session env or settings env block — experimental): spawn each node's role agent as a NAMED
-teammate, name = node id, so the announcement lines and mailbox traffic are self-documenting;
-expect spawns to return immediately and results to arrive as teammate messages; use
-`SendMessage` for the bounded repair nudges these surfaces already define (the out-of-lane
-repair nudge, mid-run write-set widening addressed to the SAME agent) instead of re-dispatching
-fresh agents; use a synchronous spawn only when a blocking result is genuinely required before
-the next decision.
-
-Idle-race discipline: an idle notification is not a deliverable and carries no ordering
-guarantee relative to the agent's final message; on idle-without-deliverable send EXACTLY ONE
-request for the deliverable, then wait — a second ask before the first answer produces
-duplicate deliveries.
-
-When classic (flag off / other runtimes): the existing synchronous dispatch flow stays the
-documented default path, unchanged.
-
-All existing contracts — evidence-persistence per role-kind, the announcement formats, the
-close-echo line, gate non-delegability — hold IDENTICALLY in both modes; teammate mode changes
-the transport, never the contract.
 
 Delegate to the base role profile matching `dispatch.agent_type`. Apply the task-name and
 reasoning-effort rule above. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:

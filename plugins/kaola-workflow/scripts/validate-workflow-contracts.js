@@ -952,14 +952,6 @@ for (const file of adaptSkillSurfacesGateProvisioning607) {
   assertIncludes(file, 'the gate never authors or deletes files');
 }
 
-// #582: tiered Codex effort dispatch must be effective in plan-run prose. The command surface
-// must require the v2 fork discipline and fail closed for unproven v1 tiered dispatch.
-assertIncludes('commands/kaola-workflow-plan-run.md', 'fork_turns: "none"');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'fresh child-session effort proof');
-assertIncludes('commands/kaola-workflow-plan-run.md', 'codex_effort_override_unavailable');
-assertNotIncludes('commands/kaola-workflow-plan-run.md', '`sonnet`/absent');
-
 // #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
 // actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
 // no-improvise prohibition on every plan-run spawn.
@@ -977,16 +969,13 @@ assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes('commands/kaola-workflow-plan-run.md', '{node-id} → complete; opened: {next-id|—}');
 
-// #606: teammate-mode dispatch subsection must propagate to ALL SIX plan-run surfaces (#400) — the
-// 3 edition commands + the 3 Codex SKILL packs. Pin the sentinel sentence + the one-nudge idle-race
-// rule so a drop on any surface fails here (mirrors the #486 adaptSurfaces486 pattern).
+// #606: teammate-mode dispatch subsection must propagate to the 3 Claude command plan-run
+// surfaces (Claude-runtime-only; the Codex SKILLs never carry this dispatch mode). Pin the
+// sentinel sentence + the one-nudge idle-race rule so a drop on any surface fails here.
 const planRunSurfaces606 = [
   'commands/kaola-workflow-plan-run.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
-  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
-  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
 ];
 for (const file of planRunSurfaces606) {
   assertIncludes(file, "spawn each node's role agent as a NAMED teammate");
@@ -1012,12 +1001,9 @@ for (const file of planRunSurfacesGateFence607) {
 
 // #611: the Codex dispatch prose mandates fork_turns:"none" for EVERY role dispatch (not only
 // tiered nodes) — the "only for tiered nodes" qualifier is retired. Pin the unconditional mandate
-// (both v2 and v1 dispatch modes) and ban the retired qualifier phrasing across ALL SIX plan-run
-// surfaces so a partial drop reds this chain.
+// (both v2 and v1 dispatch modes) and ban the retired qualifier phrasing across the 3 Codex SKILL
+// plan-run surfaces (Codex-runtime-only) so a partial drop reds this chain.
 const planRunSurfaces611ForkTurns = [
-  'commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
-  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
   'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
   'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
