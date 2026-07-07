@@ -22,7 +22,7 @@ If `workflow_path: adaptive`:
 - `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
   `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
   `phase5-review.md`; Finalization anchors on the plan's completion state. The barrier is
-  **script-enforced** by three gates — run all three and capture each exit code
+  **script-enforced** by four gates — run all four and capture each exit code
   DIRECTLY (never gate on a piped `| tail`, which masks failure):
   ```bash
   PLAN=kaola-workflow/{project}/workflow-plan.md

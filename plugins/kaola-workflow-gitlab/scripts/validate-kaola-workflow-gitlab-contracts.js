@@ -374,6 +374,20 @@ for (const f of ['/commands/kaola-workflow-finalize.md', '/skills/kaola-workflow
     'GitLab Finalization command must resolve the four-gate barrier validator via kaola_script (no bare scripts/ path) — #345'
   );
 }
+// #624: the forge-codex finalize SKILL must carry the adaptive prerequisite block ported from
+// the canonical (github-codex) finalize SKILL — the workflow_path: adaptive branch and its
+// four-gate barrier — not just the fast-path branch. A SKILL missing this block leaves an
+// adaptive-path run with no script-enforced completion gate and a dangling `validator_script`
+// reference in the Chain-Receipt Gate section below it.
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('workflow_path: adaptive') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('validator_script') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--resume-check') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--gate-verify') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--barrier-check') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--verdict-check'),
+  'GitLab finalize skill must carry the adaptive prerequisite block (workflow_path: adaptive + the four-gate validator_script barrier) — #624'
+);
 for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKILL.md'))) {
   assert(!read(skill).includes("*/kaola-workflow/*/scripts/kaola-gitlab"), skill + ' must use the GitLab Codex plugin cache path');
 }

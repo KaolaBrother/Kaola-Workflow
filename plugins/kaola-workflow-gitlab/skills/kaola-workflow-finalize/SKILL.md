@@ -12,7 +12,62 @@ to `full` when absent). If `workflow_path: fast`, the fast path replaces Phase
 1-5: require `fast-summary.md` with status `PASSED` (stop if it is missing or not
 `PASSED`), and read it as the Phase 1-5 substitute (`## Scope`, `## Plan`,
 `## Implementation Evidence`, `## Review`) wherever the steps below reference
-Phase 1/3/5 artifacts.
+Phase 1/3/5 artifacts. If `workflow_path: adaptive`, the adaptive path
+replaces Phase 1-5: require a frozen `workflow-plan.md` (re-check `plan_hash`) whose
+`## Node Ledger` rows are all `complete` or `n/a`; on corruption or an incomplete
+ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its plan_hash
+failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the Phase
+1-5 substitute.
+
+The adaptive completion check is **script-enforced**, not prose: run all
+four gates and capture each exit code DIRECTLY (never gate on a piped `| tail`, which
+reports the tail's exit and masks failure):
+
+```bash
+validator_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js"
+if [ ! -f "$validator_script" ]; then
+  validator_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-plan-validator.js' -print -quit 2>/dev/null)"
+fi
+PLAN="kaola-workflow/${KAOLA_PROJECT}/workflow-plan.md"
+node "$validator_script" "$PLAN" --resume-check --json; RC=$?
+node "$validator_script" "$PLAN" --gate-verify   --json; GV=$?
+# forward --base to the whole-plan --barrier-check ONLY, mirroring the
+# --finalize-check forwarding so the attribution sweep can scope to a project's OWN diff
+# on a SHARED multi-issue branch. Sourced from the KAOLA_FINALIZE_BASE env var, defaulting
+# to UNSET (→ the validator's `origin/main` default — byte-equivalent to today for
+# branch-per-issue runs, so the four-chain walkthrough stays green). The per-node
+# --barrier-check STILL rejects --base (the anti-laundering guard) — unchanged.
+BARRIER_BASE="${KAOLA_FINALIZE_BASE:-}"
+BARRIER_BASE_ARG=()
+[ -n "$BARRIER_BASE" ] && BARRIER_BASE_ARG=(--base "$BARRIER_BASE")
+node "$validator_script" "$PLAN" --barrier-check --json "${BARRIER_BASE_ARG[@]}"; BC=$?
+node "$validator_script" "$PLAN" --verdict-check --json; VC=$?
+if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
+  echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
+fi
+```
+
+- `--resume-check` proves `plan_hash` integrity + structure + closed library.
+- `--gate-verify` proves every completed code/sensitive node is post-dominated by a
+  **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak where a
+  required reviewer node is silently marked `n/a` at runtime. **G3: a
+  non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
+  completed code nodes.**
+- `--barrier-check` re-scans the files actually written (git diff vs the merge-base of
+  HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
+  node, or an out-of-allowlist production write — closing H1/H3.
+- `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`,
+  `adversarial-verifier`, and `main-session-gate` node's `.cache/{node-id}.md` and requires a machine-readable
+  `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the merge** —
+  this proves every gate-role node recorded a passing verdict before the plan closes.
+  **Exception:** an *investigation* `adversarial-verifier` that post-dominates
+  no code-producing or sensitive node is exempt from this check — its refutation is
+  analytical output, not a finalize block (applies to both sequence and fanout
+  majority-refute shapes). A *change-gate* `adversarial-verifier` (post-dominates a
+  code-producing or sensitive node) keeps full `--verdict-check` coverage.
+
+On any failure stop with a **typed refusal** (do not proceed): `Adaptive plan failed
+the script-enforced barrier. Run /kaola-workflow-plan-run first.`
 
 ### Chain-Receipt Gate
 
