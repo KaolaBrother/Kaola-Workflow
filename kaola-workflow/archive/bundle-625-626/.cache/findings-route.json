@@ -1,0 +1,23 @@
+[
+  {
+    "finding_id": "id=R1 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=canonical contract enumeration in plan-run.md/SKILL.md names only implementer+tdd-guide as WRITE and omits synthesizer/code-reviewer/security-reviewer; direction remains unambiguous via tool grants and plan spec; deliberately out of this bundle's scope",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "security-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=pre_existing action=follow_up status=deferred severity=low fix_role=none rationale=workflow-planner.md knowledge-lookup bullet states the trigger twice (pre-existing duplication; the surgical sentence removal did not introduce or worsen it)",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=out_of_scope action=follow_up status=deferred severity=low fix_role=none rationale=doc-updater.md frontmatter description still advertises /update-codemaps + docs/CODEMAPS/*; body Detection-first gate governs actual behavior so conditionalization is genuine",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

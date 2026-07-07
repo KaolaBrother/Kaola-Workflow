@@ -12,8 +12,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #621 | bug(adaptive): baseline-first (#590) not mirrored in fused advance + reopen-node | open | — | P2: baseline-before-splice in both openers; idempotent reopen |
 | #622 | perf(adaptive/scheduler): reads cannot overlap leg-contained write lane groups (two-wave mixed frontiers) | open | — | P2: relax to leg-contained invariant (!liveHasWrite) + merge fence, per speculative-path precedent |
 | #623 | perf/docs(adaptive): rolling top-up into live lane group promised but unimplemented | open | — | P3: prose fix (decided 2026-07-07) — scope the three surfaces; admission only if #622 rework makes it free |
-| #625 | bug(agents): evidence contract inverted vs executor; security-reviewer Write/Edit; stale refs | open | — | P1: align 6 profiles to plan-run role-kind contract; drop gate Write/Edit (x3 toml) |
-| #626 | bug(agents): doc-updater/tdd-guide assume absent toolchains (codemaps, test:coverage) | open | — | P2: conditionalize on detection; name real doc surfaces / recorded validation_command |
 | #627 | chore(routing): plan-run/finalize debloat — restore ~150-line skeleton, fence runtime blocks | open | — | P3: re-stub ladder+speculative to cards; fence Teammate/Codex blocks; compress goal-attestation |
 | #628 | chore(docs): frontier-batch card predates speculative-auto; freeze-illegal example | open | — | P3: three-tier speculation rows; exact-path write-set example |
 | #629 | chore(guards): hooks.json family + config/agents.toml parity unguarded; edition-sync missing-mirror | open | — | P3: HOOKS_JSON_FAMILY + byte-triple agents.toml + create-on-missing |
