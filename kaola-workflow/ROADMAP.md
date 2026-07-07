@@ -7,9 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #629 | chore(guards): hooks.json family + config/agents.toml parity unguarded; edition-sync missing-mirror | open | — | P3: HOOKS_JSON_FAMILY + byte-triple agents.toml + create-on-missing |
 | #634 | feat(adaptive): optimize-shaped node — bounded metric-ratchet loop via a metric-optimizer role for direction-not-destination work | open | — | P3: design a bounded metric-ratchet loop (new metric-optimizer role) for perf/size/flakiness targets with no AC at freeze; per-node barrier is net-diff so per-iteration commit/revert inside one node needs zero barrier change; optimize contract in ## Meta (validator = GENERATED aggregator) to avoid touching hand-ported classifier.readPlanNodes; sibling of #486 |
-| #637 | harden(routing/manifest): fn-closure-audit is vacuous against a marker-preserving interior gut — add a distinctive interior content_token | open | — | P3: add a distinctive interior content_token (e.g. sink_incomplete, verified present on all 6 finalize surfaces) to fn-closure-audit.content_tokens in templates/routing/required-blocks.js so a marker-preserving interior gut of the closure-audit block reds the #630 manifest checker; low-severity follow-up from #630's n7-adversary (spec-accepted finalize residual = pre-#630 T6 strength, NOT the #624 whole-block-drop class); cross-edition #307 |
 
 ## Rules
 

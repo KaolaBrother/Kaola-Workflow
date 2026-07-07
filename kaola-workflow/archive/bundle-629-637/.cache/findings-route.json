@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R0 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=clean-review-no-defects-found",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
