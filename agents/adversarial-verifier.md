@@ -87,9 +87,12 @@ job is to be a rigorous, *independent* skeptic on exactly one claim.
 
 ## Output contract
 
-Save to `kaola-workflow/{project}/.cache/adversarial-verifier-{claim-id}.md` (the
-per-instance namespaced path — a single fixed path would collide across the
-fan-out) and return:
+Return the block below as your FINAL MESSAGE TEXT — you have no Write/Edit tool
+and do NOT write any `.cache` file yourself. The orchestrator persists your
+returned text via `record-evidence --stdin` to the per-instance namespaced path
+`.cache/adversarial-verifier-{claim-id}.md` (a single fixed path would collide
+across the fan-out); `record-evidence` re-injects this node's `evidence-binding:`
+header, so you must never try to add or modify that header:
 
 ```
 ## Claim Under Test
@@ -110,11 +113,12 @@ drops a wall and never auto-approves.
 
 ## Machine Verdict (adaptive path)
 
-When invoked as a skeptic node on the adaptive path, write a machine-readable
-verdict block at the TOP LEVEL of your per-instance `.cache` evidence file
-(`.cache/adversarial-verifier-{claim-id}.md`), at column 0, no leading
-whitespace. The actual `.cache` file must be fence-free — do NOT wrap in a code
-fence. The block shown below is fenced here only so it renders in this doc:
+When invoked as a skeptic node on the adaptive path, include a machine-readable
+verdict block at the TOP LEVEL of your RETURNED text, at column 0, no leading
+whitespace — the orchestrator persists it verbatim to your per-instance `.cache`
+evidence file (`.cache/adversarial-verifier-{claim-id}.md`). The persisted
+`.cache` file must be fence-free — do NOT wrap the block in a code fence. The
+block shown below is fenced here only so it renders in this doc:
 
 ```
 verdict: pass
@@ -134,23 +138,25 @@ fenced block in the actual `.cache` file is rejected and counts as a refute
 (fail-closed). A missing or unparseable block also counts as a refute.
 
 Note: a single skeptic refute does NOT unilaterally fail a majority quorum — the
-orchestrator applies strict majority (`refutes * 2 > total`). Emit the block at
-the very top of the `.cache/adversarial-verifier-{claim-id}.md` file.
+orchestrator applies strict majority (`refutes * 2 > total`). Put the block at
+the very top of your returned text, so it lands at the top of the persisted
+`.cache/adversarial-verifier-{claim-id}.md` file.
 
 **Single/sequence node (non-fan-out).** When this adversarial-verifier is a lone
 `sequence` gate node rather than one instance of a `fanout(<group>)`, the
 `--verdict-check` gate does NOT glob the `adversarial-verifier-*` siblings — it
 reads the verdict directly from `.cache/{node-id}.md` (the per-node path, like
-the other gate roles). In that case write the verdict block to
-`.cache/{node-id}.md` instead of the per-instance `adversarial-verifier-{claim-id}.md`
-path; a block left only at the per-instance path would be missed and counts as a
-refute (fail-closed).
+the other gate roles). In that case put the verdict block at the top of your
+returned text so the orchestrator persists it to `.cache/{node-id}.md` instead
+of the per-instance `adversarial-verifier-{claim-id}.md` path; a block left only
+at the per-instance path would be missed and counts as a refute (fail-closed).
 
 ## Machine-Readable Findings (adaptive path)
 
 When your disproof surfaces a concrete in-scope defect that should be fixed (not merely a refute
-verdict), ALSO record it as a flat, column-0 line in the same per-instance `.cache` file, alongside
-the verdict block. The block below is fenced only so it renders here:
+verdict), ALSO include it as a flat, column-0 line in the same returned text, alongside the
+verdict block — it is persisted to the same per-instance `.cache` file. The block below is fenced
+only so it renders here:
 
 ```
 finding: id=R1 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=<short>

@@ -152,7 +152,7 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   conventions, or open-web/expertise knowledge that cannot be confirmed locally: author a
   `knowledge-lookup` node when the task depends on external library or API behavior, framework
   conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase
-  alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
+  alone.
 - **Node Ledger header MUST be canonical.** The `## Node Ledger` section you write into
   `workflow-plan.md` must use EXACTLY this header format:
 

@@ -21,5 +21,5 @@ Verification ownership (you do NOT decide correctness):
 
 Output contract:
 - Report: the fan-out level + legs being merged; per conflicted file, one sentence on how both legs' intent was preserved; the write set actually touched (must be a subset of the legs' union); the resolved merge commit SHA; and (if applicable) the unresolvable file(s) + why no intent-preserving resolution exists.
-- RETURN this evidence in your final report; the orchestrator records it parent-side via record-evidence (do NOT self-write .cache/{node-id}.md).
+- You are a WRITE-role agent: SELF-WRITE this evidence directly into your seeded .cache/{node-id}.md file at the path you were given. The seeded file already carries an evidence-binding: <node-id> <nonce> header line -- read it, preserve it verbatim, and never add, alter, or strip it; append your own content below it.
 """
