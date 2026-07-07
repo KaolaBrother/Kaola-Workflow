@@ -91,6 +91,18 @@ crash-safe transaction:
   the gate's speculative-eligible descendants, each stamped `speculative: true` in
   `running-set.json` — see `docs/plan-run-cards/speculative-open.md`.
 
+**Reads co-open alongside a live write lane group (issue #622).** A read frontier is no longer
+excluded just because a write is live: `write_node_exclusive` now fires only when the live write is
+LEGLESS (a single serial writer, no lane group) — a live LEG-CONTAINED lane-group member no longer
+blocks a read from opening alongside it, since that member's edits are isolated in its own leg
+worktree. The group's eventual last-member merge is separately held until any live read drains (see
+`merge_awaits_read_drain` in §4). A speculative WRITE candidate is additionally excluded (typed
+reason `lane_group_live`, surfaced under `speculativeWriteExcluded`) whenever a write lane group is
+already live — `running-set.json` carries at most one `lane_group` descriptor at a time, so a new
+speculative group is never allowed to form (and silently overwrite the live one) while one is
+already open; the excluded write opens normally, non-speculatively, once the live group drains. See
+`docs/decisions/D-622-01.md`.
+
 `open-ready` returns
 `{result:'ok', kind:'read'|'write', opened:[{id,role,model,declared_write_set,nonce,evidence_file,required_tokens,dispatch}], runningSet:[ids], laneGroup?:{group_id,members,write_union,legs?}}`
 — dispatch every entry in `opened` **in one assistant message**.
@@ -103,7 +115,8 @@ cross-reference the separate top-level `laneGroup.legs` descriptor, which remain
 observability only. Both keys are conditionally attached (like `dispatch.goal_line`): absent/`null`
 on the serial or read-only path, so `dispatch` there stays byte-identical to before this field
 existed. A non-error `ok` that opens
-nothing carries a `reason`: `write_node_exclusive` (a write node is already live),
+nothing carries a `reason`: `write_node_exclusive` (a LEGLESS write node — no lane group — is
+already live; a live leg-contained lane-group member no longer triggers this reason, see above),
 `write_awaits_drain` (only writes are ready but read-only members are still live), or
 `cap_reached`. A crash-safe precondition refuses `reconcile_first` when a prior `open-ready` left
 `running-set.json` mid-transaction (`state: 'opening'` or any member `opening: true`) — run
@@ -144,7 +157,10 @@ returns the newly-ready frontier (`{closed, allDone, newlyReady, taskTransitions
   show changes, or the evidence must declare `no_op: <reason>`), closes its ledger row, and
   DEFERS the diff barrier — the response carries `barrier: 'deferred_to_group'` and the compliance
   row records the same literal marker.
-- **Last member**: the `synthesizer` step runs first — a parent-clean fence, then a mechanical
+- **Last member**: refuses first (zero-mutation) with reason `merge_awaits_read_drain` if any live
+  running-set member is a read — the merge must not race a read still reading the pre-merge parent
+  tree (issue #622); retry `close-node` once the live read(s) close. Once no read is live, the
+  `synthesizer` step runs — a parent-clean fence, then a mechanical
   octopus-merge of the disjoint legs into the feature branch (commit `M`, no agent) — then the
   plan-validator's `--group-barrier --group-id <id> --merge-commit M --project P` diffs the group
   baseline against the UNION of every member's declared write set. Pass closes the row, records

@@ -193,6 +193,19 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   baseline on disk (a dead end the serial path's crash coverage could not recover, since there is
   no running set for `reconcile-running-set` to repair). See `docs/decisions/D-590-01.md`.
 
+  **Baseline-first ordering extended to the fused advance and reopen-node (issue #621).** The
+  same invariant is now also applied to `close-and-open-next`'s fused advance (`runCloseAndOpenNext`)
+  and to `runReopenNode`: both record the barrier baseline for the node they are about to open
+  BEFORE flipping that node's ledger row to `in_progress`, mirroring `runOpenNext`'s #590 ordering
+  above (which neither path had previously received). On a baseline failure, the fused advance
+  refuses `baseline_failed` with the just-closed node's own close half already landed and the next
+  node's row left `pending` (never re-attempting the splice); `runReopenNode` persists its
+  gates-reset/gates-folded write with the node still `pending` on disk, records the baseline against
+  that on-disk `pending` row, and only then flips it `pending` → `in_progress` — a crash between the
+  gates-write and the flip leaves the row genuinely `pending` (gates already folded), and a retried
+  `reopen-node` call re-enters idempotently via an `alreadyAtTarget` tolerance on its own reset
+  splice. No path can leave a ledger row `in_progress` without a recorded baseline.
+
   **Coordination kernel — serial = running-set `max_concurrent = 1` (D-419-01 Part 1).**
   The serial loop and the running-set scheduler are two surfaces of ONE coordination kernel.
   Serial is not a separate code path — it is the scheduler operating with `max_concurrent = 1`.
@@ -219,8 +232,8 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   now write a minimal `running-set.json` when — and only when — the node being opened is a
   `main-session-gate`: a single `kind:'gate'` entry recording that a gate window is open, consumed
   solely by the write-lane hook's gate-window fence and excluded from every write-oriented
-  scheduler count (`liveHasWrite`, `selectSpeculativeWriteGroup`, the `open-ready` slot math, and
-  the `reconcile-running-set` roll-forward budget all explicitly filter out `kind:'gate'`). This is
+  scheduler count (`liveHasLeglessWrite`, `selectSpeculativeWriteGroup`, the `open-ready` slot math,
+  and the `reconcile-running-set` roll-forward budget all explicitly filter out `kind:'gate'`). This is
   a disclosed narrowing of [INV-2], not a silent violation of it: the invariant's purpose — write-
   frontier concurrency accounting stays byte-identical when nothing is co-opening — is preserved (a
   gate carries no write set and never contributes to write concurrency); only the invariant's
@@ -308,6 +321,47 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   nothing prevents A writing into B's declared lane at runtime. Enforcement is retrospective:
   (a) the group barrier at the last close, and (b) the `--finalize-check` attribution sweep
   (#424). The `KAOLA_LANE_CONTAINMENT` `PreToolUse` hook (#376) emits warnings but is fail-open.
+
+  **Read/write co-open relaxed to a leg-contained invariant, with a last-member merge fence
+  (issue #622, `docs/decisions/D-622-01.md`).** `write_node_exclusive` previously refused ANY
+  co-open — including a pure read frontier — whenever ANY write node was live, whether that write
+  was a legless single serial writer or an already leg-isolated lane-group member. `runOpenReady`
+  now computes `liveHasLeglessWrite` (true only for a live write node that is NOT a member of the
+  currently-live `lane_group`) and refuses `write_node_exclusive` only in that legless case; a read
+  may now open alongside a still-live leg-contained lane-group member, since that member's edits
+  are isolated in its own leg worktree and never touch the parent tree the read observes. The
+  eventual group merge is separately fenced: `closeGroupMember`'s last-member close refuses
+  (typed, zero-mutation) with reason `merge_awaits_read_drain` while any live running-set member is
+  a read, so the octopus-merge (or the legless snapshot group-barrier) never races a read still
+  reading the pre-merge parent tree; the caller retries `close-node` once the read(s) drain. A
+  legless or read-free group is unaffected (no live read ⟹ no-op, byte-identical).
+
+  **Single-descriptor invariant and the R4 speculative-write exclusion.** `running-set.json`
+  carries at most ONE `lane_group` descriptor at a time. Relaxing `write_node_exclusive` for reads
+  exposed a gap in the pre-existing #596 speculative-write fallback — previously unreachable with a
+  write group live, since a read could never before co-open alongside one — where a speculative
+  write candidate whose only unsatisfied dependency was a read gate that had co-opened alongside a
+  live group could itself be selected while that group was still live, form its OWN size-1 group,
+  and unconditionally overwrite the live descriptor: silently dropping any still-open member from
+  `lane_group` tracking (that member's later close would then miss `closeGroupMember` routing
+  entirely, falling to the serial close path, orphaning its committed leg work and leaking its leg
+  worktree). Caught by an adversarial-verifier pass and repaired within the same bundle (finding
+  R4, never released in the vulnerable shape): `runOpenReady`'s speculative-write branch now
+  excludes ALL speculative write candidates with a typed reason `lane_group_live` whenever a write
+  lane_group descriptor is already live — sibling to the pre-existing `no_leg_capability` and
+  `parent_dirty` exclusions. The excluded write simply waits; once the live group fully drains and
+  clears its `lane_group` key, it opens normally (non-speculatively) with no lost parallelism.
+
+  **Tracked-evidence-seeding at group formation (issue #633, `docs/decisions/D-622-01.md`).** A
+  lane-group member self-writes its evidence file inside its own leg worktree, never synced back to
+  the parent. `runOpenReady` now seeds and COMMITS every group member's evidence stub as a tracked
+  file on the parent branch (via a new `legMirrorPath` helper) BEFORE `baseRev` is captured and legs
+  branch off, so each leg inherits the stub as an ordinary tracked file and the leg's real content
+  later merges in as a routine three-way change instead of colliding with an untracked parent file
+  at the last-member merge. `runCloseNode`'s evidence read correspondingly prefers a live
+  lane-group member's own leg copy (resolved via `legMirrorPath`) when present, falling back to the
+  parent copy for every non-lane-group case (byte-identical to pre-#633 behavior there). See
+  `docs/workflow-state-contract.md` for the full `.cache`/evidence-seeding contract.
 
   **Parent-cleanliness precondition on formation (D-615-01).** Lane-group formation is additionally
   gated on the parent worktree carrying no out-of-allowband production dirt — uncommitted writes

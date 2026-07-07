@@ -66,7 +66,7 @@ here for the full contract.
     any other member (id-keyed). A crashed, non-`opening` lone gate is PRESERVED (not rolled back)
     by `reconcile-running-set` — an intended fail-closed tripwire, since clearing it would silently
     reopen the fenced window. A gate entry is excluded from every write-oriented scheduler count —
-    `liveHasWrite`, `selectSpeculativeWriteGroup`, the `open-ready` read-slot base
+    `liveHasLeglessWrite`, `selectSpeculativeWriteGroup`, the `open-ready` read-slot base
     (`cap - liveNodes.filter(n => n.kind !== 'gate').length`), and the `reconcile-running-set`
     roll-forward budget all explicitly filter it out — so it never affects write co-open, slot
     accounting, or crash-resume ceilings. See `docs/decisions/D-607-01.md` and the narrow
@@ -105,6 +105,27 @@ here for the full contract.
     - **Reconcile-running-set.** The `#437` block in `reconcile-running-set` carries forward group
       survival logic: `lane_group` survives if ≥1 member id is in `survivorIds`; if all members roll
       back, `lane_group` is deleted and the group baseline is dropped.
+    - **Read entries may now co-reside with a live `lane_group` (issue #622).** `nodes` in
+      `running-set.json` can carry a `kind:'read'` entry alongside a live `lane_group`'s write
+      members — previously impossible, since `write_node_exclusive` refused any co-open while any
+      write was live. Only a LEGLESS write (no `lane_group`) still excludes co-open entirely. See
+      `docs/architecture.md` and `docs/decisions/D-622-01.md`.
+    - **Tracked evidence-stub seeding at formation (issue #633).** At group formation, `open-ready`
+      seeds each `toOpen` member's `.cache/{node-id}.md` evidence stub and COMMITS it as a tracked
+      file on the parent branch (via the `legMirrorPath` helper, `kw-stub: <group_id>` commit)
+      BEFORE `baseRev` is captured and legs branch off — so every leg inherits the stub as an
+      ordinary tracked file rather than an untracked parent-side write, preventing a "untracked
+      working tree file … would be overwritten by merge" collision at the last-member merge. A
+      commit failure here refuses the open (`stub_commit_failed`). This precedes, and is unrelated
+      to, the per-node barrier commit order described above (it is a scheduler-owned commit at
+      OPEN time, never part of a node's own barrier/ledger/pointer sequence).
+    - **Leg-preferred evidence read at close (issue #633).** A write-role lane-group member
+      self-writes its REAL evidence INSIDE its own leg (the absolute `dispatch.leg_path` its
+      working_dir names), never synced back to the parent. `close-node`'s evidence read resolves the
+      node's current `lane_group` membership first and prefers a live member's own leg copy of
+      `.cache/{node-id}.md` (via `legMirrorPath`) when present, falling back to the parent's copy
+      otherwise — byte-identical for every non-lane-group case (a legless write, a read node, or a
+      harness that seeds evidence parent-side by convention). See `docs/decisions/D-622-01.md`.
   - `active-batch.json` — retired parallel-batch manifest (`state: 'opening'|'open'|'sealed'|'joined'`).
     No live component writes this file anymore — its sole writer, `kaola-workflow-parallel-batch.js`,
     was retired (D-586-01) once the per-node running-set scheduler fully absorbed its
