@@ -131,11 +131,17 @@ const REQUIRED_BLOCKS = [
 
   // ==== finalize (basename kaola-workflow-finalize on both surface types) ====
   {
+    // 'closure-audit' (2nd token) is a bare SUBSTRING of the marker itself
+    // ('<!-- PIN: closure-audit -->'), so it is vacuous against a marker-
+    // preserving interior gut (#637). 'sink_incomplete' is a DISTINCTIVE
+    // interior token (not a marker substring, edition-neutral) verified
+    // present on all six finalize surfaces — it is the genuine presence
+    // obligation this block exists to enforce.
     block_id: 'fn-closure-audit',
     topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: closure-audit -->', 'closure-audit'],
+    content_tokens: ['<!-- PIN: closure-audit -->', 'closure-audit', 'sink_incomplete'],
   },
   {
     block_id: 'fn-gate-barrier',

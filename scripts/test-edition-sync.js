@@ -4,8 +4,9 @@
 // test-edition-sync.js (issue #365) — covers the scripted edition sync + parity check.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel } = require('./edition-sync');
+const { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, syncIfDrift } = require('./edition-sync');
 
 const REPO = path.resolve(__dirname, '..');
 let passed = 0, failed = 0;
@@ -121,6 +122,44 @@ for (const base of GENERATED_AGGREGATORS) {
     'T7: the header comment IS rendered to the forge name (item-4 cosmetic fix)');
   assert(out.includes('usage: kaola-gitlab-workflow-plan-validator.js <workflow-plan.md>'),
     'T7: the usage string IS rendered to the forge name (item-4 cosmetic fix)');
+}
+
+// ---------------------------------------------------------------------------
+// T8 (#629 bullet 3): CREATE-ON-MISSING — a newly-enrolled COMMON/byte-group member
+// with an ABSENT mirror must be CREATED by the write path, not skipped. Before the fix,
+// runWrite() steps (b) codex-sync and (c) byte-sync only copied when the target already
+// existed (`fs.existsSync(...) && ...`), so an enrolled member with no mirror stayed
+// "in sync" (nothing written) while validate-script-sync reds with "Missing files" — a
+// dead end for the enrollment workflow. `syncIfDrift` is the shared primitive both steps
+// use (matching aggregator step (a), which already handled the missing case).
+// ---------------------------------------------------------------------------
+{
+  assert(typeof syncIfDrift === 'function', 'T8: syncIfDrift exported (shared create-on-missing primitive)');
+}
+{
+  // enroll a synthetic byte-group/COMMON-style member (canonical exists, mirror ABSENT)
+  // in a throwaway root — never touches the real repo tree.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-edsync-missing-'));
+  try {
+    const rel = 'plugins/kaola-workflow/scripts/synthetic-enrolled-member.js';
+    const content = '#!/usr/bin/env node\nconsole.log("synthetic enrolled member");\n';
+    assert(!fs.existsSync(path.join(tmp, rel)), 'T8 precondition: mirror is ABSENT before sync');
+    const wrote = syncIfDrift(tmp, rel, content);
+    assert(wrote === true, 'T8: syncIfDrift returns true (a write happened) for an absent mirror');
+    assert(fs.existsSync(path.join(tmp, rel)), 'T8: the mirror is CREATED (not skipped) when absent');
+    assert(fs.readFileSync(path.join(tmp, rel), 'utf8') === content, 'T8: the created mirror carries the canonical content');
+    // idempotency: re-running against an now-identical mirror is a no-op (no spurious write).
+    const wroteAgain = syncIfDrift(tmp, rel, content);
+    assert(wroteAgain === false, 'T8: re-running against an in-sync mirror is a no-op (idempotent)');
+    // drift case: an existing-but-different mirror is still overwritten (regression guard for the
+    // pre-existing behavior this refactor must NOT weaken).
+    fs.writeFileSync(path.join(tmp, rel), 'stale content\n');
+    const wroteDrift = syncIfDrift(tmp, rel, content);
+    assert(wroteDrift === true, 'T8: an existing-but-drifted mirror is still synced (pre-existing behavior preserved)');
+    assert(fs.readFileSync(path.join(tmp, rel), 'utf8') === content, 'T8: the drifted mirror is corrected to canonical content');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 if (failed > 0) {
