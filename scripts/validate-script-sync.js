@@ -37,8 +37,10 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 //     profiles; not used by the Claude pack.
 //
 // Hook files that must stay byte-identical across every install surface are
-// checked below. `hooks/hooks.json` is intentionally excluded because each forge
-// points at its own compact-context script name.
+// checked below. `hooks/hooks.json` IS covered (HOOKS_JSON_FAMILY, below), via the
+// same rename-normalized-token approach CONFIG_HOOKS_FAMILY already uses for the
+// sibling config/hooks.json family: the only per-forge diff is the compact-context
+// script token, which normalizeHooksJson() rewrites before the byte-compare.
 const COMMON_SCRIPTS = [
   'kaola-workflow-claim.js',
   'kaola-workflow-active-folders.js',
@@ -204,6 +206,17 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/scripts/install-codex-agent-profiles.js',
     ],
   },
+  {
+    // #629 bullet 2: the three plugins/*/config/agents.toml files are byte-identical at HEAD
+    // (md5 579c8575...) but were previously uncovered here — only derived NAME parity was
+    // checked by the forge validators. Green at HEAD; guards future canonical edits.
+    label: 'config/agents.toml triple',
+    files: [
+      'plugins/kaola-workflow/config/agents.toml',
+      'plugins/kaola-workflow-gitlab/config/agents.toml',
+      'plugins/kaola-workflow-gitea/config/agents.toml',
+    ],
+  },
   // #422.1: agent-profile .toml triples — each agent's three plugin-tree .toml files
   // (codex/gitlab/gitea) must be byte-identical. Built programmatically from the codex tree's
   // agents/ directory so a new profile is auto-covered. Includes the 6 -max model variants.
@@ -340,6 +353,79 @@ function normalizeConfigHooks(referenceText, forge) {
     `kaola-${forge}-workflow-codex-compact-resume`);
 }
 
+// #629 bullet 1: the root hooks/hooks.json (Claude plugin-root install surface) and its gitlab/gitea
+// ports. MIRRORS CONFIG_HOOKS_FAMILY above: the only per-forge diff is the SessionStart compact-context
+// hook command, which carries the forge-renamed script base name
+// (kaola-{forge}-workflow-compact-context.js). Every other kaola-workflow-* token (the .sh hooks) stays
+// base-named across all forges. Reference = root tree (the base-named source; no plugins/kaola-workflow
+// copy of hooks/hooks.json exists — the Codex tree ships hooks via config/hooks.json instead).
+const HOOKS_JSON_FAMILY = {
+  label: 'hooks/hooks.json forge ports',
+  reference: 'hooks/hooks.json',
+  ports: [
+    { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/hooks/hooks.json' },
+    { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/hooks/hooks.json' },
+  ],
+};
+// Normalize ONLY the compact-context script token (the sole forge-renamed string in hooks/hooks.json).
+function normalizeHooksJson(referenceText, forge) {
+  return referenceText.replace(
+    /kaola-workflow-compact-context/g,
+    `kaola-${forge}-workflow-compact-context`);
+}
+
+// Shared family-check primitive: compare every port in `family.ports` against
+// normalizeFn(reference text, port.forge). Returns { missing, drift } (does not mutate anything or
+// throw on a missing file — a fail-closed missing entry is recorded instead). Used for
+// RENAME_NORMALIZED_FAMILIES, CONFIG_HOOKS_FAMILY, and HOOKS_JSON_FAMILY (below), and exported so
+// tests can run the SAME check logic against a synthetic fixture tree without touching real files.
+function checkNormalizedFamily(family, normalizeFn, rootDir, normalizedKind) {
+  const missing = [];
+  const drift = [];
+  const refText = readOrNull(path.join(rootDir, family.reference));
+  if (refText === null) {
+    missing.push(family.reference);
+    return { missing, drift };
+  }
+  const refStr = refText.toString('utf8');
+  for (const port of family.ports) {
+    const portText = readOrNull(path.join(rootDir, port.file));
+    if (portText === null) {
+      missing.push(port.file);
+      continue;
+    }
+    const expected = normalizeFn(refStr, port.forge);
+    if (portText.toString('utf8') !== expected) {
+      drift.push(`${family.label}: ${port.file} differs from ${family.reference} (${normalizedKind || 'normalized'} for ${port.forge})`);
+    }
+  }
+  return { missing, drift };
+}
+
+// Shared byte-identical-group-check primitive: byte-compare every copy in `group.files` (after the
+// first, reference, entry) against the reference. Returns { missing, drift }. Used for
+// BYTE_IDENTICAL_GROUPS (below) and exported so tests can run the SAME check logic against a
+// synthetic fixture tree without touching real files.
+function checkByteIdenticalGroup(group, rootDir) {
+  const missing = [];
+  const drift = [];
+  const [reference, ...copies] = group.files;
+  const referenceBytes = readOrNull(path.join(rootDir, reference));
+  if (referenceBytes === null) {
+    missing.push(reference);
+    return { missing, drift };
+  }
+  for (const copy of copies) {
+    const copyBytes = readOrNull(path.join(rootDir, copy));
+    if (copyBytes === null) {
+      missing.push(copy);
+    } else if (!referenceBytes.equals(copyBytes)) {
+      drift.push(`${group.label}: ${copy} differs from ${reference}`);
+    }
+  }
+  return { missing, drift };
+}
+
 // Normalize a base-named reference body into its forge-renamed form: every
 // `kaola-workflow-<NAME>` token becomes `kaola-<forge>-workflow-<NAME>`. Bounded by a
 // non-name-char lookahead so it never partial-matches a longer token or the
@@ -438,62 +524,30 @@ if (require.main === module) {
   }
 
   for (const group of BYTE_IDENTICAL_GROUPS) {
-    const [reference, ...copies] = group.files;
-    const referenceBytes = readOrNull(path.join(repoRoot, reference));
-    if (referenceBytes === null) {
-      missing.push(reference);
-      continue;
-    }
-    for (const copy of copies) {
-      const copyBytes = readOrNull(path.join(repoRoot, copy));
-      if (copyBytes === null) {
-        missing.push(copy);
-      } else if (!referenceBytes.equals(copyBytes)) {
-        drift.push(`${group.label}: ${copy} differs from ${reference}`);
-      }
-    }
+    const res = checkByteIdenticalGroup(group, repoRoot);
+    for (const m of res.missing) missing.push(m);
+    for (const d of res.drift) drift.push(d);
   }
 
   // issue #401 Part 3: rename-normalized forge-port families (self-contained; not edition-sync).
   for (const fam of RENAME_NORMALIZED_FAMILIES) {
-    const referenceText = readOrNull(path.join(repoRoot, fam.reference));
-    if (referenceText === null) {
-      missing.push(fam.reference);
-      continue;
-    }
-    const refStr = referenceText.toString('utf8');
-    for (const port of fam.ports) {
-      const portText = readOrNull(path.join(repoRoot, port.file));
-      if (portText === null) {
-        missing.push(port.file);
-        continue;
-      }
-      const expected = renameNormalize(refStr, port.forge);
-      if (portText.toString('utf8') !== expected) {
-        drift.push(`${fam.label}: ${port.file} differs from ${fam.reference} (rename-normalized for ${port.forge})`);
-      }
-    }
+    const res = checkNormalizedFamily(fam, renameNormalize, repoRoot, 'rename-normalized');
+    for (const m of res.missing) missing.push(m);
+    for (const d of res.drift) drift.push(d);
   }
 
   // #418.1: config/hooks.json forge ports (compact-resume token normalized; .sh tokens stay base).
   {
-    const refText = readOrNull(path.join(repoRoot, CONFIG_HOOKS_FAMILY.reference));
-    if (refText === null) {
-      missing.push(CONFIG_HOOKS_FAMILY.reference);
-    } else {
-      const refStr = refText.toString('utf8');
-      for (const port of CONFIG_HOOKS_FAMILY.ports) {
-        const portText = readOrNull(path.join(repoRoot, port.file));
-        if (portText === null) {
-          missing.push(port.file);
-          continue;
-        }
-        const expected = normalizeConfigHooks(refStr, port.forge);
-        if (portText.toString('utf8') !== expected) {
-          drift.push(`${CONFIG_HOOKS_FAMILY.label}: ${port.file} differs from ${CONFIG_HOOKS_FAMILY.reference} (compact-resume-normalized for ${port.forge})`);
-        }
-      }
-    }
+    const res = checkNormalizedFamily(CONFIG_HOOKS_FAMILY, normalizeConfigHooks, repoRoot, 'compact-resume-normalized');
+    for (const m of res.missing) missing.push(m);
+    for (const d of res.drift) drift.push(d);
+  }
+
+  // #629 bullet 1: hooks/hooks.json forge ports (compact-context token normalized; .sh tokens stay base).
+  {
+    const res = checkNormalizedFamily(HOOKS_JSON_FAMILY, normalizeHooksJson, repoRoot, 'compact-context-normalized');
+    for (const m of res.missing) missing.push(m);
+    for (const d of res.drift) drift.push(d);
   }
 
   // #550/#553: forge module.exports SUPERSET guard FAMILY (divergent hand-ports — not byte/rename families,
@@ -509,7 +563,7 @@ if (require.main === module) {
   }
 
   if (missing.length === 0 && drift.length === 0) {
-    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, 1 config/hooks.json family, and ${FORGE_EXPORT_SUPERSET_FAMILY.length} forge export-superset families in sync.`);
+    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, 2 hooks.json families (config + hooks dir), and ${FORGE_EXPORT_SUPERSET_FAMILY.length} forge export-superset families in sync.`);
     process.exit(0);
   }
 
@@ -529,4 +583,4 @@ if (require.main === module) {
   process.exit(1);
 }
 
-module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, FORGE_CLASSIFIER_EXPORT_SUPERSET, FORGE_EXPORT_SUPERSET_FAMILY, forgeClassifierExportDrift };
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, HOOKS_JSON_FAMILY, normalizeHooksJson, checkNormalizedFamily, checkByteIdenticalGroup, FORGE_CLASSIFIER_EXPORT_SUPERSET, FORGE_EXPORT_SUPERSET_FAMILY, forgeClassifierExportDrift };

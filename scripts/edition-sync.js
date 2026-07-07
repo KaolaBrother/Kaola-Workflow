@@ -110,6 +110,19 @@ function writeFile(rel, content) {
   fs.writeFileSync(path.join(REPO, rel), content);
 }
 
+// Shared create-on-missing sync primitive for steps (b) and (c): write `content` to
+// rootDir/rel when the target is ABSENT or its content differs from `content`. Matches
+// step (a)'s forge-aggregator behavior (`!fs.existsSync(...) || readFile(rel) !== next`),
+// so a newly-enrolled COMMON script or byte-group member with no mirror is CREATED instead
+// of silently skipped as "tree already in sync". Returns true iff a write happened.
+function syncIfDrift(rootDir, rel, content) {
+  const abs = path.join(rootDir, rel);
+  if (fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === content) return false;
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content);
+  return true;
+}
+
 // --- check: recompute every generated port and compare to the committed file. ---
 function runCheck() {
   const mismatches = [];
@@ -167,26 +180,27 @@ function runWrite() {
       }
     }
   }
-  // (b) COMMON_SCRIPTS canonical -> codex (byte copy).
+  // (b) COMMON_SCRIPTS canonical -> codex (byte copy). Create-on-missing (#629 bullet 3): a newly-
+  // enrolled COMMON script with no codex mirror yet is CREATED, matching step (a) above — previously
+  // an absent mirror was skipped as "tree already in sync" while validate-script-sync reds.
   for (const base of COMMON_SCRIPTS) {
     const canon = readFile(canonRel(base));
     const rel = codexRel(base);
-    if (fs.existsSync(path.join(REPO, rel)) && readFile(rel) !== canon) {
-      writeFile(rel, canon);
+    if (syncIfDrift(REPO, rel, canon)) {
       console.log('codex-sync ' + rel);
       wrote++;
     }
   }
   // (c) byte-identical groups: copy the group's first (source) file to every other path.
   // validate-script-sync.js groups expose their member list as `.files` (the first entry is
-  // the canonical source); tolerate a bare-array group too.
+  // the canonical source); tolerate a bare-array group too. Create-on-missing (#629 bullet 3):
+  // an absent copy in a newly-enrolled group is CREATED, not skipped.
   for (const group of BYTE_IDENTICAL_GROUPS) {
     const paths = Array.isArray(group) ? group : group.files;
     if (!Array.isArray(paths) || paths.length < 2) continue;
     const src = readFile(paths[0]);
     for (let i = 1; i < paths.length; i++) {
-      if (fs.existsSync(path.join(REPO, paths[i])) && readFile(paths[i]) !== src) {
-        writeFile(paths[i], src);
+      if (syncIfDrift(REPO, paths[i], src)) {
         console.log('byte-sync  ' + paths[i]);
         wrote++;
       }
@@ -209,4 +223,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, genHeader };
+module.exports = { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, genHeader, syncIfDrift };

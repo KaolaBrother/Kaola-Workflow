@@ -12,6 +12,7 @@
 // every claude + codex chain run — this test locks the GUARD LOGIC against regression.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const sync = require('./validate-script-sync.js');
 
@@ -108,6 +109,93 @@ for (const entry of sync.FORGE_EXPORT_SUPERSET_FAMILY) {
 assert(canonicalOnlyChecked >= 2,
   '#564: expected >=2 canonicalOnly names guarded (ghExec, projectHasAdaptivePlan), got ' + canonicalOnlyChecked +
   ' — the family lost its canonicalOnly entries (or the scan is broken)');
+
+// ---------------------------------------------------------------------------
+// 6) #629 bullet 1: HOOKS_JSON_FAMILY — hooks/hooks.json root+gitlab+gitea parity,
+//    compact-context token rename-normalized (MIRRORS CONFIG_HOOKS_FAMILY).
+// ---------------------------------------------------------------------------
+assert(sync.HOOKS_JSON_FAMILY && sync.HOOKS_JSON_FAMILY.reference === 'hooks/hooks.json',
+  '#629 bullet 1: HOOKS_JSON_FAMILY declared with hooks/hooks.json as reference');
+assert(typeof sync.normalizeHooksJson === 'function', '#629 bullet 1: normalizeHooksJson exported');
+assert(typeof sync.checkNormalizedFamily === 'function',
+  '#629 bullet 1: checkNormalizedFamily exported (shared family-check primitive)');
+
+// 6a) MECHANISM (RED-PROOF): plant a new PreToolUse matcher into a root-copy FIXTURE without
+// mirroring it into the forge copies -> the family check must report drift for every port.
+// Runs entirely against a throwaway tmp tree — never touches the real hooks/hooks.json files.
+if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hooksjson-plant-'));
+  try {
+    const rootHooksText = fs.readFileSync(path.join(repoRoot, 'hooks/hooks.json'), 'utf8');
+    const rootHooks = JSON.parse(rootHooksText);
+    // plant an extra PreToolUse matcher (drift) into the fixture root copy only.
+    rootHooks.hooks.PreToolUse.push({
+      matcher: 'PLANTED-DRIFT',
+      hooks: [{ type: 'command', command: 'echo planted', timeout: 5 }],
+      description: 'planted drift (test fixture only, never written to a real file)',
+      id: 'kaola-workflow:planted-drift-fixture',
+    });
+    const plantedText = JSON.stringify(rootHooks, null, 2) + '\n';
+    fs.mkdirSync(path.join(tmp, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'hooks/hooks.json'), plantedText);
+    for (const port of sync.HOOKS_JSON_FAMILY.ports) {
+      fs.mkdirSync(path.dirname(path.join(tmp, port.file)), { recursive: true });
+      // forge fixture copies stay at the UN-planted, already-normalized content (no forge mirror
+      // of the plant exists) — the exact "missing mirror" scenario the bullet describes.
+      fs.writeFileSync(path.join(tmp, port.file), sync.normalizeHooksJson(rootHooksText, port.forge));
+    }
+    const res = sync.checkNormalizedFamily(sync.HOOKS_JSON_FAMILY, sync.normalizeHooksJson, tmp, 'compact-context-normalized');
+    assert(res.drift.length === sync.HOOKS_JSON_FAMILY.ports.length,
+      '#629 bullet 1 RED-PROOF: a PreToolUse matcher planted into the root fixture only (no forge mirror) reds for every port, got ' + JSON.stringify(res));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// 6b) GREEN AT HEAD: the real hooks/hooks.json triple is ALREADY in normalized parity (verified) —
+// the fix is guard-config only; no write to the hooks.json data files.
+if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') {
+  const res = sync.checkNormalizedFamily(sync.HOOKS_JSON_FAMILY, sync.normalizeHooksJson, repoRoot, 'compact-context-normalized');
+  assert(res.missing.length === 0 && res.drift.length === 0,
+    '#629 bullet 1: the real hooks/hooks.json triple is green at HEAD (already normalized parity), got ' + JSON.stringify(res));
+}
+
+// ---------------------------------------------------------------------------
+// 7) #629 bullet 2: config/agents.toml BYTE_IDENTICAL_GROUPS entry — the three
+//    plugins/*/config/agents.toml files are byte-identical at HEAD but were previously
+//    uncovered (only derived NAME parity was forge-checked).
+// ---------------------------------------------------------------------------
+const agentsTomlGroup = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => g.label === 'config/agents.toml triple');
+assert(!!agentsTomlGroup, '#629 bullet 2: BYTE_IDENTICAL_GROUPS carries a config/agents.toml triple entry');
+assert(typeof sync.checkByteIdenticalGroup === 'function',
+  '#629 bullet 2: checkByteIdenticalGroup exported (shared byte-group-check primitive)');
+
+// 7a) MECHANISM (RED-PROOF): a divergent byte planted into one copy FIXTURE (not a real file) is CAUGHT.
+if (agentsTomlGroup && typeof sync.checkByteIdenticalGroup === 'function') {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-agentstoml-plant-'));
+  try {
+    const refText = fs.readFileSync(path.join(repoRoot, agentsTomlGroup.files[0]), 'utf8');
+    for (let i = 0; i < agentsTomlGroup.files.length; i++) {
+      const rel = agentsTomlGroup.files[i];
+      fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
+      // plant a divergent developer_instructions byte into the SECOND copy only.
+      const tampered = i === 1 ? refText + '\ndeveloper_instructions = "PLANTED-DRIFT"\n' : refText;
+      fs.writeFileSync(path.join(tmp, rel), tampered);
+    }
+    const res = sync.checkByteIdenticalGroup(agentsTomlGroup, tmp);
+    assert(res.missing.length === 0 && res.drift.length === 1,
+      '#629 bullet 2 RED-PROOF: a divergent developer_instructions byte planted in one copy fixture reds, got ' + JSON.stringify(res));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// 7b) GREEN AT HEAD: the real config/agents.toml triple is byte-identical (md5 579c8575...).
+if (agentsTomlGroup && typeof sync.checkByteIdenticalGroup === 'function') {
+  const res = sync.checkByteIdenticalGroup(agentsTomlGroup, repoRoot);
+  assert(res.missing.length === 0 && res.drift.length === 0,
+    '#629 bullet 2: the real config/agents.toml triple is byte-identical at HEAD, got ' + JSON.stringify(res));
+}
 
 if (failed) { process.stderr.write('\nvalidate-script-sync guard tests FAILED (' + failed + ' failures, ' + passed + ' passed)\n'); process.exit(1); }
 process.stdout.write('validate-script-sync guard tests passed (' + passed + ' assertions; ' + canonicalOnlyChecked + ' canonicalOnly exclusions machine-guarded)\n');
