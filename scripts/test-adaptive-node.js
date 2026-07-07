@@ -3349,6 +3349,44 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
 }
 
 // ---------------------------------------------------------------------------
+// R3b (#622): open-ready — write-node exclusivity RELAXED for a LEG-CONTAINED write: a live
+// lane_group member (leg-contained, isolated in its own leg worktree) does NOT block a new READ
+// from co-opening — only a LEGLESS live write (R3 above, unchanged) stays strictly exclusive.
+// Mirrors the #596 speculative-path precedent (a live write already co-runs with reads/other
+// members there via the SAME `!liveHasWrite`-class gate, never re-asserted for a leg-contained
+// writer). The live lane_group must survive UNTOUCHED in the rewritten running-set.json.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| w1 | in_progress | |', '| w2 | in_progress | |', '| rev | pending | |'], [
+    '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
+    '| w2 | implementer | — | scripts/b.js | 1 | sequence |',
+    '| rev | code-reviewer | — | — | 1 | sequence |',
+  ]);
+  const existingSet = JSON.stringify({
+    state: 'open',
+    max_concurrent: 2,
+    lane_group: { group_id: 'lg-w1-w2', members: ['w1', 'w2'], write_union: ['scripts/a.js', 'scripts/b.js'] },
+    nodes: [
+      { id: 'w1', role: 'implementer', kind: 'write', group_id: 'lg-w1-w2', baseline: 'recorded' },
+      { id: 'w2', role: 'implementer', kind: 'write', group_id: 'lg-w1-w2', baseline: 'recorded' },
+    ],
+  });
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: existingSet }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'code-reviewer', declared_write_set: '—' }] };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.kind === 'read' && r.opened.length === 1 && r.opened[0].id === 'rev',
+    'R3b (#622): a READ co-opens alongside a LIVE LEG-CONTAINED write lane group (no longer blocked by write_node_exclusive), got ' + JSON.stringify(r));
+  assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'R3b (#622): rev ledger flipped in_progress');
+  const set = JSON.parse(h.files[RS_SET_PATH]);
+  assert(set.lane_group && set.lane_group.group_id === 'lg-w1-w2', 'R3b (#622): the live lane_group is PRESERVED (not dropped) by the read co-open, got ' + JSON.stringify(set.lane_group));
+  assert(set.max_concurrent === 2, 'R3b (#622): the group\'s recorded max_concurrent (the WRITE cap) is preserved verbatim, not recomputed to the READ cap, got ' + set.max_concurrent);
+  assert(set.nodes.some(n => n.id === 'rev' && n.kind === 'read'), 'R3b (#622): running-set now carries rev alongside the live write lane group, got ' + JSON.stringify(set.nodes));
+  assert(set.nodes.filter(n => n.id === 'w1' || n.id === 'w2').length === 2, 'R3b (#622): the live write lane group members are still present (untouched)');
+}
+
+// ---------------------------------------------------------------------------
 // R4: open-ready — a crashed 'opening' running set refuses reconcile_first.
 // ---------------------------------------------------------------------------
 {
@@ -6489,7 +6527,16 @@ function rtHarness(initialFiles, opts) {
     const open2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(open2.result === 'ok' && open2.laneGroup, 'S5-MULTI-LEVEL: level-2 {C,D} co-opens off M1, got ' + JSON.stringify(open2));
     const rs2 = readRS(cacheDir);
-    assert(rs2.lane_group.legs.C.baseline === M1 && rs2.lane_group.legs.D.baseline === M1, 'S5-MULTI-LEVEL: level-2 leg baselines == M1 (legs branch off the prior level\'s commit), got ' + JSON.stringify({ C: rs2.lane_group.legs.C.baseline, D: rs2.lane_group.legs.D.baseline, M1 }));
+    // #633 (D-622-01): the leg branch-point is no longer BYTE-EQUAL to M1 — open-ready now commits a
+    // TRACKED evidence-stub seed (the #633 fix) on the parent branch BEFORE each leg branches off, so the
+    // legs branch from a commit ONE STEP AHEAD of M1 (M1 is its parent). Assert the WEAKER, still-
+    // meaningful invariant the #633 fix preserves: M1 is an ANCESTOR of (not necessarily equal to) each
+    // leg's recorded baseline — legs still branch off the prior level's commit chain, just past the
+    // stub-seed commit the fix inserts.
+    let m1AncestorOfC = false, m1AncestorOfD = false;
+    try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, rs2.lane_group.legs.C.baseline], STDIO_Q); m1AncestorOfC = true; } catch (_) { m1AncestorOfC = false; }
+    try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, rs2.lane_group.legs.D.baseline], STDIO_Q); m1AncestorOfD = true; } catch (_) { m1AncestorOfD = false; }
+    assert(m1AncestorOfC && m1AncestorOfD, 'S5-MULTI-LEVEL: level-2 leg baselines descend from M1 (legs branch off the prior level\'s commit chain, past the #633 stub-seed commit), got ' + JSON.stringify({ C: rs2.lane_group.legs.C.baseline, D: rs2.lane_group.legs.D.baseline, M1 }));
     const leg2C = path.join(repoRoot, '.kw', 'legs', 'test-project', 'C');
     const leg2D = path.join(repoRoot, '.kw', 'legs', 'test-project', 'D');
     writeEvidence(cacheDir, 'C'); writeEvidence(cacheDir, 'D');
@@ -6982,6 +7029,318 @@ function rtHarness(initialFiles, opts) {
       '#616-PLAIN-SERIAL-DEGRADE: KAOLA_PARALLEL_WRITES=0 degrades to a single serial write, got ' + JSON.stringify(r));
     assert(r.serialDegradeReason !== 'parent_dirty',
       '#616-PLAIN-SERIAL-DEGRADE: an ordinary serial-write choice (clean parent, kill-switch forced) must NOT carry serialDegradeReason:"parent_dirty", got ' + JSON.stringify(r.serialDegradeReason));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #622-MIXED-READ-COOPEN-AND-MERGE-FENCE (D-622-01) — a REAL end-to-end proof of BOTH #622 halves:
+  //   (1) a READ becomes ready WHILE a leg-contained write lane_group is STILL LIVE (a non-last member
+  //       already deferred; the last member has not closed yet) — open-ready must co-open the read
+  //       instead of refusing write_node_exclusive (the bug: it blocked ALL reads while ANY lane-group
+  //       member was live, forcing a two-wave [reads-then-writes] serialization).
+  //   (2) the group's LAST-member merge must not race that live read — closeGroupMember refuses
+  //       merge_awaits_read_drain (zero mutation, no merge attempted) until the read drains, THEN
+  //       succeeds cleanly once it closes.
+  // Plan: seed(complete) -> A,B (disjoint writes, depend on seed) -> probe (a NON-gate read,
+  // code-explorer, depends on A ONLY — becomes ready as soon as A defers, while B, the LAST group
+  // member, is still live) -> review (code-reviewer, depends on A,B,probe — satisfies the G1
+  // post-dominance requirement without gating probe's early readiness) -> finalize.
+  // -------------------------------------------------------------------------
+  {
+    function make622Repo() {
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd622-mixed-'));
+      const project = 'test-project';
+      const projDir = path.join(repoRoot, 'kaola-workflow', project);
+      const cacheDir = path.join(projDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      const plan = [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| seed     | code-explorer | —         | —          | 1 | sequence |',
+        '| A        | tdd-guide     | seed      | ax622.js   | 1 | sequence |',
+        '| B        | tdd-guide     | seed      | by622.js   | 1 | sequence |',
+        '| probe    | code-explorer | A         | —          | 1 | sequence |',
+        '| review   | code-reviewer | A,B,probe | —          | 1 | sequence |',
+        '| finalize | finalize      | review    | —          | 1 | sequence |', '',
+        '## Node Ledger', '',
+        '| id | status |', '| --- | --- |',
+        '| seed | complete |',
+        '| A | pending |',
+        '| B | pending |',
+        '| probe | pending |',
+        '| review | pending |',
+        '| finalize | pending |', '',
+      ].join('\n') + '\n';
+      fs.writeFileSync(planPath, plan);
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      const froze = execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+      assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse', '#622-MIXED: fixture must freeze, got ' + froze);
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']); g(['commit', '-m', 'init']);
+      return { repoRoot, project, planPath, projDir, cacheDir };
+    }
+
+    const { repoRoot, cacheDir, planPath } = make622Repo();
+
+    // Open {A,B} as a co-opened write lane group (no reads ready yet — probe depends on A, not seed).
+    const open1 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open1.result === 'ok' && open1.laneGroup && open1.opened.length === 2,
+      '#622-MIXED: {A,B} co-open as a write lane group, got ' + JSON.stringify(open1));
+    const legA = open1.laneGroup.legs.A.legPath;
+    const legB = open1.laneGroup.legs.B.legPath;
+    fs.writeFileSync(path.join(legA, 'ax622.js'), '// A in-lane\n');
+    fs.writeFileSync(path.join(legB, 'by622.js'), '// B in-lane\n');
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+
+    // Close A (non-last member) — defers to the group; A's ledger flips to complete, so `probe`
+    // (depends on A) becomes ready WHILE B (the group's last member) is still live.
+    const rA = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'A', '--json'], DEFAULT);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#622-MIXED: A deferred ok, got ' + JSON.stringify(rA));
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'in_progress',
+      '#622-MIXED: A complete, B still in_progress (the live group member)');
+
+    // #622 (1): open-ready must co-open `probe` (a read) WHILE B is still a live lane-group member —
+    // NOT refuse write_node_exclusive (the pre-#622 two-wave-forcing bug).
+    const open2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open2.result === 'ok' && open2.kind === 'read' && Array.isArray(open2.opened) && open2.opened.length === 1 && open2.opened[0].id === 'probe',
+      '#622-MIXED: probe co-opens alongside the LIVE leg-contained write group B (not blocked by write_node_exclusive), got ' + JSON.stringify(open2));
+    assert(ledgerStatus(planPath, 'probe') === 'in_progress', '#622-MIXED: probe ledger flipped in_progress');
+    const rsAfterProbeOpen = readRS(cacheDir);
+    assert(rsAfterProbeOpen.lane_group && rsAfterProbeOpen.lane_group.group_id === open1.laneGroup.group_id,
+      '#622-MIXED: the live write lane_group SURVIVES the read co-open, got ' + JSON.stringify(rsAfterProbeOpen.lane_group));
+    assert(rsAfterProbeOpen.nodes.some(n => n.id === 'B') && rsAfterProbeOpen.nodes.some(n => n.id === 'probe'),
+      '#622-MIXED: running-set carries BOTH the live write B and the newly-opened read probe, got ' + JSON.stringify(rsAfterProbeOpen.nodes.map(n => n.id)));
+
+    // #622 (2) MERGE FENCE: closing B (the LAST member) WHILE probe is STILL live must be HELD — refuse
+    // merge_awaits_read_drain, zero mutation (no merge attempted, B stays in_progress, lane_group intact).
+    const headBeforeFence = gitOut(repoRoot, ['rev-parse', 'HEAD']);
+    const rB1 = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
+    assert(rB1.result === 'refuse' && rB1.reason === 'merge_awaits_read_drain',
+      '#622-MIXED: B\'s last-member merge is HELD while probe is live (merge_awaits_read_drain), got ' + JSON.stringify(rB1));
+    assert(Array.isArray(rB1.liveReads) && rB1.liveReads.includes('probe'),
+      '#622-MIXED: the refusal names the live read(s) holding the merge, got ' + JSON.stringify(rB1.liveReads));
+    assert(ledgerStatus(planPath, 'B') === 'in_progress', '#622-MIXED: B ledger UNCHANGED (still in_progress) after the held merge attempt');
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === headBeforeFence, '#622-MIXED: HEAD unchanged — NO merge was attempted while the read was live');
+    const rsAfterFence = readRS(cacheDir);
+    assert(rsAfterFence.lane_group && rsAfterFence.lane_group.group_id === open1.laneGroup.group_id,
+      '#622-MIXED: lane_group untouched by the held merge attempt, got ' + JSON.stringify(rsAfterFence.lane_group));
+
+    // Close probe (the live read drains) — then the retried B close must succeed cleanly.
+    const probeNonce = (() => { try { return fs.readFileSync(path.join(cacheDir, 'barrier-base-probe'), 'utf8').trim().slice(0, 12); } catch (_) { return ''; } })();
+    fs.writeFileSync(path.join(cacheDir, 'probe.md'), 'evidence-binding: probe ' + probeNonce + '\nno findings\n');
+    const rProbe = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'probe', '--json'], DEFAULT);
+    assert(rProbe.result === 'ok', '#622-MIXED: probe closes ok once done, got ' + JSON.stringify(rProbe));
+    assert(ledgerStatus(planPath, 'probe') === 'complete', '#622-MIXED: probe ledger complete');
+
+    const rB2 = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
+    assert(rB2.result === 'ok' && rB2.barrier === 'group_passed' && rB2.synthesized === true,
+      '#622-MIXED: once probe drains, B\'s retried close-node merges cleanly (group_passed), got ' + JSON.stringify(rB2));
+    const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    assert(headTree.includes('ax622.js') && headTree.includes('by622.js'), '#622-MIXED: both in-lane files reach HEAD after the drained merge, got ' + JSON.stringify(headTree.split('\n').filter(Boolean)));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #633-SELF-WRITTEN-LEG-EVIDENCE-MERGE (D-622-01) — the lane-group synthesizer octopus-merge
+  // collision: BOTH members self-write REAL (non-empty) evidence INSIDE their own leg — mirroring the
+  // TRUE field mechanism (commands/kaola-workflow-plan-run.md's evidence-persistence contract: a
+  // write-role agent SELF-WRITES its `.cache` evidence via its dispatch's absolute `leg_path`, never
+  // synced back to the parent). Before the #633 fix, the parent's `seedEvidenceFile` stub is an
+  // UNTRACKED plain-fs write while each leg's real content is freshly committed on its OWN branch —
+  // the last-member octopus merge then refuses "Untracked working tree file … would be overwritten by
+  // merge" (a structural collision, not a real content conflict). After the fix (the stub is committed
+  // TRACKED on the parent BEFORE the legs branch off, and the close-side evidence read prefers each
+  // leg's own copy), the last-member close reaches barrier:'group_passed' with NO manual intervention.
+  // -------------------------------------------------------------------------
+  {
+    function selfWriteEvidenceInLeg(legPath, cacheDir, id) {
+      const legCacheDir = path.join(legPath, 'kaola-workflow', 'test-project', '.cache');
+      fs.mkdirSync(legCacheDir, { recursive: true });
+      let nonce = '';
+      try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
+      fs.writeFileSync(path.join(legCacheDir, id + '.md'),
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' — AssertionError: expected throw (pre-impl)\nGREEN: test_' + id + ' passes; 1/1 assertions green\n');
+    }
+
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open.result === 'ok' && open.laneGroup, '#633: setup co-open ok, got ' + JSON.stringify(open));
+    const legA = open.laneGroup.legs.A.legPath;
+    const legB = open.laneGroup.legs.B.legPath;
+
+    // BOTH members self-write REAL evidence INSIDE their own leg (never at the parent).
+    selfWriteEvidenceInLeg(legA, cacheDir, 'A');
+    selfWriteEvidenceInLeg(legB, cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A in-lane\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B in-lane\n');
+
+    // The parent's `.cache/A.md` / `.cache/B.md` are NEVER written by this test — they stay whatever
+    // open-ready's #633 fix left them (the TRACKED stub, untouched). The evidence-shape check for BOTH
+    // closes must read each member's OWN leg copy instead.
+    const rA = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'A', '--json'], DEFAULT);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group',
+      '#633: A deferred ok reading its OWN leg-resident evidence (parent copy never touched), got ' + JSON.stringify(rA));
+
+    const rB = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
+      '#633: last-member close reaches group_passed with NO manual intervention (the untracked-vs-tracked evidence-file merge collision does not resurface), got ' + JSON.stringify(rB));
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete',
+      '#633: both A and B ledger complete');
+    const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert(headTree.includes('ax.js') && headTree.includes('by.js'), '#633: both in-lane files reach HEAD after the merge, got ' + JSON.stringify(headTree));
+    const wts = worktreePaths(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), '#633: leg worktrees torn down on clean completion, got ' + JSON.stringify(wts));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // R4-REGRESSION (adversarial-verifier finding, repair pass on the #622 fix) — the #622 relaxation
+  // (a read co-opens alongside a still-live LEG-CONTAINED write lane group) interacts badly with the
+  // PRE-EXISTING #596 speculative-write fallback. Sequence:
+  //   1. {A,B} co-open as a write lane group.
+  //   2. A closes (defers to the group) → gateR (a code-reviewer gate depending on A alone) co-opens
+  //      as a READ alongside the still-live group member B (the #622 relaxation working as intended).
+  //   3. On the NEXT open-ready tick the normal frontier is empty (gateR still open), but W2 — a write
+  //      node whose ONLY unsatisfied dependency is the open gateR — is speculativePending. Pre-fix, the
+  //      #596 speculative-write fallback fires for W2 WHILE B is still live: W2 forms its OWN size-1
+  //      speculative lane group, and the running-set write-descriptor assignment (groupForm truthy)
+  //      UNCONDITIONALLY REPLACES the live lane_group descriptor — losing B's membership entirely.
+  //      When B (now orphaned from any lane_group) later tries to close, it can no longer be recognized
+  //      as a group member, falls through to the serial close path, and its committed in-lane leg work
+  //      never reaches HEAD (silently lost) while the leg worktree leaks.
+  // Fixed behavior asserted here: a speculative write candidate is EXCLUDED (reason: 'lane_group_live')
+  // whenever a write lane_group is ALREADY live — the running-set's single lane_group descriptor is
+  // never overwritten out from under a still-open member. W2 simply waits; once gateR later resolves
+  // (verdict: pass) and B's group drains and merges normally, W2 opens through the ordinary (non-
+  // speculative) path, proving the fix costs no real parallelism — only the racy overwrite is removed.
+  // -------------------------------------------------------------------------
+  {
+    function makeR4Repo() {
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd622-r4-'));
+      const project = 'test-project';
+      const projDir = path.join(repoRoot, 'kaola-workflow', project);
+      const cacheDir = path.join(projDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      const plan = [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', 'speculative_open_policy: auto', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| seed     | code-explorer | —      | —          | 1 | sequence |',
+        '| A        | tdd-guide     | seed   | ar4.js     | 1 | sequence |',
+        '| B        | tdd-guide     | seed   | br4.js     | 1 | sequence |',
+        '| gateR    | code-reviewer | A      | —          | 1 | sequence |',
+        '| W2       | tdd-guide     | gateR  | cr4.js     | 1 | sequence |',
+        '| review   | code-reviewer | B,W2   | —          | 1 | sequence |',
+        '| finalize | finalize      | review | —          | 1 | sequence |', '',
+        '## Node Ledger', '',
+        '| id | status |', '| --- | --- |',
+        '| seed | complete |',
+        '| A | pending |',
+        '| B | pending |',
+        '| gateR | pending |',
+        '| W2 | pending |',
+        '| review | pending |',
+        '| finalize | pending |', '',
+      ].join('\n') + '\n';
+      fs.writeFileSync(planPath, plan);
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      const froze = execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+      assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse', 'R4-REGRESSION: fixture must freeze, got ' + froze);
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']); g(['commit', '-m', 'init']);
+      return { repoRoot, project, planPath, projDir, cacheDir };
+    }
+
+    const { repoRoot, planPath, cacheDir } = makeR4Repo();
+
+    // (1) {A,B} co-open as a write lane group.
+    const open1 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open1.result === 'ok' && open1.laneGroup && open1.opened.length === 2,
+      'R4-REGRESSION: {A,B} co-open as a write lane group, got ' + JSON.stringify(open1));
+    const originalGroupId = open1.laneGroup.group_id;
+    const legA = open1.laneGroup.legs.A.legPath;
+    const legB = open1.laneGroup.legs.B.legPath;
+    fs.writeFileSync(path.join(legA, 'ar4.js'), '// A in-lane\n');
+    fs.writeFileSync(path.join(legB, 'br4.js'), '// B in-lane\n');
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+
+    // Close A (non-last member) — defers to the group; gateR (depends on A only) becomes ready while
+    // B (the group's last member) is still live.
+    const rA = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'A', '--json'], DEFAULT);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'R4-REGRESSION: A deferred ok, got ' + JSON.stringify(rA));
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'in_progress',
+      'R4-REGRESSION: A complete, B still in_progress (the live group member)');
+
+    // (2) gateR co-opens as a READ alongside the still-live write lane group (the #622 relaxation).
+    const open2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open2.result === 'ok' && open2.kind === 'read' && open2.opened.length === 1 && open2.opened[0].id === 'gateR',
+      'R4-REGRESSION: gateR co-opens alongside the LIVE leg-contained write group B, got ' + JSON.stringify(open2));
+    assert(ledgerStatus(planPath, 'gateR') === 'in_progress', 'R4-REGRESSION: gateR ledger flipped in_progress');
+    const rsAfterGateOpen = readRS(cacheDir);
+    assert(rsAfterGateOpen.lane_group && rsAfterGateOpen.lane_group.group_id === originalGroupId,
+      'R4-REGRESSION: the live write lane_group survives the read co-open, got ' + JSON.stringify(rsAfterGateOpen.lane_group));
+
+    // (3) THE REGRESSION TICK: normal frontier is empty (gateR still open blocks W2 normally, B is
+    // in_progress not pending, review depends on B+W2 both incomplete) — but W2's ONLY unsatisfied dep
+    // is the open gateR, so it is speculativePending. This must NOT be allowed to open and overwrite the
+    // still-live {A,B} lane_group descriptor.
+    const open3 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open3.result === 'ok' && (open3.opened || []).length === 0,
+      'R4-REGRESSION: W2 must NOT speculative-open while B\'s write lane group is still live, got ' + JSON.stringify(open3));
+    assert(open3.speculativeWriteExcluded && open3.speculativeWriteExcluded.reason === 'lane_group_live'
+      && (open3.speculativeWriteExcluded.nodeIds || []).includes('W2'),
+      'R4-REGRESSION: W2 is excluded with reason lane_group_live, got ' + JSON.stringify(open3.speculativeWriteExcluded));
+    assert(ledgerStatus(planPath, 'W2') === 'pending', 'R4-REGRESSION: W2 ledger row untouched (still pending)');
+    const rsAfterSpecAttempt = readRS(cacheDir);
+    assert(rsAfterSpecAttempt.lane_group && rsAfterSpecAttempt.lane_group.group_id === originalGroupId,
+      'R4-REGRESSION: the ORIGINAL live lane_group survives untouched — must NOT be overwritten by a new speculative group, got ' + JSON.stringify(rsAfterSpecAttempt.lane_group));
+    assert(Array.isArray(rsAfterSpecAttempt.lane_group.members) && rsAfterSpecAttempt.lane_group.members.includes('B'),
+      'R4-REGRESSION: B is still tracked as a lane_group member, got ' + JSON.stringify(rsAfterSpecAttempt.lane_group));
+    assert(!(rsAfterSpecAttempt.nodes || []).some(n => n.id === 'W2'),
+      'R4-REGRESSION: W2 never entered the running set, got ' + JSON.stringify((rsAfterSpecAttempt.nodes || []).map(n => n.id)));
+
+    // Recovery proof: B's last-member merge is held while gateR (a read) is live (the #622 merge fence,
+    // unaffected by this fix) — then, once gateR resolves and B drains/merges normally, W2 opens through
+    // the ORDINARY (non-speculative) path. The fix costs no real parallelism; it only removes the race.
+    const rB1 = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
+    assert(rB1.result === 'refuse' && rB1.reason === 'merge_awaits_read_drain',
+      'R4-REGRESSION: B\'s last-member merge is HELD while gateR is live, got ' + JSON.stringify(rB1));
+
+    let gateNonce = '';
+    try { gateNonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-gateR'), 'utf8').trim().slice(0, 12); } catch (_) {}
+    fs.writeFileSync(path.join(cacheDir, 'gateR.md'), 'evidence-binding: gateR ' + gateNonce + '\nverdict: pass\nfindings_blocking: 0\n');
+    const rGate = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'gateR', '--json'], DEFAULT);
+    assert(rGate.result === 'ok', 'R4-REGRESSION: gateR closes ok once evidenced, got ' + JSON.stringify(rGate));
+    assert(ledgerStatus(planPath, 'gateR') === 'complete', 'R4-REGRESSION: gateR ledger complete');
+
+    const rB2 = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'B', '--json'], DEFAULT);
+    assert(rB2.result === 'ok' && rB2.barrier === 'group_passed' && rB2.synthesized === true,
+      'R4-REGRESSION: once gateR drains, B\'s retried close-node merges cleanly (group_passed), got ' + JSON.stringify(rB2));
+    const headTree = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert(headTree.includes('ar4.js') && headTree.includes('br4.js'),
+      'R4-REGRESSION: both A and B in-lane files reach HEAD after the drained merge, got ' + JSON.stringify(headTree));
+    const wts = worktreePaths(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'R4-REGRESSION: A/B leg worktrees torn down on clean completion, got ' + JSON.stringify(wts));
+
+    // W2 is now normally ready (gateR complete, no longer speculative) — it opens through the ordinary
+    // path, proving the fix cost no reachable parallelism.
+    const open4 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open4.result === 'ok' && (open4.opened || []).length === 1 && open4.opened[0].id === 'W2' && open4.kind === 'write',
+      'R4-REGRESSION: W2 opens normally (non-speculatively) once gateR is complete, got ' + JSON.stringify(open4));
+
     cleanup(repoRoot);
   }
 }
@@ -9301,6 +9660,191 @@ function rtHarness(initialFiles, opts) {
       'T-590-order-ok: baseline recorded BEFORE the ledger flip write (baseline-first)');
     assert(sawPlanWrite === true && /\|\s*impl-core\s*\|\s*in_progress\s*\|/.test(planContent),
       'T-590-order-ok: ledger flipped in_progress AFTER the baseline');
+  }
+}
+
+// ===========================================================================
+// #621 — the #590 baseline-first ordering was applied to runOpenNext but NOT mirrored in
+// runCloseAndOpenNext's FUSED ADVANCE (the ledger flip for the NEXT node ran BEFORE its
+// baseline was recorded) nor in runReopenNode (the reopen flip ran BEFORE its fresh baseline).
+// RED (pre-#621 order in each): a baseline failure for the newly-opened/reopened node still
+// left it in_progress with NO baseline on disk. GREEN (baseline-first, mirroring #590): a
+// baseline failure leaves that row PENDING — a clean re-open/retry, never an
+// in_progress-without-baseline strand.
+// ===========================================================================
+{
+  // -- T-621-fused-fail: fused advance — baseline FAILS for the NEXT node → NO ledger flip
+  //    write for it; refuse baseline_failed; the CLOSE half (impl-core→complete) is preserved. --
+  {
+    const plan = makePlan([
+      '| impl-core | in_progress | |',
+      '| impl-other | pending | |',
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ]);
+    const cacheFiles = {
+      '/fake/kaola-workflow/test-project/.cache/impl-core.md':
+        'RED: test failed as expected\nGREEN: test passed after implementation\n5 assertions',
+    };
+    let planContent = plan;
+    const shellStub = function (scriptPath, args) {
+      const base = path.basename(scriptPath);
+      const argsArr = args || [];
+      if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+        return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true, selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+      }
+      if (base === 'kaola-workflow-commit-node.js' && argsArr.includes('--start')) {
+        return { exitCode: 1, result: 'refuse', reason: 'baseline_missing', errors: ['stub baseline failure'] };
+      }
+      if (base === 'kaola-workflow-next-action.js') {
+        return {
+          exitCode: 0, result: 'ok', allDone: false,
+          readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }],
+          nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' },
+        };
+      }
+      return { exitCode: 1, result: 'refuse' };
+    };
+    const result = runCloseAndOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', nodeId: 'impl-core', shell: shellStub,
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return makeState();
+        if (cacheFiles[fpath]) return cacheFiles[fpath];
+        throw new Error('ENOENT: ' + fpath);
+      },
+      writeFile: (fpath, content) => { if (fpath.endsWith('workflow-plan.md')) planContent = content; },
+      cacheExists: (fpath) => !!cacheFiles[fpath],
+    });
+    assert(result.result === 'refuse' && result.reason === 'baseline_failed',
+      'T-621-fused-fail: baseline failure for the NEXT node refuses baseline_failed, got ' + JSON.stringify({ result: result.result, reason: result.reason }));
+    assert(/\|\s*impl-core\s*\|\s*complete\s*\|/.test(planContent),
+      'T-621-fused-fail: the CLOSE half (impl-core→complete) is preserved despite the OPEN half failing');
+    assert(!/\|\s*impl-other\s*\|\s*in_progress\s*\|/.test(planContent),
+      'T-621-fused-fail: impl-other never flips in_progress without a recorded baseline');
+    assert(/\|\s*impl-other\s*\|\s*pending\s*\|/.test(planContent),
+      'T-621-fused-fail: impl-other row left PENDING on the baseline failure — a clean re-open, no in_progress-without-baseline strand');
+  }
+
+  // -- T-621-fused-ok: fused advance — baseline recorded BEFORE the impl-other ledger flip write. --
+  {
+    const plan = makePlan([
+      '| impl-core | in_progress | |',
+      '| impl-other | pending | |',
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ]);
+    const cacheFiles = {
+      '/fake/kaola-workflow/test-project/.cache/impl-core.md':
+        'RED: test failed as expected\nGREEN: test passed after implementation\n5 assertions',
+    };
+    let planContent = plan;
+    let sawImplOtherWrite = false;
+    let baselineSawWriteAtInvoke = null;
+    const shellStub = function (scriptPath, args) {
+      const base = path.basename(scriptPath);
+      const argsArr = args || [];
+      if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+        return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true, selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+      }
+      if (base === 'kaola-workflow-commit-node.js' && argsArr.includes('--start')) {
+        baselineSawWriteAtInvoke = sawImplOtherWrite;
+        return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-other', overallOk: true, recordBase: { base: 'deadbeefcafe0001', reused: false } };
+      }
+      if (base === 'kaola-workflow-next-action.js') {
+        return {
+          exitCode: 0, result: 'ok', allDone: false,
+          readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }],
+          nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' },
+        };
+      }
+      return { exitCode: 1, result: 'refuse' };
+    };
+    const result = runCloseAndOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', nodeId: 'impl-core', shell: shellStub,
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return makeState();
+        if (cacheFiles[fpath]) return cacheFiles[fpath];
+        throw new Error('ENOENT: ' + fpath);
+      },
+      writeFile: (fpath, content) => {
+        if (fpath.endsWith('workflow-plan.md')) {
+          if (/\|\s*impl-other\s*\|\s*in_progress\s*\|/.test(content)) sawImplOtherWrite = true;
+          planContent = content;
+        }
+      },
+      cacheExists: (fpath) => !!cacheFiles[fpath],
+    });
+    assert(result.result === 'ok' && result.opened && result.opened.id === 'impl-other',
+      'T-621-fused-ok: baseline success → fused advance opens impl-other, got ' + JSON.stringify(result));
+    assert(baselineSawWriteAtInvoke === false,
+      'T-621-fused-ok: baseline recorded BEFORE the impl-other in_progress ledger write (baseline-first ordering)');
+    assert(/\|\s*impl-other\s*\|\s*in_progress\s*\|/.test(planContent),
+      'T-621-fused-ok: impl-other flipped in_progress AFTER the baseline succeeded');
+  }
+
+  // -- T-621-reopen: runReopenNode — a baseline failure over the crash window leaves the reopened
+  //    node PENDING (gates already folded), and a RETRY over that SAME window succeeds idempotently. --
+  {
+    const planNodes = [
+      '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| finalize | finalize | review | — | 1 | sequence |',
+    ];
+    let planContent = makePlan([
+      '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
+    ], planNodes);
+    const removed = [];
+    let baselineSawInProgressAtInvoke = null;
+    const shell1 = (scriptPath) => {
+      const base = path.basename(scriptPath);
+      if (base === 'kaola-workflow-commit-node.js') {
+        baselineSawInProgressAtInvoke = /\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent);
+        return { exitCode: 1, result: 'refuse', reason: 'baseline_missing', errors: ['stub baseline failure'] };
+      }
+      return { exitCode: 0, result: 'ok' }; // --drop-base calls
+    };
+    const result = runReopenNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+      shell: shell1,
+      readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: (f) => /barrier-base-/.test(f),
+      unlink: (f) => removed.push(path.basename(f)),
+    });
+    assert(result.result === 'refuse' && result.reason === 'baseline_failed',
+      'T-621-reopen: baseline failure refuses baseline_failed, got ' + JSON.stringify(result));
+    assert(/\|\s*impl\s*\|\s*pending\s*\|/.test(planContent),
+      'T-621-reopen: impl row left PENDING on the baseline failure (never in_progress-without-baseline)');
+    assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent),
+      'T-621-reopen: the post-dominating gate is already folded to pending on disk (the prep-write landed)');
+    assert(baselineSawInProgressAtInvoke === false,
+      'T-621-reopen: commit-node --start was invoked while impl was STILL pending on disk (baseline-first)');
+
+    // -- RETRY over the SAME crash window: impl is now genuinely 'pending' on disk (gates already
+    // folded) — a repeated reopen-node call must succeed idempotently once the baseline stub is fixed,
+    // NOT refuse node_not_complete. --
+    const shell2 = (scriptPath) => (path.basename(scriptPath) === 'kaola-workflow-commit-node.js'
+      ? { exitCode: 0, result: 'ok', recordBase: { base: 'deadbeefcafe0002', reused: false } }
+      : { exitCode: 0, result: 'ok' });
+    const result2 = runReopenNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+      shell: shell2,
+      readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: (f) => /barrier-base-/.test(f),
+      unlink: (f) => removed.push(path.basename(f)),
+    });
+    assert(result2.result === 'ok',
+      'T-621-reopen: RETRY over the same crash window succeeds idempotently, got ' + JSON.stringify(result2));
+    assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent),
+      'T-621-reopen: retry flips impl in_progress once the baseline succeeds');
   }
 }
 

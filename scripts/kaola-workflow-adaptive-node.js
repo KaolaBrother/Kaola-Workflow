@@ -2480,6 +2480,31 @@ function runCloseAndOpenNext(opts) {
     return { result: 'ok', closed: nodeId, opened: null, allDone: false, reason: 'frontier_blocked', ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
+  // #621: record the fused-advance baseline BEFORE flipping the next node's ledger row (mirrors
+  // runOpenNext's #590 baseline-first ordering, which this fused path never received). The prior
+  // splice-then-baseline order left a crash window where the ledger read in_progress for nextNode with
+  // NO baseline on disk — a later close dead-ends baseline_missing, exactly the #590 hazard #621 found
+  // NOT mirrored here. Baseline-first inverts the hazard: on a baseline failure, refuse baseline_failed
+  // with nextNode's row LEFT PENDING (this splice is never attempted) — a clean re-open, never an
+  // in_progress-without-baseline strand. The CLOSE half of this fused call (the node that just closed,
+  // its compliance row, running-set removal, selector arms) already landed and is preserved on this
+  // refusal — only the OPEN half of the advance is what failed.
+  const baselineResult = shell(commitNodePath, [planPath, '--node-id', nextNode.id, '--start', '--json']);
+  const baselineOk = baselineResult.exitCode === 0 && baselineResult.result === 'ok';
+
+  if (!baselineOk) {
+    return {
+      result: 'refuse',
+      reason: 'baseline_failed',
+      nodeId: nextNode.id,
+      baselineResult,
+      closed: nodeId,
+      ...(verdictWarn || {}),
+      taskTransitions: transitions,
+      taskMirror: refreshTaskMirror(project, shell),
+    };
+  }
+
   let planForAdvance = readFile(planPath);
   const advanceSplice = spliceLedgerNode(planForAdvance, nextNode.id, 'in_progress', { allowFrom: ['pending'] });
 
@@ -2497,9 +2522,6 @@ function runCloseAndOpenNext(opts) {
 
   // #373: best-effort telemetry — the fused advance opened the next node.
   appendNodeTiming(planPath, nextNode.id, 'opened');
-
-  // Record baseline for the newly opened node.
-  const baselineResult = shell(commitNodePath, [planPath, '--node-id', nextNode.id, '--start', '--json']);
 
   // #424 (D-424-01 §5): provenance log entry — open event for fused advance.
   const fusedNonce = (baselineResult.recordBase && baselineResult.recordBase.base)
@@ -2892,10 +2914,16 @@ function runReopenNode(opts) {
   if (!nodes.length) return { result: 'refuse', reason: 'no_parseable_nodes' };
   if (!nodes.some(n => n.id === nodeId)) return { result: 'refuse', reason: 'node_not_found', nodeId };
 
-  // (2) N must be a COMPLETE ledger row — reset complete→pending.
+  // (2) N must be a COMPLETE ledger row — reset complete→pending. #621: alreadyAtTarget (the row is
+  // ALREADY pending) is ALSO accepted here — the crash-window retry case: a PRIOR reopen-node call
+  // already applied this reset + folded the gates + wrote them to disk (the (5) prep-write below), then
+  // crashed BEFORE recording the fresh baseline / flipping N back to in_progress. spliceLedgerNode's
+  // currentStatus===newStatus check fires regardless of allowFrom, so a retried call over that exact
+  // window re-derives the SAME gatesReset/gatesFolded (idempotent no-op splices) and proceeds straight to
+  // the baseline + flip at (5) — reopen-node is idempotent across its own crash window.
   const reset = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
   if (!reset.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId };
-  if (!reset.changed) {
+  if (!reset.changed && !reset.alreadyAtTarget) {
     return { result: 'refuse', reason: 'node_not_complete', nodeId, detail: 'only a complete node can be reopened for repair' };
   }
   planContent = reset.content;
@@ -3014,16 +3042,24 @@ function runReopenNode(opts) {
     }
   }
 
-  // Reopen N pending→in_progress, persist the plan (so commit-node --start sees the row),
-  // then re-record the fresh baseline at the current merged state.
-  const reopen = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
-  if (reopen.changed) planContent = reopen.content;
+  // (5) #621: persist the reset + folded gates (N still PENDING) BEFORE recording the fresh baseline,
+  // mirroring runOpenNext's #590 baseline-first ordering: --record-base is ledger-status-agnostic (it
+  // snapshots the worktree keyed by node-id only), so it is safe to run against this on-disk PENDING
+  // row. Only AFTER the baseline succeeds do we flip N to in_progress and write again. A crash between
+  // this write and the flip below leaves N genuinely PENDING on disk (gates already folded) — never
+  // in_progress-without-baseline — and a retried reopen-node call re-enters cleanly via the (2)
+  // alreadyAtTarget tolerance above.
   writeFile(planPath, planContent);
 
   const baseline = shell(commitNodePath, [planPath, '--node-id', nodeId, '--start', '--json']);
   if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
-    return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, reopened: nodeId, gatesReset };
+    return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, gatesReset, gatesFolded };
   }
+
+  // Baseline recorded while N was still PENDING on disk — now flip pending→in_progress and persist.
+  const reopen = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
+  if (reopen.changed) planContent = reopen.content;
+  writeFile(planPath, planContent);
 
   // #424 (D-424-01 §5): provenance log entry — open event (reopen generates a new nonce).
   const reopenNonce = (baseline.recordBase && baseline.recordBase.base)
@@ -3765,6 +3801,18 @@ function legPathFor(mainRoot, project, nodeId) {
   return path.join(mainRoot, '.kw', 'legs', sanitizeLegId(project), sanitizeLegId(nodeId));
 }
 
+// legMirrorPath (#633, D-622-01) — the leg's OWN copy of a repo-root-relative path (e.g. planPath or its
+// dirname). A leg is a FULL worktree checkout of the same tree, so the SAME relative path exists (or
+// will exist) rooted at legPath instead of the current worktree's root. Used to redirect a leg member's
+// evidence read to the leg's own `.cache/{node-id}.md` — the SAME path a dispatched write-role agent's
+// `dispatch.leg_path` working_dir resolves its self-written evidence against (commands/kaola-workflow-
+// plan-run.md's "write-leg dispatch discipline" + "evidence-persistence contract") — instead of the
+// PARENT's copy. Falls back to process.cwd() if getRoot() throws; never throws itself.
+function legMirrorPath(legPath, absPath) {
+  let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
+  return path.join(legPath, path.relative(root, absPath));
+}
+
 // legBaseRef — the deterministic git ref anchoring a leg's BRANCH-POINT (#463 Slice 3). The per-leg
 // barrier resolves its base ONLY from this ref (never a caller-supplied --base — the #368 vacuous-pass
 // hole), so the base must be anchored at PROVISION and the validator's --leg-barrier reads the SAME ref
@@ -4174,10 +4222,23 @@ function runOpenReady(opts) {
   // co-schedule against it).
   const liveNodes = existing ? (existing.nodes || []) : [];
   const liveIds = new Set(liveNodes.map(n => n.id));
-  const liveHasWrite = liveNodes.some(n => n.kind === 'write');
 
-  // A write node runs strictly alone: if one is live, open nothing until it closes.
-  if (liveHasWrite) {
+  // #622 (D-622-01): a LEGLESS write node (no lane_group — the plain single-writer serial path) still
+  // runs strictly alone: if one is live, open nothing until it closes (unchanged — the #588-MIXED-
+  // FRONTIER-pinned invariant, and every main-session-gate/serial-writer exclusivity case, are both
+  // untouched). A LEG-CONTAINED write (a live lane_group member — #463/#542 default-on co-open) is
+  // isolated in its own leg worktree, so it no longer needs to exclude READS from opening — mirroring the
+  // #596 speculative-path precedent (below, ~:4282-4287) that already tolerates a live write co-running
+  // with reads/other members via this SAME `!liveHasWrite` gate (never re-asserted there for a leg-
+  // contained writer). The eventual merge at the group's last-member close is separately fenced against
+  // live reads (closeGroupMember's merge-awaits-read-drain check) so a leg's merge never races a read
+  // still live against the pre-merge parent tree.
+  const liveGroupId = existing && existing.lane_group && existing.lane_group.group_id;
+  const isLegContainedWrite = n => !!(liveGroupId && n.group_id && n.group_id === liveGroupId);
+  const liveHasLeglessWrite = liveNodes.some(n => n.kind === 'write' && !isLegContainedWrite(n));
+
+  // A LEGLESS write node runs strictly alone: if one is live, open nothing until it closes.
+  if (liveHasLeglessWrite) {
     return { result: 'ok', allDone: false, opened: [], reason: 'write_node_exclusive', taskTransitions: [] };
   }
 
@@ -4199,8 +4260,8 @@ function runOpenReady(opts) {
   //     `--speculative-consent` is accepted as a NO-OP here (it is simply not consulted at auto).
   //   consent: authorized ONLY WITH the per-run `--speculative-consent` flag (the operator still opts in).
   //   off: this branch is inert ⇒ byte-identical to the off-policy shape.
-  // Never co-runs with a live write (liveHasWrite already returned above). Consent, where required, is
-  // per-run (the flag), never persisted in the plan.
+  // Never co-runs with a live LEGLESS write (liveHasLeglessWrite already returned above). Consent, where
+  // required, is per-run (the flag), never persisted in the plan.
   const specPolicy = resolveSpeculativePolicy(readFile(planPath));
   const speculativeAuthorized = specPolicy === 'auto' || (specPolicy === 'consent' && opts.speculativeConsent);
   let openingSpeculative = false;
@@ -4246,7 +4307,7 @@ function runOpenReady(opts) {
   // #596 (D-596-01): the speculative WRITE fallback. When THIS frontier is the speculative fan-out
   // (openingSpeculative), the running set is emphatically NOT empty — the open gate (or a sibling
   // speculative read) is live — so the normal `liveNodes.length === 0` write-exclusivity precondition
-  // would starve a speculative writer forever; `!liveHasWrite` (already asserted above, before the
+  // would starve a speculative writer forever; `!liveHasLeglessWrite` (already asserted above, before the
   // speculative fallback even fires) is the ONLY exclusivity invariant that still applies. Named ONLY
   // as an explanatory field on the response (never a hard refuse) so read speculation stays unaffected.
   let speculativeWriteExcluded = null;
@@ -4277,6 +4338,22 @@ function runOpenReady(opts) {
     if (!legCoupled) {
       toOpen = [];
       speculativeWriteExcluded = { reason: 'no_leg_capability', nodeIds: writeNodes.map(n => n.id) };
+    } else if (liveGroupId) {
+      // R4 (adversarial-verifier finding on the #622 fix, repair pass): running-set.json carries exactly
+      // ONE `lane_group` descriptor at a time. When a write lane_group is ALREADY live (liveGroupId, set
+      // above at :4236 — #622 relaxed write_node_exclusive so a read can co-open alongside it, which is
+      // how we can reach the speculative branch with a write group still live in the first place), a NEW
+      // speculative write candidate must NOT be allowed to form its OWN group: the running-set write-
+      // descriptor assignment below (:4623, `groupForm ? {...} : existingLaneGroup`) would UNCONDITIONALLY
+      // overwrite the live descriptor with the new one, silently dropping every still-open member (e.g. a
+      // non-last lane_group member) from lane_group tracking. That member's later close-node call then
+      // cannot recognize it as a group member (isMember checks lane_group.members), falls through to the
+      // serial close path, and its committed in-lane leg work never merges to HEAD (silently lost) while
+      // its leg worktree leaks. Exclude ALL write candidates from THIS open (mirrors the sibling
+      // no_leg_capability/parent_dirty exclusions above) — the speculative write simply waits; once the
+      // live group drains and clears lane_group entirely, a later tick can safely form a new one.
+      toOpen = [];
+      speculativeWriteExcluded = { reason: 'lane_group_live', nodeIds: writeNodes.map(n => n.id) };
     } else if (parentCarriesProductionDirt(planPath, project, shell)) {
       // #615 (D-615-01): the SAME parent-clean precondition that gates the non-speculative co-open
       // (:4286 branch) applies here. A speculative write ALWAYS opens WITH a provisioned leg (even a lone
@@ -4454,7 +4531,48 @@ function runOpenReady(opts) {
   if (groupForm && legCoupled) {
     let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
     const mainRoot = getMainRoot(root);
-    // baseRev = the feature-branch HEAD (the open-ready cwd is the feature worktree).
+
+    // #633 (D-622-01) TRACKED-EVIDENCE-SEEDING: seed EVERY toOpen group member's evidence stub AND
+    // COMMIT it on the parent branch BEFORE baseRev is captured below, so each leg (branched off baseRev)
+    // inherits the stub as a TRACKED file. A write-role member self-writes its REAL evidence INSIDE its
+    // own leg (commands/kaola-workflow-plan-run.md's write-leg dispatch discipline routes every Edit/
+    // Write through the absolute `dispatch.leg_path`), so the leg's branch later commits a DIFFERENT
+    // version of this SAME relative path — an ordinary tracked MODIFICATION from a shared ancestor if the
+    // parent's copy stays clean, but a git-refused "Untracked working tree file … would be overwritten by
+    // merge" collision if the parent's copy is still untracked at merge time (#633: the plain
+    // seedEvidenceFile fs write, never `git add`ed). Committing it here — BEFORE the leg branches off, and
+    // never touched again afterward (the close-side evidence read prefers the leg's copy, see
+    // runCloseNode) — keeps the parent's working tree clean through to the last-member merge, so the
+    // leg's real content merges in as an ordinary 3-way change. `.cache/` sits in the #424 barrier-
+    // INVISIBLE workflow-state band, so this commit is invisible to every barrier/group-barrier diff
+    // (never trips write_set_overflow). Fail-closed: a commit failure here refuses the open rather than
+    // silently leaving the pre-#633 collision risk in place.
+    const seededRelPaths = [];
+    for (const n of toOpen) {
+      const memberBaseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
+      if (!(memberBaseline.exitCode === 0 && memberBaseline.result === 'ok')) {
+        return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: memberBaseline };
+      }
+      const memberNonce = (memberBaseline.recordBase && memberBaseline.recordBase.base)
+        ? String(memberBaseline.recordBase.base).slice(0, 12) : null;
+      const seeded = seedEvidenceFile(planPath, n.id, memberNonce, n.role, false);
+      if (seeded && seeded.evidence_file) {
+        const absPath = path.join(path.dirname(planPath), seeded.evidence_file);
+        seededRelPaths.push(path.relative(root, absPath));
+      }
+    }
+    if (seededRelPaths.length) {
+      try {
+        execFileSync('git', ['add', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
+        execFileSync('git', ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow',
+          'commit', '-m', 'kw-stub: ' + groupForm.group_id, '--allow-empty'], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch (e) {
+        return { result: 'refuse', reason: 'stub_commit_failed', group_id: groupForm.group_id, detail: String((e && e.message) || e) };
+      }
+    }
+
+    // baseRev = the feature-branch HEAD (the open-ready cwd is the feature worktree). Captured AFTER the
+    // stub commit above so every leg branches off a HEAD that already carries the tracked stubs.
     let baseRev = null;
     try { baseRev = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { baseRev = null; }
     if (!baseRev) {
@@ -4495,16 +4613,29 @@ function runOpenReady(opts) {
   // #436 D-419-01: record max_concurrent at open time as min(cap, --max || cap) so
   // reconcile-running-set can honor the ceiling on crash-resume. NEVER written at freeze
   // time or into plan_hash. Absent --max falls back to cap (the full fanout ceiling).
+  // #622 (D-622-01): when THIS call opens READS alongside an ALREADY-LIVE write lane_group (groupForm is
+  // unset because no NEW group forms this call — the write_node_exclusive relaxation above let us reach
+  // here), preserve the existing lane_group descriptor + its recorded max_concurrent VERBATIM. Rebuilding
+  // either from scratch here would either (a) silently DROP the live group's tracking (the rewritten
+  // running-set.json would carry no lane_group key at all, breaking the group's own eventual close-node
+  // lookups), or (b) blow its WRITE-cap ceiling back up to the READ cap — the exact #588 hazard, now
+  // reachable from the read side too. A pre-#622 shape (no existing lane_group) recomputes exactly as
+  // before — byte-identical.
+  const existingLaneGroup = (existing && existing.lane_group) ? existing.lane_group : null;
   // #588: for a WRITE lane group, the ceiling is the WRITE cap (laneGroupCeiling, already folded with
   // --max) — NOT the read `cap`. Recording the read cap (8) for a write group let reconcile roll forward
   // more write members than co-open ever opens (the write cap is 4); pin it to the group's actual ceiling.
   const maxConcurrent = groupForm
     ? laneGroupCeiling
-    : (Number.isInteger(max) && max >= 1 ? Math.min(cap, max) : cap);
+    : (existingLaneGroup && Number.isInteger(existing.max_concurrent))
+      ? existing.max_concurrent
+      : (Number.isInteger(max) && max >= 1 ? Math.min(cap, max) : cap);
   // #437 (D-419 P2 §1.2): the lane_group descriptor, written into running-set.json BEFORE any ledger
   // flip (so a crash mid-open is reconcilable). Carries the shared baseline SHA + the write_union
   // (convenience snapshot; the group barrier re-reads the plan rows for attribution). Absent when no
-  // group formed (the serial/read path) ⇒ no lane_group key ⇒ flag-OFF byte-identical.
+  // group formed (the serial/read path) ⇒ no lane_group key ⇒ flag-OFF byte-identical. #622: falls back
+  // to the PRESERVED existing lane_group (verbatim) when this call opens reads alongside an already-live
+  // group rather than forming a new one.
   const laneGroupEntry = groupForm ? {
     group_id: groupForm.group_id,
     members: groupForm.members,
@@ -4514,7 +4645,7 @@ function runOpenReady(opts) {
     // when leg-isolation + consent + a group all held; absent ⇒ no `legs` key ⇒ flag-OFF byte-identical.
     ...(legs && Object.keys(legs).length ? { legs } : {}),
     ...(openedAt ? { openedAt } : {}),
-  } : null;
+  } : existingLaneGroup;
   const openingSet = {
     state: 'opening',
     max_concurrent: maxConcurrent,
@@ -4761,7 +4892,26 @@ function runCloseNode(opts) {
   const nodeInfo = nodes.find(n => n.id === nodeId);
   const role = nodeInfo ? nodeInfo.role : 'unknown';
 
-  const cachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+  // #437 (D-419 P2 §2): resolve THIS node's lane_group (if any) BEFORE reading evidence — moved up from
+  // (a.5) below so both the evidence read AND the member-close routing share ONE readRunningSet call.
+  // #633 (D-622-01): a write-role lane-group member SELF-WRITES its evidence INSIDE its own leg (the
+  // absolute `dispatch.leg_path` its working_dir names — commands/kaola-workflow-plan-run.md's write-leg
+  // dispatch discipline + evidence-persistence contract), never synced back to the parent. Prefer the
+  // LEG's copy when one is present there; otherwise fall back to the PARENT (byte-identical to every
+  // pre-#633 shape, including a legless/read node and a test/harness that seeds evidence parent-side by
+  // convention). This is the read-side half of the #633 fix: the write-side half (runOpenReady) commits
+  // a TRACKED stub at the parent before the leg branches off, so the parent's copy — never touched again
+  // for a leg member under this read preference — stays clean through to the last-member octopus merge.
+  const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
+  const lg = (running0 && running0.lane_group) ? running0.lane_group : null;
+  const legEntryForEvidence = (lg && Array.isArray(lg.members) && lg.members.includes(nodeId) && lg.legs)
+    ? lg.legs[nodeId] : null;
+  const parentCachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+  const legCachePath = (legEntryForEvidence && legEntryForEvidence.legPath)
+    ? path.join(legMirrorPath(legEntryForEvidence.legPath, path.dirname(planPath)), '.cache', nodeId + '.md')
+    : null;
+  const cachePath = (legCachePath && cacheExists && cacheExists(legCachePath)) ? legCachePath : parentCachePath;
+
   let evidenceContent = null;
   const evidencePresent = cacheExists ? cacheExists(cachePath) : (() => {
     try { evidenceContent = readFile(cachePath); return true; } catch (_) { return false; }
@@ -4797,15 +4947,12 @@ function runCloseNode(opts) {
   //    MUST follow the manifest (guard 1), else a default-on member would fall to the serial close and
   //    orphan its committed leg work. A serial node (no lane_group) ⇒ lg is null ⇒ this whole branch is
   //    skipped and the existing serial close runs verbatim (INV-6 preserved for the serial path).
-  const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
-
   // #439 (D-419 Part 4): close-time speculative guard — a speculative member cannot commit to complete
   // until its gate resolves (else its review pointer + discard handle would be lost). Fires only for a
   // speculative:true member whose gate is not yet complete; never for a normal node (INV-6 preserved).
   const specGuard = speculativeCloseGuard(nodeId, running0, readLedgerStatuses(readFile(planPath)));
   if (specGuard) return specGuard;
 
-  const lg = (running0 && running0.lane_group) ? running0.lane_group : null;
   const isMember = !!(lg && Array.isArray(lg.members) && lg.members.includes(nodeId));
   if (isMember) {
     return closeGroupMember({
@@ -5046,6 +5193,26 @@ function closeGroupMember(ctx) {
       ...(verdictWarn || {}),
       taskTransitions: transitions,
       taskMirror: refreshTaskMirror(project, shell),
+    };
+  }
+
+  // #622 (D-622-01) LAST-MEMBER MERGE FENCE: relaxing open-ready's write_node_exclusive check lets a
+  // READ co-open alongside a LIVE leg-contained write lane_group (the group no longer excludes reads).
+  // The complementary safety obligation lives HERE: the group's eventual merge (the octopus-merge below,
+  // or the legless snapshot group-barrier) must not race a READ that is STILL live and reading the
+  // pre-merge parent tree. Refuse — typed, ZERO mutation (the merge/group-barrier has not run yet) —
+  // while ANY live running-set member is a read; the caller retries close-node once the read(s) have
+  // drained. A legless / read-free group (the pre-#622 shape) never has a live read here ⇒ this is a
+  // no-op (byte-identical).
+  const liveReadsAtMerge = (runningLeg ? (runningLeg.nodes || []) : []).filter(n => n.kind === 'read');
+  if (liveReadsAtMerge.length > 0) {
+    return {
+      result: 'refuse',
+      reason: 'merge_awaits_read_drain',
+      nodeId, role,
+      group_id: lg.group_id,
+      liveReads: liveReadsAtMerge.map(n => n.id),
+      detail: 'the lane-group last-member merge is held until the live read(s) [' + liveReadsAtMerge.map(n => n.id).join(', ') + '] drain — retry close-node once they close',
     };
   }
 
