@@ -1,0 +1,6 @@
+{"node":"n1-finalize-barrier","event":"opened","ts":"2026-07-07T01:16:11.932Z"}
+{"node":"n1-finalize-barrier","event":"closed","ts":"2026-07-07T01:28:30.384Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-07T01:28:30.440Z"}
+{"node":"n2-review","event":"evidence","ts":"2026-07-07T01:39:24.160Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-07T01:39:31.351Z"}
+{"node":"n3-finalize","event":"opened","ts":"2026-07-07T01:39:31.417Z"}

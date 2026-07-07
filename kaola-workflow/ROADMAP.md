@@ -12,7 +12,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #621 | bug(adaptive): baseline-first (#590) not mirrored in fused advance + reopen-node | open | — | P2: baseline-before-splice in both openers; idempotent reopen |
 | #622 | perf(adaptive/scheduler): reads cannot overlap leg-contained write lane groups (two-wave mixed frontiers) | open | — | P2: relax to leg-contained invariant (!liveHasWrite) + merge fence, per speculative-path precedent |
 | #623 | perf/docs(adaptive): rolling top-up into live lane group promised but unimplemented | open | — | P3: prose fix (decided 2026-07-07) — scope the three surfaces; admission only if #622 rework makes it free |
-| #624 | bug(routing/codex): forge-codex finalize SKILLs missing adaptive four-gate block; three-vs-four gate miscount | open | — | P1: port gate block to both forge SKILLs + fix count x3 + validator pin |
 | #625 | bug(agents): evidence contract inverted vs executor; security-reviewer Write/Edit; stale refs | open | — | P1: align 6 profiles to plan-run role-kind contract; drop gate Write/Edit (x3 toml) |
 | #626 | bug(agents): doc-updater/tdd-guide assume absent toolchains (codemaps, test:coverage) | open | — | P2: conditionalize on detection; name real doc surfaces / recorded validation_command |
 | #627 | chore(routing): plan-run/finalize debloat — restore ~150-line skeleton, fence runtime blocks | open | — | P3: re-stub ladder+speculative to cards; fence Teammate/Codex blocks; compress goal-attestation |
