@@ -1,0 +1,31 @@
+{
+  "project": "bundle-629-637",
+  "branch": "workflow/bundle-629-637",
+  "issue_number": null,
+  "issue_numbers": [
+    629,
+    637
+  ],
+  "resolved_default_branch": "main",
+  "branch_head": "748dc71acc43f9d5f1ca91287e76a43281504159",
+  "started_at": "2026-07-07T23:25:30.517Z",
+  "updated_at": "2026-07-07T23:25:48.899Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "finalize": "done",
+    "stash_restore": "done",
+    "archive_commit": "done",
+    "push_main": "done",
+    "closure": "done"
+  },
+  "remote_closed_after_publish": "verified",
+  "published_head": "748dc71acc43f9d5f1ca91287e76a43281504159",
+  "closed_issues": [
+    629,
+    637
+  ]
+}

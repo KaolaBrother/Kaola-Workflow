@@ -8,6 +8,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 | #634 | feat(adaptive): optimize-shaped node — bounded metric-ratchet loop via a metric-optimizer role for direction-not-destination work | open | — | P3: design a bounded metric-ratchet loop (new metric-optimizer role) for perf/size/flakiness targets with no AC at freeze; per-node barrier is net-diff so per-iteration commit/revert inside one node needs zero barrier change; optimize contract in ## Meta (validator = GENERATED aggregator) to avoid touching hand-ported classifier.readPlanNodes; sibling of #486 |
+| #638 | refactor(edition-sync): --check (runCheck) does not cover COMMON/byte-group mirrors — only GENERATED_AGGREGATORS | open | — | P3: extend edition-sync.js runCheck to verify COMMON_SCRIPTS + BYTE_IDENTICAL_GROUPS mirrors (parity with runWrite's #629 create-on-missing) so --check reds a missing/drifted mirror on its own (today validate-script-sync catches it in-chain so it's fail-closed end-to-end; low/cosmetic --check/--write asymmetry surfaced by #629's adversary); + a test-edition-sync.js case; cross-edition #307 |
 
 ## Rules
 
