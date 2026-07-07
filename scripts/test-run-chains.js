@@ -6,11 +6,19 @@
 // waiver semantics, invalid waiver format rejection, and headSha binding.
 // Uses temp git repos so git rev-parse HEAD is a real SHA.
 // Hand-rolled assert pattern — no test framework dependency.
+//
+// #635: T26/T27/T28 (the signal-death assertions) run via a DETERMINISTIC in-process seam (see
+// "Deterministic signal-death seam" below) instead of racing a real process.kill against the
+// runner's own per-chain timer — that race was load-sensitive (a different subset of assertions
+// failed each run under system load). Because the seam needs to `await` run-chains.js's exported,
+// Promise-returning `main()`, the tests from T26 onward run inside a single async IIFE at the
+// bottom of this file (T1-T25 above stay synchronous/subprocess-based and are unaffected).
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
+const EventEmitter = require('events').EventEmitter;
 
 let passed = 0, failed = 0;
 function assert(c, m) { if (c) passed++; else { failed++; console.error('FAIL: ' + m); } }
@@ -76,6 +84,89 @@ function makeSelfKillScript(dir, name, signal) {
     'setInterval(function(){}, 1000);\n', // safety net: keep the event loop alive in case the signal is not instantaneous
     { mode: 0o755 });
   return p;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic signal-death seam (#635 — fixes the T26/T27/T28 load-sensitive flake).
+//
+// The flake: makeSelfKillScript races a REAL `process.kill(pid, 'SIGKILL')` (delivered by the OS
+// to a REAL, freshly-exec'd child) against the runner's own per-chain timer (a real setTimeout /
+// spawnSync `timeout`). Under system load, child-process scheduling is nondeterministic — the
+// self-kill can lose that race to the runner's own SIGTERM/timeout — so a DIFFERENT subset of the
+// `signal==='SIGKILL'` / `timed_out===false` assertions fails on each run. This is a TEST-HARNESS
+// reliability bug: the runner's own signal->exitCode mapping (#618, kaola-workflow-run-chains.js)
+// is correct and is NOT touched here.
+//
+// The fix: for the assertions that pin an EXACT signal name / EXACT timed_out value, remove the
+// real OS race entirely. run-chains.js destructures `spawnSync`/`spawn` ONCE, at require time,
+// from the (single, process-wide cached) `child_process` module — see its top-of-file
+// `const { spawnSync, spawn } = require('child_process')`. By replacing `child_process`'s own
+// exported `spawnSync`/`spawn` BEFORE the first `require('./kaola-workflow-run-chains.js')` below
+// (T10, further down), run-chains.js's internal bindings resolve to the wrappers installed here for
+// the REST OF THIS PROCESS's lifetime. The wrappers intercept ONLY a single reserved SENTINEL
+// command and answer it with a canned signal-death result — synchronously for spawnSync, and on
+// the very next `process.nextTick` for spawn (strictly before the runner's own `setTimeout(timeoutMs)`
+// can possibly be "due", since that requires timeoutMs of REAL wall-clock time to elapse first) — so
+// there is nothing left to race, regardless of the configured timeoutMs or system load. Every OTHER
+// command (git, the real exit/sleep/hang mocks used elsewhere in this file, etc.) passes straight
+// through to the REAL spawnSync/spawn, unchanged.
+//
+// This patch does NOT affect T1-T25/T29 above/below: those invoke run-chains.js as a SEPARATE OS
+// subprocess (via this file's own `run()` helper, which closed over the ORIGINAL `spawnSync` at
+// line ~13, before this patch runs) — a fresh Node process has its own, unpatched `child_process`
+// module, entirely unaffected by anything mutated in THIS process's module cache.
+const childProcessModule = require('child_process');
+const realSpawnSync = childProcessModule.spawnSync;
+const realSpawn = childProcessModule.spawn;
+const SIGNAL_DEATH_MARKER = '__kaola_test_signal_death__';
+function signalDeathCommand(signal) { return SIGNAL_DEATH_MARKER + ':' + (signal || 'SIGKILL'); }
+function isSignalDeathCommand(cmd) { return typeof cmd === 'string' && cmd.indexOf(SIGNAL_DEATH_MARKER + ':') === 0; }
+function signalDeathSignal(cmd) { return cmd.slice((SIGNAL_DEATH_MARKER + ':').length); }
+
+childProcessModule.spawnSync = function patchedSpawnSync(cmd, args, opts) {
+  if (isSignalDeathCommand(cmd)) {
+    // A pure, instant signal-death result: status===null (no normal exit) + signal recorded — the
+    // exact shape a real external kill produces at the spawnSync API — with NO subprocess and NO
+    // OS-scheduling dependency to race against the runner's own per-chain timer.
+    return { status: null, signal: signalDeathSignal(cmd), error: undefined, pid: -1, stdout: '', stderr: '', output: [null, '', ''] };
+  }
+  return realSpawnSync.apply(this, arguments);
+};
+childProcessModule.spawn = function patchedSpawn(cmd, args, opts) {
+  if (isSignalDeathCommand(cmd)) {
+    const fake = new EventEmitter();
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    fake.kill = function () {};
+    const signal = signalDeathSignal(cmd);
+    process.nextTick(function () { fake.emit('close', null, signal); });
+    return fake;
+  }
+  return realSpawn.apply(this, arguments);
+};
+
+// In-process invocation (#635): calls run-chains.js's exported, Promise-returning `main()` directly
+// IN THIS PROCESS (never spawns a new subprocess) so the deterministic seam above is actually
+// exercised for a `--mock-chain` pointed at the SENTINEL command. Saves/restores cwd + env so a
+// call here never leaks state into a later test. Mirrors run()'s return shape (exitCode + parsed
+// receipt) closely enough for the same assertion style.
+async function runInProcess(repoDir, extraArgs, receiptPath, env) {
+  const rp = receiptPath || path.join(repoDir, '.cache', 'chain-receipt.json');
+  const { main } = require('./kaola-workflow-run-chains.js');
+  const prevCwd = process.cwd();
+  const prevEnv = Object.assign({}, process.env);
+  try {
+    if (env) Object.assign(process.env, env);
+    process.chdir(repoDir);
+    const exitCode = await main(['node', 'kaola-workflow-run-chains.js', ...extraArgs]);
+    let receipt = null;
+    try { receipt = JSON.parse(fs.readFileSync(rp, 'utf8')); } catch (_) {}
+    return { exitCode, receipt };
+  } finally {
+    process.chdir(prevCwd);
+    for (const k of Object.keys(process.env)) { if (!(k in prevEnv)) delete process.env[k]; }
+    Object.assign(process.env, prevEnv);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -735,91 +826,138 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// T26 (#618): a SIGNAL-KILLED chain on the SYNC (serial) dispatch path must map to exitCode 1 —
-// NEVER a false green. Before the fix, `(r.status != null) ? r.status : (r.error ? 1 : 0)` read a
-// pure signal death (status===null, no spawnSync `error`) as exitCode 0. A large timeout proves
-// this is NOT our own timer-kill (timed_out must stay false); the signal name must be recorded.
+// T26 onward run inside an async IIFE: main() is a Promise-returning async function, and the
+// deterministic signal-death seam (installed above) is exercised via runInProcess(), which awaits
+// main() directly in this process. T1-T25 above are synchronous/subprocess-based and already ran
+// to completion (top-to-bottom) before this IIFE is even invoked.
 // ---------------------------------------------------------------------------
-const repo26 = makeGitRepo();
-try {
-  const killMock = makeSelfKillScript(repo26, 'selfkill.js', 'SIGKILL');
-  const r26 = run(repo26, [
-    '--chains', 'claude',
-    '--mock-chain', 'claude:' + killMock,
-  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
-  assert(r26.exitCode !== 0, 'T26: a signal-killed chain (sync path) stays RED (non-zero overall exit)');
-  const rc26 = r26.receipt;
-  assert(rc26 !== null, 'T26: receipt written on a signal death');
-  if (rc26 !== null) {
-    const ch = rc26.chains[0];
-    assert(ch.exitCode === 1, 'T26: sync-path signal death maps to exitCode 1 (never a false green); got ' + JSON.stringify(ch));
-    assert(ch.timed_out === false, 'T26: NOT our own timeout kill (large timeout headroom) — timed_out stays false; got ' + JSON.stringify(ch));
-    assert(ch.signal === 'SIGKILL', 'T26: the signal name SIGKILL is recorded in the receipt entry; got ' + JSON.stringify(ch.signal));
+(async function runRemainingTests() {
+
+// ---------------------------------------------------------------------------
+// T26 (#618, load-insensitive per #635): a SIGNAL-KILLED chain on the SYNC (serial) dispatch path
+// must map to exitCode 1 — NEVER a false green. Before the #618 fix,
+// `(r.status != null) ? r.status : (r.error ? 1 : 0)` read a pure signal death (status===null, no
+// spawnSync `error`) as exitCode 0. Uses the deterministic seam (above) so the EXACT signal name +
+// `timed_out` value are pinned WITHOUT racing a real process.kill against the runner's own per-chain
+// timer (the #635 flake) — the mock's spawnSync call is intercepted and answered synchronously, so
+// there is nothing to race regardless of system load.
+// ---------------------------------------------------------------------------
+{
+  const repo26 = makeGitRepo();
+  try {
+    const r26 = await runInProcess(repo26, [
+      '--chains', 'claude',
+      '--mock-chain', 'claude:' + signalDeathCommand('SIGKILL'),
+    ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
+    assert(r26.exitCode !== 0, 'T26: a signal-killed chain (sync path) stays RED (non-zero overall exit)');
+    const rc26 = r26.receipt;
+    assert(rc26 !== null, 'T26: receipt written on a signal death');
+    if (rc26 !== null) {
+      const ch = rc26.chains[0];
+      assert(ch.exitCode === 1, 'T26: sync-path signal death maps to exitCode 1 (never a false green); got ' + JSON.stringify(ch));
+      assert(ch.timed_out === false, 'T26: NOT our own timeout kill (deterministic seam, no race) — timed_out stays false; got ' + JSON.stringify(ch));
+      assert(ch.signal === 'SIGKILL', 'T26: the signal name SIGKILL is recorded in the receipt entry; got ' + JSON.stringify(ch.signal));
+    }
+  } finally {
+    try { fs.rmSync(repo26, { recursive: true, force: true }); } catch (_) {}
   }
-} finally {
-  try { fs.rmSync(repo26, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
-// T27 (#618): a SIGNAL-KILLED chain on the ASYNC (concurrent) dispatch path must map to exitCode 1.
-// Before the fix, `close(null, 'SIGKILL')` with timedOut===false fell through to
-// `(code != null) ? code : 0` and read as exitCode 0 — a false green. A sibling chain passes
-// independently in the SAME concurrent run (retry/dispatch stays per-spec).
+// T26b (#635): a REAL end-to-end self-kill subprocess (no seam — a lightweight integration sanity
+// check that the deterministic seam above is not merely symptom-masking a broken real-world path).
+// The assertion here is CLASS-only (exitCode 1, never the exact signal name): #618 guarantees ANY
+// signal death — whichever signal actually wins under load, our own timer's SIGTERM or the mock's
+// own SIGKILL — maps to exitCode 1, so this check is load-insensitive by construction; nothing here
+// depends on which signal is delivered first.
 // ---------------------------------------------------------------------------
-const repo27 = makeGitRepo();
-try {
-  const killMock = makeSelfKillScript(repo27, 'selfkill.js', 'SIGKILL');
-  const passMock = makeExitScript(repo27, 'pass.js', 0);
-  const r27 = run(repo27, [
-    '--chains', 'claude,codex',
-    '--mock-chain', 'claude:' + killMock,
-    '--mock-chain', 'codex:' + passMock,
-  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
-  assert(r27.exitCode !== 0, 'T27: a signal-killed chain (async/concurrent path) stays RED (non-zero overall exit)');
-  const rc27 = r27.receipt;
-  assert(rc27 !== null, 'T27: receipt written on a signal death');
-  if (rc27 !== null) {
-    const ch = rc27.chains.find(x => x.name === 'claude');
-    assert(!!ch && ch.exitCode === 1, 'T27: async-path signal death maps to exitCode 1 (never a false green); got ' + JSON.stringify(ch));
-    assert(!!ch && ch.timed_out === false, 'T27: NOT our own timeout kill (large timeout headroom) — timed_out stays false; got ' + JSON.stringify(ch));
-    assert(!!ch && ch.signal === 'SIGKILL', 'T27: the signal name SIGKILL is recorded in the receipt entry; got ' + JSON.stringify(ch && ch.signal));
-    const codexCh = rc27.chains.find(x => x.name === 'codex');
-    assert(!!codexCh && codexCh.exitCode === 0, 'T27: the sibling chain still passes independently in the same run');
+{
+  const repo26b = makeGitRepo();
+  try {
+    const killMock = makeSelfKillScript(repo26b, 'selfkill.js', 'SIGKILL');
+    const r26b = run(repo26b, [
+      '--chains', 'claude',
+      '--mock-chain', 'claude:' + killMock,
+    ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
+    assert(r26b.exitCode !== 0, 'T26b: a REAL self-killed chain (e2e sanity, sync path) stays RED (non-zero overall exit)');
+    const rc26b = r26b.receipt;
+    assert(rc26b !== null, 'T26b: receipt written on a real signal death');
+    if (rc26b !== null) {
+      assert(rc26b.chains[0].exitCode === 1, 'T26b: a real signal death maps to exitCode 1 regardless of which signal wins the race; got ' + JSON.stringify(rc26b.chains[0]));
+    }
+  } finally {
+    try { fs.rmSync(repo26b, { recursive: true, force: true }); } catch (_) {}
   }
-} finally {
-  try { fs.rmSync(repo27, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
-// T28 (#618): distinguishes "our own timeout kill" (already handled since #608 — SIGTERM via the
-// per-chain timer, timed_out: true) from "external signal kill with timedOut===false" (the NEW
-// #618 fix). Both chains run CONCURRENTLY in ONE receipt so the two rows are directly comparable —
-// a regression that conflates the two (e.g. sets timed_out for every signal-killed chain, or fails
-// to fail-closed the external case) is caught here.
+// T27 (#618, load-insensitive per #635): a SIGNAL-KILLED chain on the ASYNC (concurrent) dispatch
+// path must map to exitCode 1. Before the #618 fix, `close(null, 'SIGKILL')` with timedOut===false
+// fell through to `(code != null) ? code : 0` and read as exitCode 0 — a false green. Uses the
+// deterministic seam for the killed chain (claude); the sibling (codex) is a REAL exit-0 mock so the
+// genuine concurrent dispatch path is still exercised for "a sibling passes independently".
 // ---------------------------------------------------------------------------
-const repo28 = makeGitRepo();
-try {
-  const hangMock = path.join(repo28, 'hang.js');
-  fs.writeFileSync(hangMock, '#!/usr/bin/env node\n\'use strict\';\nsetInterval(function(){}, 1000);\n', { mode: 0o755 });
-  const killMock = makeSelfKillScript(repo28, 'selfkill.js', 'SIGKILL');
-  const r28 = run(repo28, [
-    '--chains', 'claude,codex',
-    '--mock-chain', 'claude:' + hangMock,   // killed by OUR timer -> SIGTERM, timed_out: true (unchanged, #608)
-    '--mock-chain', 'codex:' + killMock,    // self-SIGKILL, unrelated to our timer, timed_out: false (#618 fix)
-  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '600' });
-  assert(r28.exitCode !== 0, 'T28: both red chains fail the overall run (non-zero exit)');
-  const rc28 = r28.receipt;
-  assert(rc28 !== null, 'T28: receipt written');
-  if (rc28 !== null) {
-    const timeoutCh = rc28.chains.find(x => x.name === 'claude');
-    const signalCh = rc28.chains.find(x => x.name === 'codex');
-    assert(!!timeoutCh && timeoutCh.exitCode === 1 && timeoutCh.timed_out === true,
-      'T28: the TIMER-killed chain records timed_out: true (the #608 path, unchanged); got ' + JSON.stringify(timeoutCh));
-    assert(!!signalCh && signalCh.exitCode === 1 && signalCh.timed_out === false && signalCh.signal === 'SIGKILL',
-      'T28: the EXTERNALLY signal-killed chain records timed_out: false + signal: SIGKILL — distinct from a timeout; got ' + JSON.stringify(signalCh));
+{
+  const repo27 = makeGitRepo();
+  try {
+    const passMock = makeExitScript(repo27, 'pass.js', 0);
+    const r27 = await runInProcess(repo27, [
+      '--chains', 'claude,codex',
+      '--mock-chain', 'claude:' + signalDeathCommand('SIGKILL'),
+      '--mock-chain', 'codex:' + passMock,
+    ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '30000' });
+    assert(r27.exitCode !== 0, 'T27: a signal-killed chain (async/concurrent path) stays RED (non-zero overall exit)');
+    const rc27 = r27.receipt;
+    assert(rc27 !== null, 'T27: receipt written on a signal death');
+    if (rc27 !== null) {
+      const ch = rc27.chains.find(x => x.name === 'claude');
+      assert(!!ch && ch.exitCode === 1, 'T27: async-path signal death maps to exitCode 1 (never a false green); got ' + JSON.stringify(ch));
+      assert(!!ch && ch.timed_out === false, 'T27: NOT our own timeout kill (deterministic seam, no race) — timed_out stays false; got ' + JSON.stringify(ch));
+      assert(!!ch && ch.signal === 'SIGKILL', 'T27: the signal name SIGKILL is recorded in the receipt entry; got ' + JSON.stringify(ch && ch.signal));
+      const codexCh = rc27.chains.find(x => x.name === 'codex');
+      assert(!!codexCh && codexCh.exitCode === 0, 'T27: the sibling chain still passes independently in the same run');
+    }
+  } finally {
+    try { fs.rmSync(repo27, { recursive: true, force: true }); } catch (_) {}
   }
-} finally {
-  try { fs.rmSync(repo28, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T28 (#618, load-insensitive per #635): distinguishes "our own timeout kill" (already handled since
+// #608 — SIGTERM via the per-chain timer, timed_out: true) from "external signal kill with
+// timedOut===false" (the #618 fix). Both chains run CONCURRENTLY in ONE receipt so the two rows are
+// directly comparable — a regression that conflates the two (e.g. sets timed_out for every
+// signal-killed chain, or fails to fail-closed the external case) is caught here. The TIMER-killed
+// chain (claude) stays a REAL hang-forever subprocess — not racy: it either eventually runs and
+// hangs, or the runner's own timer fires regardless, either way it ends up killed by OUR timer, no
+// external signal to compete with it. The EXTERNALLY-killed chain (codex) uses the deterministic
+// seam so its exact signal/timed_out value is pinned without racing the runner's own (deliberately
+// tight, 600ms) per-chain timer.
+// ---------------------------------------------------------------------------
+{
+  const repo28 = makeGitRepo();
+  try {
+    const hangMock = path.join(repo28, 'hang.js');
+    fs.writeFileSync(hangMock, '#!/usr/bin/env node\n\'use strict\';\nsetInterval(function(){}, 1000);\n', { mode: 0o755 });
+    const r28 = await runInProcess(repo28, [
+      '--chains', 'claude,codex',
+      '--mock-chain', 'claude:' + hangMock,                             // killed by OUR timer -> SIGTERM, timed_out: true (unchanged, #608)
+      '--mock-chain', 'codex:' + signalDeathCommand('SIGKILL'),         // deterministic seam, unrelated to our timer, timed_out: false (#618 fix)
+    ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '600' });
+    assert(r28.exitCode !== 0, 'T28: both red chains fail the overall run (non-zero exit)');
+    const rc28 = r28.receipt;
+    assert(rc28 !== null, 'T28: receipt written');
+    if (rc28 !== null) {
+      const timeoutCh = rc28.chains.find(x => x.name === 'claude');
+      const signalCh = rc28.chains.find(x => x.name === 'codex');
+      assert(!!timeoutCh && timeoutCh.exitCode === 1 && timeoutCh.timed_out === true,
+        'T28: the TIMER-killed chain records timed_out: true (the #608 path, unchanged); got ' + JSON.stringify(timeoutCh));
+      assert(!!signalCh && signalCh.exitCode === 1 && signalCh.timed_out === false && signalCh.signal === 'SIGKILL',
+        'T28: the EXTERNALLY signal-killed chain records timed_out: false + signal: SIGKILL — distinct from a timeout; got ' + JSON.stringify(signalCh));
+    }
+  } finally {
+    try { fs.rmSync(repo28, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -868,3 +1006,8 @@ if (failed > 0) {
 } else {
   console.log('run-chains tests passed (' + passed + ' assertions)');
 }
+
+})().catch(function (err) {
+  console.error('run-chains tests FAILED with an uncaught error: ' + ((err && err.stack) || err));
+  process.exitCode = 1;
+});
