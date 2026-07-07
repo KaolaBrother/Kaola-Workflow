@@ -12,9 +12,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #628 | chore(docs): frontier-batch card predates speculative-auto; freeze-illegal example | open | — | P3: three-tier speculation rows; exact-path write-set example |
 | #629 | chore(guards): hooks.json family + config/agents.toml parity unguarded; edition-sync missing-mirror | open | — | P3: HOOKS_JSON_FAMILY + byte-triple agents.toml + create-on-missing |
 | #630 | feat(routing): generate the six routing surfaces from one canonical skeleton via edition-sync | open | — | P3: design+land AFTER #624/#627 (generation starts from corrected canonicals) |
-| #632 | bug(release): chainReceiptGreenness still fails open on empty/missing chains[] (mirror #618's chains_empty fix) | open | — | P2: mirror chains_empty guard into release.js chainReceiptGreenness x4 editions; fix stale --cut comment |
 | #634 | feat(adaptive): optimize-shaped node — bounded metric-ratchet loop via a metric-optimizer role for direction-not-destination work | open | — | P3: design a bounded metric-ratchet loop (new metric-optimizer role) for perf/size/flakiness targets with no AC at freeze; per-node barrier is net-diff so per-iteration commit/revert inside one node needs zero barrier change; optimize contract in ## Meta (validator = GENERATED aggregator) to avoid touching hand-ported classifier.readPlanNodes; sibling of #486 |
-| #635 | test(run-chains): signal-death assertions (T20-T28) are load-sensitive flakes — block literal four-chain-green recording under load | open | — | P2: make the signal-death assertions deterministic (inject the terminating signal via the runner's stub/mock seam, or assert killed-by-signal class not exact SIGKILL where the harness can't guarantee which signal wins under load) |
 
 ## Rules
 

@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=A1 scope=pre_existing action=none status=deferred severity=low fix_role=none rationale=chains-array-containing-null-row-throws-TypeError-in-red-loop-crash-not-false-green-same-pre-fix-behavior-fail-closed-in-effect",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
