@@ -486,7 +486,16 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
     "let top = '';",
     "try { top = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { top = 'NOT_A_REPO:' + process.cwd(); }",
     "fs.writeFileSync(" + JSON.stringify(cwdLog) + ", joined + '\\t' + top + '\\n', { flag: 'a' });",
-    "if (joined.startsWith('issues close')) process.stdout.write('{\"number\":168,\"state\":\"closed\"}\\n');",
+    // #619(2): the sink now probes `issues view` on the CLOSE SUCCESS path too (not just the catch
+    // branch), so this mock must be STATEFUL — report open until a matching `issues close` call
+    // has actually been logged. A constant non-closed response would make the new post-close probe
+    // wrongly bucket a real close as failed.
+    "if (joined.startsWith('issues view')) {",
+    "  let alreadyClosed = false;",
+    "  try { alreadyClosed = fs.readFileSync(" + JSON.stringify(cwdLog) + ", 'utf8').split('\\n').some(function (l) { return l.indexOf('issues close') === 0; }); } catch (_) {}",
+    "  process.stdout.write(JSON.stringify({ number: 168, state: alreadyClosed ? 'closed' : 'open' }) + '\\n');",
+    "}",
+    "else if (joined.startsWith('issues close')) process.stdout.write('{\"number\":168,\"state\":\"closed\"}\\n');",
     "else if (joined.startsWith('issues edit')) process.stdout.write('{\"number\":168,\"state\":\"closed\",\"labels\":[]}\\n');",
     "else if (joined.startsWith('api')) process.stdout.write('{\"id\":9005}\\n');",
     "else process.stdout.write('{}\\n');"
@@ -518,8 +527,10 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   }
 }
 
-// Test 17c: close-mid-merge FAILURE: mock CLI exits 1 on 'issues close'; process exits 0,
-// receipt.remote_issue_closed==='failed', receipt.claim_label_removed==='removed'.
+// Test 17c: #619(1) close-mid-merge FAILURE must fail CLOSED — mock CLI exits 1 on 'issues close';
+// the sink must refuse (typed sink_incomplete, exit non-zero) rather than report status:'merged'
+// exit 0 (the pre-fix fail-open behavior). The merge itself already landed (irreversible); this is
+// purely truthful reporting.
 {
   const project = 'test-gt-close-fail';
   const { root, branch, remotePath } = setupRealRepoWithBareRemote('close-fail-gt', project);
@@ -543,15 +554,15 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_TEA_MOCK_SCRIPT: mockScript },
       encoding: 'utf8'
     });
-    assert.strictEqual(result.status, 0, `close-fail test: expected exit 0, got ${result.status}. stdout: ${result.stdout} stderr: ${result.stderr}`);
-    assert((result.stderr || '').includes('Manually run: tea issues close 168'),
-      `close-fail test: expected WARNING in stderr, got: ${result.stderr}`);
+    assert.notStrictEqual(result.status, 0, `#619(1) close-fail test: expected non-zero exit (fail-closed), got ${result.status}. stdout: ${result.stdout} stderr: ${result.stderr}`);
     const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
-    assert.strictEqual(parsed.closure_receipt.remote_issue_closed, 'failed',
-      `close-fail test: expected remote_issue_closed=failed, got: ${parsed.closure_receipt.remote_issue_closed}`);
+    assert.strictEqual(parsed.result, 'refuse', `#619(1) close-fail test: expected result:refuse, got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.reason, 'sink_incomplete', `#619(1) close-fail test: expected reason:sink_incomplete, got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.remote_issue_closed, 'failed',
+      `#619(1) close-fail test: expected remote_issue_closed=failed, got: ${JSON.stringify(parsed.remote_issue_closed)}`);
     assert.strictEqual(parsed.closure_receipt.claim_label_removed, 'removed',
-      `close-fail test: expected claim_label_removed=removed, got: ${parsed.closure_receipt.claim_label_removed}`);
-    console.log('close-fail warning regression test passed');
+      `#619(1) close-fail test: expected claim_label_removed=removed (negative control), got: ${parsed.closure_receipt.claim_label_removed}`);
+    console.log('close-fail fail-closed regression test passed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(remotePath, { recursive: true, force: true });
@@ -1306,8 +1317,18 @@ console.log('Gitea #548 consumer-aware test-gate: PASSED');
     "const fs = require('fs');",
     "const a = process.argv.slice(2).join(' ');",
     "function log(m) { try { fs.appendFileSync(" + JSON.stringify(logFile) + ", m + '\\n'); } catch (_) {} }",
-    "// issues view N -> always open (never pre-closed)",
-    "if (a.startsWith('issues view')) { process.stdout.write('{\"state\":\"open\",\"labels\":[]}\\n'); process.exit(0); }",
+    // #619(2): the sink now probes `issues view` on the CLOSE SUCCESS path too (not just the
+    // catch branch), so this mock must be STATEFUL — open until a matching `issues close N` has
+    // been logged. A constant 'open' would make the new post-close probe wrongly bucket every
+    // real close as failed.
+    "const viewM = a.match(/^issues view (\\d+)/);",
+    "if (viewM) {",
+    "  const n = viewM[1];",
+    "  let alreadyClosed = false;",
+    "  try { alreadyClosed = fs.readFileSync(" + JSON.stringify(logFile) + ", 'utf8').split('\\n').includes('close:' + n); } catch (_) {}",
+    "  process.stdout.write(JSON.stringify({ state: alreadyClosed ? 'closed' : 'open', labels: [] }) + '\\n');",
+    "  process.exit(0);",
+    "}",
     "// issues close N -> succeeds, logged as close:N (so the test can assert it was ATTEMPTED)",
     "if (a.startsWith('issues close')) { const m = a.match(/issues close (\\d+)/); log('close:' + (m ? m[1] : '?')); process.stdout.write('{}\\n'); process.exit(0); }",
     "if (a.startsWith('issues edit')) { process.stdout.write('{}\\n'); process.exit(0); }",
@@ -1354,5 +1375,168 @@ console.log('Gitea #548 consumer-aware test-gate: PASSED');
   }
 }
 console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
+
+// --- #619 (claim.js): forge close-helper post-probes the SUCCESS path too ----------------------
+// closeIssueIdempotent (kaola-gitea-workflow-claim.js) trusted a successful forge.closeIssue()
+// unconditionally on the success path; only the catch branch re-probed. The post-close probe MUST
+// be a FRESH forge.viewIssue() call — probeIssueState (used for the pre-close check, shared via
+// active-folders.js's memo) is memoized per-process, so reusing it post-close would always replay
+// the pre-close verdict.
+{
+  const claimModule = require('./kaola-gitea-workflow-claim');
+
+  function scenario619(issueNum, viewSequence, closeThrows) {
+    return withForge({
+      viewIssue: (() => {
+        let call = 0;
+        return function (n) {
+          const state = viewSequence[Math.min(call, viewSequence.length - 1)];
+          call++;
+          return { number: n, state };
+        };
+      })(),
+      closeIssue: (n) => { if (closeThrows) throw new Error('mock close failure'); return { number: n, state: 'closed' }; }
+    }, () => claimModule.closeIssueIdempotent(issueNum, {}));
+  }
+
+  const token619A = scenario619(619201, ['open', 'open'], false);
+  assert.strictEqual(token619A, 'failed',
+    '#619 (Gitea): closeIssue succeeds but a LIVE post-close probe shows the issue still open must bucket failed, got ' + token619A);
+
+  const token619B = scenario619(619202, ['open', 'closed'], false);
+  assert.strictEqual(token619B, 'closed',
+    '#619 (Gitea): a genuinely successful close (post-probe confirms closed) must still return closed, got ' + token619B);
+
+  const token619C = scenario619(619203, ['open', 'closed'], true);
+  assert.strictEqual(token619C, 'already_closed',
+    '#619 (Gitea): a close call that THROWS but a live post-probe confirms the issue is actually closed must return already_closed, got ' + token619C);
+
+  const token619D = scenario619(619204, ['open', 'open'], true);
+  assert.strictEqual(token619D, 'failed',
+    '#619 (Gitea): a close call that throws and stays open must return failed (baseline, unchanged), got ' + token619D);
+
+  console.log('Gitea #619 claim.js close-helper post-probe tests passed');
+}
+
+// --- #620 (claim.js): stale-worktree-cleanup must NEVER destroy unmerged committed work ---------
+{
+  const claimScript620 = path.join(__dirname, 'kaola-gitea-workflow-claim.js');
+  const project620 = 'gitea-620-unmerged';
+  const branch620 = 'workflow/gitea-issue-96205';
+  const root620 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-620-'));
+  const kwRoot620 = root620 + '.kw';
+  const mockScript620 = root620 + '-tea-mock.js';
+  try {
+    const git620 = (...a) => execFileSync('git', a, { cwd: root620, encoding: 'utf8' });
+    git620('init', '-b', 'main');
+    git620('config', 'user.email', 't@t');
+    git620('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root620, 'README.md'), 'fixture');
+    git620('add', '-A');
+    git620('commit', '-m', 'init');
+
+    const wtPath620 = path.join(kwRoot620, 'issue-96205');
+    fs.mkdirSync(kwRoot620, { recursive: true });
+    execFileSync('git', ['-C', root620, 'worktree', 'add', '-b', branch620, '--', wtPath620, 'HEAD'], { encoding: 'utf8' });
+    // Commit new work INSIDE the worktree — never merged into main.
+    fs.writeFileSync(path.join(wtPath620, 'unmerged-feature.txt'), 'the only copy of this work\n');
+    execFileSync('git', ['-C', wtPath620, 'add', '-A'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', wtPath620, 'commit', '-m', 'feat: unmerged work'], { encoding: 'utf8' });
+    const unmergedTip620 = execFileSync('git', ['-C', wtPath620, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+    fs.writeFileSync(mockScript620, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.startsWith('issues view 96205')) { process.stdout.write(JSON.stringify({ state: 'closed' }) + '\\n'); process.exit(0); }",
+      "process.stdout.write('{}\\n'); process.exit(0);"
+    ].join('\n'));
+
+    const result620 = spawnSync(process.execPath, [claimScript620, 'stale-worktree-cleanup', '--execute'], {
+      cwd: root620,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_TEA_MOCK_SCRIPT: mockScript620 }
+    });
+    let out620 = {};
+    try { out620 = JSON.parse(result620.stdout); } catch (_) {}
+    assert.strictEqual(out620.dry_run, false, '#620 (Gitea): dry_run must be false, got ' + JSON.stringify(out620) + '\nstderr: ' + result620.stderr);
+
+    let branchSurvived620 = false, tipReachable620 = false;
+    try {
+      execFileSync('git', ['-C', root620, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branch620], { stdio: ['ignore', 'pipe', 'ignore'] });
+      branchSurvived620 = true;
+    } catch (_) {}
+    try {
+      execFileSync('git', ['-C', root620, 'cat-file', '-e', unmergedTip620], { stdio: ['ignore', 'ignore', 'ignore'] });
+      tipReachable620 = true;
+    } catch (_) {}
+    assert.ok(branchSurvived620,
+      '#620 (Gitea): the unmerged branch ' + branch620 + ' must SURVIVE cleanup --execute, got cleanup output: ' + JSON.stringify(out620));
+    assert.ok(tipReachable620,
+      '#620 (Gitea): the unmerged commit ' + unmergedTip620 + ' must still be reachable after cleanup --execute, got cleanup output: ' + JSON.stringify(out620));
+    assert.ok(!(Array.isArray(out620.deleted_branch) && out620.deleted_branch.includes(branch620)),
+      '#620 (Gitea): deleted_branch must NOT include the unmerged branch, got ' + JSON.stringify(out620.deleted_branch));
+    assert.ok(Array.isArray(out620.skipped_unmerged) && out620.skipped_unmerged.some(e => e && e.branch === branch620),
+      '#620 (Gitea): skipped_unmerged must record the unmerged branch, got ' + JSON.stringify(out620.skipped_unmerged));
+    console.log('Gitea #620 stale-worktree-cleanup unmerged-branch survives test passed');
+  } finally {
+    fs.rmSync(root620, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot620, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(mockScript620, { force: true }); } catch (_) {}
+  }
+}
+
+// --- #631 (claim.js): cmdVerifySink must PREFER published_head over rebase-stale branch_head ----
+{
+  const claimScript631 = path.join(__dirname, 'kaola-gitea-workflow-claim.js');
+  const project631 = 'gitea-631-verify';
+  const root631 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-631-'));
+  try {
+    const git631 = (...a) => execFileSync('git', a, { cwd: root631, encoding: 'utf8' });
+    git631('init', '-b', 'main');
+    git631('config', 'user.email', 't@t');
+    git631('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root631, 'README.md'), 'fixture');
+    git631('add', '-A');
+    git631('commit', '-m', 'init');
+
+    git631('checkout', '-b', 'workflow/gitea-issue-96311');
+    fs.writeFileSync(path.join(root631, 'feat.txt'), 'impl');
+    git631('add', '-A');
+    git631('commit', '-m', 'feat: impl');
+    const staleBranchHead631 = execFileSync('git', ['-C', root631, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    git631('checkout', 'main');
+
+    fs.writeFileSync(path.join(root631, 'published.txt'), 'landed');
+    git631('add', '-A');
+    git631('commit', '-m', 'feat: published');
+    const publishedHead631 = execFileSync('git', ['-C', root631, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+    assert.notStrictEqual(staleBranchHead631, publishedHead631, '#631 (Gitea) fixture: branch_head and published_head must differ');
+
+    const archiveCacheDir631 = path.join(root631, 'kaola-workflow', 'archive', project631, '.cache');
+    fs.mkdirSync(archiveCacheDir631, { recursive: true });
+    fs.writeFileSync(path.join(archiveCacheDir631, 'sink-receipt.json'), JSON.stringify({
+      branch_head: staleBranchHead631,
+      published_head: publishedHead631
+    }) + '\n');
+
+    const result631 = spawnSync(process.execPath, [claimScript631, 'verify-sink', '--project', project631], {
+      cwd: root631,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    let out631 = {};
+    try { out631 = JSON.parse(result631.stdout); } catch (_) {}
+
+    assert.strictEqual(out631.checks && out631.checks.impl_commit, publishedHead631,
+      '#631 (Gitea): cmdVerifySink must resolve impl_commit from published_head, got ' + JSON.stringify(out631.checks));
+    assert.strictEqual(out631.checks && out631.checks.merged_into_sink_target, 'verified',
+      '#631 (Gitea): a rebased-but-genuinely-published sink must verify, got ' + JSON.stringify(out631.checks));
+    assert.ok(!(Array.isArray(out631.reasons) && out631.reasons.includes('impl_commit_not_ancestor')),
+      '#631 (Gitea): reasons must NOT include impl_commit_not_ancestor, got ' + JSON.stringify(out631.reasons));
+    assert.strictEqual(result631.status, 0, '#631 (Gitea): verify-sink must exit 0, got ' + result631.status + ' full: ' + JSON.stringify(out631));
+    console.log('Gitea #631 verify-sink published_head preference test passed');
+  } finally {
+    fs.rmSync(root631, { recursive: true, force: true });
+  }
+}
 
 console.log('Gitea sink tests passed');

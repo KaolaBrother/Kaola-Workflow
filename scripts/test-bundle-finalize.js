@@ -1132,10 +1132,17 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
       '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
       '  process.exit(0);',
       '}',
-      '// issue view N --json state -> always open (never pre-closed)',
+      // #619(2): the sink now probes `issue view --jq .state` on the CLOSE SUCCESS path too (not
+      // just in the catch branch), so this mock must be STATEFUL — open until a matching `issue
+      // close N` has actually been logged, then closed (mirrors real gh --jq output: a bare state
+      // string, not a JSON blob). A constant 'open' would make the new post-close probe wrongly
+      // bucket every real close as failed.
       'const viewM = a.match(/issue view (\\d+)/);',
       'if (viewM) {',
-      '  process.stdout.write(JSON.stringify({state:"open"}) + "\\n");',
+      '  const n = viewM[1];',
+      '  let alreadyClosed = false;',
+      '  try { alreadyClosed = fs.readFileSync(logFile, "utf8").split("\\n").includes("close:" + n); } catch (_) {}',
+      '  process.stdout.write((alreadyClosed ? "closed" : "open") + "\\n");',
       '  process.exit(0);',
       '}',
       '// issue close N --comment ... -> succeeds, logged as close:N',
@@ -1274,10 +1281,15 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
       '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
       '  process.exit(0);',
       '}',
-      '// issue view N -> always open (never pre-closed)',
+      // #619(2): stateful — open until a matching `issue close N` has been logged (mirrors real
+      // gh --jq bare-state output). Unreached in this test (FORCE_PUSH_MAIN_FAIL fails before
+      // closure ever runs) but kept consistent with the #592 mock above for defensive correctness.
       'const viewM = a.match(/issue view (\\d+)/);',
       'if (viewM) {',
-      '  process.stdout.write(JSON.stringify({state:"open"}) + "\\n");',
+      '  const n = viewM[1];',
+      '  let alreadyClosed = false;',
+      '  try { alreadyClosed = fs.readFileSync(logFile, "utf8").split("\\n").includes("close:" + n); } catch (_) {}',
+      '  process.stdout.write((alreadyClosed ? "closed" : "open") + "\\n");',
       '  process.exit(0);',
       '}',
       '// issue close N -> logged as close:N',

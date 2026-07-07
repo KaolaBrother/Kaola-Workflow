@@ -213,8 +213,24 @@ function buildBranchName(issueIid, project, fallback) {
   return Number.isFinite(issueIid) && issueIid > 0 ? 'workflow/gitlab-issue-' + issueIid : 'workflow/gitlab-' + project;
 }
 
+// #619: a fresh, UN-memoized live probe for post-close verification — mirrors sink-merge.js's own
+// probeIssueClosed. probeIssueState (imported above) memoizes per-process; the pre-close probe
+// already primes that memo with the pre-close verdict, so reusing it post-close would always
+// replay the STALE pre-close state, not a fresh one (breaking every genuine success, not just
+// adding coverage). Any probe error degrades to false (never claim closed without live evidence).
+function probeIssueClosedLive(issueNumber, opts) {
+  if (OFFLINE || issueNumber == null) return false;
+  try {
+    const st = forge.viewIssue(issueNumber, opts || {});
+    return String((st && st.state) || '').toLowerCase() === 'closed';
+  } catch (_) { return false; }
+}
+
 // #427: idempotent forge issue close — probe-before-close prevents double-close; label removal
 // is best-effort (ignore failure). Returns 'closed', 'already_closed', or 'failed'.
+// #619: a `forge.closeIssue` success is not proof the issue is actually closed on the forge — post-
+// probe LIVE on the success path too, not just in the catch branch, and bucket an
+// success-call-but-still-open close as failed.
 function closeIssueIdempotent(n, opts) {
   const probe = probeIssueState(n);
   if (probe.state === 'closed') return 'already_closed';
@@ -222,9 +238,9 @@ function closeIssueIdempotent(n, opts) {
   try {
     forge.closeIssue(n, opts);
     try { forge.updateIssue(n, { unlabels: [CLAIM_LABEL] }); } catch (_) {}
-    return 'closed';
+    return probeIssueClosedLive(n, opts) ? 'closed' : 'failed';
   } catch (e) {
-    return probeIssueState(n).state === 'closed' ? 'already_closed' : 'failed';
+    return probeIssueClosedLive(n, opts) ? 'already_closed' : 'failed';
   }
 }
 
@@ -424,6 +440,48 @@ function removeBranch(root, branch) {
     return true;
   } catch (_) {
     return false;
+  }
+}
+
+// #620: is-ancestor-gated branch deletion — MIRRORS sink-merge.js's post-merge branch teardown
+// (merge-base --is-ancestor proof before -D). cmdStaleWorktreeCleanup treats a closed-on-forge
+// issue as stale even when its branch carries committed work that never merged into the default
+// branch — worktreeDirtyState only checks *uncommitted* changes, so a committed-but-unmerged
+// branch reads 'clean' — so the unconditional removeBranch() force-delete used by that loop
+// permanently destroyed the ONLY copy of that work. This is a DISTINCT, opt-in-safe helper —
+// removeBranch() itself is left untouched because cmdRelease (a user-consented discard/abandon)
+// legitimately still needs its unconditional force-delete semantics. Prove ancestry into the
+// resolved default branch first; `-D` only on that proof. Otherwise fall back to the SAFE
+// `git branch -d` (git itself refuses to delete a genuinely unmerged branch); on refusal, do NOT
+// destroy anything — report `skipped_unmerged` with the branch's tip SHA so an operator can
+// recover it manually.
+function removeBranchIfMerged(root, branch, defBranch) {
+  if (!isSafeBranchArg(branch)) return { removed: false, mode: 'unsafe_branch_arg' };
+  let mergedIntoDefault = false;
+  if (defBranch) {
+    try {
+      execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', branch, defBranch],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+      mergedIntoDefault = true; // exit 0 → branch tip is an ancestor of defBranch (fully merged)
+    } catch (_) { mergedIntoDefault = false; }
+  }
+  if (mergedIntoDefault) {
+    try {
+      execFileSync('git', ['-C', root, 'branch', '-D', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
+      return { removed: true, mode: 'forced' };
+    } catch (_) { return { removed: false, mode: 'forced_failed' }; }
+  }
+  // Not provably merged into the resolved default branch — fall back to the SAFE delete, which git
+  // itself refuses for genuinely unmerged work (never force through unproven ancestry).
+  try {
+    execFileSync('git', ['-C', root, 'branch', '-d', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
+    return { removed: true, mode: 'safe' };
+  } catch (_) {
+    let tip = null;
+    try {
+      tip = execFileSync('git', ['-C', root, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (_) {}
+    return { removed: false, mode: 'skipped_unmerged', tip };
   }
 }
 
@@ -2557,7 +2615,9 @@ function cmdStaleWorktreeCleanup() {
   }
 
   const dryRun = !args.execute;
-  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [] };
+  // #620: skipped_unmerged records a branch that survived because it could not be proven merged —
+  // fail LOUD (visible in the JSON report) rather than silently either destroying it or dropping it.
+  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unmerged: [] };
   const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [] };
   const removedBranches = new Set();
 
@@ -2615,6 +2675,9 @@ function cmdStaleWorktreeCleanup() {
 
   // Branch deletion: worktree-removed branches + loose stale_branches
   const candidateBranches = [...new Set([...removedBranches, ...stale_branches.map(b => b.branch)])];
+  // #620: resolve the default branch ONCE (read-only, offline-safe) so every candidate is checked
+  // against the same ancestry target — a stale-cleanup run must never force through unproven work.
+  const defBranch = dryRun ? null : defaultBranch(root);
   for (const branch of candidateBranches) {
     if (args.keepBranch) continue;
     if (dryRun) {
@@ -2627,7 +2690,12 @@ function cmdStaleWorktreeCleanup() {
     );
     if (stillRegistered) continue;
     if (!branchExists(root, branch)) continue;
-    if (removeBranch(root, branch)) buckets.deleted_branch.push(branch);
+    const branchResult = removeBranchIfMerged(root, branch, defBranch);
+    if (branchResult.removed) {
+      buckets.deleted_branch.push(branch);
+    } else if (branchResult.mode === 'skipped_unmerged') {
+      buckets.skipped_unmerged.push({ branch, tip: branchResult.tip });
+    }
   }
 
   if (dryRun) {
@@ -2938,8 +3006,14 @@ function cmdVerifySink() {
   if (branchLingering) reasons.push('branch_lingering');
 
   // (a) the recorded implementation commit must be an ancestor of the sink target. Prefer the
-  // durable sink-receipt.json (live or archived) branch_head; fall back to resolving the branch
-  // name directly when it still exists.
+  // durable sink-receipt.json (live or archived) published_head; fall back to resolving the
+  // branch name directly when it still exists.
+  // #631: branch_head is stamped ONCE at receipt init, before a mid-flight rebase rewrites the
+  // branch's commits — a rebase orphans that SHA even though the (rebased) content genuinely
+  // landed on the sink target, so a clean rebased sink false-alarmed impl_commit_not_ancestor.
+  // published_head (additive; stamped at the closure gate once the live tip resolves as actually
+  // published) is the FRESH ref — prefer it, falling back to branch_head only for legacy receipts
+  // that predate the field.
   let implRef = null;
   for (const p of [
     path.join(activeDir, '.cache', 'sink-receipt.json'),
@@ -2947,7 +3021,8 @@ function cmdVerifySink() {
   ]) {
     try {
       const r = JSON.parse(fs.readFileSync(p, 'utf8'));
-      if (r && r.branch_head) { implRef = r.branch_head; break; }
+      const ref = r && (r.published_head || r.branch_head);
+      if (ref) { implRef = ref; break; }
     } catch (_) {}
   }
   if (!implRef && branchLingering) {
@@ -3180,6 +3255,8 @@ module.exports = {
   resolveCodexDispatchModeFlag,
   CODEX_DISPATCH_MODES,
   removeBranch,
+  removeBranchIfMerged,
+  closeIssueIdempotent,
   postAdvisoryClaim,
   archiveProjectDir,
   buildBranchName,

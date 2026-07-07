@@ -31,6 +31,11 @@ const FORCE_WT_LIST_FAIL = process.env.KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL === '1'
 // the --sink transaction does NOT false-report status:sinked when the deliverable never reached the
 // remote. Never set in production; it only makes the push we already run throw.
 const FORCE_PUSH_MAIN_FAIL = process.env.KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL === '1';
+// #619(3): test-only — force the push_upstream step's push to THROW, simulating a transient push
+// failure. Proves the --sink transaction does NOT false-report push_upstream:done (and eventually
+// status:sinked) when the feature branch was never actually backed up on the remote. Never set in
+// production; it only makes the push we already run throw.
+const FORCE_PUSH_UPSTREAM_FAIL = process.env.KAOLA_WORKFLOW_FORCE_PUSH_UPSTREAM_FAIL === '1';
 const REMOTE_TIMEOUT_MS = (() => {
   const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
   return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
@@ -540,7 +545,17 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
         remoteIssueClosed = 'already_closed';
         process.stderr.write('sink-merge: Issue #' + args.issue + ' already closed by cmdFinalize, skipping close.\n');
       } else {
-        try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.'], forgeOpts); remoteIssueClosed = 'closed'; }
+        try {
+          ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.'], forgeOpts);
+          // #619(2): `gh issue close` exiting 0 does not PROVE the issue is closed (a rare forge/API
+          // race can leave it open) — the old code trusted the exit code unconditionally and only
+          // probed in the catch branch below. Probe the live state on the success path too.
+          if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'closed'; }
+          else {
+            remoteIssueClosed = 'failed';
+            process.stderr.write('sink-merge: WARNING: gh issue close exited 0 for ' + args.issue + ' but the issue is still OPEN; receipt.remote_issue_closed=failed. Manually run: gh issue close ' + args.issue + '\n');
+          }
+        }
         catch (e) {
           // #396.5: a `gh issue close` on an ALREADY-CLOSED issue exits 1 (re-run after a push→close
           // crash). Probe before declaring failure — an already-closed issue is a SUCCESS (idempotent),
@@ -583,8 +598,14 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       if (n === args.issue) continue; // primary handled above
       try {
         ghExec(['issue', 'close', String(n), '--comment', 'Merged via sink-merge (bundle member).'], forgeOpts);
-        closed.push(n);
-        try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
+        // #619(2): probe the live state on the success path too — an exit-0 close is not proof.
+        if (probeIssueClosed(n, forgeOpts)) {
+          closed.push(n);
+          try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
+        } else {
+          failed.push(n);
+          process.stderr.write('sink-merge: WARNING: gh issue close exited 0 for bundle member ' + n + ' but the issue is still OPEN; recorded in failed_issue_closures.\n');
+        }
       } catch (e) {
         // #396.5: classify already-closed (idempotent re-run after a push→close crash) as a SUCCESS,
         // not a failed closure — `gh issue close` exits 1 on a closed issue. Probe to disambiguate.
@@ -661,6 +682,39 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
   // #617: wire the remote-closed-after-publish invariant — verify the captured branch SHA is an
   // ancestor of defBranch before trusting this receipt's close.
   const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest, { implRef: implCommitSha, sinkTarget: defBranch });
+
+  // #619(1): a failed issue close must fail CLOSED, not silently report status:'merged' exit 0 —
+  // mirror the --sink transaction's closure-step refusal (the #497 pattern). The merge into
+  // defBranch already happened by this point in the legacy (non---sink) pipeline (irreversible);
+  // this is purely truthful reporting: a close that genuinely failed on the forge must never look
+  // like a completed sink. `closeWasAttempted` excludes the OFFLINE / keep-open / no-issue-passed
+  // cases, where remoteIssueClosed's default 'failed' init value does not represent a real failure.
+  const closeWasAttempted = !OFFLINE && !keepIssueOpen &&
+    (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0));
+  const closeFailed = bundleBuckets
+    ? bundleBuckets.failed_issue_closures.length > 0
+    : (closeWasAttempted && remoteIssueClosed === 'failed');
+  if (closeFailed) {
+    const out = {
+      result: 'refuse',
+      reason: 'sink_incomplete',
+      step: 'closure',
+      remote_issue_closed: remoteIssueClosed,
+      branch: args.branch,
+      closure_receipt: receipt,
+      closure_invariants: invariants,
+      detail: 'the merge landed on ' + defBranch + ' but the issue close failed on the forge (receipt.remote_issue_closed=' +
+        remoteIssueClosed + '). Refusing to report status:merged — a failed issue close must not look like a ' +
+        'completed sink. Manually close the issue(s) (`gh issue close <N>`), then reconcile state.',
+    };
+    if (bundleBuckets) {
+      out.closed_issues = bundleBuckets.closed_issues;
+      out.failed_issue_closures = bundleBuckets.failed_issue_closures;
+    }
+    process.stdout.write(JSON.stringify(out) + '\n');
+    return { exitCode: 1 };
+  }
+
   // #393a: surface where the member set came from (flag / state_fallback / none) so a caller can see
   // that a flag-less bundle sink derived its members from state rather than silently closing only the
   // primary.
@@ -727,7 +781,11 @@ const SINK_ABORT_AFTER = process.env.KAOLA_WORKFLOW_SINK_ABORT_AFTER || '';
 // published). Before this fix closure ran three steps too early (before archive_commit/push_main),
 // so a crash between closure and push_main left an issue closed while the merge never reached the
 // remote — the exact 2026-07-06 incident.
-const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'worktree_sync', 'finalize', 'stash_restore', 'archive_commit', 'push_main', 'closure'];
+// #619(4): 'worktree_sync' was removed — it always ran AFTER the 'merge' step's worktree removal,
+// so its own `git worktree list` scan could never find a match (wtPath was always null) and its
+// stepDone() recorded a no-op receipt attestation every run. The copy it used to attempt now
+// happens inline in the 'merge' step, BEFORE the worktree is removed (see the merge step below).
+const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'finalize', 'stash_restore', 'archive_commit', 'push_main', 'closure'];
 
 // #429: write a sink-receipt.json atomically (temp+rename) to avoid corruption on crash.
 function writeSinkReceipt(receiptPath, receipt) {
@@ -1084,9 +1142,41 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // Push the feature branch to upstream (idempotent)
       if (!OFFLINE) {
         try {
+          if (FORCE_PUSH_UPSTREAM_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_PUSH_UPSTREAM_FAIL — push upstream forced to fail');
           execFileSync('git', ['-C', mainRoot, 'push', '-u', 'origin', args.branch], { encoding: 'utf8' });
         } catch (_) {
-          // Already pushed or no remote — acceptable
+          // Already pushed, or the push failed transiently — the parity check below is the
+          // authoritative signal, not this exit code.
+        }
+        // #619(3): the old code swallowed every push failure and unconditionally recorded
+        // stepDone — a genuinely failed push left the branch un-backed-up on the remote while the
+        // receipt attested push_upstream:done. Verify branch@{u} parity (mirrors
+        // assertBranchPushedToUpstream's ahead-count check) instead of trusting the push exit code.
+        let parityOk = false;
+        try {
+          const upstream = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', args.branch + '@{u}'],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+          const ahead = parseInt(
+            execFileSync('git', ['-C', mainRoot, 'rev-list', '--count', upstream + '..' + args.branch], { encoding: 'utf8' }).trim(),
+            10
+          );
+          parityOk = ahead === 0;
+        } catch (_) { parityOk = false; }
+        if (!parityOk) {
+          receipt.push_upstream = 'failed';
+          receipt.updated_at = new Date().toISOString();
+          writeSinkReceipt(receiptPath, receipt);
+          process.stderr.write('sink-merge --sink: push upstream failed: branch ' + args.branch + ' is not at parity with its upstream after push.\n');
+          process.stdout.write(JSON.stringify({
+            result: 'refuse',
+            reason: 'sink_incomplete',
+            step: 'push_upstream',
+            push_upstream: 'failed',
+            branch: args.branch,
+            detail: '`git push -u origin ' + args.branch + '` did not verifiably reach parity with its upstream — the feature branch may not be backed up on the remote. Refusing to report status:sinked. The push_upstream step is left NOT done so a re-run retries it. Resolve the push fault (or push manually: git push -u origin ' + args.branch + ') and re-run --sink.',
+          }) + '\n');
+          process.exitCode = 1;
+          return;
         }
       }
       stepDone('push_upstream');
@@ -1094,13 +1184,35 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
 
     if (step === 'merge') {
-      // Remove the linked worktree FIRST so we can check out the feature branch in mainRoot.
-      // The worktree_sync step (which copies worktree→main) must run BEFORE merge if needed.
-      // In the --sink transaction, the worktree_sync step runs AFTER merge; on first run the
-      // worktree is still present here so we must remove it before checking out the branch.
+      // #619(4): capture (stage) the linked worktree's project folder BEFORE removing the
+      // worktree, then land the staged copy into mainRoot only AFTER checkout — and only when the
+      // branch itself does NOT already track kaola-workflow/<project>/ there. The old code ran a
+      // SEPARATE worktree_sync step AFTER this removal (and after the branch's own worktree
+      // registration was gone), so it could never find a matching `git worktree list` block —
+      // wtPath was always null and its stepDone() recorded a no-op every single time. Landing the
+      // copy straight into mainRoot BEFORE checkout (an earlier version of this fix) regressed:
+      // when the branch commits kaola-workflow/<project>/ itself (a worktree-native run that
+      // commits live state), an untracked pre-checkout copy at that exact path collides with the
+      // SAME tracked path and `git checkout` refuses to overwrite it ("untracked working tree
+      // files would be overwritten"). Staging first, then landing only when mainProjDir is still
+      // absent post-checkout, mirrors the original worktree_sync guard (`!fs.existsSync(mainProjDir)`)
+      // safely — genuinely worktree-only (untracked) content, e.g. a .cache/ crash-resume journal,
+      // still survives; branch-tracked content wins exactly as checkout already resolved it.
+      let wtStageDir = null;
       try {
-        const { removeWorktree: removeWt, readActiveFolders: readAF } = require('./kaola-workflow-claim.js');
+        const { removeWorktree: removeWt, readActiveFolders: readAF, worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
         const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
+        let wtPath = null;
+        try { wtPath = (folder && folder.worktree_path) || wtPathFor(mainRoot, args.project); } catch (_) {}
+        if (wtPath && fs.existsSync(wtPath)) {
+          const wtProjDir = path.join(wtPath, 'kaola-workflow', args.project);
+          if (fs.existsSync(wtProjDir)) {
+            try {
+              wtStageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wtsync-'));
+              sinkCopyDir(wtProjDir, wtStageDir);
+            } catch (_) { wtStageDir = null; }
+          }
+        }
         removeWt(mainRoot, args.project, folder);
       } catch (_) {}
 
@@ -1123,33 +1235,17 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         process.exitCode = 2;
         return;
       }
-      stepDone('merge');
-      continue;
-    }
-
-    if (step === 'worktree_sync') {
-      // Sync the worktree project folder → main project folder (inline copyDir)
-      // Find the linked worktree path for this project
-      let wtPath = null;
-      try {
-        const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
-        for (const block of list.split(/\n\n+/)) {
-          const pathLine = block.match(/^worktree (.+)$/m);
-          const branchLine = block.match(/^branch refs\/heads\/(.+)$/m);
-          if (pathLine && branchLine && branchLine[1] === args.branch) {
-            wtPath = pathLine[1];
-            break;
-          }
-        }
-      } catch (_) {}
-      if (wtPath) {
-        const wtProjDir = path.join(wtPath, 'kaola-workflow', args.project);
-        const mainProjDir = path.join(mainRoot, 'kaola-workflow', args.project);
-        if (fs.existsSync(wtProjDir) && !fs.existsSync(mainProjDir)) {
-          sinkCopyDir(wtProjDir, mainProjDir);
-        }
+      // Land the staged worktree-only content now that checkout has resolved whether the branch
+      // itself tracks kaola-workflow/<project>/ — copy only when it's still absent; else discard
+      // the stage (the branch-tracked content already won and is authoritative).
+      if (wtStageDir) {
+        try {
+          const mainProjDir = path.join(mainRoot, 'kaola-workflow', args.project);
+          if (!fs.existsSync(mainProjDir)) sinkCopyDir(wtStageDir, mainProjDir);
+        } catch (_) {}
+        try { fs.rmSync(wtStageDir, { recursive: true, force: true }); } catch (_) {}
       }
-      stepDone('worktree_sync');
+      stepDone('merge');
       continue;
     }
 
@@ -1304,6 +1400,16 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           } catch (_) { published = false; }
         }
         receipt.remote_closed_after_publish = published ? 'verified' : 'failed';
+        if (published) {
+          // #631: stamp a NEW, ADDITIVE published_head once the live tip resolves as published —
+          // this NEVER mutates branch_head (stamped once at receipt init; load-bearing for the
+          // #518 cycle-identity guard). branch_head can go stale after doRebase rewrites the
+          // branch's commits (a mid-flight rebase orphans the pre-rebase SHA even though the
+          // rebased content did land on defBranch); published_head is the FRESH tip resolved
+          // here, letting a caller (cmdVerifySink) distinguish a rebased-but-genuinely-published
+          // branch from a truly unpublished one without disturbing branch_head.
+          receipt.published_head = implRef;
+        }
         if (!published) {
           receipt.updated_at = new Date().toISOString();
           writeSinkReceipt(receiptPath, receipt);
@@ -1340,7 +1446,13 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           const failed = [];
           const closeOne = (n, comment) => {
             if (probeIssueClosed(n, forgeOpts)) { closed.push(n); return; }
-            try { ghExec(['issue', 'close', String(n), '--comment', comment], forgeOpts); closed.push(n); }
+            try {
+              ghExec(['issue', 'close', String(n), '--comment', comment], forgeOpts);
+              // #619(2): probe the live state on the success path too — an exit-0 close is not proof
+              // the issue is actually closed (a rare forge/API race can leave it open).
+              if (probeIssueClosed(n, forgeOpts)) { closed.push(n); }
+              else { failed.push(n); process.stderr.write('sink-merge --sink: WARNING: gh issue close exited 0 for ' + n + ' but the issue is still OPEN\n'); }
+            }
             catch (e) {
               // #396.5: an already-closed issue exits 1 — re-probe to classify it a SUCCESS, not failure.
               if (probeIssueClosed(n, forgeOpts)) { closed.push(n); }
@@ -1607,7 +1719,10 @@ function main() {
   }
 
   const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch);
-  if (cleanupResult && cleanupResult.exitCode === 3) { process.exitCode = 3; return; }
+  // #619(1): postMergeCleanup can now also return { exitCode: 1 } (a failed-close sink_incomplete
+  // refusal) alongside the pre-existing { exitCode: 3 } (merge-impossible fallback) — generalize
+  // from the exact-3 check to any returned exitCode.
+  if (cleanupResult && cleanupResult.exitCode) { process.exitCode = cleanupResult.exitCode; return; }
 }
 
 if (require.main === module) {

@@ -6095,6 +6095,183 @@ function testSinkRefusesOnPushMainFailure() {
   }
 }
 
+// #619(3): the --sink transaction must NOT report push_upstream:done (and must never fall through
+// to status:sinked) when the push_upstream step's push genuinely fails. The old code swallowed
+// EVERY push failure in a bare catch and unconditionally ran stepDone('push_upstream') — a branch
+// that was never actually backed up on the remote was still attested as pushed. The fix verifies
+// branch@{u} parity after the push attempt and refuses (typed sink_incomplete) on non-parity,
+// leaving the step NOT done so a re-run retries it.
+function testSinkRefusesOnPushUpstreamFailure() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pushupfail-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  try {
+    // A feature branch with a real (unpushed) commit and NO upstream configured — the forced push
+    // failure below means `git push -u` never actually runs, so branch@{u} never resolves and the
+    // parity check genuinely fails (this is not a fabricated assertion — it is the real git state).
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9499'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
+    spawnSync('git', ['-C', tmp, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', 'workflow/issue-9499', '--project', 'issue-9499', '--sink', '--json',
+    ], {
+      cwd: tmp,
+      // OFFLINE=0 so push_upstream is attempted; FORCE_PUSH_UPSTREAM_FAIL makes that push throw
+      // deterministically (and — since the branch has no other upstream — the parity re-check
+      // genuinely fails too, proving the refusal is not merely trusting the forced exception).
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_FORCE_PUSH_UPSTREAM_FAIL: '1' },
+      encoding: 'utf8',
+    });
+    const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+    const parsed = parseLast(result.stdout);
+    assert(parsed.status !== 'sinked', '#619(3): a hard push_upstream failure must NOT report status:sinked, got ' + JSON.stringify(parsed) + '\nstderr: ' + result.stderr);
+    assert(result.status !== 0, '#619(3): a hard push_upstream failure must exit non-zero, got ' + result.status);
+    assert(parsed.result === 'refuse' && parsed.reason === 'sink_incomplete' && parsed.step === 'push_upstream',
+      '#619(3): refusal must be result:refuse reason:sink_incomplete step:push_upstream, got ' + JSON.stringify(parsed));
+    // The receipt must NOT mark push_upstream done (else a re-run skips the retry).
+    const receiptPaths = [
+      path.join(tmp, 'kaola-workflow', 'archive', 'issue-9499', '.cache', 'sink-receipt.json'),
+      path.join(tmp, 'kaola-workflow', 'issue-9499', '.cache', 'sink-receipt.json'),
+    ];
+    const rp = receiptPaths.find(p => fs.existsSync(p));
+    assert(rp, '#619(3): a sink-receipt must exist after the failed transaction, looked in ' + receiptPaths.join(', '));
+    const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+    assert(receipt.steps.push_upstream !== 'done', '#619(3): push_upstream must NOT be marked done after a hard push failure (else re-run never retries), got ' + receipt.steps.push_upstream);
+    assert(receipt.push_upstream === 'failed', '#619(3): receipt.push_upstream must be "failed", got ' + JSON.stringify(receipt.push_upstream));
+    console.log('testSinkRefusesOnPushUpstreamFailure: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #619(4): the standalone `worktree_sync` SINK_STEP always ran AFTER the 'merge' step already
+// removed the linked worktree, so its own `git worktree list` scan could never find a matching
+// block — wtPath was always null and the copy it attempted never ran, yet stepDone('worktree_sync')
+// recorded it as done every time (a no-op receipt attestation). The fix moves the copy INLINE into
+// the 'merge' step, BEFORE the worktree is removed. This test proves the copy is now REAL: an
+// untracked marker file that exists ONLY inside the linked worktree's project folder (mirroring a
+// live kaola-workflow/<project>/.cache/dispatch-log.jsonl crash-resume journal, which is gitignored
+// and therefore invisible to git checkout) must survive into mainRoot after the --sink transaction.
+function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-wtsync-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const project = 'issue-9500';
+  const branch = 'workflow/' + project;
+  // The canonical worktree convention path (worktreePathFor): mainRoot/.kw/worktrees/<project>.
+  const wtPath = path.join(tmp, '.kw', 'worktrees', project);
+  try {
+    spawnSync('git', ['-C', tmp, 'branch', branch], { encoding: 'utf8' });
+    spawnSync('git', ['worktree', 'add', wtPath, branch], { cwd: tmp, encoding: 'utf8' });
+    fs.writeFileSync(path.join(wtPath, 'DELIVERABLE.txt'), 'deliverable\n');
+    spawnSync('git', ['-C', wtPath, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: deliverable'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
+    });
+    // Untracked live-project marker INSIDE the worktree ONLY (never git-added) — the exact shape of
+    // a gitignored kaola-workflow/<project>/.cache/ crash-resume journal.
+    const markerRel = path.join('kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    fs.mkdirSync(path.dirname(path.join(wtPath, markerRel)), { recursive: true });
+    fs.writeFileSync(path.join(wtPath, markerRel), '{"marker":"untracked-worktree-only"}\n');
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', branch, '--project', project, '--sink', '--json',
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0' },
+    });
+    const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+    const parsed = parseLast(result.stdout);
+    assert(result.status === 0, '#619(4): --sink must succeed, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(parsed.status === 'sinked', '#619(4): expected status:sinked, got ' + JSON.stringify(parsed));
+
+    // The untracked marker must have survived somewhere under kaola-workflow/ — either still under
+    // the live project dir, or moved into the archive dir (the normal outcome, since the 'finalize'
+    // step archives kaola-workflow/<project> -> kaola-workflow/archive/<project> via a filesystem
+    // rename that carries untracked content along; archiveProjectDir may suffix the destination
+    // with .archived-<ts> if an archive dir already exists, e.g. from an earlier receipt write, so
+    // search recursively rather than assuming one fixed landing path).
+    const findMarker = (dir) => {
+      let found = false;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return false; }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { if (findMarker(full)) found = true; }
+        else if (entry.name === 'dispatch-log.jsonl') {
+          try { if (fs.readFileSync(full, 'utf8').includes('untracked-worktree-only')) found = true; } catch (_) {}
+        }
+      }
+      return found;
+    };
+    const survived = findMarker(path.join(tmp, 'kaola-workflow'));
+    assert(survived, '#619(4): the untracked worktree-only marker (dispatch-log.jsonl) must be copied into mainRoot before the worktree is destroyed; not found anywhere under kaola-workflow/');
+    console.log('testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #631: cmdVerifySink's false-alarm (`impl_commit_not_ancestor`) on a clean sink whose branch was
+// rebased mid-flight traces to `branch_head` being stamped ONCE at receipt init (before doRebase
+// runs) and NEVER re-stamped after a rebase rewrites the branch's commits. The fix stamps a NEW,
+// ADDITIVE `published_head` at the closure gate once the live (post-rebase) tip resolves as
+// actually published, WITHOUT touching `branch_head` (load-bearing for the #518 cycle-identity
+// guard). This test forces a genuine rebase (a concurrent main advance) and proves: (1)
+// published_head is stamped, (2) branch_head is untouched (still the ORIGINAL pre-rebase SHA), and
+// (3) the two values differ — proving published_head carries the fresh, rebased tip.
+function testSinkTransactionStampsPublishedHeadAfterRebase() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pubhead-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const clone = tmp + '-clone';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_SKIP_TESTGATE: '1', GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  const project = 'issue-9502';
+  const branch = 'workflow/' + project;
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', branch], { env });
+    fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
+    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 9502'], { env });
+    const preRebaseHead = spawnSync('git', ['-C', tmp, 'rev-parse', branch], { encoding: 'utf8', env }).stdout.trim();
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', branch], { env });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { env });
+
+    // Advance origin/main concurrently (via a fresh clone) so the feature branch is NOT
+    // fast-forwardable and doRebase genuinely rewrites its commits (a new SHA post-rebase).
+    spawnSync('git', ['clone', remotePath, clone], { env });
+    spawnSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { env });
+    fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
+    spawnSync('git', ['-C', clone, 'add', '-A'], { env });
+    spawnSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { env });
+    spawnSync('git', ['-C', clone, 'push', 'origin', 'main'], { env });
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', branch, '--project', project, '--sink', '--json',
+    ], { cwd: tmp, encoding: 'utf8', env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0' } });
+    const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+    const parsed = parseLast(result.stdout);
+    assert(result.status === 0, '#631: --sink must succeed on a rebased branch, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(parsed.status === 'sinked', '#631: expected status:sinked, got ' + JSON.stringify(parsed));
+    const receipt = parsed.receipt;
+    assert(receipt && typeof receipt.published_head === 'string' && receipt.published_head.length > 0,
+      '#631: receipt.published_head must be stamped, got ' + JSON.stringify(receipt));
+    assert(receipt.branch_head === preRebaseHead,
+      '#631: branch_head must remain the ORIGINAL pre-rebase stamp (load-bearing for the #518 cycle-identity guard) — must NOT be mutated, got ' + JSON.stringify(receipt && receipt.branch_head) + ' vs expected ' + preRebaseHead);
+    assert(receipt.published_head !== receipt.branch_head,
+      '#631: published_head must be the FRESH rebased tip, differing from the stale pre-rebase branch_head, got both = ' + receipt.published_head);
+    console.log('testSinkTransactionStampsPublishedHeadAfterRebase: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    try { fs.rmSync(clone, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // #497 (closure arm): the --sink transaction must NOT report status:sinked when a HARD issue-CLOSE
 // failure occurs. The old code only warned (and bundle members swallowed with a bare catch), then
 // ran stepDone('closure') unconditionally → fell through to status:sinked. The fix buckets each
@@ -9058,6 +9235,18 @@ function testSinkMergeMockabilityAndReceipt() {
       "let top = '';",
       "try { top = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { top = 'NOT_A_REPO:' + process.cwd(); }",
       "fs.writeFileSync(" + JSON.stringify(cwdMarker) + ", a + '\\t' + top + '\\n', { flag: 'a' });",
+      // #619(2): a post-close success probe now calls `gh issue view ... --jq .state` both BEFORE
+      // (#427 already-closed skip check) and AFTER a close. Make the mock STATEFUL by reading its
+      // own marker log: report 'closed' only once an `issue close` call has actually been logged,
+      // mirroring real gh behavior (open before close, closed after) — a constant 'closed' would
+      // make the #427 pre-close probe skip the close attempt entirely (already_closed), and a
+      // constant non-closed would make the new post-close probe wrongly bucket a real close failed.
+      "if (a.includes('issue view')) {",
+      "  let alreadyClosed = false;",
+      "  try { alreadyClosed = fs.readFileSync(" + JSON.stringify(marker) + ", 'utf8').split('\\n').some(l => /^issue close /.test(l)); } catch (_) {}",
+      "  process.stdout.write((alreadyClosed ? 'closed' : 'open') + '\\n');",
+      "  process.exit(0);",
+      "}",
       "process.stdout.write('{}\\n');"
     ]);
 
@@ -9707,14 +9896,18 @@ function testSinkPrKeepOpenRefusal() {
 }
 
 function testSinkMergeCloseFailureWarning() {
-  // Verify AC#3: when closeIssue fails, sink-merge emits a stderr warning but still exits 0,
-  // and the receipt reflects remote_issue_closed:failed while label removal succeeds.
+  // #619(1): a failed issue close on the LEGACY (non---sink) path must fail CLOSED — mirroring the
+  // #497 fix already on the --sink transaction's closure step. Pre-fix, sink-merge emitted a stderr
+  // warning but still reported status:'merged' + exit 0 (the fail-open bug); post-fix it emits a
+  // typed sink_incomplete refusal and exits non-zero, while the (irreversible) merge itself still
+  // stands and label removal still succeeds.
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-closefail-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
   try {
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    // Shim: exit 1 for `issue close`, exit 0 for everything else.
+    // Shim: exit 1 for `issue close`, exit 0 for everything else (including `issue view`, which
+    // returns '{}' — not 'closed' — so probeIssueClosed's catch-branch re-probe also reports open).
     writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue close')) { process.stderr.write('gh: simulated close failure\\n'); process.exit(1); }",
@@ -9748,24 +9941,101 @@ function testSinkMergeCloseFailureWarning() {
     });
 
     assert(
-      result.status === 0,
-      'sink-merge must exit 0 even when issue close fails\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
-    );
-    assert(
-      result.stderr.includes('sink-merge: WARNING: issue close failed for 168'),
-      'sink-merge must emit warning to stderr on close failure, got stderr: ' + result.stderr
+      result.status !== 0,
+      '#619(1): sink-merge must exit non-zero when the issue close genuinely fails (fail-closed), got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
     );
     const lines = result.stdout.trim().split('\n').filter(l => l.trim());
     const parsed = JSON.parse(lines[lines.length - 1]);
     assert(
-      parsed.closure_receipt.remote_issue_closed === 'failed',
-      'receipt.remote_issue_closed must be "failed" when close fails, got: ' + parsed.closure_receipt.remote_issue_closed
+      parsed.result === 'refuse' && parsed.reason === 'sink_incomplete' && parsed.step === 'closure',
+      '#619(1): refusal must be result:refuse reason:sink_incomplete step:closure, got: ' + JSON.stringify(parsed)
     );
     assert(
-      parsed.closure_receipt.claim_label_removed === 'removed',
-      'receipt.claim_label_removed must be "removed" (negative control), got: ' + parsed.closure_receipt.claim_label_removed
+      parsed.remote_issue_closed === 'failed',
+      '#619(1): refusal must carry remote_issue_closed:failed, got: ' + JSON.stringify(parsed.remote_issue_closed)
+    );
+    assert(
+      parsed.closure_receipt && parsed.closure_receipt.remote_issue_closed === 'failed',
+      '#619(1): embedded closure_receipt.remote_issue_closed must still be "failed", got: ' + JSON.stringify(parsed.closure_receipt)
+    );
+    assert(
+      parsed.closure_receipt && parsed.closure_receipt.claim_label_removed === 'removed',
+      '#619(1): claim_label_removed must be "removed" (negative control — label removal is independent of the close outcome), got: ' + JSON.stringify(parsed.closure_receipt)
     );
     console.log('testSinkMergeCloseFailureWarning: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// #619(2): a `gh issue close` that exits 0 does not PROVE the issue is closed — a rare forge/API
+// race can leave it open. The old code recorded success on the exit code ALONE (the post-close
+// probe only ran in the catch branch), so this exact "exit-0-but-still-open" case was recorded as
+// remote_issue_closed:'closed' even though the issue never actually closed. This test's mock makes
+// `issue close` succeed (exit 0) while `issue view` ALWAYS reports 'open' — proving the fix probes
+// the live state on the success path too, buckets it 'failed', and (via #619(1)) fails the whole
+// sink closed rather than reporting a false status:'merged'.
+function testSinkMergeCloseExitZeroButStillOpenFailsClosed() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-closezeroopen-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    // Shim: `issue close` succeeds (exit 0, no real effect); `issue view` ALWAYS reports open —
+    // simulating a close call that reported success but never actually took effect on the forge.
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) { process.stdout.write('open\\n'); process.exit(0); }",
+      "if (a.includes('issue close')) { process.stdout.write('\\n'); process.exit(0); }",
+      "process.stdout.write('{}\\n');"
+    ]);
+
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-169f'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'feature-169f.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmp, 'add', 'feature-169f.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 169f'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
+    });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-169f'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const mockJs = path.join(binDir, 'gh.js');
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', 'issue-169f',
+      '--branch', 'workflow/issue-169f',
+      '--issue', '169'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: mockJs
+      }
+    });
+
+    assert(
+      result.status !== 0,
+      '#619(2): an exit-0-but-still-open close must fail the sink closed, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const lines = result.stdout.trim().split('\n').filter(l => l.trim());
+    const parsed = JSON.parse(lines[lines.length - 1]);
+    assert(
+      parsed.result === 'refuse' && parsed.reason === 'sink_incomplete',
+      '#619(2): refusal must be result:refuse reason:sink_incomplete, got: ' + JSON.stringify(parsed)
+    );
+    assert(
+      parsed.remote_issue_closed === 'failed',
+      '#619(2): an exit-0-but-still-open close must be bucketed remote_issue_closed:failed (not closed), got: ' + JSON.stringify(parsed.remote_issue_closed)
+    );
+    assert(
+      result.stderr.includes('still OPEN'),
+      '#619(2): a diagnostic warning must name the exit-0-but-still-open condition, got stderr: ' + result.stderr
+    );
+    console.log('testSinkMergeCloseExitZeroButStillOpenFailsClosed: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
@@ -13764,6 +14034,9 @@ function buildRegistry() {
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
   add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);
   add('testSinkRefusesOnPushMainFailure',                 testSinkRefusesOnPushMainFailure);
+  add('testSinkRefusesOnPushUpstreamFailure',             testSinkRefusesOnPushUpstreamFailure);
+  add('testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge', testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge);
+  add('testSinkTransactionStampsPublishedHeadAfterRebase', testSinkTransactionStampsPublishedHeadAfterRebase);
   add('testSinkRefusesOnCloseFailure',                    testSinkRefusesOnCloseFailure);
   add('testSinkMergeAutoPushesWhenNoUpstream',            testSinkMergeAutoPushesWhenNoUpstream);
   add('testSinkMergeOfflineSkipsPublishGuard',            testSinkMergeOfflineSkipsPublishGuard);
@@ -13796,6 +14069,7 @@ function buildRegistry() {
   add('testFinalizeOfflineClosureReceiptSkipped',         testFinalizeOfflineClosureReceiptSkipped);
   add('testSinkMergeMockabilityAndReceipt',               testSinkMergeMockabilityAndReceipt);
   add('testSinkMergeCloseFailureWarning',                 testSinkMergeCloseFailureWarning);
+  add('testSinkMergeCloseExitZeroButStillOpenFailsClosed', testSinkMergeCloseExitZeroButStillOpenFailsClosed);
   add('testSinkMergeSkipsArchivedProjectPhantom',         testSinkMergeSkipsArchivedProjectPhantom);
   add('testKeepOpenMergeFullChain',                       testKeepOpenMergeFullChain);
   add('testKeepOpenFinalizeFlagAlias',                    testKeepOpenFinalizeFlagAlias);

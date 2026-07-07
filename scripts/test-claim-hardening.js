@@ -1683,6 +1683,212 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'V2-TASK-NAME' }).inval
 assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: x' }).invalid === true,
   '#603: a newline-carrying value is rejected (durable-state field-injection guard, the assertNoNewline class)');
 
+// --- #619: claim.js close-helper — post-probe the SUCCESS path too (exit-0-but-still-open) -----
+// closeIssueIdempotent trusted a `gh issue close` exit 0 unconditionally on the success path; only
+// the catch branch re-probed. A flaky --comment post or a webhook race can exit 0 while the issue
+// stays OPEN on the forge — that must bucket 'failed', not 'closed'. The post-close probe MUST be a
+// FRESH, un-memoized gh round-trip: probeIssueState (used for the pre-close check) is memoized
+// per-process, so reusing it for a post-close re-check would always replay the pre-close 'open'
+// verdict — breaking every GENUINE success too, not just adding coverage.
+{
+  const { closeIssueIdempotent } = require('./kaola-workflow-claim.js');
+  const dir619 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-619-close-'));
+  const prevMock619 = process.env.KAOLA_GH_MOCK_SCRIPT;
+
+  function mock619(behaviors) {
+    // behaviors: { closeExit: 0|1, postProbeState: 'open'|'closed' }
+    const p = path.join(dir619, 'gh-' + Math.random().toString(36).slice(2) + '.js');
+    fs.writeFileSync(p, [
+      "const a = process.argv.slice(2);",
+      "if (a[0] === 'issue' && a[1] === 'close') { process.exit(" + behaviors.closeExit + "); }",
+      "if (a[0] === 'issue' && a[1] === 'view' && a.includes('--jq')) { process.stdout.write(" + JSON.stringify(behaviors.postProbeState) + " + '\\n'); process.exit(0); }",
+      "if (a[0] === 'issue' && a[1] === 'view') { process.stdout.write(JSON.stringify({state:'open'}) + '\\n'); process.exit(0); }",
+      "if (a[0] === 'issue' && a[1] === 'edit') { process.exit(0); }",
+      "process.exit(0);"
+    ].join('\n'));
+    return p;
+  }
+
+  process.env.KAOLA_GH_MOCK_SCRIPT = mock619({ closeExit: 0, postProbeState: 'open' });
+  const token619A = closeIssueIdempotent(619101, {});
+  assert(token619A === 'failed',
+    '#619: gh issue close exit-0 but a LIVE post-close probe shows the issue still OPEN must bucket failed, got ' + token619A);
+
+  process.env.KAOLA_GH_MOCK_SCRIPT = mock619({ closeExit: 0, postProbeState: 'closed' });
+  const token619B = closeIssueIdempotent(619102, {});
+  assert(token619B === 'closed',
+    '#619: a genuinely successful close (post-probe confirms closed) must still return closed (no regression), got ' + token619B);
+
+  process.env.KAOLA_GH_MOCK_SCRIPT = mock619({ closeExit: 1, postProbeState: 'closed' });
+  const token619C = closeIssueIdempotent(619103, {});
+  assert(token619C === 'already_closed',
+    '#619: a close attempt that THROWS but a live post-probe confirms the issue is actually closed must return already_closed, got ' + token619C);
+
+  process.env.KAOLA_GH_MOCK_SCRIPT = mock619({ closeExit: 1, postProbeState: 'open' });
+  const token619D = closeIssueIdempotent(619104, {});
+  assert(token619D === 'failed',
+    '#619: a close attempt that throws and stays open must return failed (baseline, unchanged), got ' + token619D);
+
+  if (prevMock619 === undefined) delete process.env.KAOLA_GH_MOCK_SCRIPT; else process.env.KAOLA_GH_MOCK_SCRIPT = prevMock619;
+  fs.rmSync(dir619, { recursive: true, force: true });
+}
+
+// --- #620: stale-worktree-cleanup must NEVER destroy unmerged committed work -------------------
+// cmdStaleWorktreeCleanup's branch-deletion loop ran `git branch -D` UNCONDITIONALLY once a branch's
+// issue closed on the forge; worktreeDirtyState only checks *uncommitted* changes (`git status
+// --porcelain`), so a branch carrying a COMMITTED-but-unmerged change reads 'clean' and got force-
+// deleted — permanently orphaning the only copy of that work (the #617 data-loss end-state this
+// tool exists to remedy, not reproduce). This RED test forces exactly that shape: a real commit on
+// the feature branch that never merges into main, plus a closed-issue gh mock. --execute must
+// SURVIVE it (branch + commit intact) and report skipped_unmerged, never deleted_branch.
+{
+  const { execFileSync: execFS620, spawnSync: spawnS620 } = require('child_process');
+  const CLAIM620 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_620 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g620 = (cwd, args) => execFS620('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_620 });
+
+  const tmp620 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-620-repo-')));
+  const kwRoot620 = tmp620 + '.kw';
+  const binDir620 = path.join(tmp620, 'bin');
+  try {
+    g620(tmp620, ['init', '-b', 'main']);
+    g620(tmp620, ['config', 'user.email', 't@t.com']);
+    g620(tmp620, ['config', 'user.name', 'Test']);
+    g620(tmp620, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp620, 'README.md'), 'fixture\n');
+    g620(tmp620, ['add', 'README.md']);
+    g620(tmp620, ['commit', '-m', 'init']);
+
+    // Linked worktree for issue 96201, branching off main HEAD.
+    const wtPath = path.join(kwRoot620, 'issue-96201');
+    fs.mkdirSync(kwRoot620, { recursive: true });
+    g620(tmp620, ['worktree', 'add', '-b', 'workflow/issue-96201', '--', wtPath, 'HEAD']);
+    // Commit NEW work on the branch, INSIDE the worktree — never merged into main.
+    fs.writeFileSync(path.join(wtPath, 'unmerged-feature.txt'), 'the only copy of this work\n');
+    g620(wtPath, ['add', 'unmerged-feature.txt']);
+    g620(wtPath, ['commit', '-m', 'feat: unmerged work']);
+    const unmergedTip = execFS620('git', ['-C', wtPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_620 }).trim();
+
+    // gh mock: issue 96201 reports CLOSED (the collectStale trigger).
+    fs.mkdirSync(binDir620, { recursive: true });
+    fs.writeFileSync(path.join(binDir620, 'gh.js'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 96201')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+      "process.stdout.write('[\\n'); process.exit(0);"
+    ].join('\n'));
+
+    const result = spawnS620(process.execPath, [CLAIM620, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp620,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir620, 'gh.js')
+      })
+    });
+    let out620 = {};
+    try { out620 = JSON.parse(result.stdout); } catch (_) {}
+
+    assert(out620.dry_run === false, '#620: dry_run must be false, got ' + JSON.stringify(out620) + '\nstderr: ' + result.stderr);
+
+    // The critical assertion: the committed unmerged work must SURVIVE — the branch still resolves
+    // AND its tip commit is still reachable (not merely a dangling ref about to be gc'd).
+    let branchSurvived = false, tipReachable = false;
+    try {
+      execFS620('git', ['-C', tmp620, 'rev-parse', '--verify', '--quiet', 'refs/heads/workflow/issue-96201'], { stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV_620 });
+      branchSurvived = true;
+    } catch (_) {}
+    try {
+      execFS620('git', ['-C', tmp620, 'cat-file', '-e', unmergedTip], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_620 });
+      tipReachable = true;
+    } catch (_) {}
+    assert(branchSurvived,
+      '#620: the unmerged branch workflow/issue-96201 must SURVIVE cleanup --execute (never -D unproven work), got cleanup output: ' + JSON.stringify(out620));
+    assert(tipReachable,
+      '#620: the unmerged commit ' + unmergedTip + ' must still be reachable after cleanup --execute, got cleanup output: ' + JSON.stringify(out620));
+    assert(!(Array.isArray(out620.deleted_branch) && out620.deleted_branch.includes('workflow/issue-96201')),
+      '#620: deleted_branch must NOT include the unmerged branch, got ' + JSON.stringify(out620.deleted_branch));
+    assert(Array.isArray(out620.skipped_unmerged) && out620.skipped_unmerged.some(e => e && e.branch === 'workflow/issue-96201'),
+      '#620: skipped_unmerged must record the unmerged branch (fail LOUD, not silent), got ' + JSON.stringify(out620.skipped_unmerged));
+  } finally {
+    fs.rmSync(tmp620, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot620, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// --- #631: cmdVerifySink must PREFER published_head over rebase-stale branch_head --------------
+// cmdVerifySink resolved implRef from `receipt.branch_head` only — stamped once at receipt init,
+// BEFORE a mid-flight rebase rewrites the branch. A clean sink whose branch was rebased false-
+// alarms `impl_commit_not_ancestor` even though the (rebased) content genuinely landed. The fix
+// prefers the additive `receipt.published_head` (n1-sink's fresh, post-rebase stamp) when present.
+{
+  const { execFileSync: execFS631, spawnSync: spawnS631 } = require('child_process');
+  const CLAIM631 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_631 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g631 = (cwd, args) => execFS631('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_631 });
+
+  const tmp631 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-631-repo-')));
+  const project631 = 'issue-96311';
+  try {
+    g631(tmp631, ['init', '-b', 'main']);
+    g631(tmp631, ['config', 'user.email', 't@t.com']);
+    g631(tmp631, ['config', 'user.name', 'Test']);
+    g631(tmp631, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp631, 'README.md'), 'fixture\n');
+    g631(tmp631, ['add', 'README.md']);
+    g631(tmp631, ['commit', '-m', 'init']);
+
+    // A divergent branch that never merges into main — its tip is the STALE pre-rebase branch_head
+    // (kept on a real ref so the commit stays reachable, mirroring an orphaned pre-rebase SHA).
+    g631(tmp631, ['checkout', '-b', 'workflow/' + project631]);
+    fs.writeFileSync(path.join(tmp631, 'feat.txt'), 'impl\n');
+    g631(tmp631, ['add', 'feat.txt']);
+    g631(tmp631, ['commit', '-m', 'feat: impl']);
+    const staleBranchHead = execFS631('git', ['-C', tmp631, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_631 }).trim();
+    g631(tmp631, ['checkout', 'main']);
+
+    // Advance main with the content that ACTUALLY landed (simulating the rebased/published tip).
+    fs.writeFileSync(path.join(tmp631, 'published.txt'), 'landed\n');
+    g631(tmp631, ['add', 'published.txt']);
+    g631(tmp631, ['commit', '-m', 'feat: published']);
+    const publishedHead = execFS631('git', ['-C', tmp631, 'rev-parse', 'main'], { encoding: 'utf8', env: GIT_ENV_631 }).trim();
+    assert(staleBranchHead !== publishedHead, '#631 fixture: branch_head and published_head must differ, got equal ' + staleBranchHead);
+
+    const archiveCacheDir = path.join(tmp631, 'kaola-workflow', 'archive', project631, '.cache');
+    fs.mkdirSync(archiveCacheDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveCacheDir, 'sink-receipt.json'), JSON.stringify({
+      branch_head: staleBranchHead,
+      published_head: publishedHead
+    }) + '\n');
+
+    const result = spawnS631(process.execPath, [CLAIM631, 'verify-sink', '--project', project631], {
+      cwd: tmp631,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out631 = {};
+    try { out631 = JSON.parse(result.stdout); } catch (_) {}
+
+    assert(out631.checks && out631.checks.impl_commit === publishedHead,
+      '#631: cmdVerifySink must resolve impl_commit from published_head (' + publishedHead + '), got ' + JSON.stringify(out631.checks));
+    assert(out631.checks && out631.checks.merged_into_sink_target === 'verified',
+      '#631: a rebased-but-genuinely-published sink must verify (not false-alarm), got ' + JSON.stringify(out631.checks));
+    assert(!(Array.isArray(out631.reasons) && out631.reasons.includes('impl_commit_not_ancestor')),
+      '#631: reasons must NOT include impl_commit_not_ancestor for a genuinely published (rebased) sink, got ' + JSON.stringify(out631.reasons));
+    assert(result.status === 0, '#631: verify-sink must exit 0 for a genuinely published rebased sink, got ' + result.status + ' full: ' + JSON.stringify(out631));
+  } finally {
+    fs.rmSync(tmp631, { recursive: true, force: true });
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
