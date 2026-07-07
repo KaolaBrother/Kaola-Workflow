@@ -1,0 +1,23 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=release.js chainReceiptGreenness (scripts/kaola-workflow-release.js:249, x4 edition copies) still returns green:true on chains:[] AND on a missing chains field (proven by execution); impact informational-only today (feeds only a --verify chain_warning; --cut never consults it despite a stale comment claiming otherwise). Worth a follow-up issue to mirror chains_empty + fix the stale comment.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=pre_existing action=document status=open severity=low fix_role=none rationale=cmdFinalize can still close with zero publish verification if sink:pr AND an operator manually runs finalize -- choreographically unreachable (finalize SKILL skips Step 8b for pr; pr-lane closure owned by forge/watch-pr) and pre-existing behavior deliberately preserved by the fix. No action needed.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=document status=resolved severity=low fix_role=none rationale=in the LEGACY non---sink merge pipeline, invariant wiring is post-hoc receipt reporting not a pre-close gate; ordering safety rests on control flow (push-success precedes close, ffMergeLoop precedes push), which holds. Gated-before-close enforcement lives in the --sink transaction path (verified by execution). No action needed.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
