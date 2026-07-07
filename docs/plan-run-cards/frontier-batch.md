@@ -36,8 +36,8 @@ the serial witness.
 {
   "enterBatch": true,
   "frontier": [
-    { "id": "n4", "role": "tdd-guide", "model": "sonnet", "declared_write_set": "api/" },
-    { "id": "n5", "role": "tdd-guide", "model": "sonnet", "declared_write_set": "cli/" }
+    { "id": "n4", "role": "tdd-guide", "model": "sonnet", "declared_write_set": "api/routes.js" },
+    { "id": "n5", "role": "tdd-guide", "model": "sonnet", "declared_write_set": "cli/main.js" }
   ]
 }
 ```
@@ -86,9 +86,13 @@ crash-safe transaction:
   this seam — the frontier serial-degrades to one write node at a time regardless of any flag.
   `--write-overlap-consent` / `write_overlap_policy` are parsed for frozen-plan back-compat but are
   VESTIGIAL — they neither enable nor block any co-open decision here.
-- **Speculative read fallback** (`speculative_open_policy: consent` in `## Meta`): when the normal
-  frontier is empty because only an open gate blocks progress, `--speculative-consent` fans out
-  the gate's speculative-eligible descendants, each stamped `speculative: true` in
+- **Speculative fallback** (`speculative_open_policy` in `## Meta` — three tiers, `auto` / `consent`
+  / `off`): when the normal frontier is empty because only an open gate blocks progress, a
+  speculative-eligible READ or leg-contained-WRITE descendant of that gate can open ahead of its
+  verdict. Under `auto` (the freeze-time default) `open-ready` fans these out automatically — no
+  per-run consent, no flag needed; under `consent` the same fan-out requires
+  `--speculative-consent` on the call (the opt-in tier); under `off` it never happens and plain
+  serial waiting is the DEGRADED path. Every speculative member is stamped `speculative: true` in
   `running-set.json` — see `docs/plan-run-cards/speculative-open.md`.
 
 **Reads co-open alongside a live write lane group (issue #622).** A read frontier is no longer
@@ -220,8 +224,12 @@ set with no opening transaction, no closed member, and no stale member is a no-o
 | `FANOUT_CAP_READONLY` | `KAOLA_FANOUT_CAP_READONLY` | 8 | Read-only fan-out |
 
 `--max N` further bounds either cap for a single `open-ready` call; a logical frontier MAY be
-wider than the cap — the cap bounds runtime concurrency, not plan validity. `open-ready` opens the
-remainder on the next call as members close.
+wider than the cap — the cap bounds runtime concurrency, not plan validity. For a **READ**
+frontier, `open-ready` tops up the remainder on the next call as members close (rolling admission
+into the same live set). A **WRITE** frontier wider than the cap does NOT top up into a live lane
+group — group membership / `write_union` / baseline are fixed at group formation — so it runs as
+**fixed group waves** instead: the first ≤cap members form a group and run to completion (each
+wave paying its own synthesizer-merge + group barrier), then the next wave forms as a NEW group.
 
 ---
 
@@ -233,7 +241,9 @@ remainder on the next call as members close.
 | Disjoint (`parallel_safe`), shared-infra, or coarse (same non-shared top-level area) write frontier, worktree-capable host | Co-open as an isolated-leg lane group — the DEFAULT (`open-ready`, no consent flag needed) under the retained net (post-dominating gate + no PROTECTED file) |
 | Genuinely-overlapping (`exact` — same path or a case-collision) write frontier, or a coarse pair with a non-exactly-resolvable directory/glob entry | Serial degrade — no flag or consent bypasses it |
 | Host without worktree support, or `KAOLA_PARALLEL_WRITES=0` opt-out | Serial degrade — one write node at a time via `open-ready` |
-| Speculative read fallback | Only with `--speculative-consent` AND `speculative_open_policy: consent` in `## Meta` |
+| Speculative-eligible frontier, `speculative_open_policy: auto` (the default) | Opens automatically the moment `open-ready` runs — no per-run consent, no flag; both READ and leg-contained WRITE descendants of the gate qualify |
+| Speculative-eligible frontier, `speculative_open_policy: consent` | Opens only with `--speculative-consent` passed to `open-ready` — the opt-in tier |
+| Speculative-eligible frontier, `speculative_open_policy: off` | Serial degrade — the gate's descendants wait; the permanent fallback |
 
 **Dispatch fidelity: run the frontier at its AUTHORED width.** When the planner authored an
 independent ≥2 frontier (`enterBatch: true`), dispatch it concurrently — that is the default, not

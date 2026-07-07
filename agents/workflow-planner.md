@@ -73,8 +73,11 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   the authored plan** — it is a *runtime concurrency limit*: the maximum number of fan-out siblings
   the executor dispatches at once. Author the fan-out as wide as the work is genuinely independent
   (each leg over a disjoint write set); the validator validates dependency shape, disjointness,
-  gates, and write-set safety, never width. The executor opens up to `FANOUT_CAP` legs and drains
-  the rest via rolling bounded dispatch (queue the overflow, top up as slots free).
+  gates, and write-set safety, never width. The executor opens up to `FANOUT_CAP` legs; for a READ
+  frontier wider than the cap it drains the rest via rolling bounded dispatch (queue the overflow,
+  top up as slots free) — for a WRITE frontier wider than the cap, group membership is fixed at
+  formation, so it runs as fixed group waves instead: the first ≤cap members form a group and run
+  to completion (each wave paying its own merge + group barrier) before the next wave forms.
 - **cardinality** is a reserved/advisory column (parsed, not validated). Keep a plain count and keep
   the column present and stable (it feeds `plan_hash`).
 - A single unique **`finalize`** sink is mandatory and makes the gate checks decidable. The sink may
