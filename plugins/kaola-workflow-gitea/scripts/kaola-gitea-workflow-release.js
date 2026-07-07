@@ -254,13 +254,22 @@ function chainReceiptGreenness(root) {
   if (headSha && receipt.headSha && headSha !== receipt.headSha && receipt.headSha !== 'unknown') {
     return { green: false, reason: 'chains_stale', receiptHead: receipt.headSha, currentHead: headSha };
   }
+  // #632: an EMPTY or missing chains[] previously fell through to
+  // `return {green:true}` below (the red-chain loop body never runs over an
+  // empty/absent array) — "zero chains verified" was indistinguishable from
+  // "all chains green" (the SECOND fail-open consumer of this pattern; the
+  // #618 fix only closed the plan-validator's --finalize-check gate). Refuse
+  // it fail-closed with a typed reason BEFORE the red-chain check, mirroring
+  // that precedent's precedence order: chains_unverified > chains_stale >
+  // chains_empty > chains_red.
+  if (!Array.isArray(receipt.chains) || receipt.chains.length === 0) {
+    return { green: false, reason: 'chains_empty' };
+  }
   // Check all chains passed
-  if (Array.isArray(receipt.chains)) {
-    for (const chain of receipt.chains) {
-      const exitCode = chain.exitCode != null ? chain.exitCode : chain.exit;
-      if (exitCode !== 0 && !chain.accepted_red) {
-        return { green: false, reason: 'chains_red', chain: chain.name, exitCode };
-      }
+  for (const chain of receipt.chains) {
+    const exitCode = chain.exitCode != null ? chain.exitCode : chain.exit;
+    if (exitCode !== 0 && !chain.accepted_red) {
+      return { green: false, reason: 'chains_red', chain: chain.name, exitCode };
     }
   }
   return { green: true };
@@ -361,7 +370,10 @@ function runVerify(root, opts) {
     return 1;
   }
 
-  // Greenness: non-green receipt is reflected but does not block --verify (it blocks --cut)
+  // Greenness is surfaced here as an informational chain_warning; --cut does NOT
+  // gate on it (runCut never reads greenness — the offline pre-cut check runs
+  // BEFORE the online npm test that produces the green receipt, so --cut cannot
+  // gate on a receipt that does not yet exist at cut time). See D-632-01.
   if (!greenness.green) {
     envelope.chain_warning = greenness.reason;
   }

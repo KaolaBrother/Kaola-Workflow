@@ -859,6 +859,106 @@ const repo13 = makeFixtureRepo({
 fs.rmSync(repo13, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
+// T14 (#632 regression): chainReceiptGreenness must fail CLOSED on an empty or
+// missing chains[] — "zero chains verified" must not read as "all green".
+// Mirrors the #618 precedent (plan-validator.js --finalize-check chains_empty
+// guard) at the release-side chainReceiptGreenness consumer.
+// ---------------------------------------------------------------------------
+function writeChainReceipt(dir, receipt) {
+  const cacheDir = path.join(dir, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.writeFileSync(path.join(cacheDir, 'chain-receipt.json'), JSON.stringify(receipt));
+}
+
+// T14a: an EMPTY chains[] array must refuse-shape as green:false / chains_empty.
+// Pre-fix, the red-chain loop body never runs over an empty array, so this
+// falls through to `return {green:true}` — fails OPEN.
+const repo14a = makeFixtureRepo({
+  version: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#602)\n',
+  extraCommitMessages: ['fix: thing (#602)'],
+});
+writeChainReceipt(repo14a, { headSha: 'unknown', chains: [] });
+{
+  const r = run(repo14a, ['--verify', '--json', '--issues-closed', '602']);
+  assert(r.json !== null, 'T14a: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json !== null) {
+    assert(r.json.chain_greenness && r.json.chain_greenness.green === false,
+      'T14a: chainReceiptGreenness over an empty chains[] must be green:false (zero chains verified is not "all green"); got=' + JSON.stringify(r.json.chain_greenness));
+    assert(r.json.chain_greenness && r.json.chain_greenness.reason === 'chains_empty',
+      'T14a: chainReceiptGreenness over an empty chains[] must report reason chains_empty; got=' + JSON.stringify(r.json.chain_greenness));
+  }
+}
+fs.rmSync(repo14a, { recursive: true, force: true });
+
+// T14b: a receipt with NO chains[] key at all must ALSO refuse chains_empty.
+// Pre-fix, Array.isArray(receipt.chains) is false, so the loop is skipped
+// entirely and this also falls through to `return {green:true}` — fails OPEN.
+const repo14b = makeFixtureRepo({
+  version: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#603)\n',
+  extraCommitMessages: ['fix: thing (#603)'],
+});
+writeChainReceipt(repo14b, { headSha: 'unknown' }); // no chains key at all
+{
+  const r = run(repo14b, ['--verify', '--json', '--issues-closed', '603']);
+  assert(r.json !== null, 'T14b: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json !== null) {
+    assert(r.json.chain_greenness && r.json.chain_greenness.green === false,
+      'T14b: chainReceiptGreenness over a receipt with NO chains[] key must be green:false; got=' + JSON.stringify(r.json.chain_greenness));
+    assert(r.json.chain_greenness && r.json.chain_greenness.reason === 'chains_empty',
+      'T14b: chainReceiptGreenness over a receipt with NO chains[] key must report reason chains_empty; got=' + JSON.stringify(r.json.chain_greenness));
+  }
+}
+fs.rmSync(repo14b, { recursive: true, force: true });
+
+// T14c (precedence regression guard): the pre-existing chains_stale HEAD-bound
+// check must still run BEFORE the new chains_empty guard — a stale+empty
+// receipt reports chains_stale, not chains_empty, mirroring the #618
+// precedence chains_unverified > chains_stale > chains_empty > chains_red.
+const repo14c = makeFixtureRepo({
+  version: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#604)\n',
+  extraCommitMessages: ['fix: thing (#604)'],
+});
+writeChainReceipt(repo14c, { headSha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', chains: [] });
+{
+  const r = run(repo14c, ['--verify', '--json', '--issues-closed', '604']);
+  assert(r.json !== null, 'T14c: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json !== null) {
+    assert(r.json.chain_greenness && r.json.chain_greenness.green === false,
+      'T14c: a stale + empty receipt must be green:false; got=' + JSON.stringify(r.json.chain_greenness));
+    assert(r.json.chain_greenness && r.json.chain_greenness.reason === 'chains_stale',
+      'T14c: a stale + empty receipt must report chains_stale (precedence over chains_empty); got=' + JSON.stringify(r.json.chain_greenness));
+  }
+}
+fs.rmSync(repo14c, { recursive: true, force: true });
+
+// T14d (regression guard): a non-empty, all-green, HEAD-bound receipt must
+// still pass (green:true) with no chain_warning — the new guard must not
+// fail-close on legitimate all-green input.
+const repo14d = makeFixtureRepo({
+  version: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#605)\n',
+  extraCommitMessages: ['fix: thing (#605)'],
+});
+{
+  const headSha = execFileSync('git', ['-C', repo14d, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  writeChainReceipt(repo14d, { headSha, chains: [{ name: 'claude', exitCode: 0 }] });
+}
+{
+  const r = run(repo14d, ['--verify', '--json', '--issues-closed', '605']);
+  assert(r.json !== null, 'T14d: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json !== null) {
+    assert(r.json.chain_greenness && r.json.chain_greenness.green === true,
+      'T14d: a genuinely all-green non-empty receipt must still pass green:true; got=' + JSON.stringify(r.json.chain_greenness));
+    assert(r.json.chain_warning === undefined,
+      'T14d: a green receipt must not carry a chain_warning; got=' + JSON.stringify(r.json.chain_warning));
+  }
+}
+fs.rmSync(repo14d, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 if (failed > 0) {
