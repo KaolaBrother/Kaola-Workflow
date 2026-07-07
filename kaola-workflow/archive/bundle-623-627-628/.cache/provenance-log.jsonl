@@ -1,0 +1,16 @@
+{"timestamp":"2026-07-07T15:51:28.129Z","event":"open","nodeId":"n2-finalize-surfaces","nonce":"b641428b1702","by":"adaptive-node"}
+{"timestamp":"2026-07-07T15:51:28.231Z","event":"open","nodeId":"n1-plan-run-debloat","nonce":"388cb31f3a60","by":"adaptive-node"}
+{"timestamp":"2026-07-07T15:51:28.335Z","event":"open","nodeId":"n3-workflow-next-resolver","nonce":"85c129701bff","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:08:40.749Z","event":"close","nodeId":"n1-plan-run-debloat","nonce":"388cb31f3a60","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:08:41.628Z","event":"close","nodeId":"n3-workflow-next-resolver","nonce":"85c129701bff","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:08:43.156Z","event":"close","nodeId":"n2-finalize-surfaces","nonce":"b641428b1702","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:09:04.048Z","event":"open","nodeId":"n4-cards-planner-topup","nonce":"afb40637ccbc","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:14:53.541Z","event":"close","nodeId":"n4-cards-planner-topup","nonce":"afb40637ccbc","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:14:53.913Z","event":"open","nodeId":"n5-review","nonce":"2b59c66058eb","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:33:48.101Z","event":"close","nodeId":"n5-review","nonce":"2b59c66058eb","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:33:48.713Z","event":"open","nodeId":"n6-adversary","nonce":"6f2a91d98154","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:44:50.275Z","event":"close","nodeId":"n6-adversary","nonce":"6f2a91d98154","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:44:50.882Z","event":"open","nodeId":"n7-docs","nonce":"48bd0aa00c49","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:48:40.705Z","event":"close","nodeId":"n7-docs","nonce":"48bd0aa00c49","by":"adaptive-node"}
+{"timestamp":"2026-07-07T16:48:41.300Z","event":"open","nodeId":"n8-finalize","nonce":"850efd567ffb","by":"adaptive-node"}
+{"timestamp":"2026-07-07T17:05:18.584Z","event":"close","nodeId":"n8-finalize","nonce":"850efd567ffb","by":"adaptive-node"}

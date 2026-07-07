@@ -1,0 +1,8 @@
+{"ts":"2026-07-07T15:42:27Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-07-07T15:52:18Z","agent_type":"implementer","agent_id":"af2efd6dca1e9802f","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T15:52:36Z","agent_type":"implementer","agent_id":"ae75196e1a6df792d","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T15:52:49Z","agent_type":"implementer","agent_id":"a3fa33afc622277c6","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T16:09:46Z","agent_type":"implementer","agent_id":"a251b53e6c0dab8d1","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T16:15:36Z","agent_type":"code-reviewer","agent_id":"aa3c3b157d4ae1f0c","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"opus"}
+{"ts":"2026-07-07T16:34:31Z","agent_type":"adversarial-verifier","agent_id":"aefd906802c654bc3","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-07T16:45:36Z","agent_type":"doc-updater","agent_id":"a04ee9431e861c299","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-623-627-628","model":"","model_planned":"sonnet"}

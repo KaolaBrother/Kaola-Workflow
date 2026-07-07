@@ -7,9 +7,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #623 | perf/docs(adaptive): rolling top-up into live lane group promised but unimplemented | open | — | P3: prose fix (decided 2026-07-07) — scope the three surfaces; admission only if #622 rework makes it free |
-| #627 | chore(routing): plan-run/finalize debloat — restore ~150-line skeleton, fence runtime blocks | open | — | P3: re-stub ladder+speculative to cards; fence Teammate/Codex blocks; compress goal-attestation |
-| #628 | chore(docs): frontier-batch card predates speculative-auto; freeze-illegal example | open | — | P3: three-tier speculation rows; exact-path write-set example |
 | #629 | chore(guards): hooks.json family + config/agents.toml parity unguarded; edition-sync missing-mirror | open | — | P3: HOOKS_JSON_FAMILY + byte-triple agents.toml + create-on-missing |
 | #630 | feat(routing): generate the six routing surfaces from one canonical skeleton via edition-sync | open | — | P3: design+land AFTER #624/#627 (generation starts from corrected canonicals) |
 | #634 | feat(adaptive): optimize-shaped node — bounded metric-ratchet loop via a metric-optimizer role for direction-not-destination work | open | — | P3: design a bounded metric-ratchet loop (new metric-optimizer role) for perf/size/flakiness targets with no AC at freeze; per-node barrier is net-diff so per-iteration commit/revert inside one node needs zero barrier change; optimize contract in ## Meta (validator = GENERATED aggregator) to avoid touching hand-ported classifier.readPlanNodes; sibling of #486 |
