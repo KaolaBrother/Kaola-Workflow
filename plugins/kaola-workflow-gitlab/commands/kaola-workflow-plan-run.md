@@ -197,30 +197,12 @@ request for the deliverable, then wait — a second ask before the first answer 
 duplicate deliveries.
 
 **Wait budget, escalation, and writer kill-safety.** Every dispatch card carries
-`dispatch.wait_budget_minutes` (tier-derived, e.g. 40 minutes for a reasoning-tier node, 20 for
-standard; an unresolved tier still resolves to a concrete role-default, never null) — a teammate
-that is still working is NEVER interrupted or re-nudged before that budget expires. Read the
-budget off the card at dispatch time; never substitute an improvised patience ceiling. Once the
-budget expires, escalate in order, each rung gated on the previous:
-1. Send ONE `SendMessage` demanding the bounded deliverable now (evidence + changed-file list) —
-   the SAME one-nudge discipline as the idle-race rule above, just triggered by budget expiry
-   instead of an idle notification.
-2. A grace window (~5 minutes) with no reply → treat the teammate as unresponsive: send one
-   further `SendMessage` asking for partial evidence and its changed-file list.
-3. Only then reclaim the node. Inline redo by the orchestrator is the documented LAST resort.
-
-Record a typed `delegation_outcome` in the node's evidence for every delegation: `completed |
-returned_partial | interrupted_unresponsive | interrupted_obsolete` — never a free-text "it
-stalled so I did it myself".
-
-**Writer kill-safety.** An in-place writer (shared worktree) is non-interruptible before the wait
-budget and the full escalation ladder above — no exception. A writer that must be interruptible
-belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism); reclaiming an
-isolated-leg writer discards the leg atomically, never partially. After reclaiming ANY writer, run
-`reconcile-running-set` and HONOR its verdict before re-opening the node: a `writerHalt: true`
-result means at least one departing writer's changes could not be positively confirmed inside its
-declared write set — do NOT re-open that node until the out-of-set paths are resolved
-(`revert-overflow`, `repair-node`, or a consent halt).
+`dispatch.wait_budget_minutes`; a still-working teammate is never interrupted or re-nudged before it
+expires, then the bounded escalation ladder runs — one `SendMessage` for the deliverable, a ~5-minute
+grace window, reclaim as the LAST resort — recording a typed `delegation_outcome`. **Writer
+kill-safety:** after reclaiming ANY writer, run `reconcile-running-set` and HONOR its verdict — a
+`writerHalt: true` means a departing writer's out-of-set paths must be resolved (`revert-overflow`,
+`repair-node`, or a consent halt) before you re-open the node. Full mechanics in the card below.
 
 <!-- CARD: join-protocol -->
 The Codex-runtime version of this same protocol (`spawn_agent`/`wait_agent`/`close_agent`
@@ -264,9 +246,14 @@ variant-missing note. Pass `dispatch.nonce` (evidence-binding token). Instruct t
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.
 - For read-only fan-out (`quorum`/`tally-fn`/`validateNodeOutput`): dispatch concurrently,
   record evidence parent-side, `close-node` per member.
-- `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; a top-up re-run of `open-ready`
-  drains wider frontiers as members close. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to
-  read-only fan-out.
+- `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap. The rolling top-up re-run of
+  `open-ready` (admitting a NEW member as a slot frees) drains a wider READ fan-out only; a WRITE
+  frontier wider than `FANOUT_CAP` does NOT top-up into a live lane group (group membership /
+  `write_union` / baseline are fixed at group formation, and `write_node_exclusive` fires while any
+  member is live) — it runs as fixed group waves: the first ≤cap members form a group and run to
+  completion (each wave paying its own synthesizer-merge + group barrier), then the next wave forms
+  as a NEW group, so makespan is the sum of the per-wave maxima, not a rolling drain.
+  `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only fan-out.
 - Planner-proven-disjoint (`parallel_safe`), shared-infra, and coarse (same non-shared
   top-level area, exact-file-disjoint — e.g. two cross-edition antichains both under
   `plugins/`) write frontiers ALL co-open in isolated legs BY DEFAULT — no operator toggles —
@@ -315,20 +302,11 @@ freeze-time default — or `consent`, in plan `## Meta`): `docs/plan-run-cards/s
 (covers `open-ready`'s speculative activation — automatic at `auto`, `--speculative-consent` at
 `consent` — `discard-speculative`, gate verdict:fail rollback)
 
-**Speculative gate-overlap is default-on (`speculative_open_policy: auto`) under the same structural
-net as the consent tier.** A node whose only unsatisfied predecessor is a still-open gate opens the
-moment `open-ready` runs — no per-run consent, no `decision:ask` capture, `--speculative-consent`
-accepted as a no-op. Every write-speculation safety condition holds IDENTICALLY at `auto`: exact-path
-disjointness against every live writer, no PROTECTED file, exact resolvability, not the plan's unique
-sink, leg capability, fan-out caps, and the close fence (`speculativeCloseGuard` — a speculative node
-can never reach `complete` before its gate does). A failing gate still discards the bet (read:
-KEEP-or-discard operator review; write: unconditional leg teardown, parent untouched), and every
-discard now records telemetry (node id, role, gate) in the run's provenance log — the cost of a bet
-that did not pay off is observable, never silent. **Serial waiting for the gate to close is now the
-DEGRADED path** — run `open-ready` to admit the speculative frontier rather than idling on
-`open-next`; plain serial waiting is the ONLY behavior at `speculative_open_policy: off`. The per-run
-consent ceremony REMAINS authorable: set `speculative_open_policy: consent` to require the explicit
-`--speculative-consent` grant before a speculative node opens.
+**Speculative gate-overlap is default-on** (`speculative_open_policy: auto` — the freeze-time
+default; the three tiers are `auto` / `consent` / `off`). A node blocked only by a still-open gate
+opens the moment `open-ready` runs; `--speculative-consent` is a no-op at `auto` and required only at
+`consent`, and plain serial waiting is the DEGRADED path (the sole behavior at `off`). Eligibility,
+write-speculation safety, discard, and telemetry mechanics live in the card above.
 - **Write-leg dispatch discipline.** Isolation is **discipline-dependent, not transparent** —
   the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
   a leg agent's edits. Dispatch each leg with its member's **`dispatch.leg_path`** (and `dispatch.leg_branch`)
