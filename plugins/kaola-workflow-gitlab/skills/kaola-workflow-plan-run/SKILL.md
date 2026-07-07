@@ -272,9 +272,14 @@ reasoning-effort rule above. Pass `dispatch.nonce` (evidence-binding token). Ins
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.
 - For read-only fan-out (`quorum`/`tally-fn`/`validateNodeOutput`): dispatch concurrently,
   record evidence parent-side, `close-node` per member.
-- `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; a top-up re-run of `open-ready`
-  drains wider frontiers as members close. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to
-  read-only fan-out.
+- `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap. The rolling top-up re-run of
+  `open-ready` (admitting a NEW member as a slot frees) drains a wider READ fan-out only; a WRITE
+  frontier wider than `FANOUT_CAP` does NOT top-up into a live lane group (group membership /
+  `write_union` / baseline are fixed at group formation, and `write_node_exclusive` fires while any
+  member is live) — it runs as fixed group waves: the first ≤cap members form a group and run to
+  completion (each wave paying its own synthesizer-merge + group barrier), then the next wave forms
+  as a NEW group, so makespan is the sum of the per-wave maxima, not a rolling drain.
+  `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only fan-out.
 - Planner-proven-disjoint (`parallel_safe`), shared-infra, and coarse (same non-shared
   top-level area, exact-file-disjoint — e.g. two cross-edition antichains both under
   `plugins/`) write frontiers ALL co-open in isolated legs BY DEFAULT — no operator toggles —
@@ -323,20 +328,11 @@ freeze-time default — or `consent`, in plan `## Meta`): `docs/plan-run-cards/s
 (covers `open-ready`'s speculative activation — automatic at `auto`, `--speculative-consent` at
 `consent` — `discard-speculative`, gate verdict:fail rollback)
 
-**Speculative gate-overlap is default-on (`speculative_open_policy: auto`) under the same structural
-net as the consent tier.** A node whose only unsatisfied predecessor is a still-open gate opens the
-moment `open-ready` runs — no per-run consent, no `decision:ask` capture, `--speculative-consent`
-accepted as a no-op. Every write-speculation safety condition holds IDENTICALLY at `auto`: exact-path
-disjointness against every live writer, no PROTECTED file, exact resolvability, not the plan's unique
-sink, leg capability, fan-out caps, and the close fence (`speculativeCloseGuard` — a speculative node
-can never reach `complete` before its gate does). A failing gate still discards the bet (read:
-KEEP-or-discard operator review; write: unconditional leg teardown, parent untouched), and every
-discard now records telemetry (node id, role, gate) in the run's provenance log — the cost of a bet
-that did not pay off is observable, never silent. **Serial waiting for the gate to close is now the
-DEGRADED path** — run `open-ready` to admit the speculative frontier rather than idling on
-`open-next`; plain serial waiting is the ONLY behavior at `speculative_open_policy: off`. The per-run
-consent ceremony REMAINS authorable: set `speculative_open_policy: consent` to require the explicit
-`--speculative-consent` grant before a speculative node opens.
+**Speculative gate-overlap is default-on** (`speculative_open_policy: auto` — the freeze-time
+default; the three tiers are `auto` / `consent` / `off`). A node blocked only by a still-open gate
+opens the moment `open-ready` runs; `--speculative-consent` is a no-op at `auto` and required only at
+`consent`, and plain serial waiting is the DEGRADED path (the sole behavior at `off`). Eligibility,
+write-speculation safety, discard, and telemetry mechanics live in the card above.
 - **Write-leg dispatch discipline.** Isolation is **discipline-dependent, not transparent** —
   the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
   a leg agent's edits. Dispatch each leg with its member's **`dispatch.leg_path`** (and `dispatch.leg_branch`)

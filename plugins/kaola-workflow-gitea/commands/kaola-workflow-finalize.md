@@ -186,7 +186,7 @@ Main session must delegate expensive or noisy validation by default:
 
 Delegated validation should use a fresh validation subagent when available, or
 the relevant fix agent (`tdd-guide` for behavior/regression/coverage checks,
-`build-error-resolver` for build/type/lint/tooling checks). Raw output goes to:
+`build-error-resolver` for build/type/lint/tooling checks).
 
 Route behavior/test fixes to the Claude Code agent `tdd-guide`:
 
@@ -210,6 +210,8 @@ Agent(
   prompt="..."
 )
 ```
+
+Raw output goes to:
 
 ```text
 kaola-workflow/{project}/.cache/final-validation.md
@@ -734,9 +736,12 @@ outcome — attestation is warn-first and never blocks finalization.
 
 If the session crashes after `cmdFinalize` archives the project folder but before the Step 8 `git commit` runs, finalize is resumable.
 
-**Detect:** run from the worktree root:
+**Detect:** run from the worktree root (self-contained — resolves `$CLAIM_JS`
+via the same `kaola_script()` resolver used elsewhere in this file):
 
 ```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitea-workflow-claim.js)"
 node "$CLAIM_JS" resume --project {project} --json
 ```
 
@@ -751,7 +756,8 @@ Use the sink metadata captured before Step 8b. Do not read the active
 
 ```bash
 # Capture main repo root before sink dispatch.
-# --git-common-dir always resolves to the shared .git dir (mirrors lines 305-306, 533-534, 565-566).
+# --git-common-dir always resolves to the shared .git dir (same idiom as the
+# Step 8a - Artifact Mirror section in agents/contractor.md).
 # --show-toplevel returns the worktree root sink-merge is about to delete.
 _COORD_ROOT_RAW_SINK="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
 if [[ "$_COORD_ROOT_RAW_SINK" != /* ]]; then _COORD_ROOT_RAW_SINK="$(pwd)/$_COORD_ROOT_RAW_SINK"; fi
