@@ -1,0 +1,48 @@
+{
+  "source_plan_hash": "29fcee2b2af56bafe52d596fd2527b9b6bd1156e10bf304845f23a542a2cfea5",
+  "tasks": [
+    {
+      "id": "n1-probe-surfaces",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-probe-machinery",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-probe-pins",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-assume-design",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-critique-design",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-converge-shape",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-07T18:27:57.803Z"
+}
