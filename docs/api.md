@@ -135,14 +135,16 @@ The Finalization sink is responsible for delivering completed work to the reposi
     - Exits 1 with a list of the workflow-only changed files and a remediation note
     - Skipped when `origin/main` is unresolvable (mirror already up-to-date, no integration base to diff against) — cannot judge, so does not block
 - **Exit codes**:
-  - `0`: merge succeeded, branch pushed, issue closed (or close failure emits warning but exit code stays 0)
-  - `1`: merge failed (non-recoverable; includes pre-merge guard failures: live workflow-state, unpushed commits, or no upstream tracking ref)
+  - `0`: merge succeeded, branch pushed, issue(s) genuinely closed (verified live on the success path, not just a `0` exit from the close call — issue #619)
+  - `1`: merge failed (non-recoverable; includes pre-merge guard failures: live workflow-state, unpushed commits, or no upstream tracking ref) OR a post-merge issue close that could not be verified closed on the forge (issue #619 — see Failure handling below). `main()` propagates any non-zero `postMergeCleanup` exit code, not only `3`.
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts
   - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); also returned if project archive dir exists during receipt write (root/Codex/GitLab/Gitea guard, issue #216); auto-fallback to PR sink
-- **Failure handling** (issue #168):
-  - When issue close fails, a stderr warning is emitted (e.g., `sink-merge: WARNING: issue close failed for N; receipt.remote_issue_closed=failed. Manually run: gh issue close N`) instead of silently swallowing the error
-  - Exit code remains 0 because the merge itself succeeded; the receipt records `remote_issue_closed: 'failed'` for audit purposes
-  - Label removal attempts to proceed even if issue close fails
+- **Failure handling** (issue #168, hardened fail-closed by issue #619):
+  - A `gh issue close` (or forge-equivalent) call that exits `0` is no longer trusted as proof of closure: `postMergeCleanup` now re-probes the live issue state on the SUCCESS path too, at both the legacy single-issue close and the bundle-member loop (previously the probe only ran in the catch branch, for the pre-existing already-closed-exits-1 case). An exit-0-but-still-open close is bucketed `remote_issue_closed: 'failed'` (or added to `failed_issue_closures` for a bundle member).
+  - A close that was genuinely attempted and failed (or could not be verified closed) now fails the WHOLE sink closed: `postMergeCleanup` emits a typed refuse envelope — `{result:'refuse', reason:'sink_incomplete', step:'closure', remote_issue_closed, closure_receipt, closure_invariants}` — and exit code `1`, instead of `status:'merged'` exit `0`. The merge into the default branch has already happened by this point (irreversible); this only prevents a failed close from being reported as a completed sink. This mirrors the `--sink` transaction's pre-existing `sink_incomplete` closure refusal (issue #497) on the legacy direct-merge path, which previously had no such refusal.
+  - This refusal fires only when a close was genuinely attempted — a sink with nothing to close (no `--issue`/`--issue-numbers` passed, `KAOLA_WORKFLOW_OFFLINE=1`, or a keep-open run) is never false-flagged.
+  - A stderr warning is still emitted alongside the refuse envelope (e.g., `sink-merge: WARNING: gh issue close exited 0 for N but the issue is still OPEN`).
+  - Label removal still attempts to proceed even if issue close fails.
 - **Failure classification** (`classifyMergeError` function):
   - Exported from all three sink-merge modules (GitHub, GitLab, Gitea)
   - Classifies push/merge errors into: `permission_denied`, `branch_protected`, `non_fast_forward`, or `null` (unclassifiable)
@@ -206,6 +208,7 @@ The following environment variables are **test-only hooks** used by the test sui
 
 - **`KAOLA_WORKFLOW_FORCE_FF_FAIL=N`** — Fail the first N fast-forward merge attempts in `ffMergeLoop`. Used to test FF race-condition retry logic. Applies to GitHub, GitLab, and Gitea editions.
 - **`KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE=token`** — Force a merge-impossible error in `postMergeCleanup` by throwing a synthetic error. The token becomes the classification result returned by `classifyMergeError`. Used to test auto-fallback-to-PR behavior. Applies to GitHub, GitLab, and Gitea editions.
+- **`KAOLA_WORKFLOW_FORCE_PUSH_UPSTREAM_FAIL=1`** (issue #619) — Force the `--sink` transaction's `push_upstream` step to throw, simulating a transient push failure. Proves the transaction does not false-report `push_upstream: 'done'` (and eventually `status:'sinked'`) when the feature branch was never actually backed up on the remote. Test-only; never set in production.
 - **`KAOLA_WORKFLOW_DEBUG_CWD=path`** — When set, sink-merge writes the final `process.cwd()` to the specified file on exit. Used by test suite to verify CWD restoration after worktree removal. Applies to all three editions.
 
 ### Offline and Derivation Test Hooks
@@ -1794,7 +1797,7 @@ When no strategy flag (`--archive`, `--export`, or `--force`) is given, dirty wo
 
 4. **Missing worktrees**: Registered in git but filesystem deleted. Branch cleanup still proceeds.
 
-5. **Branch cleanup**: Local branches matching `workflow/issue-*` (GitHub), `workflow/gitlab-issue-*` (GitLab), or `workflow/gitea-issue-*` (Gitea) are deleted unless `--keep-branch` is set.
+5. **Branch cleanup**: Local branches matching `workflow/issue-*` (GitHub), `workflow/gitlab-issue-*` (GitLab), or `workflow/gitea-issue-*` (Gitea) are deleted unless `--keep-branch` is set — but never unconditionally (issue #620). `--execute` resolves the repo's default branch once, then for each candidate proves `git merge-base --is-ancestor <branch> <defBranch>` before running `git branch -D`; when that ancestry cannot be proven it falls back to the SAFE `git branch -d`, which git itself refuses when the branch carries genuinely unmerged work. A branch that survives (refused by `-d`) is never destroyed — it is reported in the new `skipped_unmerged` bucket (see below) with its tip SHA, instead of being silently force-deleted. This closes the exact data-loss shape (#617) `stale-worktree-cleanup` exists to remedy: `worktreeDirtyState` only detects *uncommitted* changes, so a branch with committed-but-unmerged work previously read as "clean" and was force-deleted anyway.
 
 **Exit codes:**
 
@@ -1824,9 +1827,27 @@ When no strategy flag (`--archive`, `--export`, or `--force`) is given, dirty wo
   "skipped_dirty": [],
   "stashed": [],
   "exported": [],
-  "failed_preserve": []
+  "failed_preserve": [],
+  "skipped_unmerged": []
 }
 ```
+
+**`skipped_unmerged` (issue #620).** An array of `{ branch, tip }` entries — one per candidate
+branch whose committed work could not be proven merged into the resolved default branch (via
+`git merge-base --is-ancestor`) AND whose safe `git branch -d` was refused by git itself (a
+genuinely unmerged branch). `tip` is the branch's current commit SHA, recorded so the branch can
+be recovered manually (`git branch <name> <tip>` after `git fetch`/`git worktree add`, if the
+local ref itself was later pruned). This bucket is empty on a repo where every candidate branch
+was already merged or safely deletable — it is not populated defensively.
+
+**A pushed-and-at-parity branch is deleted, not skipped (R4 clarification).** A branch that is
+pushed and at parity with its own configured upstream is deleted by the SAFE `-d` leg and lands in
+`deleted_branch`, not `skipped_unmerged` — git considers a branch "merged" once it is an ancestor
+of its own upstream, independent of whether it is also an ancestor of the resolved `defBranch`
+used for the `-D` proof above. This is **not data loss**: the tip remains reachable via
+`refs/remotes/origin/<branch>` and on the remote itself. It means `deleted_branch` does not imply
+"ancestor-proven into `defBranch`" for every entry — only that the branch was not one `-d` refused
+to delete.
 
 **Typical cleanup workflow:**
 
@@ -2198,10 +2219,26 @@ the active folder open. The authoritative closure receipt for a `sink:pr`
 project is emitted by `cmdWatchPr`/`cmdWatchMr` when the PR/MR merges. This is
 documented behavior, not a gap; no schema change is needed.
 
-**`sink_incomplete` refuse envelope (issue #497).** When a hard `push_main` or
-`closure` failure occurs, `sink-merge` emits a refuse envelope to stdout (exit 1)
-instead of `status:sinked`. There are two distinct shapes discriminated by
-`step`:
+**`sink_incomplete` refuse envelope (issue #497; `push_upstream` shape added by issue #619).**
+When a hard `push_upstream`, `push_main`, or `closure` failure occurs, `sink-merge` emits a
+refuse envelope to stdout (exit 1) instead of `status:sinked`. There are three distinct shapes
+discriminated by `step`:
+
+`step:"push_upstream"` (issue #619) — `git push -u origin <branch>` did not verifiably reach
+parity with its upstream (`branch@{u}` ahead-count is not `0` after the push attempt); the
+feature branch may not be backed up on the remote. The `push_upstream` step is left NOT done so
+a re-run retries it.
+
+```json
+{
+  "result": "refuse",
+  "reason": "sink_incomplete",
+  "step": "push_upstream",
+  "push_upstream": "failed",
+  "branch": "<branch-name>",
+  "detail": "..."
+}
+```
 
 `step:"push_main"` — the FF-merge landed locally but `git push origin <defBranch>`
 threw. The branch is preserved; re-run `--sink` after resolving the push fault.
@@ -2219,7 +2256,8 @@ threw. The branch is preserved; re-run `--sink` after resolving the push fault.
 ```
 
 `step:"closure"` — the merge landed and `push_main` succeeded, but at least one
-issue could not be closed on the forge (a bundle member or the primary issue).
+issue could not be closed on the forge (a bundle member or the primary issue), OR an
+exit-0 close could not be verified closed on a live post-close probe (issue #619).
 The `closure` step is left NOT done so a re-run retries it.
 
 ```json

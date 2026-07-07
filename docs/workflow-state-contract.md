@@ -251,6 +251,19 @@ here for the full contract.
     close an issue before its implementation has actually reached the pushed default branch. See
     `docs/decisions/D-617-01.md`.
 
+  - **`published_head`** (fresh post-rebase cycle tracking, #631) — an ADDITIVE field stamped
+    into `sink-receipt.json` at the `closure` step's gate, once the live feature-branch tip
+    resolves as genuinely published (`git merge-base --is-ancestor` into the sink target
+    verified). Unlike `branch_head` (#518, stamped once at receipt init, BEFORE `doRebase` runs),
+    `published_head` captures the branch's FRESH tip after a mid-flight rebase (a concurrent
+    `origin/main` advance racing a `--sink` run) rewrites its commits — a rebase that lands
+    genuine content but orphans the pre-rebase `branch_head` SHA from the sink target's ancestry.
+    `branch_head` is **never mutated** by this fix; its #518 cycle-identity role is unchanged.
+    `cmdVerifySink` resolves the implementation commit via `r.published_head || r.branch_head`,
+    preferring the fresh field and falling back to `branch_head` only for legacy receipts written
+    before this field existed. This closes a false `impl_commit_not_ancestor` verify-sink failure
+    on a cleanly rebased, genuinely published sink. See `docs/decisions/D-619-01.md`.
+
 ## Workflow State Fields
 
 The `workflow-state.md` file contains several key blocks:
