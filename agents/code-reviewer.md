@@ -296,10 +296,14 @@ Verdict: WARNING — 2 HIGH issues should be resolved before merge.
 
 ### Machine Verdict (adaptive path)
 
-When invoked as a gate node on the adaptive path, write a machine-readable verdict
-block at the TOP LEVEL of your `.cache` evidence file (column 0, no leading
-whitespace). The actual `.cache` file must be fence-free — do NOT wrap in a code
-fence. The block shown below is fenced here only so it renders in this doc:
+When invoked as a gate node on the adaptive path, include a machine-readable
+verdict block at the TOP LEVEL of your RETURNED final-message text (column 0, no
+leading whitespace) — you have no Write/Edit tool and do NOT write any `.cache`
+file yourself; the orchestrator persists your returned text via `record-evidence
+--stdin` to `.cache/{node-id}.md`, re-injecting this node's `evidence-binding:`
+header (never add or modify that header yourself). The persisted `.cache` file
+must be fence-free — do NOT wrap the block in a code fence. The block shown
+below is fenced here only so it renders in this doc:
 
 ```
 verdict: pass
@@ -316,14 +320,15 @@ Mappings from your prose verdict to the machine block:
 
 The block is parsed by `parseNodeVerdict` in `kaola-workflow-adaptive-schema.js`
 using a column-0 anchor (`^verdict:` — no leading whitespace). An indented or
-fenced block in the actual `.cache` file is rejected (fail-closed). Emit the
-block at the very top of the `.cache/{node-id}.md` file.
+fenced block in the actual `.cache` file is rejected (fail-closed). Put the
+block at the very top of your returned text, so it lands at the top of the
+persisted `.cache/{node-id}.md` file.
 
 ### Machine-Readable Findings (adaptive path)
 
-Alongside the verdict block, record each actionable finding as a flat, column-0 line (one per
-line, same fence-free discipline as the verdict block) in the SAME `.cache/{node-id}.md` file. The
-block below is fenced only so it renders here:
+Alongside the verdict block, include each actionable finding as a flat, column-0 line (one per
+line, same fence-free discipline as the verdict block) in the SAME returned text — it is persisted
+to `.cache/{node-id}.md`. The block below is fenced only so it renders here:
 
 ```
 finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=<short>
