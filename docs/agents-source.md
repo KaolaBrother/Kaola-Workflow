@@ -43,6 +43,30 @@ They are no longer byte-tracked to upstream and are NOT re-fetched by the Refres
   non-byte-identical to upstream by design (the Kaola attribution comment and
   the Prompt Defense Baseline additions diverge it), so the provenance pointers
   remain accurate upstream-identity references, not byte-equality claims.
+- `agents/tdd-guide.md`'s coverage-gate step is deliberately conditionalized
+  (issue #626). The upstream body unconditionally mandates `npm run
+  test:coverage` with a hardcoded 80%+ requirement, which assumes a coverage
+  command that may not exist in the target repo. The Kaola body now runs the
+  coverage command and applies the project's coverage target only where the
+  repo actually exposes one; otherwise it falls back to verifying via the
+  project's recorded `validation_command`. As above, the recorded upstream
+  `source-blob-sha` / `source-sha256` remain an upstream-identity reference,
+  not a byte-equality claim.
+- `agents/doc-updater.md`'s codemap mission is deliberately conditionalized
+  (issue #626), in addition to the `model` override above. The upstream body
+  hardcodes a codemap/TypeScript mission (`npx tsx scripts/codemaps/
+  generate.ts`, `madge`, `jsdoc2md`, and a `docs/CODEMAPS/` structure) that
+  assumes a toolchain absent in most repos. The Kaola body now runs a
+  Detection step first: only when the repo actually has `scripts/codemaps/`
+  and/or `docs/CODEMAPS/` does it regenerate them via the Codemap Workflow;
+  otherwise it reconciles the doc surfaces the repo actually declares
+  (README, CHANGELOG, `docs/*.md`, `.env.example`) against the diff, and
+  skips with reason rather than inventing structure that doesn't exist.
+- `agents/build-error-resolver.md`'s "When NOT to Use" routing table is
+  deliberately remapped (issue #625). The upstream body routes to
+  `refactor-cleaner` and `architect`, neither of which is an installed
+  Kaola-Workflow role. The Kaola body maps these to the actual installed
+  roles: `refactor-cleaner` → `implementer`, `architect` → `code-architect`.
 
 ## Refresh Procedure
 
