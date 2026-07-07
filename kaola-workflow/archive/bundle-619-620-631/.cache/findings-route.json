@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R4 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a pushed-at-parity unmerged branch is deleted by the safe -d leg (git's own merged-into-upstream semantics) and lands in deleted_branch rather than skipped_unmerged; the work is NOT destroyed (proven reachable via refs/remotes/origin/<branch> and the remote itself), so no data loss",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

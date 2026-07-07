@@ -1,0 +1,14 @@
+{"node":"n1-sink","event":"opened","ts":"2026-07-07T09:48:51.177Z"}
+{"node":"n1-sink","event":"closed","ts":"2026-07-07T11:16:58.987Z"}
+{"node":"n2-claim","event":"opened","ts":"2026-07-07T11:16:59.366Z"}
+{"node":"n2-claim","event":"closed","ts":"2026-07-07T12:19:28.087Z"}
+{"node":"n3-review","event":"opened","ts":"2026-07-07T12:19:28.462Z"}
+{"node":"n3-review","event":"closed","ts":"2026-07-07T12:47:31.114Z"}
+{"node":"n4-adversary","event":"opened","ts":"2026-07-07T12:47:31.764Z"}
+{"node":"n4-adversary","event":"evidence","ts":"2026-07-07T13:05:04.572Z"}
+{"node":"n4-adversary","event":"closed","ts":"2026-07-07T13:05:05.537Z"}
+{"node":"n5-docs","event":"opened","ts":"2026-07-07T13:05:18.714Z"}
+{"node":"n5-docs","event":"closed","ts":"2026-07-07T13:15:31.128Z"}
+{"node":"n6-finalize","event":"opened","ts":"2026-07-07T13:16:01.763Z"}
+{"node":"n6-finalize","event":"evidence","ts":"2026-07-07T13:24:50.014Z"}
+{"node":"n6-finalize","event":"closed","ts":"2026-07-07T13:24:50.460Z"}
