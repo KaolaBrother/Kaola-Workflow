@@ -16,6 +16,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #630 | feat(routing): generate the six routing surfaces from one canonical skeleton via edition-sync | open | — | P3: design+land AFTER #624/#627 (generation starts from corrected canonicals) |
 | #631 | bug(claim/verify-sink): false-alarms impl_commit_not_ancestor on a clean sink whose branch was rebased mid-flight | open | — | P2: stamp a post-publish ref (e.g. published_head) at the closure gate; have verify-sink prefer it over rebase-stale branch_head |
 | #632 | bug(release): chainReceiptGreenness still fails open on empty/missing chains[] (mirror #618's chains_empty fix) | open | — | P2: mirror chains_empty guard into release.js chainReceiptGreenness x4 editions; fix stale --cut comment |
+| #635 | test(run-chains): signal-death assertions (T20-T28) are load-sensitive flakes — block literal four-chain-green recording under load | open | — | P2: make the signal-death assertions deterministic (inject the terminating signal via the runner's stub/mock seam, or assert killed-by-signal class not exact SIGKILL where the harness can't guarantee which signal wins under load) |
 
 ## Rules
 
