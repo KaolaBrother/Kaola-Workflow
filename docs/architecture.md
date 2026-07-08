@@ -33,6 +33,18 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   intra-issue write-set disjointness, and the durable
   `workflow-plan.md` + `## Node Ledger` + `plan_hash` resume contract.
 
+  **A new shape of work composes with the existing library, rather than adding a new lane
+  (issue #634).** Not every deliverable is task-shaped (a known acceptance criterion, one
+  attempt). *Direction-not-destination* work — "make it faster / smaller / less flaky," with no
+  destination knowable at freeze — is served by `metric-optimizer`: an ordinary `sequence`-shaped
+  `IMPLEMENT_ROLES` member (G1/G3 post-dominance inherited automatically, no new node shape, no
+  scheduler change), whose bounded budget-capped ratchet loop (propose → apply → regression-gate →
+  measure → accept-or-revert) runs inside a single dispatch and whose contract lives in a `## Meta`
+  `optimize(<node-id>)` block rather than new node columns. A change-gate `adversarial-verifier`
+  always reproduces the final metric before finalize. It is the write-side sibling of the
+  still-unshipped question-shaped design (#486). See `docs/api.md` § "`## Meta` field
+  `optimize(<node-id>)`" and `docs/decisions/D-634-01.md`.
+
   **Components.** `kaola-workflow-adapt` dispatches the `workflow-planner` front-end
   subagent, which claims + authors `workflow-plan.md`;
   `kaola-workflow-plan-validator.js` proves it in-grammar + computes the governance
@@ -605,8 +617,8 @@ one finalization  →  close N issues  →  remove N .roadmap/issue-N.md files
 for the Claude edition) and a `.toml` triple across the three plugin editions:
 `plugins/kaola-workflow/agents/<name>.toml` (codex),
 `plugins/kaola-workflow-gitlab/agents/<name>.toml`, and
-`plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 15 base-role
-profiles (15 files, 15 triples); the 6 `-max` xhigh effort-variant profiles were retired
+`plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 16 base-role
+profiles (16 files, 16 triples) — 15 plus `metric-optimizer` (#634); the 6 `-max` xhigh effort-variant profiles were retired
 in #451 and planner-selected effort now flows through per-spawn dispatch metadata (`reasoning → xhigh`,
 `standard → high`; legacy plan-tier tokens `opus`/`sonnet` normalize to the same effort, #610) rather
 than a per-role profile pin. All three `.toml` twins for a given profile are byte-identical

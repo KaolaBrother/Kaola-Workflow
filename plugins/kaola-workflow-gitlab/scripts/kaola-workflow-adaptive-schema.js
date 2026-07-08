@@ -322,6 +322,15 @@ const SHARED_STATE_FIELDS = Object.freeze([
 // four editions share one byte-identical value via the sync check.
 const MAX_NODES = 200;
 
+// #634 (metric-optimizer): the bounded budget caps for a metric-ratchet optimize node, validated at
+// freeze (OPT-3). budget_iterations must be 1..OPTIMIZE_ITER_CAP; an optional budget_wallclock_minutes
+// must be ≤ OPTIMIZE_WALLCLOCK_CAP. ~20–40 cheap iterations is the design's working range, so 50 never
+// false-refuses a real ratchet while it bounds the unattended spend; 120 minutes is a conservative
+// wall-clock ceiling (the wait-budget ladder applies at runtime, no daemon). Byte-identical ×4 (the
+// drift anchor), living beside MAX_NODES (the cap cluster) so all editions share one value via the sync.
+const OPTIMIZE_ITER_CAP = 50;
+const OPTIMIZE_WALLCLOCK_CAP = 120;
+
 // Barrier escalation markers written durably to workflow-state.md. `security` forces
 // security-reviewer post-dominance; `consent` halts a provisional auto-run for the
 // user's explicit yes (surfaced on resume, never blindly re-dispatched); `test_thrash`
@@ -460,6 +469,21 @@ function parseNodeVerdict(cacheText) {
   let fm, lastBlocking = null;
   while ((fm = fRe.exec(text)) !== null) { lastBlocking = parseInt(fm[1], 10); }
   return { found, verdict, findings_blocking: lastBlocking };
+}
+
+// #634 (metric-optimizer): PURE parse of a metric_command's stdout for its single machine metric.
+// Same discipline as parseNodeVerdict: native multiline regex ONLY (no classifier — cross-edition
+// byte-identity). FENCE-BLIND BY ANCHOR: a metric line is recognised ONLY at column 0
+// (`^metric:` no leading whitespace). LAST-MATCH-WINS (a command may print progress metrics; the
+// final line is the frozen value). Value is a signed decimal. Returns { found, metric:<number>|null }.
+// This one-sources the D2 `metric: <number>` output contract so the role's evidence + the verifier's
+// reproduction check parse it identically.
+function parseMetricValue(text) {
+  const src = String(text || '');
+  const re = /^metric:[ \t]*(-?\d+(?:\.\d+)?)[ \t]*$/gm;
+  let m, last = null;
+  while ((m = re.exec(src)) !== null) { last = m[1]; }
+  return { found: last !== null, metric: last !== null ? Number(last) : null };
 }
 
 // #263: the mechanical SELECTOR vocabulary a read-only classifier (selector_source) emits
@@ -1146,6 +1170,8 @@ module.exports = {
   TEST_THRASH_LIMIT,
   MERGE_CONFLICT_REPAIR_LIMIT,
   MAX_NODES,
+  OPTIMIZE_ITER_CAP,
+  OPTIMIZE_WALLCLOCK_CAP,
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
@@ -1163,6 +1189,7 @@ module.exports = {
   WRITE_OVERLAP_POLICY_LEGAL,
   WRITE_OVERLAP_POLICY_REFUSED_AT_FREEZE,
   parseNodeVerdict,
+  parseMetricValue,
   parseNodeSelector,
   FINDING_SCOPE_VOCABULARY,
   FINDING_ACTION_VOCABULARY,

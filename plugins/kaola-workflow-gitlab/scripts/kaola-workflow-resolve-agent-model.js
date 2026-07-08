@@ -19,6 +19,10 @@ const DEFAULT_AGENT_MODELS = {
   'adversarial-verifier': 'sonnet',
   'issue-scout': 'sonnet',
   contractor: 'sonnet',
+  // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
+  // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
+  // A plan may raise it per node; it is NOT a reasoning-floor role.
+  'metric-optimizer': 'sonnet',
   'workflow-planner': 'opus',
   // #463 (write-overlap): the synthesizer resolves real write-leg merge conflicts BY INTENT — a
   // reasoning-class task. Its default is opus; a plan may RAISE but never LOWER this floor (see

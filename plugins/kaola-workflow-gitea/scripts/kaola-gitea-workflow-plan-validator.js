@@ -153,6 +153,11 @@ const CANONICAL_ROLES = [
   'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
   'adversarial-verifier', 'implementer', 'issue-scout',
+  // #634: metric-optimizer runs a bounded metric-ratchet loop for direction-not-destination work (make
+  // it faster / smaller / less flaky). It is a WRITE + IMPLEMENT role (its per-iteration accepted commits
+  // ARE code), so G1/G3 post-dominance is inherited for free; its optimize(<id>) Meta contract + OPT-1..6
+  // freeze rules keep the ratchet honest.
+  'metric-optimizer',
   // #463 (write-overlap): the synthesizer is the WRITE convergence node that depends_on every leg of
   // a parallel write fan-out, declares the UNION of the legs' write sets, and is post-dominated by a
   // real code-reviewer (G1). It is NEVER a leg co-member (its union exact-overlaps every leg; depends_on
@@ -166,8 +171,10 @@ const CANONICAL_ROLES = [
 // #463: synthesizer is WRITE (it commits the merged union) → producesCode() true → G1 required. It is
 // NOT in IMPLEMENT_ROLES (it reconciles, it does not originate) and NOT in GATE_VERDICT_ROLES (it is a
 // code-producing node post-dominated by a gate, never a gate itself).
-const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer', 'synthesizer']);
-const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer']);
+const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer', 'synthesizer', 'metric-optimizer']);
+// #634: metric-optimizer ∈ IMPLEMENT_ROLES ⇒ producesCode() true ⇒ G1 (code-reviewer) + G3
+// (main-session-gate) post-dominance coverage is inherited with zero gate plumbing.
+const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer', 'metric-optimizer']);
 // #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
 // cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)
 // so the freeze-time sanitize-collision check sees the SAME collisions the barrier keys do
@@ -197,6 +204,11 @@ const ROLE_TOKEN_REGISTRY = {
   'adversarial-verifier': ['evidence-binding', 'verdict'],
   'doc-updater':          ['evidence-binding'],
   'main-session-gate':    ['evidence-binding', 'verdict', 'findings_blocking'],
+  // #634: the metric-optimizer evidence contract proves "baseline honest, N iterations budget-bounded,
+  // final metric reproducible, regression gate green". checkEvidenceShape only asserts token PRESENCE
+  // (non-empty); the per-iteration ratchet log (accepted AND rejected attempts) is audited by the
+  // change-gate verifier, not the shape check. This row is the SINGLE source seeded by adaptive-node.
+  'metric-optimizer':     ['evidence-binding', 'metric_baseline', 'metric_final', 'iterations_used', 'regression-green'],
 };
 
 // #424 (D-424-01): the NARROW `.md`/attribution allowband. A repo-root-relative path is
@@ -430,6 +442,65 @@ function parseValidationTestConsumes(content) {
   const m = String(meta || '').match(/^validation_test_consumes:[ \t]*(.*)$/m);
   if (!m) return [];
   return m[1].split(',').map(s => s.trim().replace(/^\.\//, '')).filter(Boolean);
+}
+// #634 (metric-optimizer): parse the `optimize(<node-id>)` Meta blocks — one per optimize node. The
+// block is an INDENTED grammar keyed by node id: a `optimize(<id>):` header at column 0 followed by
+// `  <key>: <value>` indented field lines (any non-indented, non-empty line ends the block). Read from
+// the RAW `## Meta` body (classifier.sectionBody preserves indentation) so the block scope is
+// recoverable; computePlanHash covers the WHOLE Meta body ⇒ the contract is freeze/plan_hash-covered
+// automatically. Same Meta-scoped, decoy-immune discipline as parseSpeculativePolicy/parseValidation-
+// Command. Returns Map<nodeId, contract>. A numeric field parses to a Number when well-formed, NaN when
+// present-but-non-numeric, and the documented default (metric_repeats 1, min_delta 0) or null (absent
+// optional) otherwise — so the OPT-3/OPT-4 freeze rules can distinguish absent from malformed. metric_paths
+// are normalized through classifier.normalizeRepoPath so OPT-2 disjointness compares like the write set.
+function parseOptimizeContracts(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const lines = String(meta || '').split('\n');
+  const contracts = new Map();
+  const headerRe = /^optimize\(([^)]*)\)[ \t]*:[ \t]*$/;   // column 0, no leading whitespace
+  const fieldRe = /^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)[ \t]*$/; // indented key: value
+  let curId = null;
+  let curFields = null;
+  const num = s => {
+    if (s === null || s === undefined) return null;
+    const t = String(s).trim();
+    if (t === '') return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : NaN;
+  };
+  const flush = () => {
+    if (curId === null) return;
+    const f = curFields || {};
+    const has = k => Object.prototype.hasOwnProperty.call(f, k);
+    contracts.set(curId, {
+      nodeId: curId,
+      metric_command: has('metric_command') && f.metric_command !== '' ? f.metric_command : null,
+      // Normalize via parseWriteSetCell (splits on comma/whitespace + normalizeRepoPath per token) so
+      // OPT-2 disjointness compares metric_paths to declared_write_set under IDENTICAL normalization.
+      metric_paths: [...classifier.parseWriteSetCell(f.metric_paths || '')],
+      direction: has('direction') && f.direction !== '' ? f.direction : null,
+      budget_iterations: has('budget_iterations') ? num(f.budget_iterations) : null,
+      budget_wallclock_minutes: has('budget_wallclock_minutes') ? num(f.budget_wallclock_minutes) : null,
+      regression_gate: has('regression_gate') && f.regression_gate !== '' ? f.regression_gate : null,
+      metric_repeats: has('metric_repeats') ? num(f.metric_repeats) : 1,
+      min_delta: has('min_delta') ? num(f.min_delta) : 0,
+      patience: has('patience') ? num(f.patience) : null,
+    });
+    curId = null;
+    curFields = null;
+  };
+  for (const raw of lines) {
+    const h = raw.match(headerRe);
+    if (h) { flush(); curId = h[1].trim(); curFields = {}; continue; }
+    if (curId !== null) {
+      const fm = raw.match(fieldRe);
+      if (fm) { curFields[fm[1]] = fm[2]; continue; }
+      // a non-indented, non-empty line closes the current block; blank lines are tolerated within it.
+      if (raw.trim() !== '' && !/^[ \t]/.test(raw)) flush();
+    }
+  }
+  flush();
+  return contracts;
 }
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
@@ -1228,6 +1299,9 @@ function validatePlan(content, opts) {
     return { result: 'refuse', reason: 'too_many_nodes', operator_hint: getOperatorHint('too_many_nodes'), errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
   }
   const ids = new Set(nodes.map(n => n.id));
+  // #634: the metric-optimizer optimize(<id>) Meta contracts (Map<nodeId,contract>), parsed once for the
+  // OPT-1..OPT-4/OPT-6 field rules below and the OPT-5 gate rule in the gates block. plan_hash-covered.
+  const optimizeContracts = parseOptimizeContracts(content);
 
   // #388 (FREEZE-ONLY): duplicate node ids + sanitize-collisions freeze in-grammar today (nodeCount
   // counts both; barrierCheck's nodes.find judges the 2nd against the 1st's write set; parseLedger is
@@ -1385,6 +1459,72 @@ function validatePlan(content, opts) {
       // Refuse it at freeze for wall symmetry. Freeze-only (revalidateForResume untouched).
       if (n.role === TERMINAL_ROLE) {
         errors.push(`node ${n.id} is the finalize sink and must not declare a model (it is never dispatched as a subagent)`);
+      }
+    }
+  }
+
+  // #634 OPT-1..OPT-4 / OPT-6: the metric-optimizer freeze rules (fail-closed refusals folded into
+  // `errors` ⇒ {result:'refuse',reason:'plan_invalid'}). OPT-5 (change-gate reproduction) lives in the
+  // gates block below (it needs the unique sink). Each rule is checked ONLY for a contract that keys a
+  // real metric-optimizer node so a mis-keyed OPT-1 case is not double-reported with field errors.
+  {
+    const optimizerNodeIds = new Set(nodes.filter(n => n.role === 'metric-optimizer').map(n => n.id));
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
+    // OPT-1: exactly one optimize(<id>) block per metric-optimizer node, and every block keys one.
+    for (const id of optimizerNodeIds) {
+      if (!optimizeContracts.has(id)) {
+        errors.push(`OPT-1: metric-optimizer node ${id} has no optimize(${id}) block in ## Meta — every metric-optimizer node needs exactly one optimize contract`);
+      }
+    }
+    for (const [id] of optimizeContracts) {
+      if (!nodeById.has(id)) {
+        errors.push(`OPT-1: optimize(${id}) names a node "${id}" that does not exist in ## Nodes`);
+      } else if (!optimizerNodeIds.has(id)) {
+        errors.push(`OPT-1: optimize(${id}) keys node "${id}" whose role is "${nodeById.get(id).role}", not metric-optimizer — an optimize contract may only key a metric-optimizer node`);
+      }
+    }
+    const metaValidationCommand = parseValidationCommand(content);
+    for (const [id, c] of optimizeContracts) {
+      if (!optimizerNodeIds.has(id)) continue; // OPT-1 already reported the mis-key
+      const node = nodeById.get(id);
+      // OPT-2 (evaluation isolation): metric_paths non-empty AND disjoint from declared_write_set —
+      // the measurement can never live inside the mutable scope (a write to it trips the barrier).
+      if (!c.metric_paths.length) {
+        errors.push(`OPT-2: optimize(${id}) declares no metric_paths — the metric harness paths must be named and kept outside the mutable scope`);
+      } else {
+        const shared = c.metric_paths.filter(p => node.writeSet.has(p));
+        if (shared.length) {
+          errors.push(`OPT-2: optimize(${id}) metric_paths ${shared.join(', ')} intersect the node's declared_write_set — the metric harness must be disjoint from the mutable scope (evaluation isolation)`);
+        }
+      }
+      // OPT-3 (bounded budget): 1 ≤ budget_iterations ≤ OPTIMIZE_ITER_CAP; optional
+      // budget_wallclock_minutes ≤ OPTIMIZE_WALLCLOCK_CAP.
+      const bi = c.budget_iterations;
+      if (bi === null || !Number.isInteger(bi) || bi < 1 || bi > schema.OPTIMIZE_ITER_CAP) {
+        errors.push(`OPT-3: optimize(${id}) budget_iterations must be an integer in 1..${schema.OPTIMIZE_ITER_CAP} (got ${bi === null ? 'absent' : c.budget_iterations})`);
+      }
+      if (c.budget_wallclock_minutes !== null) {
+        const bw = c.budget_wallclock_minutes;
+        if (!Number.isInteger(bw) || bw < 1 || bw > schema.OPTIMIZE_WALLCLOCK_CAP) {
+          errors.push(`OPT-3: optimize(${id}) budget_wallclock_minutes must be an integer in 1..${schema.OPTIMIZE_WALLCLOCK_CAP} when present (got ${c.budget_wallclock_minutes})`);
+        }
+      }
+      // OPT-4: direction ∈ {min,max}; metric_repeats ≥ 1; min_delta ≥ 0.
+      if (c.direction !== 'min' && c.direction !== 'max') {
+        errors.push(`OPT-4: optimize(${id}) direction must be min|max (got ${c.direction === null ? 'absent' : '"' + c.direction + '"'})`);
+      }
+      const mr = c.metric_repeats;
+      if (mr === null || !Number.isInteger(mr) || mr < 1) {
+        errors.push(`OPT-4: optimize(${id}) metric_repeats must be an integer ≥ 1 (got ${c.metric_repeats})`);
+      }
+      const md = c.min_delta;
+      if (md === null || Number.isNaN(md) || md < 0) {
+        errors.push(`OPT-4: optimize(${id}) min_delta must be a number ≥ 0 (got ${c.min_delta})`);
+      }
+      // OPT-6: a regression gate resolves non-empty — the block's own regression_gate, or inherited from
+      // the Meta validation_command. A metric-only ratchet with no regression gate is Goodhart bait.
+      if (!c.regression_gate && !metaValidationCommand) {
+        errors.push(`OPT-6: optimize(${id}) has no regression_gate and ## Meta declares no validation_command — a ratchet with no regression gate is refused (a metric-only ratchet is Goodhart bait)`);
       }
     }
   }
@@ -1664,6 +1804,16 @@ function validatePlan(content, opts) {
     if (nodes.some(n => n.role === MAIN_SESSION_GATE)) {
       const g3 = gateUncovered(nodes, producesCode, MAIN_SESSION_GATE, sink);
       if (g3.length) errors.push(`G3: main-session-gate does not post-dominate code-producing node(s): ${g3.join(', ')}`);
+    }
+
+    // #634 OPT-5 (reproduction gate): a change-gate adversarial-verifier must post-dominate every
+    // metric-optimizer node — the measured metric claim is the node's ENTIRE deliverable, so it does not
+    // finalize unverified. Reuse gateUncovered exactly as G1/G3 do (post-dominance over the unique sink).
+    // Post-dominance over a producesCode optimize node makes the verifier a change gate
+    // (advVerifierIsChangeGate), so it is non-exempt from --verdict-check.
+    if (nodes.some(n => n.role === 'metric-optimizer')) {
+      const opt5 = gateUncovered(nodes, n => n.role === 'metric-optimizer', 'adversarial-verifier', sink);
+      if (opt5.length) errors.push(`OPT-5: adversarial-verifier does not post-dominate metric-optimizer node(s): ${opt5.join(', ')} — a change-gate adversarial-verifier must reproduce the metric claim before finalize`);
     }
   }
 
@@ -3056,6 +3206,7 @@ module.exports = {
   parseLedger,
   parseSpeculativePolicy,
   parseWriteOverlapPolicy,
+  parseOptimizeContracts,
   parseValidationCommand,
   parseValidationTestConsumes,
   testConsumes,

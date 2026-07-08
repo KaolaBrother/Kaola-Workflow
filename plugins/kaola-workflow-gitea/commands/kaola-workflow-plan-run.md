@@ -90,8 +90,8 @@ For `adversarial-verifier` and `code-reviewer`, an inline gate reviewing its own
 no gate: do NOT dispatch the gate node inline and silently record a self-issued `verdict: pass`.
 Instead route through the consent-halt valve (`write-halt --reason consent`) and await operator
 resolution before the gate node is considered satisfied. Forward roles — `code-explorer`,
-`knowledge-lookup`, `implementer`, `tdd-guide`, `doc-updater`, and `security-reviewer` when it runs
-as a forward check — may still record the documented local fallback
+`knowledge-lookup`, `implementer`, `tdd-guide`, `metric-optimizer`, `doc-updater`, and
+`security-reviewer` when it runs as a forward check — may still record the documented local fallback
 (`local-fallback-tool-unavailable`) and proceed inline.
 
 When a node runs inline under this degradation notice, announce it instead of the pre-spawn
@@ -316,8 +316,17 @@ guesswork:
   orchestrator persists it via `record-evidence --stdin` (below). `record-evidence` re-injects
   this node's `evidence-binding:` header, so persisting evidence cannot strip the header —
   the read-only role MUST NOT try to add or modify it.
-- **WRITE-role agents** (`implementer`, `tdd-guide`) SELF-WRITE their `.cache` evidence, INCLUDING
-  the seeded `evidence-binding:` header (read it from the seeded file, never alter it).
+- **WRITE-role agents** (`implementer`, `tdd-guide`, `metric-optimizer`) SELF-WRITE their `.cache`
+  evidence, INCLUDING the seeded `evidence-binding:` header (read it from the seeded file, never
+  alter it).
+
+<!-- CARD: metric-optimizer -->
+A `metric-optimizer` node's dispatch card carries `dispatch.optimize` (the frozen
+`optimize(<node-id>)` metric contract) and may override `dispatch.wait_budget_minutes` from
+the contract's `budget_wallclock_minutes`. Full ratchet protocol:
+`docs/plan-run-cards/metric-optimizer.md` (covers the propose/apply/regression-gate/measure/
+accept-or-reject loop, the `metric: <number>` output contract, scoped-revert safety, stop
+conditions, and the five evidence tokens).
 
 On every return, before evidence/close bookkeeping, announce the outcome:
 

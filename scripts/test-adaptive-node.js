@@ -409,6 +409,60 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T7m (#634): checkEvidenceShape — metric-optimizer needs NON-EMPTY D6 tokens.
+// A hollow seeded stub (token KEYS present, VALUES empty) must be REFUSED —
+// the generic file-present-and-non-empty tail would wrongly accept it, so a
+// metric node could close COMPLETE on a hollow stub with zero ratchet log.
+// ---------------------------------------------------------------------------
+{
+  // Hollow seeded stub exactly as seedEvidenceFile emits it: every D6 token key
+  // present (as a comment + a column-0 line) but with an EMPTY value.
+  const hollowStub = [
+    'evidence-binding: n2-opt opt123456789',
+    '<!-- metric_baseline: paste metric_baseline here -->',
+    'metric_baseline: ',
+    '<!-- metric_final: paste metric_final here -->',
+    'metric_final: ',
+    '<!-- iterations_used: paste iterations_used here -->',
+    'iterations_used: ',
+    '<!-- regression-green: paste regression-green here -->',
+    'regression-green: ',
+  ].join('\n') + '\n';
+  const rHollow = checkEvidenceShape('metric-optimizer', 'n2-opt', hollowStub);
+  assert(rHollow.ok === false, 'T7m-a: metric-optimizer hollow stub (empty D6 values) → REFUSED');
+  assert(rHollow.kind === 'shape' && rHollow.missingTokenClass === 'metric_baseline',
+    'T7m-a: kind shape + missingTokenClass names the first empty D6 token (metric_baseline)');
+
+  // Partial fill: baseline present, but metric_final still empty → refused AT metric_final.
+  const partial = [
+    'evidence-binding: n2-opt opt123456789',
+    'metric_baseline: 4200ms p50',
+    'metric_final: ',
+    'iterations_used: 12',
+    'regression-green: npm test passed',
+  ].join('\n') + '\n';
+  const rPartial = checkEvidenceShape('metric-optimizer', 'n2-opt', partial);
+  assert(rPartial.ok === false && rPartial.missingTokenClass === 'metric_final',
+    'T7m-b: metric-optimizer with one empty D6 token → refused, names that token');
+
+  // Fully filled: all four D6 tokens carry non-empty values → ok.
+  const filled = [
+    'evidence-binding: n2-opt opt123456789',
+    'metric_baseline: 4200ms p50 (node bench.js --emit-metric, 3 repeats)',
+    'metric_final: 3100ms p50 (26% faster)',
+    'iterations_used: 12 of 20 (patience-stopped at 5 no-improve)',
+    'regression-green: npm test passed, 0 failures',
+  ].join('\n') + '\n';
+  const rFilled = checkEvidenceShape('metric-optimizer', 'n2-opt', filled);
+  assert(rFilled.ok === true, 'T7m-c: metric-optimizer with all D6 values non-empty → ok');
+
+  // Absent evidence → not ok (kind absent), mirroring the tdd-guide/implementer branches.
+  const rAbsent = checkEvidenceShape('metric-optimizer', 'n2-opt', null);
+  assert(rAbsent.ok === false && rAbsent.kind === 'absent',
+    'T7m-d: metric-optimizer with null evidence → not ok (absent)');
+}
+
+// ---------------------------------------------------------------------------
 // T8: checkEvidenceShape — other roles: file present is sufficient
 // ---------------------------------------------------------------------------
 {
@@ -4702,6 +4756,39 @@ function rtHarness(initialFiles, opts) {
   const dV2 = buildDispatch(nodeInfo, Object.assign({}, context, { codex_dispatch_mode: 'v2-task-name' }));
   assert(dV2.codex_dispatch_mode === 'v2-task-name', 'D444-DISPATCH-PARITY: context can select v2 task-name mode');
   assert(dV2.codex_task_name === 'n1_impl_tdd_guide', 'D444-DISPATCH-PARITY: v2 dispatch still carries stable task name');
+}
+
+// #634 (metric-optimizer): buildDispatch threads the optimize contract + wait-budget override onto a
+// metric-optimizer card, and leaves every other card byte-identical to pre-#634.
+{
+  const optNode = { id: 'n2-opt', role: 'metric-optimizer', model: 'sonnet', declared_write_set: 'src/hot.js' };
+  const optContract = {
+    nodeId: 'n2-opt', metric_command: 'node bench.js --emit-metric', metric_paths: ['bench/suite.js'],
+    direction: 'min', budget_iterations: 20, budget_wallclock_minutes: 60, regression_gate: 'npm test',
+    metric_repeats: 3, min_delta: 0.5, patience: 5,
+  };
+  const optCtx = {
+    nonce: 'opt123456789', evidence_file: '.cache/n2-opt.md',
+    required_tokens: ['evidence-binding', 'metric_baseline', 'metric_final', 'iterations_used', 'regression-green'],
+    working_dir: '/fake/worktree', forge_rider: null,
+    budget_wallclock_minutes: 60, optimize: optContract,
+  };
+  const dOpt = buildDispatch(optNode, optCtx);
+  assert(dOpt.wait_budget_minutes === 60, '#634: budget_wallclock_minutes overrides the tier-derived wait budget');
+  assert(dOpt.wait_budget_source === 'optimize_budget', '#634: the overridden wait budget is sourced from the optimize contract');
+  assert(dOpt.optimize && dOpt.optimize.direction === 'min' && dOpt.optimize.budget_iterations === 20,
+    '#634: the optimize contract is attached to the dispatch card');
+  // Control 1: the SAME optimize node WITHOUT a budget override keeps the tier-derived wait budget.
+  const dNoBudget = buildDispatch(optNode, { nonce: 'opt123456789', evidence_file: '.cache/n2-opt.md',
+    required_tokens: [], working_dir: '/fake/worktree', forge_rider: null, optimize: optContract });
+  assert(dNoBudget.wait_budget_source === 'planner_model', '#634: without a budget override the wait-budget source stays tier-derived');
+  assert(dNoBudget.wait_budget_minutes === 20, '#634: standard-tier wait budget is 20 minutes when not overridden');
+  assert(dNoBudget.optimize && dNoBudget.optimize.direction === 'min', '#634: the optimize contract still attaches without a budget override');
+  // Control 2: a NON-optimize card carries neither optimize nor an optimize_budget source (byte-identical).
+  const dPlain = buildDispatch({ id: 'n1-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'src/x.js' },
+    { nonce: 'plain1234567', evidence_file: '.cache/n1-impl.md', required_tokens: [], working_dir: '/fake/worktree', forge_rider: null });
+  assert(dPlain.optimize === undefined, '#634: a non-optimize card carries no optimize field');
+  assert(dPlain.wait_budget_source === 'planner_model', '#634: a non-optimize card keeps its tier-derived wait-budget source');
 }
 
 // D444-DISPATCH-PARITY: serial open and fused advance produce field-identical dispatch for same node

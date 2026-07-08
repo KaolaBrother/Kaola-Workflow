@@ -2225,6 +2225,227 @@ function testAdaptiveValidatorGovernance() {
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
 
+// #634: the metric-optimizer role (bounded metric-ratchet loop, direction-not-destination work).
+// The optimize(<node-id>) Meta contract + OPT-1..OPT-6 freeze rules + the role's inherited G1/G3
+// coverage + plan_hash coverage + change-gate verifier + barrier commit-count indifference.
+function testMetricOptimizerContract() {
+  const tmp = adaptiveTmp('metric-optimizer');
+  const pv = require('./kaola-workflow-plan-validator');
+  // Build a plan with a `## Meta` carrying arbitrary extra lines (the optimize block + optional
+  // validation_command) — validatePlanFixture only supports `labels:`, so this variant is dedicated.
+  function optPlan(metaExtra, nodesRows) {
+    const planPath = path.join(tmp, 'plan.md');
+    fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: enhancement']
+      .concat(metaExtra || [])
+      .concat(['', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|'])
+      .concat(nodesRows).concat(['']).join('\n'));
+    return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
+  }
+  // A fully-valid optimize block keyed by node id; `overrides` may set a field to null to OMIT it.
+  function optBlock(id, overrides) {
+    const f = Object.assign({
+      metric_command: 'node bench.js --emit-metric',
+      metric_paths: 'bench/suite.js',
+      direction: 'min',
+      budget_iterations: '20',
+      budget_wallclock_minutes: '60',
+      regression_gate: 'npm test',
+      metric_repeats: '3',
+      min_delta: '0.5',
+      patience: '5',
+    }, overrides || {});
+    const lines = ['optimize(' + id + '):'];
+    for (const k of ['metric_command', 'metric_paths', 'direction', 'budget_iterations',
+      'budget_wallclock_minutes', 'regression_gate', 'metric_repeats', 'min_delta', 'patience']) {
+      if (f[k] === null || f[k] === undefined) continue;
+      lines.push('  ' + k + ': ' + f[k]);
+    }
+    return lines;
+  }
+  // The canonical valid node set: an optimize node post-dominated by BOTH a code-reviewer (G1,
+  // inherited via producesCode) AND a change-gate adversarial-verifier (OPT-5).
+  const validNodes = [
+    '| explore | code-explorer | — | — | 1 | sequence |',
+    '| opt | metric-optimizer | explore | src/hot.js | 1 | sequence |',
+    '| review | code-reviewer | opt | — | 1 | sequence |',
+    '| adv | adversarial-verifier | review | — | 1 | sequence |',
+    '| done | finalize | adv | — | 1 | sequence |',
+  ];
+  const errs = v => (v.errors || []).join(';');
+  // A frozen plan WITH a `## Node Ledger` (id -> status) for the runtime --verdict-check surface.
+  const mkLedgerPlan = (nodesRows, ledgerRows, labels) => ['# Plan', '', '## Meta', 'labels: ' + (labels || 'chore'), '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|'].concat(nodesRows).concat(['', '## Node Ledger', '', '| id | status |', '|---|---|'])
+    .concat(ledgerRows).concat(['']).join('\n');
+  try {
+    // AC1 — the in-grammar example: optimize node freezes green and INHERITS G1/G3 coverage with
+    // zero gate-plumbing (metric-optimizer ∈ IMPLEMENT_ROLES ⇒ producesCode ⇒ G1/G3 fire for free).
+    let v = optPlan(optBlock('opt'), validNodes);
+    assert(v.result === 'in-grammar', 'AC1: a well-formed optimize plan must freeze in-grammar, got: ' + JSON.stringify(v));
+    // G1 inheritance proof: drop the code-reviewer (keep adv so OPT-5 is satisfied) → refuse G1.
+    v = optPlan(optBlock('opt'), [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| opt | metric-optimizer | explore | src/hot.js | 1 | sequence |',
+      '| adv | adversarial-verifier | opt | — | 1 | sequence |',
+      '| done | finalize | adv | — | 1 | sequence |',
+    ]);
+    assert(v.result === 'refuse' && /G1/.test(errs(v)), 'AC1: an optimize node without code-reviewer post-dominance must refuse G1, got: ' + JSON.stringify(v));
+
+    // OPT-1 — 1:1 metric-optimizer ↔ optimize block.
+    //   (a) an optimize node with NO block refuses.
+    v = optPlan([], validNodes);
+    assert(v.result === 'refuse' && /OPT-1/.test(errs(v)), 'OPT-1(a): metric-optimizer node without optimize block must refuse, got: ' + JSON.stringify(v));
+    //   (b) an optimize(<id>) block keying a NON-EXISTENT node refuses.
+    v = optPlan(optBlock('opt').concat(optBlock('ghost')), validNodes);
+    assert(v.result === 'refuse' && /OPT-1/.test(errs(v)), 'OPT-1(b): optimize block for a missing node must refuse, got: ' + JSON.stringify(v));
+    //   (c) an optimize(<id>) block keying an existing NON-optimizer node refuses.
+    v = optPlan(optBlock('opt').concat(optBlock('review')), validNodes);
+    assert(v.result === 'refuse' && /OPT-1/.test(errs(v)), 'OPT-1(c): optimize block on a non-metric-optimizer node must refuse, got: ' + JSON.stringify(v));
+
+    // OPT-2 — metric_paths non-empty AND disjoint from the node's declared_write_set.
+    v = optPlan(optBlock('opt', { metric_paths: 'src/hot.js' }), validNodes); // shares the write path
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: metric_paths intersecting the write set must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { metric_paths: null }), validNodes); // empty metric_paths
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: empty metric_paths must refuse, got: ' + JSON.stringify(v));
+
+    // OPT-3 — 1 ≤ budget_iterations ≤ OPTIMIZE_ITER_CAP(50); budget_wallclock_minutes ≤ CAP(120).
+    v = optPlan(optBlock('opt', { budget_iterations: '51' }), validNodes);
+    assert(v.result === 'refuse' && /OPT-3/.test(errs(v)), 'OPT-3: budget_iterations over the cap must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { budget_iterations: '0' }), validNodes);
+    assert(v.result === 'refuse' && /OPT-3/.test(errs(v)), 'OPT-3: budget_iterations below 1 must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { budget_wallclock_minutes: '121' }), validNodes);
+    assert(v.result === 'refuse' && /OPT-3/.test(errs(v)), 'OPT-3: budget_wallclock_minutes over the cap must refuse, got: ' + JSON.stringify(v));
+
+    // OPT-4 — direction ∈ {min,max}; metric_repeats ≥ 1; min_delta ≥ 0.
+    v = optPlan(optBlock('opt', { direction: 'down' }), validNodes);
+    assert(v.result === 'refuse' && /OPT-4/.test(errs(v)), 'OPT-4: an out-of-vocab direction must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { metric_repeats: '0' }), validNodes);
+    assert(v.result === 'refuse' && /OPT-4/.test(errs(v)), 'OPT-4: metric_repeats < 1 must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { min_delta: '-1' }), validNodes);
+    assert(v.result === 'refuse' && /OPT-4/.test(errs(v)), 'OPT-4: a negative min_delta must refuse, got: ' + JSON.stringify(v));
+    // direction: max is equally legal.
+    v = optPlan(optBlock('opt', { direction: 'max' }), validNodes);
+    assert(v.result === 'in-grammar', 'OPT-4: direction: max must freeze in-grammar, got: ' + JSON.stringify(v));
+
+    // OPT-5 — a change-gate adversarial-verifier must post-dominate every optimize node.
+    v = optPlan(optBlock('opt'), [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| opt | metric-optimizer | explore | src/hot.js | 1 | sequence |',
+      '| review | code-reviewer | opt | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ]);
+    assert(v.result === 'refuse' && /OPT-5/.test(errs(v)), 'OPT-5: an optimize node reaching the sink without a post-dominating adversarial-verifier must refuse, got: ' + JSON.stringify(v));
+
+    // OPT-6 — regression_gate resolves non-empty (explicit, or inherited from Meta validation_command).
+    v = optPlan(optBlock('opt', { regression_gate: null }), validNodes); // no explicit gate, no Meta validation_command
+    assert(v.result === 'refuse' && /OPT-6/.test(errs(v)), 'OPT-6: neither an explicit regression_gate nor a Meta validation_command must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(['validation_command: npm test'].concat(optBlock('opt', { regression_gate: null })), validNodes);
+    assert(v.result === 'in-grammar', 'OPT-6: an omitted regression_gate that INHERITS the Meta validation_command must freeze in-grammar, got: ' + JSON.stringify(v));
+
+    // AC2 — the optimize contract is plan_hash-covered (computePlanHash normalizes the whole ## Meta
+    // body). A post-freeze field mutation flips the hash ⇒ resume refusal.
+    const validBody = ['# Plan', '', '## Meta', 'labels: enhancement']
+      .concat(optBlock('opt'))
+      .concat(['', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|'])
+      .concat(validNodes).concat(['']).join('\n');
+    const h1 = pv.computePlanHash(validBody);
+    const mutatedBody = validBody.replace('budget_iterations: 20', 'budget_iterations: 21');
+    assert(pv.computePlanHash(mutatedBody) !== h1, 'AC2: mutating an optimize field must flip plan_hash');
+    const frozenTampered = '<!-- plan_hash: ' + h1 + ' -->\n' + mutatedBody;
+    assert(pv.revalidateForResume(frozenTampered).ok === false, 'AC2: a tampered optimize field must fail --resume-check');
+    const frozenClean = '<!-- plan_hash: ' + pv.computePlanHash(validBody) + ' -->\n' + validBody;
+    assert(pv.revalidateForResume(frozenClean).ok === true, 'AC2: the un-tampered frozen optimize plan must pass --resume-check');
+
+    // parseOptimizeContracts is exported and reads the block keyed by node id (indented block-scoping).
+    const contracts = pv.parseOptimizeContracts(validBody);
+    assert(contracts && typeof contracts.get === 'function' && contracts.get('opt'), 'parseOptimizeContracts returns a Map keyed by node id');
+    const c = contracts.get('opt');
+    assert(c.direction === 'min' && Number(c.budget_iterations) === 20 && c.budget_wallclock_minutes === 60,
+      'parseOptimizeContracts parses the contract fields, got: ' + JSON.stringify(c));
+    assert(Array.isArray(c.metric_paths) && c.metric_paths.join(',') === 'bench/suite.js', 'parseOptimizeContracts splits metric_paths, got: ' + JSON.stringify(c.metric_paths));
+
+    // AC4 — the optimize node's post-dominating change-gate adversarial-verifier BLOCKS finalize on
+    // verdict: fail via --verdict-check (metric-optimizer ∈ IMPLEMENT_ROLES ⇒ producesCode ⇒ the
+    // verifier lies on a code→verifier→sink path ⇒ advVerifierIsChangeGate ⇒ non-exempt).
+    const acProj = path.join(tmp, 'kaola-workflow', 'issue-634');
+    const acCache = path.join(acProj, '.cache');
+    fs.mkdirSync(acCache, { recursive: true });
+    const acPlan = path.join(acProj, 'workflow-plan.md');
+    fs.writeFileSync(acPlan, mkLedgerPlan(
+      ['| opt | metric-optimizer | — | src/hot.js | 1 | sequence |',
+       '| rv | code-reviewer | opt | — | 1 | sequence |',
+       '| critique | adversarial-verifier | rv | — | 1 | sequence |',
+       '| done | finalize | critique | — | 1 | sequence |'],
+      ['| opt | complete |', '| rv | complete |', '| critique | complete |', '| done | complete |'],
+      'enhancement'));
+    fs.writeFileSync(path.join(acCache, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(acCache, 'critique.md'), 'verdict: fail\nfindings_blocking: 2\nthe final metric does not reproduce\n');
+    assert(runNode(planValidatorScript, [acPlan, '--verdict-check', '--json'], tmp).status === 1,
+      'AC4: a change-gate adversarial-verifier over an optimize node emitting verdict: fail must BLOCK --verdict-check (exit 1)');
+    // control: verdict pass → finalize passes.
+    fs.writeFileSync(path.join(acCache, 'critique.md'), 'verdict: pass\nfindings_blocking: 0\nfinal metric reproduces within tolerance\n');
+    assert(runNode(planValidatorScript, [acPlan, '--verdict-check', '--json'], tmp).status === 0,
+      'AC4 control: the same verifier emitting verdict: pass must PASS --verdict-check (exit 0)');
+
+    // AC5 — barrier commit-count indifference. The per-node barrier is a NET-DIFF (snapshot base →
+    // snapshot now); ≥3 intermediate commit/revert cycles inside the optimize leg with an UNCHANGED
+    // declared write set pass the per-node barrier. (The --leg-barrier / commit-based --group-barrier
+    // use the SAME role-agnostic commit-range machinery — D5 needs no barrier change; exercised over
+    // the per-node net-diff barrier here, the metric-optimizer-specific proof point.)
+    const grepo = adaptiveTmp('metric-opt-barrier-git');
+    try {
+      initGitRepoWithBareRemote(grepo);
+      const proj = path.join(grepo, 'kaola-workflow', 'issue-634-ratchet');
+      fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: enhancement']
+        .concat(optBlock('opt'))
+        .concat(['', '## Nodes', '',
+          '| id | role | depends_on | declared_write_set | cardinality | shape |',
+          '|---|---|---|---|---|---|',
+          '| opt | metric-optimizer | — | src/hot.js | 1 | sequence |',
+          '| review | code-reviewer | opt | — | 1 | sequence |',
+          '| adv | adversarial-verifier | review | — | 1 | sequence |',
+          '| done | finalize | adv | — | 1 | sequence |', '']).join('\n'));
+      runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      fs.mkdirSync(path.join(grepo, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = 0;\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'baseline'], { cwd: grepo, encoding: 'utf8' });
+      // record the optimize node's baseline AFTER the baseline commit.
+      const rb = runNode(planValidatorScript, [planPath, '--record-base', '--node-id', 'opt'], grepo);
+      assert(rb.status === 0, 'AC5: --record-base for the optimize node must exit 0, got ' + rb.status + ' ' + rb.stderr);
+      // ≥3 intermediate commit/revert cycles, all inside the declared write set (src/hot.js).
+      for (let k = 1; k <= 3; k++) {
+        fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = ' + k + '; // iter ' + k + '\n');
+        spawnSync('git', ['add', 'src/hot.js'], { cwd: grepo, encoding: 'utf8' });
+        spawnSync('git', ['commit', '-m', 'kw-opt(opt) iter ' + k], { cwd: grepo, encoding: 'utf8' });
+        // reject-and-revert this iteration (scoped restore, never reset --hard), then commit the revert.
+        spawnSync('git', ['restore', '--source=HEAD~1', '--', 'src/hot.js'], { cwd: grepo, encoding: 'utf8' });
+        spawnSync('git', ['commit', '-am', 'kw-opt(opt) revert iter ' + k], { cwd: grepo, encoding: 'utf8' });
+      }
+      // final accepted iteration: a net change confined to src/hot.js.
+      fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = 42; // final accepted\n');
+      spawnSync('git', ['commit', '-am', 'kw-opt(opt) iter final: 0 -> 42'], { cwd: grepo, encoding: 'utf8' });
+      const bc = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'opt', '--json'], grepo);
+      assert(bc.status === 0 && JSON.parse(bc.stdout).result === 'pass',
+        'AC5: after ≥3 commit/revert cycles + an unchanged declared write set, the per-node net-diff barrier must pass, got status ' + bc.status + ' ' + bc.stdout);
+      // control: a net write OUTSIDE the declared set (an intermediate commit that escaped the lane) refuses.
+      fs.writeFileSync(path.join(grepo, 'src', 'stray.js'), 'escaped\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'stray out-of-lane write'], { cwd: grepo, encoding: 'utf8' });
+      const bc2 = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'opt', '--json'], grepo);
+      assert(bc2.status === 1 && /stray\.js/.test(bc2.stdout),
+        'AC5 control: a net out-of-lane write must still refuse (the barrier attributes the net diff, not the commit count), got status ' + bc2.status + ' ' + bc2.stdout);
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); fs.rmSync(grepo + '-remote', { recursive: true, force: true }); }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testMetricOptimizerContract: PASSED');
+}
+
 function testQuestionShaped486() {
   // #486: the question-shaped / bug-shaped worked examples (the DAGs the new planner hints author) must
   // validate IN-GRAMMAR against the CURRENT plan-validator with ZERO grammar changes — the AC's proof
@@ -14121,6 +14342,7 @@ function buildRegistry() {
   add('testAdaptiveConsentHaltSurfaces',                  testAdaptiveConsentHaltSurfaces);
   add('testAdaptiveCrossSurfaceMutexWalkthrough',         testAdaptiveCrossSurfaceMutexWalkthrough);
   add('testAdaptiveValidatorGovernance',                  testAdaptiveValidatorGovernance);
+  add('testMetricOptimizerContract',                      testMetricOptimizerContract);
   add('testQuestionShaped486',                            testQuestionShaped486);
   add('testAdaptiveFanoutGroupScoping',                   testAdaptiveFanoutGroupScoping);
   add('testAdaptiveReadySetDisjointness',                 testAdaptiveReadySetDisjointness);

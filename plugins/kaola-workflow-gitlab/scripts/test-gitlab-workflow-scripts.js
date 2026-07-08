@@ -2169,8 +2169,8 @@ function testInstallProfilesFeaturesTableHandling() {
     const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      15,
-      'should install 15 agent TOML files (14 base + synthesizer #463; <role>-max retired #451)'
+      16,
+      'should install 16 agent TOML files (14 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451)'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
@@ -3596,7 +3596,7 @@ function testGitlabPreflight266() {
   const hEnvGl = { ...process.env, HOME: emptyHomeGl, USERPROFILE: emptyHomeGl };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-preflight-'));
   try {
-    // Install all 15 profiles into the fixture (14 base + synthesizer #463)
+    // Install all 16 profiles into the fixture (14 base + synthesizer #463 + metric-optimizer #634)
     const installResult = spawnSync(process.execPath, [installProfilesScript, root], {
       cwd: gitlabPluginRoot, encoding: 'utf8'
     });
@@ -3920,13 +3920,13 @@ function gitlabListTomls(dir) {
 function testInstallSchemaPruneManifest332Gitlab() {
   const manifestBase = '.kaola-managed-profiles.json';
 
-  // AC3: fresh install — exactly 15 tomls (14 base + synthesizer #463), no docs-lookup, name on each, manifest, sentinel.
+  // AC3: fresh install — exactly 16 tomls (14 base + synthesizer #463 + metric-optimizer #634), no docs-lookup, name on each, manifest, sentinel.
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-install-fresh-'));
   try {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = gitlabListTomls(agentsDir);
-    assert.strictEqual(tomls.length, 15, '#463 gl AC: fresh install must place 15 *.toml (14 base + synthesizer; <role>-max retired)');
+    assert.strictEqual(tomls.length, 16, '#463 gl AC: fresh install must place 16 *.toml (14 base + synthesizer + metric-optimizer; <role>-max retired)');
     assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gl AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -3935,7 +3935,7 @@ function testInstallSchemaPruneManifest332Gitlab() {
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gl AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, 15, '#463 gl AC: manifest must list 15 roles (14 base + synthesizer)');
+    assert.strictEqual(manifest.roles.length, 16, '#463 gl AC: manifest must list 16 roles (14 base + synthesizer + metric-optimizer)');
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gl AC3: stdout must end with status: ok');
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });

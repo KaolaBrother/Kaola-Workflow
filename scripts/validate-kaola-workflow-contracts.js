@@ -606,6 +606,8 @@ assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spaw
 // #359: producer-attested evidence-token vocabulary in the codex agent profiles.
 assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');
 assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'literal tokens RED');
+// #634: producer-attested evidence-token vocabulary in the metric-optimizer Codex agent profile.
+assertIncludes(`${pluginRoot}/agents/metric-optimizer.toml`, 'iterations_used');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',

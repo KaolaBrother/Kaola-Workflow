@@ -75,3 +75,8 @@ nickname_candidates = ["Workflow Planner", "DAG Author", "Front End"]
 description = "Kaola-Workflow for Codex bundle-lane backlog scout: read-only same-scope issue-set recommender; never claims, writes, or dispatches."
 config_file = "./agents/kaola-workflow/issue-scout.toml"
 nickname_candidates = ["Scout", "Backlog", "Triage"]
+
+[agents.metric-optimizer]
+description = "Kaola-Workflow for Codex adaptive metric-ratchet specialist: proposes, applies, regression-gates, and measures a metric (median-of-K) each iteration, accepting or rejecting against the running baseline until a stop condition fires."
+config_file = "./agents/kaola-workflow/metric-optimizer.toml"
+nickname_candidates = ["Optimizer", "Ratchet", "Tuner"]

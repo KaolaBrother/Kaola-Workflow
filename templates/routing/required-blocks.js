@@ -128,6 +128,21 @@ const REQUIRED_BLOCKS = [
       'writerHalt',
     ],
   },
+  {
+    // #634: metric-optimizer dispatch prose — the 2nd/3rd tokens are distinctive
+    // interior content, NOT substrings of the marker itself (the #637 lesson
+    // applied proactively: 'dispatch.optimize' and the card path do not appear
+    // inside '<!-- CARD: metric-optimizer -->').
+    block_id: 'pr-metric-optimizer-card',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- CARD: metric-optimizer -->',
+      'dispatch.optimize',
+      'docs/plan-run-cards/metric-optimizer.md',
+    ],
+  },
 
   // ==== finalize (basename kaola-workflow-finalize on both surface types) ====
   {

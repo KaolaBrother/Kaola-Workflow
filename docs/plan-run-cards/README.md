@@ -16,6 +16,7 @@ that situation.
 | [frontier-batch.md](frontier-batch.md) | Parallel frontier fan-out — running-set scheduler (open-ready / close-node / reconcile-running-set) |
 | [speculative-open.md](speculative-open.md) | Speculative open (`speculative_open_policy` three tiers: `auto` default-on / `consent` opt-in / `off` serial; open-ready --speculative-consent / discard-speculative) |
 | [join-protocol.md](join-protocol.md) | Codex Join Protocol — wait budgets, long-poll join loop, escalation ladder, writer kill-safety (reconcile-running-set), typed delegation_outcome, frontier dispatch + slot awareness |
+| [metric-optimizer.md](metric-optimizer.md) | Dispatching a `metric-optimizer` node — the `optimize(<node-id>)` contract, the ratchet loop, scoped-revert safety, and the evidence contract |
 
 ## How to use these cards
 

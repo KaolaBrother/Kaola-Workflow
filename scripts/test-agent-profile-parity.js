@@ -52,6 +52,10 @@ const FEATURE_TOKENS = [
   // gate itself — present in agents/workflow-planner.md's main-session-gate authoring paragraph, so
   // this enforces all three .toml twins carry the rule (md↔toml parity for the #607 authoring lever).
   'the gate never authors or deletes files',
+  // #634 (n3-register): the metric-optimizer's mandatory scoped-revert safety rule — present in
+  // agents/metric-optimizer.md's ratchet-protocol reject step, so this enforces its three .toml
+  // twins carry it (md↔toml parity coverage for the new bounded metric-ratchet role).
+  'git reset --hard',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

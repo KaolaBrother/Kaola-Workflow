@@ -910,10 +910,13 @@ function writeRunProgressMirror(mainRoot, project, planPath, readFile, op, mainR
 // ---------------------------------------------------------------------------
 // checkEvidenceShape — presence-only check for role-specific evidence tokens.
 //
-// tdd-guide:   needs BOTH 'RED' AND 'GREEN' (or 'n/a' reason).
-// implementer: needs 'non_tdd_reason' AND one of {regression-green, build-green,
-//              smoke-integration} (or 'n/a').
-// other roles: file present and non-empty is sufficient.
+// tdd-guide:        needs BOTH 'RED' AND 'GREEN' (or 'n/a' reason).
+// implementer:      needs 'non_tdd_reason' AND one of {regression-green, build-green,
+//                   smoke-integration} (or 'n/a').
+// metric-optimizer: needs a NON-EMPTY value for each of 'metric_baseline', 'metric_final',
+//                   'iterations_used', 'regression-green' (the hollow-stub guard — token keys
+//                   alone are not enough) (or 'n/a').
+// other roles:      file present and non-empty is sufficient.
 //
 // @param {string}      role         node role string
 // @param {string}      nodeId       node id (for error context)
@@ -1055,6 +1058,29 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     }
     if (!hasChangeType) {
       return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing change-type token', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+    }
+    return { ok: true };
+  }
+
+  // metric-optimizer: the measured metric claim IS the node's entire deliverable, so a bare
+  // token-name presence check (as tdd-guide/implementer use) is not enough — the open-time
+  // seeded stub already carries every D6 token KEY with an EMPTY value, so a name-only probe
+  // would close a node COMPLETE on a hollow stub with zero ratchet log. Enforce that each of the
+  // four non-binding D6 tokens is present AND carries a non-empty value (evidence-binding is
+  // checked at the top of this function). Presence-only, per the function's documented contract:
+  // a non-whitespace value after the column-0 `<token>:` is required; the value itself is not
+  // validated. The stub's `<!-- <token>: paste ... -->` comment line is NOT column-0 anchored on
+  // the token key, so it never satisfies the check.
+  if (role === 'metric-optimizer') {
+    if (!content) {
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for metric-optimizer node ' + nodeId, expected: ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green'] };
+    }
+    const D6_TOKENS = ['metric_baseline', 'metric_final', 'iterations_used', 'regression-green'];
+    for (const token of D6_TOKENS) {
+      const hasValue = new RegExp('^' + token + ':[ \\t]*(\\S.*)$', 'm').test(content);
+      if (!hasValue) {
+        return { ok: false, kind: 'shape', missingTokenClass: token, reason: 'metric-optimizer ' + nodeId + ' evidence missing non-empty ' + token + ' token', expected: D6_TOKENS };
+      }
     }
     return { ok: true };
   }
@@ -1241,7 +1267,41 @@ function buildDispatch(nodeInfo, context) {
   if (ctx.leg_branch != null && String(ctx.leg_branch).trim() !== '') {
     d.leg_branch = String(ctx.leg_branch);
   }
+  // #634 (metric-optimizer): an optimize node's budget_wallclock_minutes OVERRIDES the tier-derived
+  // wait budget (the ratchet's declared runtime ceiling); mark the source so the orchestrator's
+  // wait-budget ladder applies the contract budget, not the tier default. Conditionally applied (like
+  // goal_line/leg_path): absent ctx.budget_wallclock_minutes leaves the tier-derived budget + source
+  // byte-identical to pre-#634. The optimize contract itself is attached so the dispatched agent runs
+  // the exact frozen ratchet parameters.
+  if (Number.isFinite(ctx.budget_wallclock_minutes) && ctx.budget_wallclock_minutes > 0) {
+    d.wait_budget_minutes = ctx.budget_wallclock_minutes;
+    d.wait_budget_source = 'optimize_budget';
+  }
+  if (ctx.optimize != null) {
+    d.optimize = ctx.optimize;
+  }
   return d;
+}
+
+// #634 (metric-optimizer): resolve the optimize context to thread onto a dispatch card for a
+// metric-optimizer node. Returns { optimize, budget_wallclock_minutes? } when the node is a
+// metric-optimizer WITH a frozen optimize(<id>) contract, else {} (spread is a no-op ⇒ every
+// non-optimize card stays byte-identical). Reads the contract from the frozen plan via the validator's
+// single parser (no second copy of the grammar).
+function optimizeDispatchCtx(planContent, role, nodeId) {
+  if (role !== 'metric-optimizer') return {};
+  let parseOptimizeContracts;
+  try { ({ parseOptimizeContracts } = require('./kaola-workflow-plan-validator')); } catch (_) { return {}; }
+  if (typeof parseOptimizeContracts !== 'function') return {};
+  let contracts;
+  try { contracts = parseOptimizeContracts(planContent); } catch (_) { return {}; }
+  const contract = contracts && typeof contracts.get === 'function' ? contracts.get(nodeId) : null;
+  if (!contract) return {};
+  const out = { optimize: contract };
+  if (Number.isFinite(contract.budget_wallclock_minutes) && contract.budget_wallclock_minutes > 0) {
+    out.budget_wallclock_minutes = contract.budget_wallclock_minutes;
+  }
+  return out;
 }
 
 // #609/#610: the advisory frontier/newly-ready preview descriptor (orient's frontier, the #472 read-
@@ -2038,6 +2098,9 @@ function runOpenNext(opts) {
     forge_rider:    null,
     // #603: thread the state-persisted Codex dispatch mode (null when absent → fail-closed default).
     codex_dispatch_mode: codexDispatchMode || null,
+    // #634: thread the metric-optimizer optimize contract + wait-budget override ({} ⇒ no-op for every
+    // other role, so the dispatch card stays byte-identical).
+    ...optimizeDispatchCtx(planContent, targetNode.role, targetNode.id),
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -2543,6 +2606,9 @@ function runCloseAndOpenNext(opts) {
     forge_rider:    null,
     // #603: thread the state-persisted Codex dispatch mode (null when absent → fail-closed default).
     codex_dispatch_mode: codexDispatchMode || null,
+    // #634: thread the optimize contract + wait-budget override for a fused-advance optimize node ({} ⇒
+    // no-op for every other role ⇒ byte-identical dispatch card).
+    ...optimizeDispatchCtx(planForAdvance, nextNode.role, nextNode.id),
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -4725,6 +4791,9 @@ function runOpenReady(opts) {
           leg_path: legInfo ? legInfo.legPath : null, leg_branch: legInfo ? legInfo.legBranch : null,
           // #603: thread the state-persisted Codex dispatch mode (null when absent → fail-closed default).
           codex_dispatch_mode: codexDispatchMode || null,
+          // #634: thread the optimize contract + wait-budget override for a co-opened optimize node ({} ⇒
+          // no-op for every other role ⇒ byte-identical dispatch card).
+          ...optimizeDispatchCtx(planContent, n.role, n.id),
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).

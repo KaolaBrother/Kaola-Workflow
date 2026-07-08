@@ -632,6 +632,7 @@ contractor
 workflow-planner
 issue-scout
 synthesizer
+metric-optimizer
 ```
 
 (`adversarial-verifier` is the read-only skeptic for the opt-in adaptive path; it is
@@ -639,7 +640,10 @@ mirrored into the Codex editions for parity and is never a review gate. `contrac
 `workflow-planner`, and `issue-scout` are the adaptive lean-orchestrator roles —
 bookkeeper, DAG front end, and read-only bundle-lane backlog scout. `synthesizer` is the
 adaptive parallel-write convergence role (#463) — reasoning-class (Opus), dispatched only
-to reconcile concurrent write legs by intent on a real merge conflict.)
+to reconcile concurrent write legs by intent on a real merge conflict. `metric-optimizer`
+is the adaptive bounded metric-ratchet role — each iteration it proposes a change,
+applies it, runs the regression gate, measures the metric, and accepts or rejects it
+against the running baseline until a stop condition fires.)
 
 The managed setup copies role configs into `~/.codex/agents/kaola-workflow/` (global
 default; a project-local override targets `<project>/.codex/agents/kaola-workflow/`

@@ -663,6 +663,25 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
 }
 
+// --- #634: pr-metric-optimizer-card block sanity — the new block exists, obligates all 6
+//     plan-run surfaces (both/both), and its distinctive tokens are not vacuous substrings of
+//     its own marker (the #637 lesson applied PROACTIVELY, before any bug is ever observed). The
+//     card file it points at must also exist. ------------------------------------------------
+{
+  const block = REQUIRED_BLOCKS.find(b => b.block_id === 'pr-metric-optimizer-card');
+  assert(!!block, '#634: pr-metric-optimizer-card block must exist in the manifest');
+  if (block) {
+    const { error, files } = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
+    assert(!error && files.length === 6,
+      '#634: pr-metric-optimizer-card must obligate all 6 plan-run surfaces (both/both)');
+    const marker = norm(block.content_tokens[0]);
+    assert(block.content_tokens.slice(1).every(t => !marker.includes(norm(t))),
+      '#634: pr-metric-optimizer-card distinctive tokens must not be substrings of its own marker');
+  }
+  assert(exists('docs/plan-run-cards/metric-optimizer.md'),
+    '#634: docs/plan-run-cards/metric-optimizer.md card must exist');
+}
+
 // --- SUPERSET PROOF: every legacy in-scope T-pin token folds into a manifest
 //     block (⊇ the legacy surface set) or is an accepted residual. Covers the
 //     #624-fix gate flags + workflow_path:adaptive explicitly. --------------

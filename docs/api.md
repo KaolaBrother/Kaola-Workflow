@@ -348,6 +348,89 @@ The read-axis scheduler (#303/#375/#377/#438/#439) marks N rows `in_progress`, b
 - **`validation_command: <cmd>`** (hash-covered; reader-only, no freeze gate) — the consumer's validation command, recorded ONCE by the planner at freeze (`plan-validator.js parseValidationCommand`). Each node and Finalization reuse it instead of re-deriving a full-suite command per node (the "record once, cite don't re-run" discipline; closes the Stage-1 omission). Absent ⇒ `null`.
 - **`validation_test_consumes: a/b.md, c.md`** (hash-covered; `parseValidationTestConsumes`) — the OPTIONAL widening of the code-tree-hash keep-as-code set for a self-hosting fork whose chain tests read prose beyond the built-in `SELF_HOST_TEST_CONSUMED`. Listed files stay code-relevant for the receipt freshness hash (so a real change to them is never cited-as-unchanged). The producer records the resolved list in the receipt so the gate replays the identical band. Absent ⇒ `[]`.
 
+### `## Meta` field `optimize(<node-id>)` — the metric-optimizer contract (issue #634 / D-634-01)
+
+`metric-optimizer` is a closed-library role (`CANONICAL_ROLES`/`WRITE_ROLES`/`IMPLEMENT_ROLES`,
+`kaola-workflow-plan-validator.js`; model tier `sonnet`, `kaola-workflow-resolve-agent-model.js`)
+serving *direction-not-destination* work — no fixed acceptance threshold is knowable at freeze. It
+is an ordinary `sequence`-shaped `IMPLEMENT_ROLES` member: `producesCode()` is true for it exactly as
+for `implementer`/`tdd-guide`, so **G1 `code-reviewer` and G3 `main-session-gate` post-dominance are
+inherited with no gate-plumbing change.**
+
+**The `optimize(<node-id>):` Meta block (`parseOptimizeContracts`).** One block per
+`metric-optimizer` node, keyed by node id, read from the RAW `## Meta` body (fence-scoped exactly
+like `parseSpeculativePolicy`/`parseValidationCommand`), so a header must sit at column 0 and its
+fields are indented:
+
+```
+optimize(n3):
+  metric_command: node scripts/bench-walkthrough.js --emit-metric
+  metric_paths: bench/suite.js
+  direction: min
+  budget_iterations: 20
+  budget_wallclock_minutes: 60        # optional; default = tier-derived wait budget
+  regression_gate: npm test           # optional; default = Meta validation_command
+  metric_repeats: 3                   # optional; default 1 (median-of-K)
+  min_delta: 0.5                      # optional; default 0 (absolute metric units)
+  patience: 5                         # optional; consecutive rejects before early stop
+```
+
+`metric_paths` is comma/whitespace-separated and normalized through the same parser as
+`declared_write_set` (`classifier.parseWriteSetCell`), so OPT-2 disjointness (below) compares both
+under identical normalization. Absent optional fields parse to `null` except `metric_repeats`
+(default `1`) and `min_delta` (default `0`). `computePlanHash` already normalizes the whole `## Meta`
+body, so the contract is `plan_hash`-covered automatically — mutating any field flips the hash (a
+`--resume-check` refusal on tamper), with no hash-computation change.
+
+**Bounded budget caps (`kaola-workflow-adaptive-schema.js`).** `OPTIMIZE_ITER_CAP = 50` and
+`OPTIMIZE_WALLCLOCK_CAP = 120` (minutes) — byte-identical ×4, living beside `MAX_NODES` in the cap
+cluster.
+
+**Output contract (`parseMetricValue`, `kaola-workflow-adaptive-schema.js`).** `metric_command`'s
+stdout must carry a column-0 `metric: <number>` line (a signed decimal); last-match-wins, mirroring
+`parseNodeVerdict`'s discipline. One-sourced so the role's own evidence and the OPT-5 verifier's
+reproduction check parse it identically.
+
+**Freeze rules (OPT-1..6, all fail-closed `errors.push('OPT-N: …')` refusals folded into
+`{result:'refuse', reason:'plan_invalid'}`):**
+
+- **OPT-1** — exactly one `optimize(<id>)` block per `metric-optimizer` node, and every block keys a
+  node that exists and is `metric-optimizer` (a mis-keyed or missing block refuses).
+- **OPT-2 (evaluation isolation)** — `metric_paths` non-empty and disjoint from the node's
+  `declared_write_set`; the metric harness can never live inside the mutable scope — a *runtime*
+  write to a metric path is separately caught by the existing per-node barrier (a write outside the
+  declared set).
+- **OPT-3 (bounded budget)** — `budget_iterations` an integer in `1..OPTIMIZE_ITER_CAP`;
+  `budget_wallclock_minutes`, when present, an integer in `1..OPTIMIZE_WALLCLOCK_CAP`.
+- **OPT-4** — `direction ∈ {min, max}`; `metric_repeats` an integer ≥ 1; `min_delta` a number ≥ 0.
+- **OPT-5 (reproduction gate)** — a change-gate `adversarial-verifier` must post-dominate every
+  `metric-optimizer` node, computed via the same `gateUncovered` reachability-after-gate-removal
+  check G1/G2 use. The measured metric claim is the node's entire deliverable, so a plan with an
+  optimize node uncovered by a downstream `adversarial-verifier` never freezes.
+- **OPT-6** — a `regression_gate` must resolve non-empty: the block's own field, or (if absent) the
+  Meta `validation_command`. Neither present ⇒ refused — a metric-only ratchet with no regression
+  gate is Goodhart bait.
+
+**Evidence contract (D6).** `ROLE_TOKEN_REGISTRY['metric-optimizer']` (see "Export:
+`ROLE_TOKEN_REGISTRY`" below) = `['evidence-binding', 'metric_baseline', 'metric_final',
+'iterations_used', 'regression-green']`. `checkEvidenceShape` (`kaola-workflow-adaptive-node.js`)
+carries a dedicated `metric-optimizer` branch — unlike the presence-only checks for `tdd-guide`/
+`implementer`, it requires each of the four non-binding tokens (`evidence-binding` is checked
+earlier, universally, for every role) to carry a **non-empty** column-0 value
+(`^<token>:[ \t]*(\S.*)$`), not merely the token key: the seeded open-time stub already carries every
+D6 token *key*, so a bare presence check would let a node close COMPLETE on a fully hollow stub with
+zero ratchet log. The value itself is otherwise not validated (presence-only, per the function's
+documented contract).
+
+**Dispatch-card threading.** `optimizeDispatchCtx(planContent, role, nodeId)`
+(`kaola-workflow-adaptive-node.js`) resolves the frozen `optimize(<id>)` contract for a
+`metric-optimizer` node and attaches it to the dispatch card as `dispatch.optimize`; when the
+contract's `budget_wallclock_minutes` is a positive number it also overrides
+`dispatch.wait_budget_minutes` (source `optimize_budget`, replacing the tier-derived
+`planner_model`/`role_default` value — see "`opened` payload — `dispatch` sub-object" below). A
+non-optimize node, or an optimize node without a frozen contract, gets `{}` back (spread no-op) —
+every other dispatch card stays byte-identical to pre-#634.
+
 ### Script: `kaola-workflow-run-chains.js` (issue #432)
 
 Runs all four edition test chains via `spawnSync` with real process exit codes (no shell pipe tricks that mask failures) and produces a machine-verifiable chain receipt.
@@ -433,9 +516,15 @@ dispatch: {
   model_display?:     { claude: string, codex: string, opencode: string }, // optional (issue #610);
                                          //   present only when `model` resolves to a non-null tier
                                          //   (absent for a model-less / role-static node)
-  wait_budget_minutes: number,          // issue #611; tier-derived (reasoning=40 / standard=20 /
-                                         //   role-default=20); ALWAYS present, never null
-  wait_budget_source:  'planner_model' | 'role_default', // issue #611; which branch produced the budget
+  wait_budget_minutes: number,          // issue #611 (overridden by #634, see below); tier-derived
+                                         //   (reasoning=40 / standard=20 / role-default=20); ALWAYS
+                                         //   present, never null
+  wait_budget_source:  'planner_model' | 'role_default' | 'optimize_budget', // issue #611 (#634 adds
+                                         //   the third value); which branch produced the budget
+  optimize?:           object,          // optional (issue #634); the frozen optimize(<node-id>)
+                                         //   contract — present only for a metric-optimizer node with
+                                         //   a frozen contract; see "`## Meta` field `optimize(<node-id>)`"
+                                         //   above
 }
 ```
 
@@ -449,6 +538,15 @@ wait_budget_source }`: tier `reasoning` → `{40, 'planner_model'}`, `standard` 
 role-default, never `null`). The Codex Join Protocol rule this backs: a `running` agent is never
 interrupted before its `wait_budget_minutes` elapses. See `docs/plan-run-cards/join-protocol.md` for
 the full join-loop/escalation-ladder mechanics that consume this field.
+
+**`optimize` / the `optimize_budget` wait-budget override (issue #634 / D-634-01).** Conditionally
+attached exactly like `goal_line`/`leg_path` — `optimizeDispatchCtx()` resolves the frozen
+`optimize(<node-id>)` contract for a `metric-optimizer` node and folds it into `buildDispatch()`'s
+context; when the contract's `budget_wallclock_minutes` is a positive number it overrides
+`wait_budget_minutes`/`wait_budget_source` (`'optimize_budget'`) ahead of the tier-derived value
+above, and the contract itself is attached as `dispatch.optimize`. A non-optimize node, or an
+optimize node without a frozen contract, gets neither key — its dispatch card is byte-identical to
+pre-#634. See "`## Meta` field `optimize(<node-id>)`" above for the full contract shape.
 
 **`model_display` (issue #610).** Conditionally attached exactly like `goal_line`/`leg_path` — `buildDispatch()` (and every other `dispatch`/`opened`/`first_node` emitter) calls `modelDisplay(model)` and attaches the key only when the node's resolved tier is non-null; a model-less node's descriptor stays byte-identical to before this field existed. `modelDisplay(tier)` first runs the value through `normalizeTier()` (so a legacy `opus`/`sonnet` cell displays identically to its `reasoning`/`standard` counterpart), then returns a runtime-native display string per key so a narrative echo of the raw tier reads naturally on the runtime that receives it: `claude` is the `Agent(model=…)` alias (`dispatchModelClaude`: `reasoning`→`"opus"`, `standard`→`"sonnet"`); `codex` is `"<effort> reasoning effort"` (`dispatchEffort`: `reasoning`→`"xhigh reasoning effort"`, `standard`→`"high reasoning effort"`); `opencode` is `"<rank> effort variant"` (`TIER_RANK`: `reasoning`→`"top effort variant"`, `standard`→`"second effort variant"`). Additive only — the raw `model` field is unchanged; this is a sibling display, not a replacement.
 

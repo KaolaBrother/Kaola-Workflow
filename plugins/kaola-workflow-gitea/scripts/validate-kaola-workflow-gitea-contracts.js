@@ -180,7 +180,8 @@ assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh'
 // #376: the write-lane containment hook ships in every edition (byte-identical, forge-neutral).
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-write-lane.sh')), 'Gitea write-lane hook missing');
 // #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired). #463: +synthesizer = 15.
-assert(agentFiles.length === 15, 'expected 15 Gitea agent profiles (14 base + synthesizer #463; <role>-max retired #451), got ' + agentFiles.length);
+// #634: +metric-optimizer = 16.
+assert(agentFiles.length === 16, 'expected 16 Gitea agent profiles (14 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451), got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -746,6 +747,8 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-
 assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
 assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'literal tokens RED');
 assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
+// #634: producer-attested evidence-token vocabulary in the metric-optimizer forge agent profile.
+assertIncludes(pluginRoot + '/agents/metric-optimizer.toml', 'iterations_used');
 
 // #445/#446: operator_hint + route-findings + --summary pins (Gitea forge ports).
 // OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,

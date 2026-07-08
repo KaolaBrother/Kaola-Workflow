@@ -31,6 +31,9 @@ function writeManifest(dir, obj) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-'));
 try {
   assert.strictEqual(resolver.resolveAgentModel('tdd-guide', { agentDir: tmp }), 'sonnet');
+  // #634: the metric-optimizer default resolves to the standard tier (sonnet) — no agent file, no
+  // manifest, so it falls through to DEFAULT_AGENT_MODELS. It is NOT a reasoning-floor role.
+  assert.strictEqual(resolver.resolveAgentModel('metric-optimizer', { agentDir: tmp }), 'sonnet');
 
   writeAgent(tmp, 'code-reviewer', 'opus');
   assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmp }), 'opus');
