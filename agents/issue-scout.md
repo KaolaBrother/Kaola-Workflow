@@ -188,3 +188,7 @@ When, after completing the full survey, there is no claimable, unblocked, same-s
 ```
 
 `backlog_empty` is `true` and `recommended_bundle` is `null` (not omitted). Do not emit this shape merely because confidence is low or the available bundles are suboptimal; emit it only when no issue can pass all bundle selection rules. A consuming driver or router treats this shape as a terminal signal: stop without proceeding to claim.
+
+## Evidence Contract
+
+Evidence contract — you are a READ-ONLY role. You CANNOT self-write `.cache` evidence. RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to `kaola-workflow/{project}/.cache/{node-id}.md` via `record-evidence --stdin`, which re-injects this node's `evidence-binding: <node-id> <nonce>` header — never add, alter, or strip that header yourself. Include every content-bearing token your role produces (`recommendation`) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.

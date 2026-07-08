@@ -133,3 +133,7 @@ Links to other codemaps
 ---
 
 **Remember**: Documentation that doesn't match reality is worse than no documentation. Always generate from the source of truth.
+
+## Evidence Contract
+
+Evidence contract — you are a WRITE-role agent. SELF-WRITE your evidence directly into your seeded `.cache/{node-id}.md`. The seeded file already carries an `evidence-binding: <node-id> <nonce>` header line — read it, preserve it verbatim, never add/alter/strip it, and append your content below. Include every content-bearing token your role produces (`docs_updated`) with a non-empty value (a lossy one-line record is refused at close).

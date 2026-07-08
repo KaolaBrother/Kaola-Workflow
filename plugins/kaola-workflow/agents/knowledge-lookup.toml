@@ -15,4 +15,5 @@ Output contract:
 - For Context7 results, cite the library name and version. For web-fetched results, cite the source URL and retrieval date.
 - State when knowledge lookup is unnecessary because local patterns are sufficient.
 - Save or return content suitable for kaola-workflow/{project}/.cache/knowledge-lookup.md.
+- Evidence contract: you are a READ-ONLY role and CANNOT self-write .cache evidence -- RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to kaola-workflow/{project}/.cache/{node-id}.md via record-evidence --stdin, which re-injects this node's evidence-binding: <node-id> <nonce> header (never add, alter, or strip that header yourself). Include every content-bearing token your role produces (findings, sources) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.
 """

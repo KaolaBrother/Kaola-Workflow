@@ -87,3 +87,7 @@ Order the implementation by dependency:
 1. Step 1
 2. Step 2
 ```
+
+## Evidence Contract
+
+Evidence contract — you are a READ-ONLY role. You CANNOT self-write `.cache` evidence. RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to `kaola-workflow/{project}/.cache/{node-id}.md` via `record-evidence --stdin`, which re-injects this node's `evidence-binding: <node-id> <nonce>` header — never add, alter, or strip that header yourself. Include every content-bearing token your role produces (`files_to_create`/`files_to_modify`, `build_sequence`) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.

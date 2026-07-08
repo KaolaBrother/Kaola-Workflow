@@ -15,4 +15,5 @@ Output contract:
 - Recommend one approach and explain why it fits the evidence.
 - Identify hidden risks and assumptions.
 - Save or return content suitable for kaola-workflow/{project}/.cache/planner.md.
+- Evidence contract: you are a READ-ONLY role and CANNOT self-write .cache evidence -- RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to kaola-workflow/{project}/.cache/{node-id}.md via record-evidence --stdin, which re-injects this node's evidence-binding: <node-id> <nonce> header (never add, alter, or strip that header yourself). Include every content-bearing token your role produces (recommendation) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.
 """

@@ -130,3 +130,7 @@ npx eslint . --fix
 ---
 
 **Remember**: Fix the error, verify the build passes, move on. Speed and precision over perfection.
+
+## Evidence Contract
+
+Evidence contract — you are a WRITE-role agent. SELF-WRITE your evidence directly into your seeded `.cache/{node-id}.md`. The seeded file already carries an `evidence-binding: <node-id> <nonce>` header line — read it, preserve it verbatim, never add/alter/strip it, and append your content below. Include every content-bearing token your role produces (`build-green`) with a non-empty value (a lossy one-line record is refused at close).

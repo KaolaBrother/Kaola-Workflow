@@ -16,4 +16,5 @@ Output contract:
 - List files changed and why.
 - Re-run the failing command and report the result.
 - Save or return content suitable for kaola-workflow/{project}/.cache/build-error-resolver-*.md.
+- Evidence contract: you are a WRITE-role agent -- SELF-WRITE your evidence directly into your seeded .cache/{node-id}.md file at the path you were given. The seeded file already carries an evidence-binding: <node-id> <nonce> header line -- read it, preserve it verbatim, never add/alter/strip it, and append your content below. Include every content-bearing token your role produces (build-green) with a non-empty value (a lossy one-line record is refused at close).
 """

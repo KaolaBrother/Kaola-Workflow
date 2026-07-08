@@ -171,6 +171,14 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   The column header row must be `| id | status |` — not `| node |`, `| node_id |`, or any alias.
   Any plan with a different ledger header will fail the freeze-wall with `ledger_header_invalid`.
   The `--repair` flag can normalize a bad header to canonical form.
+- **Compact-plan posture.** Decide per issue whether design needs a dedicated node. Simple issue:
+  author NO `planner`/`code-architect` node — act as the architect yourself and write the
+  implementation direction (files, approach, constraints, gotchas) INTO the implement node's
+  `## Node Briefs` entry so the standard-tier implementer still receives durable reasoning-tier
+  direction. Complex issue: author the design node; the downstream implement node's brief says
+  "read `<design-node>`'s evidence file before starting," and the design node's brief states what
+  its deliverable must contain. Author `## Node Briefs` per node (intent, approach, key
+  constraints, which upstream evidence to read); the section is frozen with the plan.
 - **Aggregator-coupling rule — `generated_port_split`.** When a node's declared write set
   includes `scripts/<base>` where `<base>` is a GENERATED_AGGREGATOR (e.g.,
   `kaola-workflow-plan-validator.js`, `kaola-workflow-adaptive-node.js`), the SAME node must ALSO

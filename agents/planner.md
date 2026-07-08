@@ -228,3 +228,7 @@ Each phase should be mergeable independently. Avoid plans that require all phase
 - Phases that cannot be delivered independently
 
 **Remember**: A great plan is specific, actionable, and considers both the happy path and edge cases. The best plans enable confident, incremental implementation.
+
+## Evidence Contract
+
+Evidence contract — you are a READ-ONLY role. You CANNOT self-write `.cache` evidence. RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to `kaola-workflow/{project}/.cache/{node-id}.md` via `record-evidence --stdin`, which re-injects this node's `evidence-binding: <node-id> <nonce>` header — never add, alter, or strip that header yourself. Include every content-bearing token your role produces (`recommendation`) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.

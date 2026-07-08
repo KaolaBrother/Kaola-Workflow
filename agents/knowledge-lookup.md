@@ -86,3 +86,7 @@ Input: "What are the Supabase auth methods?"
 Action: Call the resolve-library-id tool with libraryName "Supabase", query "Supabase auth methods"; then call the query-docs tool with the chosen libraryId; list methods and show minimal examples from docs.
 
 Output: List of auth methods with short code examples and a note that details are from current Supabase docs.
+
+## Evidence Contract
+
+Evidence contract — you are a READ-ONLY role. You CANNOT self-write `.cache` evidence. RETURN your FULL structured deliverable as your final message; the orchestrator persists it verbatim to `kaola-workflow/{project}/.cache/{node-id}.md` via `record-evidence --stdin`, which re-injects this node's `evidence-binding: <node-id> <nonce>` header — never add, alter, or strip that header yourself. Include every content-bearing token your role produces (`findings`, `sources`) with a non-empty value; a lossy one-line paraphrase of a rich deliverable is refused at close.
