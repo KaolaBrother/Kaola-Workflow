@@ -1,0 +1,12 @@
+{"node":"n1-opt-shape","event":"opened","ts":"2026-07-08T06:30:20.281Z"}
+{"node":"n1-opt-shape","event":"closed","ts":"2026-07-08T07:01:45.908Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-08T07:01:46.271Z"}
+{"node":"n2-review","event":"evidence","ts":"2026-07-08T07:12:05.446Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-08T07:12:44.166Z"}
+{"node":"n3-adversary","event":"opened","ts":"2026-07-08T07:13:05.025Z"}
+{"node":"n3-adversary","event":"evidence","ts":"2026-07-08T07:29:20.389Z"}
+{"node":"n3-adversary","event":"closed","ts":"2026-07-08T07:29:20.879Z"}
+{"node":"n4-docs","event":"opened","ts":"2026-07-08T07:29:32.865Z"}
+{"node":"n4-docs","event":"closed","ts":"2026-07-08T07:32:28.883Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-07-08T07:32:29.231Z"}
+{"node":"n5-finalize","event":"closed","ts":"2026-07-08T07:34:15.657Z"}

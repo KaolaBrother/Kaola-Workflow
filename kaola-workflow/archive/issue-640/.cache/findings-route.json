@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=document status=open severity=low fix_role=none rationale=docs/api.md OPT-2 bullet (line ~406) still lists only directory-shaped/glob/'..'-aliasing; the three new shapes (absolute_path, backslash_in_path, bare-existing-directory) are not yet documented",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=reason-LABEL ordering diverges from the freeze wall for a path that is both absolute and dir-shaped (e.g. '/bench/' labels \"directory-shaped, glob, or '..'-aliasing\" at OPT-2 vs absolute_path at the wall)",
+    "file": "accept/refuse behavior is identical in all cases, cosmetic only",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
