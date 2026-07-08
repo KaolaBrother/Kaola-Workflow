@@ -7,8 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #638 | refactor(edition-sync): --check (runCheck) does not cover COMMON/byte-group mirrors — only GENERATED_AGGREGATORS | open | — | P3: extend edition-sync.js runCheck to verify COMMON_SCRIPTS + BYTE_IDENTICAL_GROUPS mirrors (parity with runWrite's #629 create-on-missing) so --check reds a missing/drifted mirror on its own (today validate-script-sync catches it in-chain so it's fail-closed end-to-end; low/cosmetic --check/--write asymmetry surfaced by #629's adversary); + a test-edition-sync.js case; cross-edition #307 |
-| #639 | harden metric-optimizer OPT freeze rules (R1 metric_command required · R2 dir-shaped metric_paths · R3 duplicate optimize block) | open | — | P3: three non-blocking freeze-rule hardening rules in plan-validator.js parseOptimizeContracts/OPT-1..6 (surfaced by #634 n5-review + n6-adversary). R1 refuse metric_command absence at freeze (implicitly required by D2, no OPT rule reads it). R2/R5 refuse directory-shaped and ../-alias metric_paths (exact-string disjointness misses bench/ and bench/../src/hot.js). R3/R7 refuse duplicate / fenced-decoy optimize(<id>) blocks (Map.set last-win). R6 (numeric hex/exp form) is documentation-only — cap binds on the converted value, no unbounded escape. Non-shipping-blocking (change-gate reproduction + evidence-shape backstop bound impact to one wasted dispatch); each fix = canonical plan-validator.js + a walkthrough refuse fixture; regen sync:editions; cross-edition #307 |
+| none | No active work | — | — | — |
 
 ## Rules
 

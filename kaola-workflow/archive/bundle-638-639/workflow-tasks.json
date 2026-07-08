@@ -1,0 +1,42 @@
+{
+  "source_plan_hash": "050a1cdb7c467840907e45b82f5e2b2721071208f80378901746fd2adaaf6821",
+  "tasks": [
+    {
+      "id": "n1-editionsync-check",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-opt-freeze",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-adversary",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-08T05:47:53.530Z"
+}
