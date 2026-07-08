@@ -11355,6 +11355,358 @@ function rtHarness(initialFiles, opts) {
   } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
 }
 
+// ===========================================================================
+// Durable node channel + per-role close contract + scheduler gate-count residuals.
+// The dispatch card carries the node's brief (goal_line) verbatim and the derived
+// upstream_evidence pointers; the consumer proves it consumed each producer upstream
+// (upstream_read echo), the close gate enforces registry content tokens for producer
+// roles, and a live main-session-gate is counted as a live observer at co-open/merge.
+// RED-first: these reference behaviors absent before the channel + gate-count edits.
+// ===========================================================================
+{
+  const ADAPT = require('./kaola-workflow-adaptive-node');
+  const VAL = require('./kaola-workflow-plan-validator');
+
+  // A plan carrying a `## Node Briefs` section: design (code-architect producer, root) →
+  // impl (tdd-guide consumer, depends on design). The impl brief spans two lines.
+  const IMPL_BRIEF = 'Implement X per the design.\nRead design evidence first.';
+  const DESIGN_BRIEF = 'Design X. Deliverable must carry files_to_create + build_sequence.';
+  function channelPlan(ledger) {
+    return [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| design | code-architect | — | — | 1 | sequence |',
+      '| impl | tdd-guide | design | scripts/x.js | 1 | sequence |',
+      '| finalize | finalize | impl | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Briefs', '',
+      '### impl', 'Implement X per the design.', 'Read design evidence first.', '',
+      '### design', DESIGN_BRIEF, '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      ...(ledger || ['| design | complete |', '| impl | in_progress |', '| finalize | pending |']),
+      '',
+    ].join('\n') + '\n';
+  }
+
+  // ---- V1: deriveDispatchChannel byte-for-byte + conditional-attach --------
+  {
+    if (typeof ADAPT.deriveDispatchChannel !== 'function') {
+      assert(false, 'V1: deriveDispatchChannel must be exported');
+    } else {
+      const plan = channelPlan();
+      const nodes = VAL.parseNodes(plan);
+      const implNode = nodes.find(n => n.id === 'impl');
+      const designNode = nodes.find(n => n.id === 'design');
+      const ch = ADAPT.deriveDispatchChannel(plan, implNode, 'test-project');
+      assert(ch.goal_line === IMPL_BRIEF,
+        'V1: goal_line is the brief byte-for-byte, got ' + JSON.stringify(ch.goal_line));
+      assert(Array.isArray(ch.upstream_evidence) && ch.upstream_evidence.length === 1,
+        'V1: upstream_evidence has one entry, got ' + JSON.stringify(ch.upstream_evidence));
+      const ue = ch.upstream_evidence[0];
+      assert(ue.node_id === 'design' && ue.role === 'code-architect'
+        && ue.path === 'kaola-workflow/test-project/.cache/design.md',
+        'V1: upstream_evidence entry {node_id,role,path} project-qualified, got ' + JSON.stringify(ue));
+      // ANTI-FABRICATION: the derived channel never carries a nonce anywhere.
+      assert(!/[0-9a-f]{12}/.test(JSON.stringify(ch)),
+        'V1: deriveDispatchChannel emits NO nonce (anti-fabrication), got ' + JSON.stringify(ch));
+      // Root node (design) has a brief but NO deps ⇒ goal_line present, upstream_evidence absent.
+      const chRoot = ADAPT.deriveDispatchChannel(plan, designNode, 'test-project');
+      assert(chRoot.goal_line === DESIGN_BRIEF, 'V1: root node goal_line from its brief');
+      assert(chRoot.upstream_evidence === undefined,
+        'V1: root node has NO upstream_evidence field (byte-identical), got ' + JSON.stringify(chRoot.upstream_evidence));
+    }
+  }
+  // Briefless / root back-compat: no ## Node Briefs and no deps ⇒ empty channel.
+  {
+    if (typeof ADAPT.deriveDispatchChannel === 'function') {
+      const briefless = channelPlan().replace(/## Node Briefs[\s\S]*?## Node Ledger/, '## Node Ledger');
+      const nodes = VAL.parseNodes(briefless);
+      const ch = ADAPT.deriveDispatchChannel(briefless, nodes.find(n => n.id === 'design'), 'test-project');
+      assert(ch.goal_line === undefined && ch.upstream_evidence === undefined,
+        'V1: briefless root ⇒ empty channel (byte-identical), got ' + JSON.stringify(ch));
+    }
+  }
+  // buildDispatch conditional-attach pin: with the fields set → attached; without → absent.
+  {
+    const withCh = buildDispatch({ id: 'impl', role: 'tdd-guide', model: null, declared_write_set: 'scripts/x.js' },
+      { goal_line: IMPL_BRIEF, upstream_evidence: [{ node_id: 'design', role: 'code-architect', path: 'kaola-workflow/test-project/.cache/design.md' }] });
+    assert(withCh.goal_line === IMPL_BRIEF, 'V1: buildDispatch attaches goal_line');
+    assert(Array.isArray(withCh.upstream_evidence) && withCh.upstream_evidence.length === 1,
+      'V1: buildDispatch attaches upstream_evidence when present, got ' + JSON.stringify(withCh.upstream_evidence));
+    const without = buildDispatch({ id: 'root', role: 'code-explorer', model: null, declared_write_set: '—' }, {});
+    assert(without.goal_line === undefined && without.upstream_evidence === undefined,
+      'V1: buildDispatch omits goal_line/upstream_evidence for a briefless/root card (byte-identical)');
+  }
+
+  // ---- V1 integration + V2 + V3: real tmpdir open/close/close-refuse -------
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-channel-'));
+    try {
+      const proj = path.join(tmp, 'kaola-workflow', 'test-project');
+      const cache = path.join(proj, '.cache');
+      fs.mkdirSync(cache, { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      const statePath = path.join(proj, 'workflow-state.md');
+      fs.writeFileSync(statePath, makeState());
+      const rf = (p) => fs.readFileSync(p, 'utf8');
+      const wf = (p, c) => fs.writeFileSync(p, c);
+
+      // Open-next over impl (design already complete) — the fused-advance is not used; open-next opens
+      // the next-action nextNode directly. Stub next-action to name impl and commit-node to record a base.
+      fs.writeFileSync(planPath, channelPlan());
+      const openShell = function(scriptPath, args) {
+        const base = path.basename(scriptPath);
+        const a = args || [];
+        if (base === 'kaola-workflow-plan-validator.js' && a.includes('--resume-check')) return { exitCode: 0, ok: true };
+        if (base === 'kaola-workflow-next-action.js') {
+          return { exitCode: 0, result: 'ok', allDone: false,
+            readySet: [{ id: 'impl', role: 'tdd-guide', model: null, declared_write_set: 'scripts/x.js', dependsOn: ['design'] }],
+            nextNode: { id: 'impl', role: 'tdd-guide', model: null, declared_write_set: 'scripts/x.js' } };
+        }
+        if (base === 'kaola-workflow-commit-node.js') {
+          return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl', overallOk: true, recordBase: { base: 'aaaabbbbcccc0000' } };
+        }
+        return { exitCode: 0 };
+      };
+      const opened = runOpenNext({ planPath, statePath, project: 'test-project', nodeId: null, shell: openShell, readFile: rf, writeFile: wf });
+      assert(opened.result === 'ok' && opened.opened && opened.opened.dispatch, 'V1-int: open-next ok with a dispatch card');
+      const disp = opened.opened.dispatch;
+      assert(disp.goal_line === IMPL_BRIEF, 'V1-int: card goal_line is the impl brief, got ' + JSON.stringify(disp.goal_line));
+      assert(Array.isArray(disp.upstream_evidence) && disp.upstream_evidence[0]
+        && disp.upstream_evidence[0].node_id === 'design'
+        && disp.upstream_evidence[0].path === 'kaola-workflow/test-project/.cache/design.md',
+        'V1-int: card upstream_evidence points to design (project-qualified), got ' + JSON.stringify(disp.upstream_evidence));
+      // V2 neg-3 fabrication grep: the SERIALIZED open envelope carries NO upstream nonce anywhere.
+      // design's line-1 nonce is defined below; assert the open envelope never contains ANY 12-hex token.
+      const openSerialized = JSON.stringify(opened);
+      assert(!/upstream_read/.test(openSerialized),
+        'V2-neg3: the open envelope carries NO upstream_read echo (anti-fabrication)');
+
+      // The impl seed carries an EMPTY `upstream_read: design` stub (producer upstream, IMPLEMENT consumer).
+      const implSeed = fs.readFileSync(path.join(cache, 'impl.md'), 'utf8');
+      assert(/^upstream_read:[ \t]+design[ \t]*$/m.test(implSeed),
+        'V2-seed: impl seed carries an EMPTY `upstream_read: design` stub (no nonce), got:\n' + implSeed);
+      assert(!/upstream_read:[ \t]+design[ \t]+\S/.test(implSeed),
+        'V2-seed: the seeded upstream_read stub has NO nonce (anti-fabrication)');
+
+      // Write design's completed evidence with a KNOWN line-1 nonce.
+      const DESIGN_NONCE = 'd0d0d0d0d0d0';
+      fs.writeFileSync(path.join(cache, 'design.md'),
+        'evidence-binding: design ' + DESIGN_NONCE + '\nfiles_to_create: a.js\nbuild_sequence: a then b\n');
+      // The impl node's open-time nonce = commit-node base slice(0,12).
+      const IMPL_NONCE = 'aaaabbbbcccc';
+      const implBinding = 'evidence-binding: impl ' + IMPL_NONCE + '\n';
+      const implBody = 'RED: t_x — AssertionError (pre-impl)\nGREEN: t_x passes; 1/1 green\n';
+
+      // ---- checkUpstreamConsumed direct: happy / neg-1 missing / advisory ----
+      if (typeof ADAPT.checkUpstreamConsumed !== 'function') {
+        assert(false, 'V2: checkUpstreamConsumed must be exported');
+      } else {
+        const nodes = VAL.parseNodes(channelPlan());
+        const statuses = { design: 'complete', impl: 'in_progress', finalize: 'pending' };
+        // happy: correct echo of design's line-1 nonce.
+        const okEv = implBinding + implBody + 'upstream_read: design ' + DESIGN_NONCE + '\n';
+        const rOk = ADAPT.checkUpstreamConsumed({ role: 'tdd-guide', nodeId: 'impl', evidenceContent: okEv, nodes, ledgerStatuses: statuses, planPath, project: 'test-project', readFile: rf });
+        assert(rOk.ok === true, 'V2-happy: a matching upstream_read echo ⇒ consumed ok, got ' + JSON.stringify(rOk));
+        // neg-1: KEY present (seeded) but NO nonce ⇒ hard refuse for an IMPLEMENT consumer.
+        const missEv = implBinding + implBody + 'upstream_read: design\n';
+        const rMiss = ADAPT.checkUpstreamConsumed({ role: 'tdd-guide', nodeId: 'impl', evidenceContent: missEv, nodes, ledgerStatuses: statuses, planPath, project: 'test-project', readFile: rf });
+        assert(rMiss.ok === false && rMiss.hard === true && rMiss.offending === 'design' && rMiss.reason === 'upstream_not_consumed',
+          'V2-neg1: a missing nonce echo ⇒ hard upstream_not_consumed, got ' + JSON.stringify(rMiss));
+        // neg-2: STALE nonce (design rotated to a different line-1 nonce) ⇒ mismatch refuse.
+        const staleEv = implBinding + implBody + 'upstream_read: design deadbeefdead\n';
+        const rStale = ADAPT.checkUpstreamConsumed({ role: 'tdd-guide', nodeId: 'impl', evidenceContent: staleEv, nodes, ledgerStatuses: statuses, planPath, project: 'test-project', readFile: rf });
+        assert(rStale.ok === false && rStale.hard === true && rStale.offending === 'design',
+          'V2-neg2: a stale nonce echo ⇒ hard upstream_not_consumed, got ' + JSON.stringify(rStale));
+        // back-compat (DD-5): KEY ABSENT (old in-flight consumer) ⇒ exempt (ok).
+        const noKeyEv = implBinding + implBody;
+        const rNoKey = ADAPT.checkUpstreamConsumed({ role: 'tdd-guide', nodeId: 'impl', evidenceContent: noKeyEv, nodes, ledgerStatuses: statuses, planPath, project: 'test-project', readFile: rf });
+        assert(rNoKey.ok === true, 'V2-backcompat: absent upstream_read KEY ⇒ exempt, got ' + JSON.stringify(rNoKey));
+        // advisory: a GATE (non-IMPLEMENT) depending on a producer ⇒ hard:false even on a miss.
+        const gateNodes = VAL.parseNodes(channelPlan(['| design | complete |', '| gate | in_progress |', '| finalize | pending |'])
+          .replace('| impl | tdd-guide | design | scripts/x.js | 1 | sequence |', '| gate | adversarial-verifier | design | — | 1 | sequence |')
+          .replace('### impl\nImplement X per the design.\nRead design evidence first.\n\n', ''));
+        const rAdv = ADAPT.checkUpstreamConsumed({ role: 'adversarial-verifier', nodeId: 'gate', evidenceContent: 'evidence-binding: gate x\nverdict: pass\nupstream_read: design\n', nodes: gateNodes, ledgerStatuses: { design: 'complete', gate: 'in_progress' }, planPath, project: 'test-project', readFile: rf });
+        assert(rAdv.ok === false && rAdv.hard === false && rAdv.offending === 'design',
+          'V2-advisory: producer→gate miss is advisory (hard:false), got ' + JSON.stringify(rAdv));
+      }
+
+      // ---- V2 close integration: neg-1 refuses upstream_not_consumed with ZERO mutation ----
+      {
+        // barrier-base-impl carries the open nonce so the binding check passes.
+        fs.writeFileSync(path.join(cache, 'barrier-base-impl'), 'aaaabbbbcccc0000\n');
+        fs.writeFileSync(path.join(cache, 'impl.md'), implBinding + implBody + 'upstream_read: design\n'); // KEY present, NO nonce
+        const before = fs.readFileSync(planPath, 'utf8');
+        const closeShell = function(scriptPath) {
+          const base = path.basename(scriptPath);
+          if (base === 'kaola-workflow-commit-node.js') { assert(false, 'V2-neg1: barrier must NOT be reached (refuse is before the barrier)'); return { exitCode: 1 }; }
+          return { exitCode: 0, result: 'ok' };
+        };
+        const rClose = runCloseAndOpenNext({ planPath, statePath, project: 'test-project', nodeId: 'impl', shell: closeShell, readFile: rf, writeFile: wf, cacheExists: (p) => fs.existsSync(p) });
+        assert(rClose.result === 'refuse' && rClose.reason === 'upstream_not_consumed' && rClose.offending === 'design',
+          'V2-neg1-close: close refuses upstream_not_consumed, got ' + JSON.stringify({ result: rClose.result, reason: rClose.reason, offending: rClose.offending }));
+        const after = fs.readFileSync(planPath, 'utf8');
+        assert(before === after, 'V2-neg1-close: ZERO ledger mutation on the upstream_not_consumed refuse');
+        assert(typeof rClose.operator_hint === 'string' && rClose.operator_hint.length > 0,
+          'V2-neg1-close: an operator_hint accompanies the refuse');
+      }
+
+      // ---- V3: resume re-hydration — the card re-derives from durable plan state alone ----
+      {
+        if (typeof ADAPT.deriveDispatchChannel === 'function') {
+          const planContent = fs.readFileSync(planPath, 'utf8');
+          const nodes = VAL.parseNodes(planContent);
+          const a = ADAPT.deriveDispatchChannel(planContent, nodes.find(n => n.id === 'impl'), 'test-project');
+          const b = ADAPT.deriveDispatchChannel(planContent, nodes.find(n => n.id === 'impl'), 'test-project');
+          assert(JSON.stringify(a) === JSON.stringify(b) && a.goal_line === IMPL_BRIEF,
+            'V3: a fresh-shell re-derivation of goal_line + upstream_evidence from the frozen plan is deterministic');
+          // The cached open envelope (opened.dispatch) is the authoritative re-dispatch context.
+          assert(opened.opened.dispatch.goal_line === IMPL_BRIEF
+            && Array.isArray(opened.opened.dispatch.upstream_evidence),
+            'V3: the cached open envelope carries goal_line + upstream_evidence for re-hydration');
+        }
+      }
+
+      // ---- V6: truncated producer evidence → evidence_shape_failed at CLOSE ----
+      {
+        // A code-architect (producer) whose evidence is truncated: the files_to_create|files_to_modify
+        // and build_sequence KEYS are seeded (present) but EMPTY ⇒ the generalized checkEvidenceShape
+        // must refuse at close. Direct checkEvidenceShape assertion (the close gate uses the same fn).
+        const truncated = 'evidence-binding: design d0d0d0d0d0d0\nfiles_to_create: \nbuild_sequence: \n';
+        const shape = checkEvidenceShape('code-architect', 'design', truncated, {});
+        assert(shape.ok === false,
+          'V6: a code-architect with EMPTY seeded content tokens fails checkEvidenceShape, got ' + JSON.stringify(shape));
+        // A non-empty producer evidence passes.
+        const full = 'evidence-binding: design d0d0d0d0d0d0\nfiles_to_create: a.js\nbuild_sequence: a then b\n';
+        assert(checkEvidenceShape('code-architect', 'design', full, {}).ok === true,
+          'V6: a non-empty producer evidence passes the generalized shape check');
+        // Alternation: files_to_modify alone (the other alternative) satisfies.
+        const alt = 'evidence-binding: design d0d0d0d0d0d0\nfiles_to_modify: b.js\nbuild_sequence: x\n';
+        assert(checkEvidenceShape('code-architect', 'design', alt, {}).ok === true,
+          'V6: the files_to_create|files_to_modify alternation is satisfied by EITHER alternative');
+        // A key ABSENT entirely (old in-flight producer) ⇒ exempt (non-empty fallback still passes).
+        const legacy = 'evidence-binding: design d0d0d0d0d0d0\nsome free-form producer notes\n';
+        assert(checkEvidenceShape('code-architect', 'design', legacy, {}).ok === true,
+          'V6-backcompat: a producer evidence with the content KEYS absent falls back to non-empty (in-flight exempt)');
+        // tdd-guide branch is UNTOUCHED: RED/GREEN presence still governs (empty RED: does not false-satisfy).
+        assert(checkEvidenceShape('tdd-guide', 'n', 'evidence-binding: n x\nsome notes\n', {}).ok === false,
+          'V6: tdd-guide branch untouched (missing RED token still refuses)');
+      }
+    } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // ---- #644 A1: a live kind:'gate' holds the relaxed write co-open (gate_live) --------
+  {
+    const gatePlan = makePlan([
+      '| gate | in_progress |',
+      '| doc | pending |',
+      '| finalize | pending |',
+    ], [
+      '| gate | main-session-gate | — | — | 1 | sequence |',
+      '| doc | doc-updater | — | docs/api.md | 1 | sequence |',
+      '| finalize | finalize | gate doc | CHANGELOG.md | 1 | sequence |',
+    ]);
+    // The running set already holds the live gate (kind:'gate').
+    const liveSet = JSON.stringify({ state: 'open', nodes: [
+      { id: 'gate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—', baseline: 'recorded' },
+    ] }, null, 2);
+    const h = rsHarness({ [RS_PLAN_PATH]: gatePlan, [RS_SET_PATH]: liveSet }, (base) => {
+      if (base === 'kaola-workflow-next-action.js') {
+        return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+          { id: 'doc', role: 'doc-updater', declared_write_set: 'docs/api.md' },
+        ] };
+      }
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1, result: 'refuse' };
+    });
+    const r = withParallelWrites(undefined, () => runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp }));
+    assert(r.result === 'ok' && r.reason === 'write_awaits_drain' && (r.opened || []).length === 0,
+      'A1-coopen-hold: the writer is HELD while a gate is live, got ' + JSON.stringify({ result: r.result, reason: r.reason, opened: (r.opened || []).length }));
+    assert(r.serialDegradeReason === 'gate_live',
+      'A1-coopen-hold: serialDegradeReason is gate_live, got ' + JSON.stringify(r.serialDegradeReason));
+  }
+  // A1 byte-identical serial fallback: NO running set (no gate) ⇒ the else-branch never fires.
+  {
+    const wPlan = makePlan([
+      '| w | pending |', '| finalize | pending |',
+    ], [
+      '| w | tdd-guide | — | scripts/w.js | 1 | sequence |',
+      '| finalize | finalize | w | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const h = rsHarness({ [RS_PLAN_PATH]: wPlan }, (base) => {
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'w', role: 'tdd-guide', declared_write_set: 'scripts/w.js' }] };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1, result: 'refuse' };
+    });
+    const r = withParallelWrites('0', () => runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp }));
+    assert(r.result === 'ok' && (r.opened || []).length === 1 && r.kind === 'write',
+      'A1-serial-fallback: a lone write opens serially with no running set, got ' + JSON.stringify({ opened: (r.opened || []).length, kind: r.kind }));
+    assert(r.serialDegradeReason !== 'gate_live',
+      'A1-serial-fallback: the serial path never emits gate_live (byte-identical)');
+  }
+  // A1 merge-fence-hold: a live gate holds the lane-group last-member merge.
+  {
+    const grpPlan = makePlan([
+      '| w | in_progress |', '| gate | in_progress |', '| finalize | pending |',
+    ], [
+      '| w | tdd-guide | — | — | 1 | sequence |',
+      '| gate | main-session-gate | — | — | 1 | sequence |',
+      '| finalize | finalize | w gate | CHANGELOG.md | 1 | sequence |',
+    ]);
+    // A legless single-member lane group (member w) + a live gate in the running set.
+    const grpSet = JSON.stringify({ state: 'open', lane_group: { group_id: 'lg1', members: ['w'], closed_members: [] }, nodes: [
+      { id: 'w', role: 'tdd-guide', kind: 'write', declared_write_set: '—', group_id: 'lg1' },
+      { id: 'gate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' },
+    ] }, null, 2);
+    // w's evidence: RED/GREEN + no_op (empty declared set ⇒ vacuity guard needs a no_op declaration).
+    const wEv = 'evidence-binding: w x\nRED: t (pre)\nGREEN: t passes\nno_op: legless test member\n';
+    const h = rsHarness({ [RS_PLAN_PATH]: grpPlan, [RS_SET_PATH]: grpSet, ['/p/.cache/w.md']: wEv }, (base) => {
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 0, result: 'ok' };
+    });
+    const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'w', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp, unlink: h.unlink });
+    assert(r.result === 'refuse' && r.reason === 'merge_awaits_read_drain',
+      'A1-merge-fence-hold: the last-member merge is held while a gate is live, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  }
+
+  // ---- #644 A2: validation_test_consumes widens the R2b legless co-open predicate --------
+  {
+    if (typeof ADAPT.tryR2bLeglessCoopen !== 'function') {
+      assert(false, 'A2: tryR2bLeglessCoopen must be exported for the fork-widening pin');
+    } else {
+      const forkPlan = [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'validation_test_consumes: docs/fork-guide.md', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
+        '| gate | adversarial-verifier | — | — | 1 | sequence | scratch |',
+        '| forkw | doc-updater | — | docs/fork-guide.md | 1 | sequence | — |', '',
+        '## Node Ledger', '',
+        '| id | status |', '| --- | --- |', '| gate | in_progress |', '| forkw | pending |', '',
+      ].join('\n') + '\n';
+      const files = { '/p/workflow-plan.md': forkPlan };
+      const rf = (p) => { if (p in files) return files[p]; throw new Error('ENOENT ' + p); };
+      const writeNodes = [{ id: 'forkw', role: 'doc-updater', declared_write_set: 'docs/fork-guide.md' }];
+      const liveNodes = [{ id: 'gate', role: 'adversarial-verifier', kind: 'read' }];
+      const chosen = ADAPT.tryR2bLeglessCoopen(writeNodes, liveNodes, '/p/workflow-plan.md', 'test-project', rf);
+      assert(chosen === null,
+        'A2: a validation_test_consumes doc (docs/fork-guide.md) is NOT scratch-observable-safe ⇒ NO legless co-open, got ' + JSON.stringify(chosen && chosen.id));
+      // Control: WITHOUT the widening, the same docs writer IS scratch-observable-safe (co-opens).
+      const noWiden = forkPlan.replace('validation_test_consumes: docs/fork-guide.md\n', '');
+      const files2 = { '/p/workflow-plan.md': noWiden };
+      const rf2 = (p) => { if (p in files2) return files2[p]; throw new Error('ENOENT ' + p); };
+      const chosen2 = ADAPT.tryR2bLeglessCoopen(writeNodes, liveNodes, '/p/workflow-plan.md', 'test-project', rf2);
+      assert(chosen2 && chosen2.id === 'forkw',
+        'A2-control: a plain docs writer behind a scratch gate DOES legless co-open (widening is the only difference), got ' + JSON.stringify(chosen2 && chosen2.id));
+    }
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -3420,13 +3420,74 @@ function testBundle424432433ValidatorGates() {
       'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
       'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
       'adversarial-verifier': ['evidence-binding', 'verdict'],
-      'doc-updater':          ['evidence-binding'],
       'main-session-gate':    ['evidence-binding', 'verdict', 'findings_blocking'],
+      // Per-role evidence contract rows: every producer/write role now carries ≥2 content-bearing tokens.
+      'code-architect':       ['evidence-binding', 'files_to_create|files_to_modify', 'build_sequence'],
+      'code-explorer':        ['evidence-binding', 'findings'],
+      'knowledge-lookup':     ['evidence-binding', 'findings', 'sources'],
+      'planner':              ['evidence-binding', 'recommendation'],
+      'issue-scout':          ['evidence-binding', 'recommendation'],
+      'build-error-resolver': ['evidence-binding', 'build-green'],
+      'synthesizer':          ['evidence-binding', 'merge_outcome'],
+      'doc-updater':          ['evidence-binding', 'docs_updated'],
     };
     for (const role of Object.keys(expect)) {
       assert(JSON.stringify(reg[role]) === JSON.stringify(expect[role]),
         '#433 (5): ROLE_TOKEN_REGISTRY[' + role + '] must equal ' + JSON.stringify(expect[role]) + ', got ' + JSON.stringify(reg[role]));
     }
+  }
+
+  // --- Durable node channel: brief→goal_line + upstream_evidence derivation + freeze/back-compat.
+  {
+    const pv = require('./kaola-workflow-plan-validator');
+    const an = require('./kaola-workflow-adaptive-node');
+    const briefedPlan = [
+      '# Workflow Plan — channel', '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| design | code-architect | — | — | 1 | sequence |',
+      '| impl | tdd-guide | design | scripts/x.js | 1 | sequence |',
+      '| done | finalize | impl | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Briefs', '',
+      '### impl', 'Implement X per the design.', 'Read design evidence first.', '',
+      '### design', 'Design X. Deliverable must carry files_to_create + build_sequence.', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| design | complete |', '| impl | in_progress |', '| done | pending |', '',
+    ].join('\n') + '\n';
+
+    // brief → goal_line, verbatim (internal newline preserved, trailing blank trimmed).
+    const implNode = pv.parseNodes(briefedPlan).find(n => n.id === 'impl');
+    const ch = an.deriveDispatchChannel(briefedPlan, implNode, 'channel');
+    assert(ch.goal_line === 'Implement X per the design.\nRead design evidence first.',
+      'channel: goal_line is the node brief verbatim, got ' + JSON.stringify(ch.goal_line));
+    // upstream_evidence derivation from depends_on — {node_id, role, path}, project-qualified, NO nonce.
+    assert(Array.isArray(ch.upstream_evidence) && ch.upstream_evidence.length === 1
+      && ch.upstream_evidence[0].node_id === 'design'
+      && ch.upstream_evidence[0].role === 'code-architect'
+      && ch.upstream_evidence[0].path === 'kaola-workflow/channel/.cache/design.md',
+      'channel: upstream_evidence derived from depends_on, got ' + JSON.stringify(ch.upstream_evidence));
+    assert(!/[0-9a-f]{12}/.test(JSON.stringify(ch)), 'channel: the derived channel carries NO nonce (anti-fabrication)');
+
+    // Briefless back-compat: a plan WITHOUT ## Node Briefs hashes identically to today (Meta + Nodes only).
+    const briefless = briefedPlan.replace(/## Node Briefs[\s\S]*?## Node Ledger/, '## Node Ledger');
+    assert(pv.nodeBriefsPresent(briefless) === false, 'channel: nodeBriefsPresent false for a briefless plan');
+    assert(pv.nodeBriefsPresent(briefedPlan) === true, 'channel: nodeBriefsPresent true when the section exists');
+    const rootCh = an.deriveDispatchChannel(briefless, pv.parseNodes(briefless).find(n => n.id === 'design'), 'channel');
+    assert(rootCh.goal_line === undefined && rootCh.upstream_evidence === undefined,
+      'channel: a briefless root node ⇒ empty channel (byte-identical dispatch card)');
+
+    // unknown-node-id in ## Node Briefs → freeze refuses brief_unknown_node.
+    const badBrief = briefedPlan.replace('### design', '### ghost-node');
+    const verdict = pv.validatePlan(badBrief);
+    assert(verdict.result === 'refuse' && verdict.reason === 'brief_unknown_node',
+      'channel: a ## Node Briefs entry naming an unknown node id refuses brief_unknown_node, got ' + JSON.stringify({ result: verdict.result, reason: verdict.reason }));
+
+    // Resume re-hydration: a fresh re-derivation of the card from the FROZEN plan alone is deterministic —
+    // the same goal_line + upstream_evidence the open envelope cached, reconstructable without memory.
+    const again = an.deriveDispatchChannel(briefedPlan, pv.parseNodes(briefedPlan).find(n => n.id === 'impl'), 'channel');
+    assert(JSON.stringify(again) === JSON.stringify(ch),
+      'channel: fresh-shell re-derivation of the dispatch channel is deterministic (resume re-hydration)');
   }
 
   // --- CLI-integration scenarios over a real git repo (root-pin, drop-base window-lock, finalize gate).

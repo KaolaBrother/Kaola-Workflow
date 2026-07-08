@@ -243,6 +243,8 @@ const OPERATOR_HINT_REGISTRY = {
     'Evidence for ' + (ctx.nodeId || '<id>') + ' carries a stale evidence-binding nonce (replayed from a prior open). Re-author the evidence with this open\'s nonce — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
   evidence_unbound: (ctx) =>
     'Evidence for ' + (ctx.nodeId || '<id>') + ' is bound to a DIFFERENT node id (copied across nodes). Re-author it with this node\'s evidence-binding header — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
+  upstream_not_consumed: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' did not prove it consumed upstream "' + (ctx.offending || '<up-id>') + '". OPEN ' + (ctx.expected || 'the upstream evidence file') + ', read its line-1 `evidence-binding: ' + (ctx.offending || '<up-id>') + ' <nonce>` header, and record a column-0 `upstream_read: ' + (ctx.offending || '<up-id>') + ' <nonce>` line in this node\'s evidence, then re-close.',
 
   // --- halt (#391/#360) ---
   invalid_reason: (ctx) =>
@@ -587,6 +589,26 @@ function appendProvenanceLog(planPath, event, nodeId, nonce, extra) {
 // @param {boolean} forceRotate  if true, RE-SEED the ENTIRE file (nonce rotation on reopen — stale body discarded)
 // @returns {{ evidence_file:string, required_tokens:string[], nonce_rotated?:boolean }}
 // ---------------------------------------------------------------------------
+// upstreamReadStubIds(planPath, nodeId, role) — the producer-upstream ids the durable node channel seeds
+// an EMPTY `upstream_read: <up-id>` stub for. Non-empty ONLY when the node's role ∈ IMPLEMENT_ROLES and it
+// has ≥1 depends_on whose upstream role ∈ PRODUCER_ROLES. Reads the plan to resolve deps + upstream roles.
+// Fail-soft to [] (a seed failure must not brick the open); [] ⇒ byte-identical seed.
+function upstreamReadStubIds(planPath, nodeId, role) {
+  try {
+    let IMPLEMENT_ROLES, PRODUCER_ROLES;
+    try { ({ IMPLEMENT_ROLES, PRODUCER_ROLES } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) { return []; }
+    if (!IMPLEMENT_ROLES || typeof IMPLEMENT_ROLES.has !== 'function' || !IMPLEMENT_ROLES.has(role)) return [];
+    if (!PRODUCER_ROLES || typeof PRODUCER_ROLES.has !== 'function') return [];
+    const content = require('fs').readFileSync(planPath, 'utf8');
+    const nodes = parseNodesFromContent(content);
+    const self = nodes.find(n => n.id === nodeId);
+    const deps = (self && Array.isArray(self.dependsOn)) ? self.dependsOn : [];
+    if (!deps.length) return [];
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    return deps.filter(upId => { const up = byId.get(upId); return !!(up && PRODUCER_ROLES.has(up.role)); });
+  } catch (_) { return []; }
+}
+
 function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
   try {
     const fs = require('fs');
@@ -598,6 +620,12 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
     const tokens = (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
     // Remove 'evidence-binding' from the stub list — it becomes line 1 directly.
     const stubTokens = tokens.filter(t => t !== 'evidence-binding');
+    // The durable node channel: an IMPLEMENT-role consumer with ≥1 PRODUCER-role upstream gets one EMPTY
+    // `upstream_read: <up-id>` stub per producer upstream — the KEY that makes the close-time consumed-proof
+    // enforceable (present-key ⇒ nonce required) while the value stays EMPTY (anti-fabrication: the opener
+    // NEVER seeds a nonce; the consumer must OPEN the upstream file and echo its line-1 nonce). Empty list
+    // for every non-IMPLEMENT / depless / non-producer-upstream node ⇒ byte-identical seed.
+    const upstreamStubIds = upstreamReadStubIds(planPath, nodeId, role);
     const evidenceFile = '.cache/' + nodeId + '.md';
     const cacheDir = path.join(path.dirname(planPath), '.cache');
     const cachePath = path.join(cacheDir, nodeId + '.md');
@@ -622,6 +650,10 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
             freshContent += tokenClass + ': \n';
           }
         }
+        for (const upId of upstreamStubIds) {
+          freshContent += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
+          freshContent += 'upstream_read: ' + upId + '\n';
+        }
         fs.writeFileSync(cachePath, freshContent, 'utf8');
         return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: true };
       }
@@ -641,6 +673,10 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
         content += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
         content += tokenClass + ': \n';
       }
+    }
+    for (const upId of upstreamStubIds) {
+      content += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
+      content += 'upstream_read: ' + upId + '\n';
     }
 
     fs.writeFileSync(cachePath, content, 'utf8');
@@ -1086,9 +1122,37 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     return { ok: true };
   }
 
-  // Other roles: file present and non-empty.
+  // Other roles: file present and non-empty, PLUS — registry-driven — each content-bearing token whose
+  // column-0 `<token>:` KEY is PRESENT must carry a non-empty value (a single token) or ANY one alternative
+  // (an alternation). This makes a producer role's seeded-but-EMPTY content token (e.g. a truncated
+  // code-architect's `files_to_create:` / `build_sequence:`) REFUSE at close, while a role with no registry
+  // row / no such keys present keeps the bare non-empty fallback. DD-5 back-compat: enforcing ONLY on a
+  // PRESENT key exempts an old in-flight node (which has no such keys). The tdd-guide/implementer/
+  // metric-optimizer/main-session-gate branches above are UNTOUCHED (they key off bare-name presence, so an
+  // empty key must not false-satisfy them — hence they never reach here).
   if (!content.trim()) {
     return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: role + ' ' + nodeId + ' evidence missing or empty', expected: ['non-empty evidence file'] };
+  }
+  {
+    let ROLE_TOKEN_REGISTRY;
+    try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) { ROLE_TOKEN_REGISTRY = {}; }
+    const row = (ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) || null;
+    if (row) {
+      const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const keyPresent = (tok) => new RegExp('^' + esc(tok) + ':', 'm').test(content);
+      const valuePresent = (tok) => new RegExp('^' + esc(tok) + ':[ \\t]*(\\S.*)$', 'm').test(content);
+      for (const tokenClass of row) {
+        if (tokenClass === 'evidence-binding') continue;
+        const alts = tokenClass.split('|');
+        // Enforce only when at least one alternative's KEY is present (present-key ⇒ non-empty; DD-5).
+        if (!alts.some(keyPresent)) continue;
+        if (!alts.some(valuePresent)) {
+          return { ok: false, kind: 'shape', missingTokenClass: tokenClass,
+            reason: role + ' ' + nodeId + ' evidence has an empty ' + tokenClass + ' token (a seeded content-bearing key with no value)',
+            expected: row.filter(t => t !== 'evidence-binding') };
+        }
+      }
+    }
   }
   return { ok: true };
 }
@@ -1274,6 +1338,14 @@ function buildDispatch(nodeInfo, context) {
   if (ctx.leg_branch != null && String(ctx.leg_branch).trim() !== '') {
     d.leg_branch = String(ctx.leg_branch);
   }
+  // The durable node channel: pointers to each upstream's evidence file so the dispatched consumer can
+  // OPEN and READ them before starting. Each entry is { node_id, role, path } — the project-qualified,
+  // barrier-exempt evidence path — and NEVER a nonce (anti-fabrication: only line 1 of the upstream file
+  // carries the read-proof nonce). Conditionally attached (like goal_line/leg_path): a root/depless node
+  // has NO upstream_evidence field ⇒ the dispatch shape stays byte-identical.
+  if (Array.isArray(ctx.upstream_evidence) && ctx.upstream_evidence.length) {
+    d.upstream_evidence = ctx.upstream_evidence;
+  }
   // #634 (metric-optimizer): an optimize node's budget_wallclock_minutes OVERRIDES the tier-derived
   // wait budget (the ratchet's declared runtime ceiling); mark the source so the orchestrator's
   // wait-budget ladder applies the contract budget, not the tier default. Conditionally applied (like
@@ -1376,6 +1448,120 @@ function dispatchSummarySegments(result) {
 function qualifiedEvidenceFile(project, nodeId) {
   if (!project) return '.cache/' + nodeId + '.md';
   return 'kaola-workflow/' + project + '/.cache/' + nodeId + '.md';
+}
+
+// ---------------------------------------------------------------------------
+// deriveDispatchChannel(planContent, node, project) — the durable node channel fields threaded onto a
+// dispatch card. Returns { goal_line?, upstream_evidence? }:
+//   goal_line       the node's `## Node Briefs` entry (its intent/approach/constraints), verbatim; absent
+//                   when the plan has no brief for this node (byte-identical to a briefless plan).
+//   upstream_evidence  for each of the node's depends_on ids, { node_id, role, path } where path is the
+//                   PROJECT-QUALIFIED (barrier-exempt) evidence file — NEVER a nonce (anti-fabrication:
+//                   the read-proof nonce lives only on line 1 of the upstream file). Absent for a root
+//                   node (empty deps) ⇒ no field attached.
+// Deps are re-looked-up from the frozen plan (parseNodesFromContent) so the channel never relies on the
+// scheduler carrying deps forward. Fail-soft: any parse miss yields an empty channel (byte-identical).
+// ---------------------------------------------------------------------------
+function deriveDispatchChannel(planContent, node, project) {
+  const out = {};
+  if (!node || !node.id) return out;
+  // goal_line — the node's brief.
+  try {
+    const { parseNodeBriefs } = require('./kaola-gitea-workflow-plan-validator');
+    if (typeof parseNodeBriefs === 'function') {
+      const b = (parseNodeBriefs(planContent) || []).find(x => x.nodeId === node.id);
+      if (b && b.brief != null && String(b.brief).trim() !== '') out.goal_line = String(b.brief);
+    }
+  } catch (_) { /* no briefs section ⇒ no goal_line */ }
+  // upstream_evidence — one pointer per depends_on id (deps re-looked-up from the frozen plan).
+  try {
+    const nodes = parseNodesFromContent(planContent);
+    const self = nodes.find(x => x.id === node.id);
+    const deps = (self && Array.isArray(self.dependsOn)) ? self.dependsOn : [];
+    if (deps.length) {
+      const byId = new Map(nodes.map(x => [x.id, x]));
+      const ue = deps.map(upId => {
+        const up = byId.get(upId);
+        return { node_id: upId, role: up ? up.role : null, path: qualifiedEvidenceFile(project, upId) };
+      });
+      if (ue.length) out.upstream_evidence = ue;
+    }
+  } catch (_) { /* no resolvable deps ⇒ no upstream_evidence */ }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// checkUpstreamConsumed(args) — the close-time consumed-proof over the durable node channel. Recomputes
+// the node's PRODUCER upstreams from the FROZEN plan's depends_on and requires the consumer's evidence to
+// echo a column-0 `upstream_read: <up-id> <nonce>` matching the upstream's CURRENT line-1 binding nonce.
+// A correct echo proves the consumer opened the upstream file THIS open (the nonce is never emitted by any
+// opener/card/seed — it lives only on line 1 of the upstream evidence).
+//
+// args = { role, nodeId, evidenceContent, nodes, ledgerStatuses, planPath, project, readFile }
+// Returns { ok, hard, reason?:'upstream_not_consumed', offending?:<up-id>, expectedPath?, detail? }.
+//   hard=true (a HARD refuse — zero ledger mutation at the caller) ONLY for an IMPLEMENT_ROLES consumer
+//   with ≥1 producer upstream and a missing/mismatched echo; every other pair is advisory (hard=false).
+// Exemptions: root nodes (no deps); non-producer upstreams (no token required); an upstream whose ledger
+// status is n/a (skipped); and — for back-compat — a producer whose `upstream_read: <up-id>` KEY is ABSENT
+// from the evidence (old in-flight consumers recorded before the seed/re-injection existed). New-code opens
+// seed the key (record-evidence re-injects it empty), so a truncated new-node echo has an empty key ⇒
+// enforced. Fail-soft: never throws (a probe failure must not brick a close).
+// ---------------------------------------------------------------------------
+function checkUpstreamConsumed(args) {
+  const out = { ok: true, hard: false };
+  try {
+    const { role, nodeId, evidenceContent, nodes, ledgerStatuses, planPath, project, readFile } = args || {};
+    let IMPLEMENT_ROLES, PRODUCER_ROLES;
+    try { ({ IMPLEMENT_ROLES, PRODUCER_ROLES } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) { return out; }
+    if (!PRODUCER_ROLES || typeof PRODUCER_ROLES.has !== 'function') return out;
+    const nodeList = Array.isArray(nodes) && nodes.length ? nodes
+      : parseNodesFromContent(readFile ? readFile(planPath) : '');
+    const self = nodeList.find(n => n.id === nodeId);
+    const deps = (self && Array.isArray(self.dependsOn)) ? self.dependsOn : [];
+    if (!deps.length) return out; // root node — nothing required.
+    const byId = new Map(nodeList.map(n => [n.id, n]));
+    const statuses = ledgerStatuses || {};
+    const content = evidenceContent || '';
+    const isImplementer = !!(IMPLEMENT_ROLES && typeof IMPLEMENT_ROLES.has === 'function' && IMPLEMENT_ROLES.has(role));
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const upId of deps) {
+      const up = byId.get(upId);
+      if (!up) continue;                              // unknown upstream (never on a frozen plan).
+      if (!PRODUCER_ROLES.has(up.role)) continue;     // non-producer upstream — no token required.
+      if (statuses[upId] === 'n/a') continue;         // skipped upstream — exempt.
+      // DD-5 back-compat: enforce ONLY when the `upstream_read: <up-id>` KEY is present in the evidence.
+      const keyPresent = new RegExp('^upstream_read:[ \\t]+' + esc(upId) + '(?:[ \\t]|$)', 'm').test(content);
+      if (!keyPresent) continue;                      // old in-flight consumer (no seeded key) — exempt.
+      const upNonce = readUpstreamEvidenceNonce(planPath, upId, readFile);
+      if (!upNonce) continue;                         // cannot resolve the upstream nonce — fail-open.
+      const matched = new RegExp('^upstream_read:[ \\t]+' + esc(upId) + '[ \\t]+' + esc(upNonce) + '[ \\t]*$', 'm').test(content);
+      if (!matched) {
+        out.ok = false;
+        out.reason = 'upstream_not_consumed';
+        out.offending = upId;
+        out.expectedPath = qualifiedEvidenceFile(project, upId);
+        out.hard = isImplementer;
+        out.detail = role + ' ' + nodeId + ' evidence does not echo `upstream_read: ' + upId
+          + ' <nonce>` matching ' + upId + '\'s current binding nonce — OPEN ' + out.expectedPath
+          + ' and record its line-1 nonce';
+        return out;
+      }
+    }
+  } catch (_) { /* fail-soft: the consumed-proof never bricks a close */ }
+  return out;
+}
+
+// readUpstreamEvidenceNonce — read line 1 of an upstream's .cache/<up-id>.md and return its binding
+// nonce (`evidence-binding: <up-id> <nonce>`). The evidence file (not the barrier-base) is authoritative:
+// a completed upstream's baseline may be dropped, but its evidence line-1 nonce persists — and it rotates
+// on reopen (forceRotate), which is exactly what makes a stale echo detectable. Null on any miss.
+function readUpstreamEvidenceNonce(planPath, upId, readFile) {
+  try {
+    const upPath = path.join(path.dirname(planPath), '.cache', upId + '.md');
+    const content = String((readFile ? readFile(upPath) : require('fs').readFileSync(upPath, 'utf8')) || '');
+    const m = content.match(/^evidence-binding:[ \t]+\S+[ \t]+(\S+)[ \t]*$/m);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -2113,6 +2299,9 @@ function runOpenNext(opts) {
     // #634: thread the metric-optimizer optimize contract + wait-budget override ({} ⇒ no-op for every
     // other role, so the dispatch card stays byte-identical).
     ...optimizeDispatchCtx(planContent, targetNode.role, targetNode.id),
+    // The durable node channel: the node's brief (goal_line) + upstream_evidence pointers. Empty channel
+    // ({}) for a briefless/root node ⇒ byte-identical dispatch card.
+    ...deriveDispatchChannel(planContent, targetNode, project),
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -2157,6 +2346,54 @@ function runOpenNext(opts) {
   };
 }
 
+// The verdict/word-boundary-presence branches of checkEvidenceShape whose bare-name presence regex would
+// be FALSE-SATISFIED by an empty re-injected key — never re-inject content tokens for these roles.
+const REINJECT_EXCLUDED_ROLES = new Set([
+  'tdd-guide', 'implementer', 'metric-optimizer',
+  'main-session-gate', 'code-reviewer', 'security-reviewer', 'adversarial-verifier',
+]);
+
+// reinjectMissingRequiredKeys(content, planPath, nodeId, readFile) — append any MISSING required stub keys
+// as EMPTY lines (see runRecordEvidence). Returns content unchanged for a role with nothing to re-inject.
+// Fail-soft: any parse miss returns content untouched (never bricks record-evidence).
+function reinjectMissingRequiredKeys(content, planPath, nodeId, readFile) {
+  try {
+    let ROLE_TOKEN_REGISTRY, IMPLEMENT_ROLES, PRODUCER_ROLES;
+    try { ({ ROLE_TOKEN_REGISTRY, IMPLEMENT_ROLES, PRODUCER_ROLES } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) { return content; }
+    const nodes = parseNodesFromContent(readFile(planPath));
+    const self = nodes.find(n => n.id === nodeId);
+    if (!self) return content;
+    const role = self.role;
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const toAdd = [];
+    // (i) generic-branch content tokens (registry-driven; the excluded roles keep their bare-name branches).
+    if (!REINJECT_EXCLUDED_ROLES.has(role) && ROLE_TOKEN_REGISTRY && ROLE_TOKEN_REGISTRY[role]) {
+      for (const tokenClass of ROLE_TOKEN_REGISTRY[role]) {
+        if (tokenClass === 'evidence-binding') continue;
+        const alts = tokenClass.split('|');
+        const anyPresent = alts.some(alt => new RegExp('^' + esc(alt) + ':', 'm').test(content));
+        if (!anyPresent) toAdd.push(alts[0] + ': ');
+      }
+    }
+    // (ii) upstream_read keys for the producer upstreams of an IMPLEMENT consumer.
+    if (IMPLEMENT_ROLES && typeof IMPLEMENT_ROLES.has === 'function' && IMPLEMENT_ROLES.has(role)
+      && PRODUCER_ROLES && typeof PRODUCER_ROLES.has === 'function') {
+      const deps = Array.isArray(self.dependsOn) ? self.dependsOn : [];
+      const byId = new Map(nodes.map(n => [n.id, n]));
+      for (const upId of deps) {
+        const up = byId.get(upId);
+        if (!(up && PRODUCER_ROLES.has(up.role))) continue;
+        if (!new RegExp('^upstream_read:[ \\t]+' + esc(upId) + '(?:[ \\t]|$)', 'm').test(content)) {
+          toAdd.push('upstream_read: ' + upId);
+        }
+      }
+    }
+    if (!toAdd.length) return content;
+    const sep = String(content || '').endsWith('\n') ? '' : '\n';
+    return String(content || '') + sep + toAdd.join('\n') + '\n';
+  } catch (_) { return content; }
+}
+
 // ---------------------------------------------------------------------------
 // runRecordEvidence — MUTATES .cache.
 // Reads stdin content and writes verbatim to .cache/<nodeId>.md.
@@ -2194,11 +2431,22 @@ function runRecordEvidence(opts) {
   // If the stdin ALREADY carries a binding line (even a foreign / copied one), leave it
   // UNTOUCHED so checkEvidenceShape still catches a stale / foreign nonce — the #392
   // anti-replay / anti-copy guard must stay able to refuse a replayed binding.
+  const recordReadFile = opts.readFile || require('fs').readFileSync;
   let contentToWrite = stdinContent;
   if (!/^evidence-binding:/m.test(String(stdinContent || ''))) {
-    const nonce = readNonce(planPath, nodeId, opts.readFile || require('fs').readFileSync);
+    const nonce = readNonce(planPath, nodeId, recordReadFile);
     contentToWrite = 'evidence-binding: ' + nodeId + ' ' + (nonce || '') + '\n' + String(stdinContent || '');
   }
+
+  // Non-droppability: re-inject any MISSING required stub keys as EMPTY lines so the close gates stay
+  // non-fabricable (a lossy verbatim write cannot silently drop a producer's content token or a consumer's
+  // consumed-proof key). SCOPED to (i) generic-branch content tokens (never the tdd-guide/implementer/
+  // metric-optimizer/verdict-gate branches — re-injecting an empty RED:/non_tdd_reason: would false-satisfy
+  // their bare-name presence regexes) and (ii) upstream_read keys for the producer upstreams of an
+  // IMPLEMENT consumer. An empty re-injected key turns a dropped token into a REFUSE at close (the shape /
+  // consumed check requires a non-empty value), never a pass. Old in-flight nodes (whose record-evidence
+  // already ran under old code) never re-enter here ⇒ exempt.
+  contentToWrite = reinjectMissingRequiredKeys(contentToWrite, planPath, nodeId, recordReadFile);
 
   writeFile(cachePath, contentToWrite);
 
@@ -2320,6 +2568,25 @@ function runCloseAndOpenNext(opts) {
   // speculative_review_required into verdictWarn below, so EVERY post-close success return (which all
   // spread `...(verdictWarn || {})`) carries the review pointer without editing each return.
   let verdictWarn = checkVerdictParse(role, evidenceContent);
+
+  // -- (a.5) Consumed-proof over the durable node channel. Placed AFTER shapeCheck and BEFORE the barrier
+  // so a HARD refuse (an IMPLEMENT consumer that did not echo a producer upstream's current nonce) is a
+  // ZERO-mutation no-op. Advisory for every other pair (rides verdictWarn into the success returns).
+  {
+    const consumed = checkUpstreamConsumed({ role, nodeId, evidenceContent, nodes,
+      ledgerStatuses: readLedgerStatuses(planContent), planPath, project, readFile });
+    if (consumed && !consumed.ok && consumed.hard) {
+      return decorateOperatorHint({
+        result: 'refuse', reason: 'upstream_not_consumed', nodeId, role,
+        offending: consumed.offending, expected: consumed.expectedPath, detail: consumed.detail,
+      });
+    }
+    if (consumed && !consumed.ok) {
+      verdictWarn = Object.assign(verdictWarn || {}, {
+        upstream_advisory: { offending: consumed.offending, expected: consumed.expectedPath, detail: consumed.detail },
+      });
+    }
+  }
 
   // -- (b) Shell COMMIT_NODE per-node barrier ----------------------------
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
@@ -2621,6 +2888,8 @@ function runCloseAndOpenNext(opts) {
     // #634: thread the optimize contract + wait-budget override for a fused-advance optimize node ({} ⇒
     // no-op for every other role ⇒ byte-identical dispatch card).
     ...optimizeDispatchCtx(planForAdvance, nextNode.role, nextNode.id),
+    // The durable node channel for the fused-advance node ({} for a briefless/root node ⇒ byte-identical).
+    ...deriveDispatchChannel(planForAdvance, nextNode, project),
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -3840,11 +4109,15 @@ function parentCarriesProductionDirt(planPath, project, shell) {
 // Returns null otherwise ⇒ the caller's byte-identical parent_dirty hold. Re-reads the FROZEN plan for the
 // reads' role + observes annotation (the running-set entry carries neither); fail-closed on any parse miss.
 function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile) {
-  let parseNodes, scratchObservableWriteSet;
-  try { ({ parseNodes, scratchObservableWriteSet } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) { return null; }
+  let parseNodes, scratchObservableWriteSet, parseValidationTestConsumes;
+  try { ({ parseNodes, scratchObservableWriteSet, parseValidationTestConsumes } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) { return null; }
   if (typeof parseNodes !== 'function' || typeof scratchObservableWriteSet !== 'function') return null;
-  let planNodes;
-  try { planNodes = parseNodes(readFile(planPath)); } catch (_) { return null; }
+  // A live main-session-gate (kind:'gate') is a live observer, not a scratch reader — hold the legless
+  // co-open while a gate is running (its verdict window must not span a co-running writer's uncommitted
+  // bytes). Defensive fail-closed so the co-open precondition independently sees the gate.
+  if ((liveNodes || []).some(n => n.kind === 'gate')) return null;
+  let planNodes, planContent;
+  try { planContent = readFile(planPath); planNodes = parseNodes(planContent); } catch (_) { return null; }
   const byId = new Map(planNodes.map(n => [n.id, n]));
   const liveReads = (liveNodes || []).filter(n => n.kind === 'read');
   // (i) every live read must be a freeze-declared observes:scratch adversarial-verifier. No live reads,
@@ -3861,7 +4134,11 @@ function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile)
   const pn = byId.get(writer.id);
   let ws = (pn && pn.writeSet) ? pn.writeSet : null;
   if (!ws) { try { ws = require('./kaola-gitea-workflow-classifier').parseWriteSetCell(writer.declared_write_set); } catch (_) { ws = []; } }
-  if (!scratchObservableWriteSet(ws, { project, ownerNodeId: writer.id })) return null;
+  // Widen the scratch-observable predicate with the plan's validation_test_consumes so a fork declaring a
+  // verdict-affecting prose file (e.g. a custom guide) makes that file observation-VISIBLE — a writer of
+  // it is then NOT scratch-observable-safe and stays serial (never a legless co-open over a dirty parent).
+  const testConsumedExtra = (typeof parseValidationTestConsumes === 'function') ? parseValidationTestConsumes(planContent) : [];
+  if (!scratchObservableWriteSet(ws, { project, ownerNodeId: writer.id, testConsumedExtra })) return null;
   return writer;
 }
 
@@ -4610,6 +4887,10 @@ function runOpenReady(opts) {
       ...(degradeReason ? { serialDegradeReason: degradeReason } : {}),
       taskTransitions: [],
     });
+    // A live main-session-gate (kind:'gate') is a live observer of the parent tree — HOLD the relaxed write
+    // co-open while it runs (a co-opened writer's uncommitted bytes would sit inside the gate's verdict
+    // window). Checked FIRST so the gate hold is visible as its own serialDegradeReason.
+    if ((liveNodes || []).some(n => n.kind === 'gate')) return holdDrain('gate_live');
     if (!legCoupled) return holdDrain('parallel_writes_off');
     if (liveGroupId) return holdDrain('lane_group_live');
     if (parentCarriesProductionDirt(planPath, project, shell)) {
@@ -4912,6 +5193,9 @@ function runOpenReady(opts) {
           // #634: thread the optimize contract + wait-budget override for a co-opened optimize node ({} ⇒
           // no-op for every other role ⇒ byte-identical dispatch card).
           ...optimizeDispatchCtx(planContent, n.role, n.id),
+          // The durable node channel — per-member (each co-opened member gets its OWN brief + upstream
+          // list). {} for a briefless/root member ⇒ byte-identical dispatch card.
+          ...deriveDispatchChannel(planContent, n, project),
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
@@ -5126,7 +5410,26 @@ function runCloseNode(opts) {
   }
 
   // #403.4: non-blocking near-miss verdict warning (informational, per #328) — see runCloseAndOpenNext.
-  const verdictWarn = checkVerdictParse(role, evidenceContent);
+  let verdictWarn = checkVerdictParse(role, evidenceContent);
+
+  // Consumed-proof over the durable node channel (mirror of runCloseAndOpenNext). Placed BEFORE the member
+  // routing + barrier so a HARD refuse is a ZERO-mutation no-op for BOTH the serial and lane-group close
+  // paths. Advisory rides verdictWarn into every success return (and into closeGroupMember's).
+  {
+    const consumed = checkUpstreamConsumed({ role, nodeId, evidenceContent, nodes,
+      ledgerStatuses: readLedgerStatuses(planContent0), planPath, project, readFile });
+    if (consumed && !consumed.ok && consumed.hard) {
+      return decorateOperatorHint({
+        result: 'refuse', reason: 'upstream_not_consumed', nodeId, role,
+        offending: consumed.offending, expected: consumed.expectedPath, detail: consumed.detail,
+      });
+    }
+    if (consumed && !consumed.ok) {
+      verdictWarn = Object.assign(verdictWarn || {}, {
+        upstream_advisory: { offending: consumed.offending, expected: consumed.expectedPath, detail: consumed.detail },
+      });
+    }
+  }
 
   // -- (a.5) #437 (D-419 P2 §2): LANE-GROUP MEMBER close path. #542 (D-542-01): keyed PURELY on this
   //    node being a live lane_group member in the durable manifest — NOT on KAOLA_LANE_CONTAINMENT.
@@ -5391,7 +5694,9 @@ function closeGroupMember(ctx) {
   // while ANY live running-set member is a read; the caller retries close-node once the read(s) have
   // drained. A legless / read-free group (the pre-#622 shape) never has a live read here ⇒ this is a
   // no-op (byte-identical).
-  const liveReadsAtMerge = (runningLeg ? (runningLeg.nodes || []) : []).filter(n => n.kind === 'read');
+  // A live main-session-gate (kind:'gate') is a live observer of the pre-merge parent tree alongside any
+  // live read — the merge must not race it either. Count both; the typed reason stays stable.
+  const liveReadsAtMerge = (runningLeg ? (runningLeg.nodes || []) : []).filter(n => n.kind === 'read' || n.kind === 'gate');
   if (liveReadsAtMerge.length > 0) {
     return {
       result: 'refuse',
@@ -5399,7 +5704,7 @@ function closeGroupMember(ctx) {
       nodeId, role,
       group_id: lg.group_id,
       liveReads: liveReadsAtMerge.map(n => n.id),
-      detail: 'the lane-group last-member merge is held until the live read(s) [' + liveReadsAtMerge.map(n => n.id).join(', ') + '] drain — retry close-node once they close',
+      detail: 'the lane-group last-member merge is held until the live observer(s) [' + liveReadsAtMerge.map(n => n.id).join(', ') + '] (read/gate) drain — retry close-node once they close',
     };
   }
 
@@ -6576,6 +6881,11 @@ module.exports = {
   shellNode,
   // #444 (D-444-01): dispatch descriptor builder + guards + verify subcommand.
   buildDispatch,
+  // Durable node channel: brief→goal_line + upstream_evidence derivation, and the close-time consumed-proof.
+  deriveDispatchChannel,
+  checkUpstreamConsumed,
+  // Scheduler legless-co-open predicate (exported for the gate-count + test-consumed-widening pins).
+  tryR2bLeglessCoopen,
   // #602: --summary dispatch-segment extractor.
   dispatchSummarySegments,
   // #605: derived run-progress mirror primitives.
