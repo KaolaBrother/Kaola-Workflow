@@ -1,0 +1,33 @@
+{
+  "project": "bundle-642-643-644",
+  "branch": "workflow/bundle-642-643-644",
+  "issue_number": 642,
+  "issue_numbers": [
+    642,
+    643,
+    644
+  ],
+  "resolved_default_branch": "main",
+  "branch_head": "7911aa1474e9ca5f70d177f21ec6506a8bbd83ca",
+  "started_at": "2026-07-08T16:50:30.332Z",
+  "updated_at": "2026-07-08T17:06:08.848Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done-manual",
+    "finalize": "done-pre-sink (cmdFinalize --keep-worktree, commit 7911aa14 pre-rebase / 79ae9f71 post-rebase)",
+    "stash_restore": "n/a (no stash)",
+    "archive_commit": "done (folded into archive commit)",
+    "push_main": "done-manual (208c3b7e..79ae9f71)",
+    "closure": "done-manual (gh issue close 642 643 644)"
+  },
+  "manual_completion_note": "sink --sink transaction stopped by operator directive after push_upstream to skip the redundant npm-test step: the four-chain receipt (.cache/chain-receipt.json, headSha 2008a913 pre-rebase, codeTreeHash c7c209b7da6c unchanged by the two roadmap-band-only rebases) is the validation evidence. Merge, push, and closure completed manually by the orchestrator; branch rebased twice onto a moving origin (roadmap filings for 645 and 646) with the ROADMAP.md mirror regenerated from sources each time.",
+  "merge_commit": "79ae9f71cae503f024ab716b6afb5922eae35792",
+  "closed_issues": [
+    642,
+    643,
+    644
+  ]
+}
