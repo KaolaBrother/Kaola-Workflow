@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=A1 scope=in_scope action=follow_up status=open severity=medium fix_role=none rationale=n2-R1 CONFIRMED-REAL-but-FENCED-at-verdict-time: a live kind:'gate' is invisible to the R1 else-branch and to liveReadsAtMerge (adaptive-node.js:5393)",
+    "file": "demonstrated end-to-end on an in-grammar frozen plan ({main-session-gate ∥ doc-updater docs/api.md} antichain: gate opens via open-next, open-ready co-opens the writer as a size-1 leg group behind the live gate, close-node MERGES test-consumed prose into the parent while the gate is in_progress; main holds write_awaits_drain at the same state",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=A2 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=n2-R2 CONFIRMED-REAL: testConsumedExtra is not threaded into tryR2bLeglessCoopen's scratchObservableWriteSet call",
+    "file": "runtime demo: a fork plan declaring validation_test_consumes: docs/fork-guide.md still R2b-co-opens a docs/fork-guide.md writer behind the scratch gate over a dirty parent, though the predicate itself refuses that path when the extra IS passed. Bounded: fires only on a self-hosting fork with the widening, and any verdict impact requires the annotated gate to disobey its pinned scratch-only contract (run the fork's chains mid-edit); no post-domination ⇒ no laundering channel. One-arg thread-through (parseValidationTestConsumes → opts.testConsumedExtra) when next touched.",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
