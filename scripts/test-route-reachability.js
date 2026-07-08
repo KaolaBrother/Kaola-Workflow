@@ -486,6 +486,49 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T16: node-briefs channel relay pin — all 6 plan-run surfaces (3 Claude commands + 3 Codex
+// SKILLs) must carry the <!-- PIN: node-briefs-relay --> anchor, the goal_line relay literal, the
+// upstream_read consumed-proof instruction, the resume re-hydration line, and the manifest-derived
+// role-kind enumeration sentence; AND must NOT carry the stale exclusive-contract enumerations
+// (the old hardcoded READ-ONLY / WRITE role-list framing). Fail-closed: unconditional assert()
+// per surface (positive + negative), whitespace-normalized for reflow tolerance.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  const present = [
+    '<!-- PIN: node-briefs-relay -->',
+    'carry it VERBATIM into the role dispatch',
+    'record a column-0 `upstream_read: <node-id> <nonce>` line',
+    're-derived from the cached `.cache/<op>-envelope.json`',
+    "derived from each role's tool manifest",
+  ];
+  // The stale exclusive-contract enumerations that the manifest-derived sentence replaced. Their
+  // bold-header framing is the signature; reintroducing either list on any surface reds here.
+  const stale = [
+    '**READ-ONLY roles**',
+    '**WRITE-role agents**',
+  ];
+  for (const f of planRunSurfaces) {
+    const content = norm(fs.readFileSync(path.join(REPO, f), 'utf8'));
+    for (const tok of present) {
+      assert(content.includes(norm(tok)),
+        `T16: ${f} must carry the node-briefs-relay literal ${JSON.stringify(tok)}`);
+    }
+    for (const tok of stale) {
+      assert(!content.includes(norm(tok)),
+        `T16: ${f} must NOT carry the stale exclusive-contract enumeration ${JSON.stringify(tok)} (replaced by the manifest-derived role-kind sentence)`);
+    }
+  }
+}
+
 // ===========================================================================
 // #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
 // bidirectional orphan-sentinel, the superset proof, and the by-construction

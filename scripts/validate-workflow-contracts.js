@@ -907,6 +907,20 @@ assertIncludes('agents/workflow-planner.md', 'EFFICIENT DAGs');
 assertIncludes('agents/workflow-planner.md', 'forge-neutral');
 assertIncludes('commands/kaola-workflow-plan-run.md', '--forbidden-only');
 
+// node-briefs channel relay + role-kind enumeration prose on the plan-run executor COMMAND
+// surface (the Claude side of the Codex SKILL relay). The dispatch carries the node's brief as
+// its task direction, instructs a consumer to read each upstream evidence file and record the
+// consumed nonce, and derives the evidence-persistence kind from each role's tool manifest — no
+// hand-list. The stale exclusive-contract enumerations (the hardcoded READ-ONLY / WRITE role
+// lists) were replaced by the manifest-derived sentence; reintroducing either bold-header list
+// reds the chain.
+assertIncludes('commands/kaola-workflow-plan-run.md', '<!-- PIN: node-briefs-relay -->');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'carry it VERBATIM into the role dispatch');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'record a column-0 `upstream_read: <node-id> <nonce>` line');
+assertIncludes('commands/kaola-workflow-plan-run.md', "derived from each role's tool manifest");
+assertNotIncludes('commands/kaola-workflow-plan-run.md', '**READ-ONLY roles**');
+assertNotIncludes('commands/kaola-workflow-plan-run.md', '**WRITE-role agents**');
+
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
 assertIncludes('scripts/kaola-workflow-plan-validator.js', 'agent-registration gap');
 assertIncludes('scripts/kaola-workflow-plan-validator.js', 'forge-port ordering gap');

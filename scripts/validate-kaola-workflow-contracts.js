@@ -608,6 +608,37 @@ assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');
 assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'literal tokens RED');
 // #634: producer-attested evidence-token vocabulary in the metric-optimizer Codex agent profile.
 assertIncludes(`${pluginRoot}/agents/metric-optimizer.toml`, 'iterations_used');
+
+// Per-role evidence-contract needle mirror — the Codex .toml side of the future-agent wall
+// (validate-vendored-agents.js). The KIND is DERIVED from each role's canonical tool manifest
+// (agents/<role>.md front-matter: a Write/Edit tool => write-kind, else read-kind), never a
+// hand-list. A write-kind profile SELF-WRITES its seeded .cache evidence; a read-kind profile
+// (producers AND gate roles) RETURNS its deliverable for orchestrator persistence. The
+// orchestration roles (contractor / workflow-planner) are not node-role evidence producers and
+// are skipped.
+{
+  const orchestrationRoles = new Set(['contractor', 'workflow-planner']);
+  const nodeRoleTomls = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+    .filter(file => file.endsWith('.toml'))
+    .map(file => file.slice(0, -'.toml'.length))
+    .filter(role => !orchestrationRoles.has(role))
+    .sort();
+  for (const role of nodeRoleTomls) {
+    const md = read(`agents/${role}.md`);
+    const fmEnd = md.indexOf('\n---\n', 4);
+    const fm = fmEnd > 0 ? md.slice(0, fmEnd) : '';
+    const tm = /^tools:\s*(.+)$/m.exec(fm);
+    const writeKind = tm ? /\b(Write|Edit)\b/.test(tm[1]) : false;
+    const tomlText = read(`${pluginRoot}/agents/${role}.toml`);
+    if (writeKind) {
+      assert(tomlText.includes('SELF-WRITE') && tomlText.includes('evidence-binding'),
+        `Codex agents/${role}.toml must carry the write-role SELF-WRITE + evidence-binding evidence contract`);
+    } else {
+      assert(/RETURN/i.test(tomlText) && /orchestrator persists/i.test(tomlText),
+        `Codex agents/${role}.toml must carry the read-role RETURN + orchestrator-persists evidence contract`);
+    }
+  }
+}
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',

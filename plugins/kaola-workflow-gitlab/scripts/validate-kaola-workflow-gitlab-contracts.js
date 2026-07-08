@@ -745,6 +745,36 @@ assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spaw
 // #634: producer-attested evidence-token vocabulary in the metric-optimizer forge agent profile.
 assertIncludes(pluginRoot + '/agents/metric-optimizer.toml', 'iterations_used');
 
+// Per-role evidence-contract needle mirror — the forge .toml side of the future-agent wall
+// (validate-vendored-agents.js). The KIND is DERIVED from each role's canonical tool manifest
+// (agents/<role>.md front-matter: a Write/Edit tool => write-kind, else read-kind), never a
+// hand-list. A write-kind profile SELF-WRITES its seeded .cache evidence; a read-kind profile
+// (producers AND gate roles) RETURNS its deliverable for orchestrator persistence. The
+// orchestration roles (contractor / workflow-planner) are not node-role evidence producers and
+// are skipped.
+{
+  const orchestrationRoles = new Set(['contractor', 'workflow-planner']);
+  const nodeRoleTomls = agentFiles
+    .map(file => path.basename(file, '.toml'))
+    .filter(role => !orchestrationRoles.has(role))
+    .sort();
+  for (const role of nodeRoleTomls) {
+    const md = read('agents/' + role + '.md');
+    const fmEnd = md.indexOf('\n---\n', 4);
+    const fm = fmEnd > 0 ? md.slice(0, fmEnd) : '';
+    const tm = /^tools:\s*(.+)$/m.exec(fm);
+    const writeKind = tm ? /\b(Write|Edit)\b/.test(tm[1]) : false;
+    const tomlText = read(pluginRoot + '/agents/' + role + '.toml');
+    if (writeKind) {
+      assert(tomlText.includes('SELF-WRITE') && tomlText.includes('evidence-binding'),
+        'GitLab agents/' + role + '.toml must carry the write-role SELF-WRITE + evidence-binding evidence contract');
+    } else {
+      assert(/RETURN/i.test(tomlText) && /orchestrator persists/i.test(tomlText),
+        'GitLab agents/' + role + '.toml must carry the read-role RETURN + orchestrator-persists evidence contract');
+    }
+  }
+}
+
 // #445/#446: operator_hint + route-findings + --summary pins (GitLab forge ports).
 // OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,
 // adaptive-node). route-findings and --summary are adaptive-node-only (#446).
