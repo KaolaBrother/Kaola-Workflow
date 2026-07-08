@@ -2364,6 +2364,24 @@ function testMetricOptimizerContract() {
     v = optPlan(optBlock('opt', { metric_paths: 'bench/nested/suite.js' }), validNodes);
     assert(v.result === 'in-grammar', 'OPT-2: a nested exactly-resolvable metric_paths file disjoint from the write set must freeze in-grammar, got: ' + JSON.stringify(v));
 
+    // OPT-2 hardening (#640) — mirror the declared_write_set freeze-wall's absolute-path,
+    // backslash, and bare-existing-directory shape refusals onto metric_paths (defense-in-depth
+    // completeness: these three shapes are just as unresolvable at the exact-string disjointness
+    // check as directory-shaped/glob/'..'-aliasing above).
+    v = optPlan(optBlock('opt', { metric_paths: '/tmp/suite.js' }), validNodes); // absolute path
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: an absolute-path metric_paths entry must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { metric_paths: 'bench\\suite.js' }), validNodes); // backslash
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: a backslash-bearing metric_paths entry must refuse, got: ' + JSON.stringify(v));
+    fs.mkdirSync(path.join(tmp, 'metricdir'), { recursive: true });
+    v = optPlan(optBlock('opt', { metric_paths: 'metricdir' }), validNodes); // bare existing directory
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: a bare metric_paths entry resolving to an existing directory must refuse, got: ' + JSON.stringify(v));
+    // ACCEPT control: a bare slash-less root FILE (not a directory) must stay in-grammar — mirrors
+    // the freeze-wall's Makefile/Dockerfile root-file control (the bare-dir check must not
+    // over-refuse a real file).
+    fs.writeFileSync(path.join(tmp, 'Makefile'), 'all:\n');
+    v = optPlan(optBlock('opt', { metric_paths: 'Makefile' }), validNodes);
+    assert(v.result === 'in-grammar', 'OPT-2: a bare metric_paths entry resolving to an existing FILE must freeze in-grammar, got: ' + JSON.stringify(v));
+
     // OPT-1 hardening — parseOptimizeContracts' Map last-wins on a duplicate `optimize(<id>):` header,
     // so a second block for the same node (including a decoy fenced inside ## Meta, which sectionBody
     // returns verbatim) silently clobbers the real contract with a tampered field yet freezes green.

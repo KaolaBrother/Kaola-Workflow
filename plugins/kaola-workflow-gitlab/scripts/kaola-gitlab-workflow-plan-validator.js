@@ -1527,9 +1527,26 @@ function validatePlan(content, opts) {
         // (`bench/../src/hot.js`) entry defeats evaluation isolation: it can COVER or ALIAS a
         // write-set file yet compare string-distinct. Reuse hasUnresolvableEntry (dir-shape + glob)
         // and the freeze-wall `..` split — the same shapes the write-set freeze-wall already refuses.
-        const unresolvable = c.metric_paths.filter(p => hasUnresolvableEntry(new Set([p])) || p.split('/').indexOf('..') !== -1);
+        // #640: the freeze wall also refuses absolute-path, backslash, and bare-existing-directory
+        // declared_write_set tokens (see the freeze-wall block above, ~line 1396) — mirror those same
+        // three shapes onto metric_paths for the same reason: each is just as unresolvable at the
+        // exact-string comparison. freezeRoot (above) is block-scoped to the write-set loop and is
+        // NOT in scope here, so recompute a local root. Checked absolute BEFORE backslash so a
+        // Windows path like `C:\foo` reports absolute_path, not backslash_in_path — same order as
+        // the freeze wall.
+        const optRoot = opts.root || process.cwd();
+        const shapeReason = p => {
+          if (hasUnresolvableEntry(new Set([p])) || p.split('/').indexOf('..') !== -1) return "directory-shaped, glob, or '..'-aliasing";
+          if (p.startsWith('/') || p.match(/^[A-Za-z]:/)) return 'absolute_path';
+          if (p.includes('\\')) return 'backslash_in_path';
+          try {
+            if (fs.statSync(path.join(optRoot, p)).isDirectory()) return 'bare-existing-directory';
+          } catch (_) { /* path does not exist yet — a new file, legitimate */ }
+          return null;
+        };
+        const unresolvable = c.metric_paths.map(p => ({ p, reason: shapeReason(p) })).filter(x => x.reason);
         if (unresolvable.length) {
-          errors.push(`OPT-2: optimize(${id}) metric_paths ${unresolvable.join(', ')} are not exactly-resolvable single files (directory-shaped, glob, or '..'-aliasing) — the metric harness paths must name concrete files kept disjoint from the mutable scope (evaluation isolation)`);
+          errors.push(`OPT-2: optimize(${id}) metric_paths ${unresolvable.map(x => `${x.p} (${x.reason})`).join(', ')} are not exactly-resolvable single files — the metric harness paths must name concrete files kept disjoint from the mutable scope (evaluation isolation)`);
         } else {
           const shared = c.metric_paths.filter(p => node.writeSet.has(p));
           if (shared.length) {

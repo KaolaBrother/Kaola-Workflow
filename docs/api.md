@@ -404,11 +404,13 @@ reproduction check parse it identically.
   command that prints the measured metric, so a block with no `metric_command` used to freeze
   in-grammar and only die later at dispatch); `metric_paths` is non-empty, disjoint from the node's
   `declared_write_set`, and every entry is an **exactly-resolvable single file** — a directory-shaped
-  (`bench/`), glob (`bench/*.js`), or `../`-aliasing (`bench/../src/hot.js`) entry refuses, reusing
-  `hasUnresolvableEntry` (the same dir-shape/glob detection the write-set freeze-wall already applies)
-  plus a `../`-segment check. The metric harness can never live inside the mutable scope — a
-  *runtime* write to a metric path is separately caught by the existing per-node barrier (a write
-  outside the declared set).
+  (`bench/`), glob (`bench/*.js`), `../`-aliasing (`bench/../src/hot.js`), absolute-path (`/tmp/x.js`,
+  `C:\bench\x.js`), backslash-separated (`bench\suite.js`), or bare existing-directory (a slash-less
+  name that resolves to a real directory) entry refuses, mirroring the same shape refusals the
+  write-set freeze-wall already applies: `hasUnresolvableEntry` (dir-shape/glob detection) plus the
+  `../`-segment, absolute-path, backslash, and `statSync`-based bare-existing-directory checks. The
+  metric harness can never live inside the mutable scope — a *runtime* write to a metric path is
+  separately caught by the existing per-node barrier (a write outside the declared set).
 - **OPT-3 (bounded budget)** — `budget_iterations` an integer in `1..OPTIMIZE_ITER_CAP`;
   `budget_wallclock_minutes`, when present, an integer in `1..OPTIMIZE_WALLCLOCK_CAP`.
 - **OPT-4** — `direction ∈ {min, max}`; `metric_repeats` an integer ≥ 1; `min_delta` a number ≥ 0.
