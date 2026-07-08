@@ -1,0 +1,5 @@
+issue: #642
+title: adaptive: durable node-to-node information channel — planner-authored node briefs (goal_line), upstream_evidence on the dispatch card, resume re-hydration
+status: open
+workflow_project: —
+next_step: Node-to-node information transfer is not mechanically guaranteed — a producer node's full output (code-architect blueprint, planner recommendation, code-explorer map, knowledge-lookup facts) reaches its downstream consumer (implementer/tdd-guide, often a lower model tier) only via the orchestrator's transient context, not the machinery. Audit (AN = adaptive-node.js @ 9404efa3): (1) buildDispatch (AN:1222-1284) carries no upstream_evidence field, not even a depends_on echo; seedEvidenceFile (AN:589) seeds only a binding header + empty token stubs. (2) No relay instruction on any routing surface (plan-run step 3 "Instruct the role to:"). Proposed: planner-authored node briefs (goal_line), upstream_evidence pointers on the dispatch card, and resume re-hydration so a crash/resume rebuilds the consumer's upstream context. Cross-edition #307 (adaptive-node.js GENERATED aggregator). Filed by user 2026-07-08; full spec on GitHub #642.
