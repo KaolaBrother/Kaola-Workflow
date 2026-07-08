@@ -501,6 +501,22 @@ function parseOptimizeContracts(content) {
   flush();
   return contracts;
 }
+// Count `optimize(<id>):` headers per node id from the RAW `## Meta` body — the SAME fence-inclusive
+// body parseOptimizeContracts reads. parseOptimizeContracts' Map.set silently LAST-WINS on a duplicate
+// header, so a second `optimize(<id>):` block for the same node — including a decoy fenced inside
+// `## Meta`, which classifier.sectionBody returns verbatim — clobbers the real contract with no
+// refusal. Counting headers lets OPT-1 refuse the duplicate before the clobber can hide a tampered
+// field. Same header regex as parseOptimizeContracts (column-0, no leading whitespace).
+function optimizeHeaderCounts(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const headerRe = /^optimize\(([^)]*)\)[ \t]*:[ \t]*$/;
+  const counts = new Map();
+  for (const raw of String(meta || '').split('\n')) {
+    const h = raw.match(headerRe);
+    if (h) { const id = h[1].trim(); counts.set(id, (counts.get(id) || 0) + 1); }
+  }
+  return counts;
+}
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
 // write-set parsing to classifier.parseWriteSetCell, so the validator, the plan_hash, and
@@ -1469,10 +1485,17 @@ function validatePlan(content, opts) {
   {
     const optimizerNodeIds = new Set(nodes.filter(n => n.role === 'metric-optimizer').map(n => n.id));
     const nodeById = new Map(nodes.map(n => [n.id, n]));
+    const headerCounts = optimizeHeaderCounts(content);
     // OPT-1: exactly one optimize(<id>) block per metric-optimizer node, and every block keys one.
+    // A DUPLICATE header (including a decoy fenced inside ## Meta) is caught by the header count:
+    // parseOptimizeContracts' Map last-wins, so a second block silently clobbers the first and a
+    // tampered field freezes in-grammar. Refuse ≥2 blocks for the same node at freeze.
     for (const id of optimizerNodeIds) {
-      if (!optimizeContracts.has(id)) {
+      const n = headerCounts.get(id) || 0;
+      if (n === 0) {
         errors.push(`OPT-1: metric-optimizer node ${id} has no optimize(${id}) block in ## Meta — every metric-optimizer node needs exactly one optimize contract`);
+      } else if (n > 1) {
+        errors.push(`OPT-1: metric-optimizer node ${id} has ${n} optimize(${id}) blocks in ## Meta — exactly one optimize contract per node (a duplicate header silently clobbers the earlier block; remove the extra/decoy)`);
       }
     }
     for (const [id] of optimizeContracts) {
@@ -1486,14 +1509,31 @@ function validatePlan(content, opts) {
     for (const [id, c] of optimizeContracts) {
       if (!optimizerNodeIds.has(id)) continue; // OPT-1 already reported the mis-key
       const node = nodeById.get(id);
-      // OPT-2 (evaluation isolation): metric_paths non-empty AND disjoint from declared_write_set —
-      // the measurement can never live inside the mutable scope (a write to it trips the barrier).
+      // OPT-2 (metric harness definition): metric_command is named, metric_paths is non-empty, and
+      // each metric_path is an exactly-resolvable single file kept OUTSIDE the mutable scope — so the
+      // measurement can never live inside the mutable scope (a write to it trips the barrier).
+      // metric_command is implicitly required (it is THE command that prints the measured metric); no
+      // field rule read it before, so a block with no metric_command froze in-grammar and died at
+      // dispatch.
+      if (!c.metric_command) {
+        errors.push(`OPT-2: optimize(${id}) declares no metric_command — the metric harness command must be named`);
+      }
       if (!c.metric_paths.length) {
         errors.push(`OPT-2: optimize(${id}) declares no metric_paths — the metric harness paths must be named and kept outside the mutable scope`);
       } else {
-        const shared = c.metric_paths.filter(p => node.writeSet.has(p));
-        if (shared.length) {
-          errors.push(`OPT-2: optimize(${id}) metric_paths ${shared.join(', ')} intersect the node's declared_write_set — the metric harness must be disjoint from the mutable scope (evaluation isolation)`);
+        // Every metric_path must name ONE concrete file so the exact-string disjointness below is
+        // SOUND. A directory-shaped (`bench/`), glob (`bench/*.js`), or `..`-aliasing
+        // (`bench/../src/hot.js`) entry defeats evaluation isolation: it can COVER or ALIAS a
+        // write-set file yet compare string-distinct. Reuse hasUnresolvableEntry (dir-shape + glob)
+        // and the freeze-wall `..` split — the same shapes the write-set freeze-wall already refuses.
+        const unresolvable = c.metric_paths.filter(p => hasUnresolvableEntry(new Set([p])) || p.split('/').indexOf('..') !== -1);
+        if (unresolvable.length) {
+          errors.push(`OPT-2: optimize(${id}) metric_paths ${unresolvable.join(', ')} are not exactly-resolvable single files (directory-shaped, glob, or '..'-aliasing) — the metric harness paths must name concrete files kept disjoint from the mutable scope (evaluation isolation)`);
+        } else {
+          const shared = c.metric_paths.filter(p => node.writeSet.has(p));
+          if (shared.length) {
+            errors.push(`OPT-2: optimize(${id}) metric_paths ${shared.join(', ')} intersect the node's declared_write_set — the metric harness must be disjoint from the mutable scope (evaluation isolation)`);
+          }
         }
       }
       // OPT-3 (bounded budget): 1 ≤ budget_iterations ≤ OPTIMIZE_ITER_CAP; optional
@@ -3206,6 +3246,7 @@ module.exports = {
   parseSpeculativePolicy,
   parseWriteOverlapPolicy,
   parseOptimizeContracts,
+  optimizeHeaderCounts,
   parseValidationCommand,
   parseValidationTestConsumes,
   testConsumes,

@@ -2344,6 +2344,43 @@ function testMetricOptimizerContract() {
     v = optPlan(['validation_command: npm test'].concat(optBlock('opt', { regression_gate: null })), validNodes);
     assert(v.result === 'in-grammar', 'OPT-6: an omitted regression_gate that INHERITS the Meta validation_command must freeze in-grammar, got: ' + JSON.stringify(v));
 
+    // OPT-2 hardening — metric_command is implicitly required (no field rule read it before, so an
+    // absent one froze in-grammar and died at dispatch). A block that names one still freezes.
+    v = optPlan(optBlock('opt', { metric_command: null }), validNodes);
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)) && /metric_command/.test(errs(v)), 'OPT-2: an absent metric_command must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { metric_command: 'node bench.js --emit-metric' }), validNodes);
+    assert(v.result === 'in-grammar', 'OPT-2: a named metric_command must freeze in-grammar, got: ' + JSON.stringify(v));
+
+    // OPT-2 hardening — every metric_path must name ONE concrete file so the exact-string
+    // disjointness is SOUND. A directory-shaped / glob / `..`-aliasing entry defeats eval-isolation
+    // (it can COVER or ALIAS a write-set file yet compare string-distinct) and must refuse at freeze.
+    v = optPlan(optBlock('opt', { metric_paths: 'bench/' }), validNodes); // directory-shaped
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: a directory-shaped metric_paths entry must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { metric_paths: 'bench/*.js' }), validNodes); // glob
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: a glob metric_paths entry must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt', { metric_paths: 'bench/../src/hot.js' }), validNodes); // `..` aliasing the write set
+    assert(v.result === 'refuse' && /OPT-2/.test(errs(v)), 'OPT-2: a `..`-aliasing metric_paths entry must refuse, got: ' + JSON.stringify(v));
+    // a NESTED but exactly-resolvable file that stays outside the write set still freezes.
+    v = optPlan(optBlock('opt', { metric_paths: 'bench/nested/suite.js' }), validNodes);
+    assert(v.result === 'in-grammar', 'OPT-2: a nested exactly-resolvable metric_paths file disjoint from the write set must freeze in-grammar, got: ' + JSON.stringify(v));
+
+    // OPT-1 hardening — parseOptimizeContracts' Map last-wins on a duplicate `optimize(<id>):` header,
+    // so a second block for the same node (including a decoy fenced inside ## Meta, which sectionBody
+    // returns verbatim) silently clobbers the real contract with a tampered field yet freezes green.
+    // Count headers and refuse ≥2 for the same node at freeze.
+    v = optPlan(optBlock('opt').concat(optBlock('opt', { budget_iterations: '30' })), validNodes);
+    assert(v.result === 'refuse' && /OPT-1/.test(errs(v)), 'OPT-1: a duplicate optimize(<id>) block for the same node must refuse, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt').concat(['```'], optBlock('opt', { budget_iterations: '30' }), ['```']), validNodes);
+    assert(v.result === 'refuse' && /OPT-1/.test(errs(v)), 'OPT-1: a fenced-decoy optimize(<id>) block in ## Meta must refuse (sectionBody returns it verbatim; the count catches it), got: ' + JSON.stringify(v));
+    // a SINGLE optimize block for the node still freezes (regression guard for the header count).
+    v = optPlan(optBlock('opt'), validNodes);
+    assert(v.result === 'in-grammar', 'OPT-1: exactly one optimize(<id>) block must freeze in-grammar, got: ' + JSON.stringify(v));
+    // optimizeHeaderCounts is exported and counts per-id headers from the raw ## Meta body.
+    const dupBody = ['# Plan', '', '## Meta', 'labels: enhancement']
+      .concat(optBlock('opt')).concat(optBlock('opt', { budget_iterations: '30' }))
+      .concat(['', '## Nodes', '']).join('\n');
+    assert(pv.optimizeHeaderCounts(dupBody).get('opt') === 2, 'optimizeHeaderCounts counts duplicate optimize(opt) headers, got: ' + JSON.stringify([...pv.optimizeHeaderCounts(dupBody)]));
+
     // AC2 — the optimize contract is plan_hash-covered (computePlanHash normalizes the whole ## Meta
     // body). A post-freeze field mutation flips the hash ⇒ resume refusal.
     const validBody = ['# Plan', '', '## Meta', 'labels: enhancement']

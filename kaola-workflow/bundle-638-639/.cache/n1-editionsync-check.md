@@ -1,5 +1,9 @@
 evidence-binding: n1-editionsync-check c5f49e405981
 <!-- RED: paste RED here -->
-RED: 
+RED: scripts/test-edition-sync.js T9/T10 (checkMirrors, run against the pre-fix edition-sync.js with `checkByteIdenticalGroup` imported but no `checkMirrors` export) — `TypeError: checkMirrors is not a function` at test-edition-sync.js:195, proving `--check` had no primitive covering COMMON_SCRIPTS/BYTE_IDENTICAL_GROUPS mirrors before the fix. Captured by reverting only `scripts/edition-sync.js` to HEAD (test file kept its new T9/T10) and running `node scripts/test-edition-sync.js`.
 <!-- GREEN: paste GREEN here -->
-GREEN: 
+GREEN: after restoring the fix, `node scripts/test-edition-sync.js` -> "edition-sync tests passed (41 assertions)" (T9 in-sync/missing-mirror/drifted-mirror cases on a synthetic fixture tree + T10 real-repo no-false-positive case all green). Also verified live: `node scripts/edition-sync.js --check` -> "edition-sync: 10 forge aggregator ports, 24 COMMON_SCRIPTS mirrors, and 27 byte-identical groups in parity with canonical." (matches `validate-script-sync.js`'s own "24 common scripts, 27 byte-identical groups" count); a real planted 1-line drift in `scripts/kaola-workflow-claim.js` (a COMMON_SCRIPTS member) made `--check` exit 1 with "PARITY FAILED (1 issue(s))" reporting the drifted mirror, then reverted to exit 0 clean. `node scripts/validate-script-sync.js` unchanged and green ("OK: 24 common scripts, 27 byte-identical groups, ...").
+
+Files changed (exactly the declared 2-file write set):
+- `scripts/edition-sync.js` — added `checkMirrors(rootDir, commonScripts=COMMON_SCRIPTS, byteGroups=BYTE_IDENTICAL_GROUPS)`, reusing `checkByteIdenticalGroup` (imported from `validate-script-sync.js`) for both COMMON_SCRIPTS (as a degenerate 2-file `[canonical, codex]` group) and BYTE_IDENTICAL_GROUPS; wired it into `runCheck()` alongside the existing GENERATED_AGGREGATORS loop; exported `checkMirrors`. `runWrite()` untouched; no mirror data file written (tree was already in parity — `--write` confirmed a no-op both before and after).
+- `scripts/test-edition-sync.js` — added T9 (synthetic fixture tree: green on in-sync, red on a planted missing codex mirror, red on a planted drifted byte-group copy) and T10 (checkMirrors(REPO) with no override args has zero missing/drift on the real committed tree).
