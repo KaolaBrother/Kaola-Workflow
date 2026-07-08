@@ -1,0 +1,29 @@
+{
+  "project": "issue-634",
+  "branch": "workflow/issue-634",
+  "issue_number": 634,
+  "issue_numbers": [
+    634
+  ],
+  "resolved_default_branch": "main",
+  "branch_head": "e62a635d47b462f7485688f4f60627e54c58e6db",
+  "started_at": "2026-07-08T04:32:16.082Z",
+  "updated_at": "2026-07-08T04:32:33.307Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "finalize": "done",
+    "stash_restore": "done",
+    "archive_commit": "done",
+    "push_main": "done",
+    "closure": "done"
+  },
+  "remote_closed_after_publish": "verified",
+  "published_head": "e62a635d47b462f7485688f4f60627e54c58e6db",
+  "closed_issues": [
+    634
+  ]
+}
