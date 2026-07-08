@@ -143,6 +143,23 @@ const REQUIRED_BLOCKS = [
       'docs/plan-run-cards/metric-optimizer.md',
     ],
   },
+  {
+    // node-briefs-relay: the step-3 dispatch bullets that carry a node's
+    // authored brief (`goal_line`) verbatim into the role dispatch and
+    // instruct the role to read+echo each `upstream_evidence` file's nonce.
+    // Raw skeleton text (no SLOT/SPLICE divergence), so it obligates all six
+    // surfaces identically.
+    block_id: 'pr-node-briefs-relay',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: node-briefs-relay -->',
+      'carry it VERBATIM into the role dispatch',
+      'record a column-0 `upstream_read: <node-id> <nonce>` line',
+      'never from the card — the card never carries it',
+    ],
+  },
 
   // ==== finalize (basename kaola-workflow-finalize on both surface types) ====
   {

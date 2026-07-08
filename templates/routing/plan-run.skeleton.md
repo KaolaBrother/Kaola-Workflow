@@ -191,6 +191,10 @@ node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" orient \
 node and its `.cache/{node-id}.md` state, `escalated_to_full` / `consent_halt: pending` markers,
 and the `allDone` flag. Makes NO mutations.
 
+On resume or after a context compaction, the in-progress node's re-dispatch context
+(`goal_line` + `upstream_evidence`) is re-derived from the cached `.cache/<op>-envelope.json` —
+the disk is authoritative; never reconstruct it from memory.
+
 <!-- CARD: resume -->
 On crash/interrupt resume, read the card: `docs/plan-run-cards/resume.md`
 (covers `requires_redispatch`, complete-evidence crash, consent-halt `clear-halt`, unfrozen plan)
@@ -301,6 +305,13 @@ the transport, never the contract.
 <!-- /REGION -->
 <!-- SPLICE:pr-instruct-lead -->
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
+<!-- PIN: node-briefs-relay -->
+- When `dispatch.goal_line` is present, carry it VERBATIM into the role dispatch as the node's
+  task direction.
+- When `dispatch.upstream_evidence` is present, instruct the role to READ each listed evidence
+  file BEFORE starting work and record a column-0 `upstream_read: <node-id> <nonce>` line in its
+  own evidence, copying the nonce from line 1 of that upstream file (never from the card — the
+  card never carries it).
 <!-- SPLICE:pr-fill-stubs -->
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.
   Record compliance as `main-session-direct` for the `finalize` sink node.
@@ -391,16 +402,18 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
-**Evidence-persistence contract per role-kind.** There is ONE contract — no per-agent
-guesswork:
-- **READ-ONLY roles** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`, and the
-  planner) CANNOT self-write `.cache` evidence — they RETURN their evidence text and the
-  orchestrator persists it via `record-evidence --stdin` (below). `record-evidence` re-injects
-  this node's `evidence-binding:` header, so persisting evidence cannot strip the header —
-  the read-only role MUST NOT try to add or modify it.
-- **WRITE-role agents** (`implementer`, `tdd-guide`, `metric-optimizer`) SELF-WRITE their `.cache`
-  evidence, INCLUDING the seeded `evidence-binding:` header (read it from the seeded file, never
-  alter it).
+**Evidence-persistence contract per role-kind.** There is ONE contract, derived from each role's
+tool manifest — no hand-list, no per-agent guesswork:
+- Any node role WITHOUT `Write` in its tool manifest CANNOT self-write `.cache` evidence — it
+  RETURNS its deliverable for orchestrator persistence via `record-evidence --stdin` (below).
+  `record-evidence` re-injects this node's `evidence-binding:` header, so persisting evidence
+  cannot strip the header — the role MUST NOT try to add or modify it. Current roster (EXAMPLES
+  only): read producers `code-explorer`, `knowledge-lookup`, `code-architect`, `planner`,
+  `issue-scout`; plus the read gates `adversarial-verifier` / `code-reviewer`.
+- Any node role WITH `Write` in its tool manifest SELF-WRITES its `.cache` evidence, INCLUDING
+  the seeded `evidence-binding:` header (read it from the seeded file, never alter it). Current
+  roster (EXAMPLES only): `implementer`, `tdd-guide`, `metric-optimizer`, `build-error-resolver`,
+  `doc-updater`, `synthesizer`.
 
 <!-- CARD: metric-optimizer -->
 A `metric-optimizer` node's dispatch card carries `dispatch.optimize` (the frozen
