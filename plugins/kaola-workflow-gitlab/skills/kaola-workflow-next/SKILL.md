@@ -5,6 +5,13 @@ description: Use when resuming, routing, or starting a Kaola-Workflow for Codex 
 
 # Kaola-Workflow Next
 
+**First Principles.** When no shipped rule, gate, or refusal already settles a
+situation, break the tie by the First Principles axioms (the `## First Principles`
+block in your project's workflow-init CLAUDE.md), applied in priority order, and
+record a one-line derivation in the node's `.cache` evidence — OPTIONAL, never
+blocks a gate. An axiom may only make you stricter:
+never cite one to skip a typed gate, refusal, or barrier.
+
 This is the thin router. It owns startup checks, roadmap freshness, active project selection, state repair, and phase routing. It does not perform phase work directly unless it routes into the next skill.
 
 ## Goal Contract

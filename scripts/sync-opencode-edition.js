@@ -353,6 +353,16 @@ function transformCommandBody(body) {
     /For every[^.]*?include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
     "Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier roles use the model's TOP effort, standard-tier its SECOND). Never pass a per-call `model=`."
   );
+  // #646: the router's issue-scout dispatch names `model="{ISSUE_SCOUT_MODEL}"` and then an
+  // install-time resolution note. The generic {X_MODEL} strip below would leave an empty
+  // inline-code span (` `` `) where the placeholder was, PLUS an "install time" resolution
+  // sentence that is FALSE for opencode (opencode has no install-time render step — it centralizes
+  // the tier in opencode.json). Rewrite the whole paragraph to opencode-true wording BEFORE the
+  // generic strip runs — the scout's effort variant resolves centrally from opencode.json.
+  text = text.replace(
+    /Dispatch it with `model="\{ISSUE_SCOUT_MODEL\}"` — the governed issue-scout tier\.\s+The model above is resolved at install time; the router does not substitute it\./g,
+    "Dispatch the read-only issue-scout agent; its effort variant resolves centrally from `opencode.json` — the governed issue-scout tier."
+  );
   // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
   // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"

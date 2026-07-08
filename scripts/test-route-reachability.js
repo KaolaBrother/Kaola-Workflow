@@ -725,6 +725,26 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     '#634: docs/plan-run-cards/metric-optimizer.md card must exist');
 }
 
+// --- #645: nx-first-principles axiom-pointer block sanity — the shared-body reference line exists,
+//     obligates all 6 next surfaces (both/both), and its distinctive tokens are not vacuous
+//     substrings of its own marker (the #637 lesson applied to the new axiom block — a correctness
+//     class the manifest presence-check alone does NOT cover). The canonical axioms file the pointer
+//     names must also exist. --------------------------------------------------------------------
+{
+  const block = REQUIRED_BLOCKS.find(b => b.block_id === 'nx-first-principles');
+  assert(!!block, '#645: nx-first-principles block must exist in the manifest');
+  if (block) {
+    const { error, files } = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
+    assert(!error && files.length === 6,
+      '#645: nx-first-principles must obligate all 6 next surfaces (both/both)');
+    const marker = norm(block.content_tokens[0]);
+    assert(block.content_tokens.slice(1).every(t => !marker.includes(norm(t))),
+      '#645: nx-first-principles distinctive tokens must not be substrings of its own marker');
+  }
+  assert(exists('templates/axioms.md'),
+    '#645: templates/axioms.md canonical First Principles source must exist');
+}
+
 // --- SUPERSET PROOF: every legacy in-scope T-pin token folds into a manifest
 //     block (⊇ the legacy surface set) or is an accepted residual. Covers the
 //     #624-fix gate flags + workflow_path:adaptive explicitly. --------------

@@ -801,6 +801,14 @@ assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-w
 // This surface was unlocked before, which let forge-edition router drift ship green on all 4 lanes.
 assertIncludes('commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
 assertIncludes('commands/workflow-next.md', 'Skip this entire step when `KAOLA_PATH=adaptive`');
+// #646: the issue-scout is dispatched PRE-CLAIM via router prose (Step 0, no-issue-named branch), not a
+// fenced Agent() block — and commands/workflow-next.md is NOT in phaseCommands, so
+// assertEveryDispatchHasModel never scans it. Pin the governed scout dispatch here explicitly: the
+// tier must stay the install-rendered {ISSUE_SCOUT_MODEL} placeholder, never drift back to an
+// ungoverned (model-less) prose dispatch (the #443 regression shape — an unrendered placeholder — is
+// separately caught by test-install-model-rendering.js).
+assertIncludes('commands/workflow-next.md', 'the governed issue-scout tier');
+assertIncludes('commands/workflow-next.md', 'model="{ISSUE_SCOUT_MODEL}"');
 // adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance
 // #277 M3: FANOUT_CAP and post-dominate concepts relocated from commands/kaola-workflow-adapt.md
 // (now a dispatch-handle-only file) to agents/workflow-planner.md (sole home of authoring procedure).

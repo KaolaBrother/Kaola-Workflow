@@ -551,3 +551,42 @@ scratch (a temp dir, the scratchpad) remains legal for the gate's own transient 
 instrumentation, or the id of the upstream writer node that authored what it did run; the named
 node must exist in the ledger as a writer (non-empty declared write set). Absence of the token is
 refused alongside the existing missing-verdict shape check.
+
+## First Principles axiom layer (#645)
+
+`templates/axioms.md` is the single canonical source for the workflow's five tie-breaking axioms
+(correct first; then save human time; then spend as little as possible; machines decide facts,
+humans decide values; own your own verdicts). It reaches consumers by EMBEDDING byte-identically
+into the six workflow-init CLAUDE.md-template surfaces — never per-edition copies, since
+`templates/` has no runtime `require()` consumer and the `BYTE_IDENTICAL_GROUPS` mechanism is built
+for that case, not this one. The drift guard is a `simulate-workflow-walkthrough.js` scenario,
+`testAxiomBlockByteIdentity`, comparing the canonical file's trimmed content against each of the six
+embeds. A short reference pointer (not the full block) is separately required on the six generated
+`next` routing surfaces via a `required-blocks.js` entry, `nx-first-principles`.
+
+**Tie-breaker protocol.** Axioms apply only when no shipped rule, gate, or refusal already resolves
+a situation — walk them in priority order and record an OPTIONAL one-line derivation in the node's
+`.cache` evidence; its absence never blocks a gate (it is never wired into any evidence-shape
+check).
+
+**Tighten-only boundary (hard).** An axiom may only make an agent stricter, never looser — never
+cite an axiom to justify skipping a typed gate, refusal, or barrier. A rule that would loosen an
+existing gate belongs in the gate itself, with its own review, not as an axiom appeal.
+
+See `docs/decisions/D-645-01.md`.
+
+## Issue-scout higher-profile model tier (#646)
+
+`issue-scout` has a `agents/profiles/higher/issue-scout.md` file (`model: opus`) alongside the base
+`agents/issue-scout.md` (`model: sonnet`), following the same higher/common tier shape as
+`code-reviewer`/`security-reviewer`. `ISSUE_SCOUT_MODEL` is wired into `install.sh`'s
+`model_for_placeholder` case and `render_command_file`'s `placeholders` array — both entries land
+together in the same change, never partially: a partial land (either list without the other)
+reproduces a historical unrendered-placeholder regression, where the token survived install with no
+case to resolve it. The rendered placeholder is COMMAND-surface-only (the three `workflow-next`
+commands) — Codex SKILL packs keep prose-only scout dispatch, matching the model-less
+`issue-scout.toml` twins across all three plugin editions; a shared-body placeholder would leak
+into the skills. `DEFAULT_AGENT_MODELS['issue-scout']` and `REASONING_FLOOR_ROLES` are unaffected —
+a higher-profile lever raises quality, it never lowers the reasoning floor.
+
+See `docs/decisions/D-646-01.md`.

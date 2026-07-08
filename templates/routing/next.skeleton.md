@@ -2,6 +2,13 @@
 
 <!-- SLOT:nx-h1 -->
 
+**First Principles.** When no shipped rule, gate, or refusal already settles a
+situation, break the tie by the First Principles axioms (the `## First Principles`
+block in your project's workflow-init CLAUDE.md), applied in priority order, and
+record a one-line derivation in the node's `.cache` evidence — OPTIONAL, never
+blocks a gate. An axiom may only make you stricter:
+never cite one to skip a typed gate, refusal, or barrier.
+
 <!-- REGION:command -->
 `/workflow-next` is the thin router for the six phase commands. It owns
 startup, Git/roadmap freshness, project selection, resume detection, and phase
@@ -141,6 +148,9 @@ startup.** Scripts validate but never select or substitute issues.
 
 issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
+
+Dispatch it with `model="{ISSUE_SCOUT_MODEL}"` — the governed issue-scout tier.
+The model above is resolved at install time; the router does not substitute it.
 
 <!-- REGION:github -->
 **Goal context (`KAOLA_GOAL`).** If `KAOLA_GOAL` is set, pass the value to the

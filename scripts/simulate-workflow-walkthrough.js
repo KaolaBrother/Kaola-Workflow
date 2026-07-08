@@ -14218,6 +14218,33 @@ function testSinkTransactionCleanEndToEnd() {
   }
 }
 
+// #645: the First Principles axiom block embedded in every workflow-init CLAUDE.md template must stay
+// byte-identical to the canonical templates/axioms.md — the single source the `next` routing surfaces
+// point to ("canonical source templates/axioms.md"). If any embed (or the canonical file) drifts, the
+// consumer's CLAUDE.md and the pointer's referent would silently disagree; this reds npm test. The
+// startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('') is
+// always true), so the guard is load-bearing on BOTH the canonical file and every embed.
+function testAxiomBlockByteIdentity() {
+  const axioms = read(path.join(repoRoot, 'templates', 'axioms.md'));
+  assert(axioms.startsWith('## First Principles'),
+    'templates/axioms.md must open with the ## First Principles heading; got: ' + JSON.stringify(axioms.slice(0, 40)));
+  const initSurfaces = [
+    'commands/workflow-init.md',
+    'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
+    'plugins/kaola-workflow-gitea/commands/workflow-init.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md',
+  ];
+  for (const rel of initSurfaces) {
+    const body = read(path.join(repoRoot, rel));
+    assert(body.includes(axioms),
+      rel + ' must embed the canonical templates/axioms.md First Principles block byte-identically ' +
+      '(drift from templates/axioms.md detected)');
+  }
+  console.log('testAxiomBlockByteIdentity: PASSED');
+}
+
 // ---------------------------------------------------------------------------
 // SCENARIO REGISTRY
 //
@@ -14286,6 +14313,7 @@ function buildRegistry() {
     reg.push({ name: n, fn: sharedTmpFn, sharedTmp: true });
   }
   // Self-contained scenarios — exact order from the original main() call list:
+  add('testAxiomBlockByteIdentity',                       testAxiomBlockByteIdentity);
   add('testKeepOpenArchiveStamp',                         testKeepOpenArchiveStamp);
   add('testManualArchiveBackstop',                        testManualArchiveBackstop);
   add('testRepairFastNoArgSingle',                        testRepairFastNoArgSingle);

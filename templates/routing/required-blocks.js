@@ -226,6 +226,20 @@ const REQUIRED_BLOCKS = [
     content_tokens: ['kaola-workflow-plan-run', 'auto-bundle'],
   },
   {
+    // #645 axiom pointer — the shared-body First Principles reference line
+    // (tie-breaker + tighten-only). Raw skeleton text above every REGION, so it
+    // obligates all six next surfaces identically. Non-marker tokens (distinctive
+    // verbatim prose), so no reverse orphan-sentinel obligation.
+    block_id: 'nx-first-principles',
+    topic: 'next',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'First Principles axioms',
+      'never cite one to skip a typed gate, refusal, or barrier',
+    ],
+  },
+  {
     block_id: 'nx-codex-dispatch-mode',
     topic: 'next',
     runtime_tag: 'codex-live',
@@ -247,6 +261,10 @@ const REQUIRED_BLOCKS = [
       'issue-scout',
       'Skip this entire step when `KAOLA_PATH=adaptive`',
       'path_not_installed',
+      // #646: the governed issue-scout model placeholder — command-only (install.sh
+      // renders {X_MODEL} placeholders in COMMANDS; no SKILL.md may carry one), so it
+      // rides this claude-live/command block, not the both/both blocks above.
+      'model="{ISSUE_SCOUT_MODEL}"',
     ],
   },
 ];
