@@ -59,3 +59,5 @@
 {"node":"n8-cr-surface","event":"evidence","ts":"2026-07-08T16:15:02.695Z"}
 {"node":"n8-cr-surface","event":"closed","ts":"2026-07-08T16:15:03.127Z"}
 {"node":"n11-finalize","event":"opened","ts":"2026-07-08T16:15:03.513Z"}
+{"node":"n11-finalize","event":"evidence","ts":"2026-07-08T16:42:11.607Z"}
+{"node":"n11-finalize","event":"closed","ts":"2026-07-08T16:42:12.130Z"}

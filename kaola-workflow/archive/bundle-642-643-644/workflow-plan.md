@@ -233,7 +233,7 @@ documents for when a design node IS authored.
 | n8-cr-surface | complete |
 | n9-adversary | complete |
 | n10-docs | complete |
-| n11-finalize | in_progress |
+| n11-finalize | complete |
 ## Required Agent Compliance
 
 | Requirement | Status | Evidence | Skip Reason |
@@ -247,3 +247,4 @@ documents for when a design node IS authored.
 | code-reviewer | subagent-invoked | evidence-binding: n7-cr-engine dce77a8a41e6 | |
 | adversarial-verifier (n9-adversary) | subagent-invoked | evidence-binding: n9-adversary 3b80090c352a | |
 | doc-updater (n10-docs) | subagent-invoked | evidence-binding: n10-docs 923a0d2372ee | |
+| finalize (n11-finalize) | main-session-direct | evidence-binding: n11-finalize 29f4cf90bee2 | |

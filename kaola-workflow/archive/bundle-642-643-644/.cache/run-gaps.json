@@ -1,0 +1,50 @@
+{
+  "project": "bundle-642-643-644",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-validator",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-agents",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n5-prose",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-adaptive",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n6-enforcement",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n7-cr-engine",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n8-cr-surface",
+      "count": 3
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n9-adversary",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n11-finalize",
+      "count": 3
+    }
+  ]
+}
