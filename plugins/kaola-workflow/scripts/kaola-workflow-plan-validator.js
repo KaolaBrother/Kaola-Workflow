@@ -105,6 +105,7 @@ const OPERATOR_HINT_REGISTRY = {
   plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md was modified after freeze. Re-run --freeze to re-stamp.',
   unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
   dangling_depends_on: (ctx) => `Node ${ctx.nodeId || '(unknown)'} depends_on a node that does not exist. Fix the depends_on reference and re-freeze.`,
+  brief_unknown_node: (ctx) => `## Node Briefs names unknown node id "${ctx.nodeId || '(unknown)'}" — every brief's ### <node-id> header must match a node in the ## Nodes table. Fix the id (or add the node) and re-freeze.`,
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -174,6 +175,12 @@ const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater',
 // #634: metric-optimizer ∈ IMPLEMENT_ROLES ⇒ producesCode() true ⇒ G1 (code-reviewer) + G3
 // (main-session-gate) post-dominance coverage is inherited with zero gate plumbing.
 const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer', 'metric-optimizer']);
+// The READ-PRODUCER + convergence roles whose evidence is durable UPSTREAM context a downstream
+// implement node consumes (the producer side of the node-to-node information channel). A consumer
+// that depends_on a producer must prove it actually read that producer's evidence (the close-time
+// consumed-proof). Distinct from IMPLEMENT_ROLES (the consumer side). Exported via module.exports so
+// the per-node lifecycle aggregator imports the SAME set and the producer/consumer split never drifts.
+const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'issue-scout', 'synthesizer']);
 // #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
 // cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)
 // so the freeze-time sanitize-collision check sees the SAME collisions the barrier keys do
@@ -201,8 +208,21 @@ const ROLE_TOKEN_REGISTRY = {
   'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
   'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
   'adversarial-verifier': ['evidence-binding', 'verdict'],
-  'doc-updater':          ['evidence-binding'],
   'main-session-gate':    ['evidence-binding', 'verdict', 'findings_blocking'],
+  // Read-PRODUCER + write role evidence contracts. Each row names the CONTENT-BEARING token(s) the
+  // role's evidence must carry (beyond evidence-binding). An alternation (`|`) is satisfied by ANY one
+  // alternative (checkEvidenceShape's ANY-of semantics; the open-time seed writes the FIRST). These
+  // rows drive open-time SEEDING + required_tokens + --verify for free; the close-time shape gate
+  // consumes them for producer roles via the registry-driven branch. Every role reaches >=2 tokens
+  // (the future-agent wall's floor — no presence-only exception needed).
+  'code-architect':       ['evidence-binding', 'files_to_create|files_to_modify', 'build_sequence'],
+  'code-explorer':        ['evidence-binding', 'findings'],
+  'knowledge-lookup':     ['evidence-binding', 'findings', 'sources'],
+  'planner':              ['evidence-binding', 'recommendation'],
+  'issue-scout':          ['evidence-binding', 'recommendation'],
+  'build-error-resolver': ['evidence-binding', 'build-green'],
+  'synthesizer':          ['evidence-binding', 'merge_outcome'],
+  'doc-updater':          ['evidence-binding', 'docs_updated'],
   // #634: the metric-optimizer evidence contract proves "baseline honest, N iterations budget-bounded,
   // final metric reproducible, regression gate green". checkEvidenceShape only asserts token PRESENCE
   // (non-empty); the per-iteration ratchet log (accepted AND rejected attempts) is audited by the
@@ -1299,10 +1319,62 @@ function barrierCheck(content, actualPaths, opts) {
 // comment. Covering `## Meta` closes the integrity hole where tampering the labels after
 // freeze (e.g. security -> chore) would otherwise be invisible to --resume-check and
 // silently drop the G2 security requirement on resume.
+// `## Node Briefs` — the durable per-node information channel. One h3 sub-block per node under the
+// `## Node Briefs` h2 (`### <node-id>` header, then the brief body = the node's goal_line). The section
+// is hash-covered (computePlanHash appends it when present) so a post-freeze brief edit is tamper-
+// evident, and the freeze wall refuses a brief naming an unknown node id.
+//
+// nodeBriefsPresent: a fence-safe column-0 heading probe. Used by computePlanHash's CONDITIONAL append
+// (a briefless plan hashes BYTE-IDENTICALLY to the pre-briefs formula → back-compat is absolute) and as
+// the parse guard. sectionBody returns '' for both an absent and an empty section, so presence must be
+// probed on the heading, not the body.
+function nodeBriefsPresent(content) {
+  return /^##\s+Node Briefs\s*$/m.test(String(content || ''));
+}
+// parseNodeBriefs: parse the `## Node Briefs` section into [{ nodeId, brief }]. The section body is
+// sliced via the fence-aware classifier.sectionBody (an h3 does NOT close the h2 section); the
+// `### <node-id>` headers are scanned fence-aware (mirroring sectionBody's fenceRe) so a fenced
+// `### x` inside a brief's code block is not mistaken for a header. Each brief body has leading/trailing
+// blank lines trimmed with internal newlines preserved. Returns [] when the section is absent (the
+// deterministic-trim contract the hash byte-identity + the freeze wall both rely on). Pure (no fs).
+function parseNodeBriefs(content) {
+  if (!nodeBriefsPresent(content)) return [];
+  const body = classifier.sectionBody(content, 'Node Briefs');
+  if (!body) return [];
+  const fenceRe = /^(`{3,}|~{3,})/;
+  let inFence = false;
+  let fenceFamily = '';
+  const out = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    const bl = cur.lines.slice();
+    while (bl.length && bl[0].trim() === '') bl.shift();
+    while (bl.length && bl[bl.length - 1].trim() === '') bl.pop();
+    out.push({ nodeId: cur.nodeId, brief: bl.join('\n') });
+    cur = null;
+  };
+  for (const line of body.split('\n')) {
+    const fm = line.trim().match(fenceRe);
+    if (fm) {
+      const fam = fm[1][0];
+      if (!inFence) { inFence = true; fenceFamily = fam; }
+      else if (fam === fenceFamily) { inFence = false; fenceFamily = ''; }
+    }
+    const hm = !inFence ? line.match(/^###\s+(\S+)\s*$/) : null;
+    if (hm) { flush(); cur = { nodeId: hm[1], lines: [] }; }
+    else if (cur) { cur.lines.push(line); }
+  }
+  flush();
+  return out;
+}
 function computePlanHash(content) {
   const norm = section => classifier.sectionBody(content, section)
     .split('\n').map(l => l.trim()).filter(Boolean).join('\n');
-  const body = norm('Meta') + '\n---NODES---\n' + norm(schema.NODES_HEADING);
+  let body = norm('Meta') + '\n---NODES---\n' + norm(schema.NODES_HEADING);
+  // The `## Node Briefs` section is hash-covered ONLY when present — a briefless plan produces a
+  // byte-identical hash body, so every existing frozen/in-flight plan resume-checks unchanged.
+  if (nodeBriefsPresent(content)) body += '\n---BRIEFS---\n' + norm('Node Briefs');
   return crypto.createHash('sha256').update(body).digest('hex');
 }
 function readStoredHash(content) {
@@ -1354,6 +1426,15 @@ function validatePlan(content, opts) {
     return { result: 'refuse', reason: 'too_many_nodes', operator_hint: getOperatorHint('too_many_nodes'), errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
   }
   const ids = new Set(nodes.map(n => n.id));
+  // `## Node Briefs` freeze wall: a brief whose ### <node-id> header names a node absent from ## Nodes
+  // is an authoring error (the brief would never reach any dispatch). Early typed refusal, mirroring the
+  // policy-token refusals above. Freeze-only (NOT added to revalidateForResume) — briefs are hash-
+  // covered, so a frozen plan can never carry an unknown-node brief; same pattern as the dup-id wall.
+  for (const b of parseNodeBriefs(content)) {
+    if (!ids.has(b.nodeId)) {
+      return { result: 'refuse', reason: 'brief_unknown_node', operator_hint: getOperatorHint('brief_unknown_node', { nodeId: b.nodeId }), errors: ['## Node Briefs names unknown node id "' + b.nodeId + '"'], planHash: computePlanHash(content) };
+    }
+  }
   // #634: the metric-optimizer optimize(<id>) Meta contracts (Map<nodeId,contract>), parsed once for the
   // OPT-1..OPT-4/OPT-6 field rules below and the OPT-5 gate rule in the gates block. plan_hash-covered.
   const optimizeContracts = parseOptimizeContracts(content);
@@ -3311,6 +3392,9 @@ module.exports = {
   reconcileLedger,
   computePlanHash,
   readStoredHash,
+  // `## Node Briefs` channel: the parser + presence probe (fence-aware; hash-covered when present).
+  parseNodeBriefs,
+  nodeBriefsPresent,
   parseNodes,
   parseLabels,
   parseGoal,
@@ -3335,6 +3419,10 @@ module.exports = {
   barrierCheck,
   installedRoles,
   ROLE_TOKEN_REGISTRY,
+  // Producer/consumer role classification for the node-to-node channel's consumed-proof (the lifecycle
+  // aggregator imports the SAME sets so the split never drifts).
+  PRODUCER_ROLES,
+  IMPLEMENT_ROLES,
   isBarrierInvisible,
   // #596: exported so next-action.js's static write-eligibility check reuses the SAME resolvability
   // predicate the --parallel-safe coarse relaxation already applies (no new logic, no new entry point).

@@ -11286,6 +11286,75 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// SEED-arch (per-role evidence registry): open-next over a producer-role node (code-architect)
+// SEEDS the NEW content-bearing token stubs (files_to_create + build_sequence) into
+// .cache/<id>.md and emits them in the opened node's required_tokens. This is REGISTRY-DRIVEN:
+// seedEvidenceFile + open-next already consume ROLE_TOKEN_REGISTRY, so adding the validator's
+// rows is sufficient — no adaptive-node.js edit. Real temp dir so seedEvidenceFile's fs write
+// lands (an in-memory writeFile map never captures it — seedEvidenceFile writes fs directly).
+// NOTE: the CLOSE-time refusal on an empty producer token (checkEvidenceShape) is a separate
+// deliverable — it lives in adaptive-node.js, not this seed half.
+// ---------------------------------------------------------------------------
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-seed-arch-'));
+  try {
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    const statePath = path.join(proj, 'workflow-state.md');
+    // Fixture: a code-architect producer node, pending, next to open.
+    const plan = makePlan(
+      ['| design | pending | |', '| impl | pending | |', '| finalize | pending | |'],
+      [
+        '| design | code-architect | — | — | 1 | sequence |',
+        '| impl | implementer | design | scripts/x.js | 1 | sequence |',
+        '| finalize | finalize | impl | CHANGELOG.md | 1 | sequence |',
+      ]);
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(statePath, makeState());
+
+    const shellStub = function(scriptPath, args) {
+      const base = path.basename(scriptPath);
+      const argsArr = args || [];
+      if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (base === 'kaola-workflow-next-action.js') {
+        return {
+          exitCode: 0, result: 'ok',
+          readySet: [{ id: 'design', role: 'code-architect', model: 'reasoning', declared_write_set: '—', dependsOn: [] }],
+          nextNode: { id: 'design', role: 'code-architect', model: 'reasoning', declared_write_set: '—' },
+          allDone: false,
+        };
+      }
+      if (base === 'kaola-workflow-commit-node.js') {
+        return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'design', overallOk: true, recordBase: { base: 'deadbeefcafe0000' } };
+      }
+      return { exitCode: 0 }; // best-effort (task-mirror etc.)
+    };
+
+    const result = runOpenNext({
+      planPath, statePath, project: 'test-project', nodeId: null,
+      shell: shellStub,
+      readFile: (fpath) => fs.readFileSync(fpath, 'utf8'),
+      writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+    });
+
+    assert(result.result === 'ok', 'SEED-arch: open-next ok, got ' + JSON.stringify({ result: result.result, reason: result.reason }));
+    assert(result.opened && result.opened.role === 'code-architect', 'SEED-arch: opened the code-architect node, got ' + JSON.stringify(result.opened && result.opened.role));
+    const rt = (result.opened && result.opened.required_tokens) || [];
+    assert(rt.includes('files_to_create|files_to_modify'),
+      'SEED-arch: required_tokens carries the files_to_create|files_to_modify class, got ' + JSON.stringify(rt));
+    assert(rt.includes('build_sequence'),
+      'SEED-arch: required_tokens carries build_sequence, got ' + JSON.stringify(rt));
+
+    // The seeded evidence file carries the stub KEYS (the alternation seeds its FIRST alternative).
+    const seeded = fs.readFileSync(path.join(proj, '.cache', 'design.md'), 'utf8');
+    assert(/^evidence-binding: design /m.test(seeded), 'SEED-arch: line-1 binding header seeded, got:\n' + seeded);
+    assert(/^files_to_create:\s*$/m.test(seeded), 'SEED-arch: files_to_create stub key seeded (first alternative), got:\n' + seeded);
+    assert(/^build_sequence:\s*$/m.test(seeded), 'SEED-arch: build_sequence stub key seeded, got:\n' + seeded);
+  } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

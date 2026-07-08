@@ -1505,6 +1505,173 @@ function runMirrorHandoffCase(mirrorResponse) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Node Briefs — the durable per-node information channel grammar. A new hash-covered
+// `## Node Briefs` plan section (### <node-id> sub-blocks). Two freeze contracts, exercised
+// end-to-end through the REAL validator subprocess (shellHandoff) + the handoff mapping:
+//   (a) a brief naming an unknown node id → freeze REFUSE brief_unknown_node; the handoff
+//       surfaces it as plan_invalid, with NO --freeze and NO mutation.
+//   (b) the brief text is hash-covered — a one-line post-freeze brief edit → --resume-check
+//       plan_hash_mismatch (the integrity proof). Briefless plans hash byte-identically to the
+//       pre-briefs formula (back-compat is absolute).
+// ---------------------------------------------------------------------------
+{
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const { computePlanHash, parseNodeBriefs, nodeBriefsPresent } = require('./kaola-workflow-plan-validator');
+
+  // A minimal freezable 2-node plan (code-explorer → finalize), parameterized on an optional
+  // trailing `## Node Briefs` block (h2 section, ### <node-id> sub-blocks).
+  function briefsPlan(briefsBlock) {
+    const base = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| finalize | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| explore | pending |', '| finalize | pending |', '',
+    ];
+    if (briefsBlock) base.push(briefsBlock, '');
+    return base.join('\n') + '\n';
+  }
+
+  const goodBriefs = [
+    '## Node Briefs', '',
+    '### explore', 'Probe the codebase. Return findings.', '',
+    '### finalize', 'Close the loop.',
+  ].join('\n');
+  const badBriefs = [
+    '## Node Briefs', '',
+    '### explore', 'Probe.', '',
+    '### ghost-node', 'This id is not in the ## Nodes table.',
+  ].join('\n');
+
+  // Drive the REAL validator subprocess over a plan in a temp dir; return {verdict, planPath, tmpDir}.
+  function freezeVerdict(planContent, extraFlags) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-briefs-'));
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planContent);
+    const verdict = shellHandoff(VALIDATOR, [planPath, '--json'].concat(extraFlags || []));
+    return { verdict, planPath, tmpDir };
+  }
+
+  // (a-neg) a valid-id ## Node Briefs plan freezes (in-grammar) — the section is legal.
+  {
+    const { verdict, tmpDir } = freezeVerdict(briefsPlan(goodBriefs));
+    assert(verdict.result !== 'refuse',
+      'briefs-valid: a ## Node Briefs plan with known ids freezes in-grammar, got ' + JSON.stringify({ result: verdict.result, errors: verdict.errors }));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // (a) an unknown-node brief → REFUSE brief_unknown_node (the DEFAULT --json validate path carries
+  //     the early typed reason verbatim; the offending id is named in errors).
+  {
+    const { verdict, tmpDir } = freezeVerdict(briefsPlan(badBriefs));
+    assert(verdict.result === 'refuse' && verdict.reason === 'brief_unknown_node',
+      'briefs-unknown: an unknown-node ## Node Briefs entry refuses brief_unknown_node, got ' + JSON.stringify({ result: verdict.result, reason: verdict.reason }));
+    assert(Array.isArray(verdict.errors) && verdict.errors.some(e => /ghost-node/.test(e)),
+      'briefs-unknown: the offending node id is named in the errors, got ' + JSON.stringify(verdict.errors));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // (a-e2e) the handoff surfaces the unknown-node refuse as plan_invalid, with NO --freeze (no mutation).
+  {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-briefs-h-'));
+    try {
+      const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+      fs.mkdirSync(proj, { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      const statePath = path.join(proj, 'workflow-state.md');
+      fs.writeFileSync(planPath, briefsPlan(badBriefs));
+      fs.writeFileSync(statePath, makeStateContent({ issueNumber: 9 }));
+      let freezeShelled = false;
+      const result = runHandoff({
+        planPath, statePath, project: 'test-project', json: true,
+        // Delegate ONLY the validator to the real subprocess (its --freeze-checked refuse is what we
+        // assert reaches the handoff); stub everything else so a refuse-path test can never shell the
+        // real roadmap/git and pollute the live .roadmap mirror (hermetic on refuse and on regression).
+        shell: (scriptPath, args) => {
+          const a = args || [];
+          const base = path.basename(scriptPath);
+          if (base === 'kaola-workflow-plan-validator.js') {
+            if (a.includes('--freeze')) freezeShelled = true;
+            return shellHandoff(scriptPath, a);
+          }
+          return { exitCode: 0 };
+        },
+        computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+        resolveModel: () => 'sonnet',
+        readFile: (fpath) => fs.readFileSync(fpath, 'utf8'),
+        writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+        stateMtime: undefined,
+      });
+      assert(result.handoff_status === 'plan_invalid',
+        'briefs-unknown-e2e: the handoff surfaces the brief refuse as plan_invalid, got ' + JSON.stringify(result.handoff_status));
+      assert(Array.isArray(result.errors) && result.errors.some(e => /ghost-node/.test(e)),
+        'briefs-unknown-e2e: the offending id reaches the handoff packet, got ' + JSON.stringify(result.errors));
+      assert(freezeShelled === false, 'briefs-unknown-e2e: --freeze NEVER shelled on the refuse (no mutation)');
+    } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // (b) HASH COVERAGE: the brief text is hash-covered — a one-line ## Node Briefs edit moves plan_hash.
+  {
+    const withBrief = briefsPlan(goodBriefs);
+    const editedBrief = briefsPlan(goodBriefs.replace('Probe the codebase. Return findings.', 'Probe the codebase. Return a DIFFERENT deliverable.'));
+    assert(computePlanHash(withBrief) !== computePlanHash(editedBrief),
+      'briefs-hash: a one-line ## Node Briefs edit changes plan_hash (briefs are hash-covered)');
+  }
+
+  // (b-resume) post-freeze one-line brief edit → --resume-check refuses plan_hash_mismatch (the
+  //            integrity proof: freezing stamps a brief-covering hash, so a later brief edit is caught).
+  {
+    const { verdict: freezeOut, planPath, tmpDir } = freezeVerdict(briefsPlan(goodBriefs), ['--freeze']);
+    try {
+      assert(freezeOut.frozen === true,
+        'briefs-resume: the good-briefs plan freezes (stamps a plan_hash), got ' + JSON.stringify({ frozen: freezeOut.frozen, errors: freezeOut.errors }));
+      const frozen = fs.readFileSync(planPath, 'utf8');
+      const tampered = frozen.replace('Probe the codebase. Return findings.', 'Probe the codebase. Return findings. (post-freeze edit)');
+      assert(tampered !== frozen, 'briefs-resume: the tamper actually changed the frozen plan');
+      fs.writeFileSync(planPath, tampered);
+      const resume = shellHandoff(VALIDATOR, [planPath, '--resume-check', '--json']);
+      assert(resume.ok === false && resume.reasonCode === 'plan_hash_mismatch',
+        'briefs-resume: a post-freeze brief edit fails --resume-check plan_hash_mismatch, got ' + JSON.stringify({ ok: resume.ok, reasonCode: resume.reasonCode }));
+    } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // (c) BACK-COMPAT + parser: a briefless plan hashes byte-identically to the pre-briefs formula
+  //     (Meta + Nodes only); parseNodeBriefs returns one trimmed entry per ### sub-block. typeof-guarded
+  //     so a missing export produces a clean assertion FAIL (RED) rather than a top-level throw.
+  {
+    const classifier = require('./kaola-workflow-classifier');
+    const crypto = require('crypto');
+    const legacyHash = (content) => {
+      const norm = section => classifier.sectionBody(content, section).split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+      const body = norm('Meta') + '\n---NODES---\n' + norm('Nodes');
+      return crypto.createHash('sha256').update(body).digest('hex');
+    };
+    const briefless = briefsPlan(null);
+    assert(typeof nodeBriefsPresent === 'function' && nodeBriefsPresent(briefless) === false,
+      'briefs-backcompat: a briefless plan reports nodeBriefsPresent===false');
+    assert(computePlanHash(briefless) === legacyHash(briefless),
+      'briefs-backcompat: a briefless plan hashes byte-identically to the pre-briefs formula (Meta + Nodes only)');
+    assert(typeof nodeBriefsPresent === 'function' && nodeBriefsPresent(briefsPlan(goodBriefs)) === true,
+      'briefs-backcompat: a ## Node Briefs plan reports nodeBriefsPresent===true');
+    const parsed = (typeof parseNodeBriefs === 'function') ? parseNodeBriefs(briefsPlan(goodBriefs)) : [];
+    assert(Array.isArray(parsed) && parsed.length === 2,
+      'briefs-parse: parseNodeBriefs returns one entry per ### sub-block, got ' + JSON.stringify(parsed && parsed.map(b => b.nodeId)));
+    const ex = parsed.find(b => b.nodeId === 'explore');
+    assert(ex && ex.brief === 'Probe the codebase. Return findings.',
+      'briefs-parse: the brief body is trimmed (internal newlines preserved), got ' + JSON.stringify(ex && ex.brief));
+    assert((typeof parseNodeBriefs === 'function' ? parseNodeBriefs(briefless) : []).length === 0,
+      'briefs-parse: a briefless plan parses to []');
+  }
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
