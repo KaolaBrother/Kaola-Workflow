@@ -11707,6 +11707,166 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Universal n/a skip in the consumed-proof: an IMPLEMENT consumer skipped mid-run records
+// `n/a — <reason>` evidence — the seeded `upstream_read:` key is present but carries no echo.
+// checkEvidenceShape passes such evidence via its universal n/a carve-out; checkUpstreamConsumed
+// must AGREE (a skipped consumer proves nothing), never hard-refuse upstream_not_consumed.
+// The two close gates must render the same verdict on the same n/a evidence.
+// ---------------------------------------------------------------------------
+{
+  const ADAPT = require('./kaola-workflow-adaptive-node');
+  const VAL = require('./kaola-workflow-plan-validator');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-na-consumed-'));
+  try {
+    const proj = path.join(tmp, 'kaola-workflow', 'test-project');
+    const cache = path.join(proj, '.cache');
+    fs.mkdirSync(cache, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    const statePath = path.join(proj, 'workflow-state.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| design | code-architect | — | — | 1 | sequence |',
+      '| impl | tdd-guide | design | scripts/x.js | 1 | sequence |',
+      '| finalize | finalize | impl | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| design | complete |', '| impl | in_progress |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(statePath, makeState());
+    const rf = (p) => fs.readFileSync(p, 'utf8');
+    const wf = (p, c) => fs.writeFileSync(p, c);
+    // design's completed evidence with a known line-1 nonce (the echo the skipped consumer never made).
+    fs.writeFileSync(path.join(cache, 'design.md'),
+      'evidence-binding: design d0d0d0d0d0d0\nfiles_to_create: a.js\nbuild_sequence: a then b\n');
+    // impl's open-time nonce on disk (the close-side binding check reads it).
+    fs.writeFileSync(path.join(cache, 'barrier-base-impl'), 'aaaabbbbcccc0000\n');
+    // impl's evidence: an n/a SKIP — content starts with n/a (the universal carve-out shape), carries the
+    // binding line + the seeded upstream_read key, and NO nonce echo (a skipped consumer read nothing).
+    const naEv = 'n/a — descoped mid-run (covered upstream)\nevidence-binding: impl aaaabbbbcccc\nupstream_read: design\n';
+    fs.writeFileSync(path.join(cache, 'impl.md'), naEv);
+    const nodes = VAL.parseNodes(plan);
+    // Direct: the consumed-proof honors the universal n/a skip (mirrors checkEvidenceShape's carve-out).
+    const r = ADAPT.checkUpstreamConsumed({ role: 'tdd-guide', nodeId: 'impl', evidenceContent: naEv, nodes,
+      ledgerStatuses: { design: 'complete', impl: 'in_progress', finalize: 'pending' },
+      planPath, project: 'test-project', readFile: rf });
+    assert(r.ok === true && r.hard === false,
+      'NA-skip: an n/a-skipped consumer is exempt from the consumed-proof, got ' + JSON.stringify(r));
+    // Close path: the SAME n/a evidence that checkEvidenceShape passes must NOT refuse upstream_not_consumed.
+    const shellStub = (scriptPath, args) => {
+      const base = path.basename(scriptPath);
+      const a = args || [];
+      if (base === 'kaola-workflow-plan-validator.js' && a.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: true };
+      return { exitCode: 0 };
+    };
+    const rClose = runCloseAndOpenNext({ planPath, statePath, project: 'test-project', nodeId: 'impl',
+      shell: shellStub, readFile: rf, writeFile: wf, cacheExists: (p) => fs.existsSync(p) });
+    assert(rClose.reason !== 'upstream_not_consumed',
+      'NA-skip-close: close does NOT refuse upstream_not_consumed on an n/a-skipped consumer, got ' + JSON.stringify({ result: rClose.result, reason: rClose.reason }));
+  } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// Fused-advance gate-window hold: close-and-open-next must NOT open the next node while a
+// main-session-gate is live in the running set (kind:'gate'). The serial open-next door refuses
+// scheduler_active and open-ready holds gate_live — without this hold the FUSED advance was the
+// one unfenced door (a table-order-dependent bypass of the gate-window invariant: the next pending
+// writer opened in_progress WHILE the gate was live). Pinned for BOTH ## Nodes table orders
+// (writer-rows-first AND gate-row-first) so the hold is order-INDEPENDENT, plus a no-gate control
+// (the fused advance stays byte-identical when no gate is live).
+// ---------------------------------------------------------------------------
+{
+  function fusedGatePlan(order) {
+    const waRow = '| wa | tdd-guide | — | scripts/a.js | 1 | sequence |';
+    const wbRow = '| wb | tdd-guide | wa | scripts/b.js | 1 | sequence |';
+    const g1Row = '| g1 | main-session-gate | — | — | 1 | sequence |';
+    const finRow = '| finalize | finalize | wb g1 | CHANGELOG.md | 1 | sequence |';
+    const nodeRows = order === 'gate-first' ? [g1Row, waRow, wbRow, finRow] : [waRow, wbRow, g1Row, finRow];
+    return [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      ...nodeRows, '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| wa | in_progress |', '| wb | pending |', '| g1 | in_progress |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+  }
+  function runFusedClose(order, gateLiveInSet) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fused-gate-'));
+    try {
+      const proj = path.join(tmp, 'kaola-workflow', 'test-project');
+      const cache = path.join(proj, '.cache');
+      fs.mkdirSync(cache, { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      const statePath = path.join(proj, 'workflow-state.md');
+      const plan = gateLiveInSet ? fusedGatePlan(order)
+        // no-gate control: g1 not yet opened (pending ledger row, empty running set).
+        : fusedGatePlan(order).replace('| g1 | in_progress |', '| g1 | pending |');
+      fs.writeFileSync(planPath, plan);
+      fs.writeFileSync(statePath, makeState());
+      // wa's open-time nonce + shape-valid tdd-guide evidence.
+      fs.writeFileSync(path.join(cache, 'barrier-base-wa'), 'aaaabbbbcccc0000\n');
+      fs.writeFileSync(path.join(cache, 'wa.md'),
+        'evidence-binding: wa aaaabbbbcccc\nRED: t (pre)\nGREEN: t passes; 1/1 green\n');
+      // The live gate window: g1 recorded as kind:'gate' (the open-next door already recorded it).
+      if (gateLiveInSet) {
+        fs.writeFileSync(path.join(cache, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+          { id: 'g1', role: 'main-session-gate', kind: 'gate', declared_write_set: '—', baseline: 'recorded' },
+        ] }, null, 2));
+      }
+      const shellStub = (scriptPath, args) => {
+        const base = path.basename(scriptPath);
+        const a = args || [];
+        if (base === 'kaola-workflow-plan-validator.js' && a.includes('--resume-check')) return { exitCode: 0, ok: true };
+        if (base === 'kaola-workflow-commit-node.js' && a.includes('--start')) {
+          return { exitCode: 0, result: 'ok', mode: 'per-node-start', overallOk: true, recordBase: { base: 'bbbbccccdddd0000' } };
+        }
+        if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+        if (base === 'kaola-workflow-next-action.js') {
+          // next-action surfaces the pending writer wb as the single fused-advance target
+          // (the gate is excluded from readyPending per the main-session rule).
+          return { exitCode: 0, result: 'ok', allDone: false,
+            readyPending: [{ id: 'wb', role: 'tdd-guide', model: null, declared_write_set: 'scripts/b.js' }],
+            nextNode: { id: 'wb', role: 'tdd-guide', model: null, declared_write_set: 'scripts/b.js' } };
+        }
+        return { exitCode: 0 };
+      };
+      const r = runCloseAndOpenNext({ planPath, statePath, project: 'test-project', nodeId: 'wa',
+        shell: shellStub, readFile: (p) => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+        cacheExists: (p) => fs.existsSync(p), unlink: (p) => fs.unlinkSync(p) });
+      const ledgerBody = fs.readFileSync(planPath, 'utf8');
+      const ledgerStart = ledgerBody.indexOf('## Node Ledger');
+      const wbLedger = ((ledgerStart >= 0 ? ledgerBody.slice(ledgerStart) : ledgerBody).match(/^\|\s*wb\s*\|\s*(\S+)\s*\|/m) || [])[1] || null;
+      return { r, wbLedger };
+    } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {} }
+  }
+  // BOTH table orders: with g1 live (kind:'gate'), the fused advance returns CLOSED-ONLY (order-independent).
+  for (const order of ['writer-first', 'gate-first']) {
+    const { r, wbLedger } = runFusedClose(order, true);
+    assert(r.result === 'ok' && r.closed === 'wa', 'FUSED-GATE-HOLD(' + order + '): wa closes ok, got ' + JSON.stringify({ result: r.result, closed: r.closed, reason: r.reason }));
+    assert(r.opened === null, 'FUSED-GATE-HOLD(' + order + '): opened is null while the gate is live, got ' + JSON.stringify(r.opened && r.opened.id));
+    assert(r.reason === 'gate_live', 'FUSED-GATE-HOLD(' + order + '): typed reason gate_live, got ' + JSON.stringify(r.reason));
+    assert(wbLedger === 'pending', 'FUSED-GATE-HOLD(' + order + '): wb ledger row stays pending (no open mutation), got ' + JSON.stringify(wbLedger));
+  }
+  // Control: NO live gate ⇒ the fused advance opens wb exactly as before (byte-identical no-gate path).
+  for (const order of ['writer-first', 'gate-first']) {
+    const { r, wbLedger } = runFusedClose(order, false);
+    assert(r.result === 'ok' && r.closed === 'wa' && r.opened && r.opened.id === 'wb',
+      'FUSED-GATE-CONTROL(' + order + '): no live gate ⇒ fused advance opens wb, got ' + JSON.stringify({ opened: r.opened && r.opened.id, reason: r.reason }));
+    assert(wbLedger === 'in_progress', 'FUSED-GATE-CONTROL(' + order + '): wb ledger row flipped in_progress, got ' + JSON.stringify(wbLedger));
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

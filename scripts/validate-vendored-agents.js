@@ -77,10 +77,12 @@ const PRESENCE_ONLY_RATIONALE = {};
 
 // KIND derivation from the front-matter tool manifest (inline-array form:
 // `tools: [Read, Write]` or `tools: ["Read", "Write"]`). Write OR Edit present => write-kind,
-// else read-kind. Never a hand-list.
+// else read-kind. Never a hand-list. Returns null when the front matter declares NO tools: line:
+// a tool-less agent inherits ALL tools at runtime (de-facto write-capable), so the kind CANNOT be
+// derived — the wall refuses fail-closed instead of defaulting to the weaker read-kind needle.
 function agentWritesEvidence(frontMatter) {
   const m = /^tools:\s*(.+)$/m.exec(frontMatter);
-  return m ? /\b(Write|Edit)\b/.test(m[1]) : false;
+  return m ? /\b(Write|Edit)\b/.test(m[1]) : null;
 }
 
 // The wall. agentsDir: absolute path to an agents/ dir; registry: role -> token-class array;
@@ -104,8 +106,15 @@ function checkFutureAgentWall(agentsDir, registry, presenceOnly, readFile) {
       throw new Error(`agent_contract_registry_missing: node-role agent "${role}" needs a ` +
         `ROLE_TOKEN_REGISTRY row with >=2 tokens or a PRESENCE_ONLY_RATIONALE entry`);
     }
-    // (b) manifest-derived role-kind evidence needle.
-    if (agentWritesEvidence(frontMatter)) {
+    // (b) manifest-derived role-kind evidence needle. A missing tools: manifest is a typed
+    // refusal, never a silent read-kind default (a tool-less agent inherits ALL tools).
+    const writesEvidence = agentWritesEvidence(frontMatter);
+    if (writesEvidence === null) {
+      throw new Error(`agent_contract_manifest_missing: node-role agent "${role}" declares no ` +
+        `tools: front-matter line — a tool-less agent inherits ALL tools (de-facto ` +
+        `write-capable), so its evidence kind cannot be derived; declare the tool manifest`);
+    }
+    if (writesEvidence) {
       assert(content.includes('SELF-WRITE') && content.includes('evidence-binding'),
         `agent_contract_needle_missing: write-kind agent "${role}" must carry the ` +
         `SELF-WRITE + evidence-binding evidence contract`);

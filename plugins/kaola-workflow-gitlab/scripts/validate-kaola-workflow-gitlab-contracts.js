@@ -763,7 +763,11 @@ assertIncludes(pluginRoot + '/agents/metric-optimizer.toml', 'iterations_used');
     const fmEnd = md.indexOf('\n---\n', 4);
     const fm = fmEnd > 0 ? md.slice(0, fmEnd) : '';
     const tm = /^tools:\s*(.+)$/m.exec(fm);
-    const writeKind = tm ? /\b(Write|Edit)\b/.test(tm[1]) : false;
+    // Fail-closed: a canonical agents/<role>.md without a tools: manifest inherits ALL tools
+    // (de-facto write-capable) — refuse typed instead of defaulting to the weaker read-kind needle.
+    assert(tm, 'agent_contract_manifest_missing: agents/' + role + '.md declares no tools: ' +
+      'front-matter line — the .toml mirror kind cannot be derived; declare the tool manifest');
+    const writeKind = /\b(Write|Edit)\b/.test(tm[1]);
     const tomlText = read(pluginRoot + '/agents/' + role + '.toml');
     if (writeKind) {
       assert(tomlText.includes('SELF-WRITE') && tomlText.includes('evidence-binding'),

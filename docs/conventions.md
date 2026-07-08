@@ -169,6 +169,30 @@ are parity-checked by `validate-script-sync.js` `CONFIG_HOOKS_FAMILY` +
 path (`kaola-workflow-codex-compact-resume` → `kaola-{forge}-workflow-codex-compact-resume`);
 any other divergence reds the validation run.
 
+## Future-Agent Evidence-Contract Checklist (issue #643 / D-643-01)
+
+Adding a new node-role agent (a fresh `agents/<name>.md` + its plugin `.toml` twins) MUST ship with
+BOTH halves of the evidence-recording contract, or the future-agent wall (`validate-vendored-agents.js`'s
+`checkFutureAgentWall`) refuses:
+
+1. **A `ROLE_TOKEN_REGISTRY` row** (`scripts/kaola-workflow-plan-validator.js`) naming at least one
+   content-bearing evidence token beyond `evidence-binding` — or, for a genuinely single-token role, an
+   explicit one-line entry in `PRESENCE_ONLY_RATIONALE` (the allowlist ships empty; every current node
+   role reaches the >=2-token floor without one). This registry is the single source for both the
+   open-time evidence SEED and the close-time evidence-shape GATE — no second copy to drift.
+2. **A role-kind evidence-contract section in the agent file**, whose KIND is derived from the agent's
+   own `tools:` front-matter manifest — never a hand-maintained list. `Write`/`Edit` present in the
+   manifest ⇒ write-kind: the agent SELF-WRITES its evidence into the seeded `.cache/{node-id}.md`,
+   preserving the seeded `evidence-binding:` header verbatim. `Write`/`Edit` absent ⇒ read-kind: the
+   agent RETURNS its full deliverable as its final message for the orchestrator to persist via
+   `record-evidence --stdin` (which re-injects the `evidence-binding:` header — the agent must never
+   add, alter, or strip it itself). An agent file with no parsable `tools:` line at all is refused
+   (`agent_contract_manifest_missing`) rather than silently defaulting to the weaker read-kind needle.
+
+Both checks are machine-enforced by `validate-vendored-agents.js` (root) and mirrored `.toml` needle
+checks in the codex/gitlab/gitea contract validators — a new node-role addition that omits either half
+reds the affected chain before it can ship silently.
+
 ## Operator hints on typed refusals (#445 / D-445-01)
 
 Every typed refusal/halt/warn envelope emitted by the three aggregators (`adaptive-node.js`, `commit-node.js`, `plan-validator.js`) carries a top-level `operator_hint: string` field — a one-sentence human-readable remediation hint generated at emit time from a per-aggregator `OPERATOR_HINT_REGISTRY`. The hint is a new optional field; existing consumers that read only `result`/`reason` are unaffected.

@@ -106,6 +106,7 @@ const OPERATOR_HINT_REGISTRY = {
   unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
   dangling_depends_on: (ctx) => `Node ${ctx.nodeId || '(unknown)'} depends_on a node that does not exist. Fix the depends_on reference and re-freeze.`,
   brief_unknown_node: (ctx) => `## Node Briefs names unknown node id "${ctx.nodeId || '(unknown)'}" — every brief's ### <node-id> header must match a node in the ## Nodes table. Fix the id (or add the node) and re-freeze.`,
+  brief_duplicate_node: (ctx) => `## Node Briefs carries more than one ### block for node id "${ctx.nodeId || '(unknown)'}" — a node has exactly ONE brief (a duplicate would silently win/lose by parse order). Merge the blocks into one and re-freeze.`,
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -1427,12 +1428,21 @@ function validatePlan(content, opts) {
   }
   const ids = new Set(nodes.map(n => n.id));
   // `## Node Briefs` freeze wall: a brief whose ### <node-id> header names a node absent from ## Nodes
-  // is an authoring error (the brief would never reach any dispatch). Early typed refusal, mirroring the
-  // policy-token refusals above. Freeze-only (NOT added to revalidateForResume) — briefs are hash-
-  // covered, so a frozen plan can never carry an unknown-node brief; same pattern as the dup-id wall.
-  for (const b of parseNodeBriefs(content)) {
-    if (!ids.has(b.nodeId)) {
-      return { result: 'refuse', reason: 'brief_unknown_node', operator_hint: getOperatorHint('brief_unknown_node', { nodeId: b.nodeId }), errors: ['## Node Briefs names unknown node id "' + b.nodeId + '"'], planHash: computePlanHash(content) };
+  // is an authoring error (the brief would never reach any dispatch), and a REPEATED ### <node-id> is
+  // just as broken — the duplicate would silently win/lose by parse order, making the dispatched
+  // goal_line ambiguous. Early typed refusals, mirroring the policy-token refusals above and the
+  // duplicate-node-id wall's seen-Set style. Freeze-only (NOT added to revalidateForResume) — briefs
+  // are hash-covered, so a frozen plan can never carry an unknown or duplicated brief.
+  {
+    const seenBriefIds = new Set();
+    for (const b of parseNodeBriefs(content)) {
+      if (!ids.has(b.nodeId)) {
+        return { result: 'refuse', reason: 'brief_unknown_node', operator_hint: getOperatorHint('brief_unknown_node', { nodeId: b.nodeId }), errors: ['## Node Briefs names unknown node id "' + b.nodeId + '"'], planHash: computePlanHash(content) };
+      }
+      if (seenBriefIds.has(b.nodeId)) {
+        return { result: 'refuse', reason: 'brief_duplicate_node', operator_hint: getOperatorHint('brief_duplicate_node', { nodeId: b.nodeId }), errors: ['## Node Briefs carries more than one ### block for node id "' + b.nodeId + '"'], planHash: computePlanHash(content) };
+      }
+      seenBriefIds.add(b.nodeId);
     }
   }
   // #634: the metric-optimizer optimize(<id>) Meta contracts (Map<nodeId,contract>), parsed once for the

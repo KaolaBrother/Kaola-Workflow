@@ -1579,6 +1579,25 @@ function runMirrorHandoffCase(mirrorResponse) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
   }
 
+  // (a-dup) TWO briefs for the SAME node id → REFUSE brief_duplicate_node. Without the wall the second
+  //     block silently wins/loses by parse order — ambiguous goal_line dispatch. Same freeze contract
+  //     the handoff surfaces verbatim (a refuse here IS the plan_invalid the handoff returns — see the
+  //     unknown-node e2e above; both walls ride the same emit path).
+  {
+    const dupBriefs = [
+      '## Node Briefs', '',
+      '### explore', 'First brief for explore.', '',
+      '### finalize', 'Close the loop.', '',
+      '### explore', 'SECOND brief for explore — which one is the goal_line?',
+    ].join('\n');
+    const { verdict, tmpDir } = freezeVerdict(briefsPlan(dupBriefs));
+    assert(verdict.result === 'refuse' && verdict.reason === 'brief_duplicate_node',
+      'briefs-dup: a repeated ### <node-id> in ## Node Briefs refuses brief_duplicate_node, got ' + JSON.stringify({ result: verdict.result, reason: verdict.reason }));
+    assert(Array.isArray(verdict.errors) && verdict.errors.some(e => /explore/.test(e)),
+      'briefs-dup: the duplicated node id is named in the errors, got ' + JSON.stringify(verdict.errors));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+
   // (a-e2e) the handoff surfaces the unknown-node refuse as plan_invalid, with NO --freeze (no mutation).
   {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-briefs-h-'));

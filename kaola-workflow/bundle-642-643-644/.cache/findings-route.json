@@ -1,0 +1,23 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=briefs-syntax-sentence-landed-md-plus-3-toml-verified-against-parseNodeBriefs",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=security-reviewer-added-via-skeleton-seam-all-six-regenerated",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "security-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=manifest-guard-fail-closed-in-wall-and-all-three-toml-mirrors-mutation-proven",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

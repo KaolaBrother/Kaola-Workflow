@@ -63,6 +63,15 @@ When `requires_redispatch` is `true`, the role agent did not complete. Re-dispat
 same node-id and write-set as the original dispatch. The node's baseline is already recorded
 (it was set at `open-next` time); the re-dispatched agent will write into the same window.
 
+**Re-hydrating the dispatch context.** The in-progress node's `goal_line` (its `## Node Briefs`
+entry, when authored) and `upstream_evidence` (its upstream producers' `.cache` evidence
+pointers) are NOT held anywhere in the resuming session's memory — they are re-derived from the
+cached `.cache/<op>-envelope.json` (`open-next-envelope.json` / `open-ready-envelope.json` /
+`close-and-open-next-envelope.json`, whichever opened the node). Read that file's
+`result.opened.dispatch` (or the matching member of `result.opened[]` for a batch open) and carry
+its `goal_line`/`upstream_evidence` verbatim into the re-dispatch — disk is authoritative; never
+reconstruct the brief or the upstream pointers from a prior turn's transcript.
+
 After the agent completes, record its evidence:
 
 ```bash

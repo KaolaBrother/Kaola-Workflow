@@ -1521,6 +1521,9 @@ function checkUpstreamConsumed(args) {
     const byId = new Map(nodeList.map(n => [n.id, n]));
     const statuses = ledgerStatuses || {};
     const content = evidenceContent || '';
+    // Universal n/a skip — a skipped consumer proves nothing (mirrors checkEvidenceShape's carve-out so
+    // the two close gates render the same verdict on the same n/a evidence).
+    if (content.trim().startsWith('n/a')) return out;
     const isImplementer = !!(IMPLEMENT_ROLES && typeof IMPLEMENT_ROLES.has === 'function' && IMPLEMENT_ROLES.has(role));
     const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const upId of deps) {
@@ -2819,6 +2822,26 @@ function runCloseAndOpenNext(opts) {
     // orchestrator can distinguish "re-orient and retry the drain" from a genuine stall. Control flow
     // is unchanged: this is still result:'ok', closed:nodeId, opened:null — only the marker is added.
     return { result: 'ok', closed: nodeId, opened: null, allDone: false, reason: 'frontier_blocked', ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
+  }
+
+  // GATE-WINDOW HOLD: a live main-session-gate (a kind:'gate' running-set member) fences the fused
+  // advance exactly as it fences the other two open doors (open-next refuses scheduler_active;
+  // open-ready holds gate_live) — without this check the fused advance was the one unfenced door and
+  // could open the next node in_progress WHILE the gate renders its verdict (an order-dependent bypass
+  // of the gate-window invariant). Re-read the running set POST-removal (the just-closed node was
+  // already removed above, so a gate closing ITSELF never self-holds); any REMAINING kind:'gate'
+  // member ⇒ return the CLOSED-ONLY envelope (the frontier_blocked shape with the typed gate_live
+  // reason, mirroring open-ready's hold vocabulary). Order-INDEPENDENT: fires before any open
+  // mutation regardless of ## Nodes table order. The orchestrator re-runs orient/open-next after the
+  // gate drains. No live gate ⇒ this block is a no-op (byte-identical fused advance).
+  {
+    const runningAtAdvance = readRunningSet(runningSetPath, cacheExists, readFile);
+    const liveGates = ((runningAtAdvance && runningAtAdvance.nodes) || []).filter(n => n.kind === 'gate');
+    if (liveGates.length > 0) {
+      return { result: 'ok', closed: nodeId, opened: null, allDone: false, reason: 'gate_live',
+        liveGates: liveGates.map(n => n.id),
+        ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
+    }
   }
 
   // #621: record the fused-advance baseline BEFORE flipping the next node's ledger row (mirrors

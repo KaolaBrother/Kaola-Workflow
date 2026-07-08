@@ -179,6 +179,10 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   "read `<design-node>`'s evidence file before starting," and the design node's brief states what
   its deliverable must contain. Author `## Node Briefs` per node (intent, approach, key
   constraints, which upstream evidence to read); the section is frozen with the plan.
+  Syntax: under the `## Node Briefs` h2, author one column-0 `### <node-id>` heading per brief
+  (the id must match a `## Nodes` row — an unknown id is a freeze refusal, `brief_unknown_node`;
+  a repeated id is `brief_duplicate_node`); the heading's body is the brief. Any other layout
+  (bullets, tables, bold names) parses as NO briefs.
 - **Aggregator-coupling rule — `generated_port_split`.** When a node's declared write set
   includes `scripts/<base>` where `<base>` is a GENERATED_AGGREGATOR (e.g.,
   `kaola-workflow-plan-validator.js`, `kaola-workflow-adaptive-node.js`), the SAME node must ALSO
