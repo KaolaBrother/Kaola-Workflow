@@ -51,8 +51,8 @@ The frozen plan is validated against six invariants at freeze time; a violation 
 
 | Marker | Invariant |
 |---|---|
-| `OPT-1` | Exactly one `optimize(<id>)` block per `metric-optimizer` node, and every block keys a real `metric-optimizer` node |
-| `OPT-2` | `metric_paths` is non-empty and disjoint from the node's declared write set |
+| `OPT-1` | Exactly one `optimize(<id>)` block per `metric-optimizer` node, and every block keys a real `metric-optimizer` node (a duplicate block for the same node — including one fenced as a decoy — also refuses) |
+| `OPT-2` | `metric_command` is named, `metric_paths` is non-empty and disjoint from the node's declared write set, and every `metric_paths` entry names one exact file (a directory, glob, or `../`-relative entry refuses) |
 | `OPT-3` | `budget_iterations` is 1–50; `budget_wallclock_minutes`, when present, is 1–120 |
 | `OPT-4` | `direction` is `min` or `max`; `metric_repeats` ≥ 1; `min_delta` ≥ 0 |
 | `OPT-5` | A change-gate `adversarial-verifier` post-dominates every `metric-optimizer` node — the measured claim is the node's entire deliverable, so it must be reproduced before finalize |

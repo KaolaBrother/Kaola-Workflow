@@ -395,11 +395,20 @@ reproduction check parse it identically.
 `{result:'refuse', reason:'plan_invalid'}`):**
 
 - **OPT-1** — exactly one `optimize(<id>)` block per `metric-optimizer` node, and every block keys a
-  node that exists and is `metric-optimizer` (a mis-keyed or missing block refuses).
-- **OPT-2 (evaluation isolation)** — `metric_paths` non-empty and disjoint from the node's
-  `declared_write_set`; the metric harness can never live inside the mutable scope — a *runtime*
-  write to a metric path is separately caught by the existing per-node barrier (a write outside the
-  declared set).
+  node that exists and is `metric-optimizer` (a mis-keyed, missing, or **duplicate** block refuses —
+  including a decoy `optimize(<id>):` header fenced inside `## Meta`. `optimizeHeaderCounts` counts
+  raw headers from the same fence-inclusive body `parseOptimizeContracts` reads, so a second header
+  for one node is caught before `parseOptimizeContracts`'s last-wins `Map.set` can silently clobber the
+  first block with a tampered field.)
+- **OPT-2 (metric harness definition)** — `metric_command` is named (implicitly required: it is THE
+  command that prints the measured metric, so a block with no `metric_command` used to freeze
+  in-grammar and only die later at dispatch); `metric_paths` is non-empty, disjoint from the node's
+  `declared_write_set`, and every entry is an **exactly-resolvable single file** — a directory-shaped
+  (`bench/`), glob (`bench/*.js`), or `../`-aliasing (`bench/../src/hot.js`) entry refuses, reusing
+  `hasUnresolvableEntry` (the same dir-shape/glob detection the write-set freeze-wall already applies)
+  plus a `../`-segment check. The metric harness can never live inside the mutable scope — a
+  *runtime* write to a metric path is separately caught by the existing per-node barrier (a write
+  outside the declared set).
 - **OPT-3 (bounded budget)** — `budget_iterations` an integer in `1..OPTIMIZE_ITER_CAP`;
   `budget_wallclock_minutes`, when present, an integer in `1..OPTIMIZE_WALLCLOCK_CAP`.
 - **OPT-4** — `direction ∈ {min, max}`; `metric_repeats` an integer ≥ 1; `min_delta` a number ≥ 0.
@@ -410,6 +419,14 @@ reproduction check parse it identically.
 - **OPT-6** — a `regression_gate` must resolve non-empty: the block's own field, or (if absent) the
   Meta `validation_command`. Neither present ⇒ refused — a metric-only ratchet with no regression
   gate is Goodhart bait.
+
+**Numeric field notation — documentation-only, no separate rule.** `budget_iterations`,
+`budget_wallclock_minutes`, `metric_repeats`, and `min_delta` all parse through the same `num()`
+helper (a plain `Number()`), so any `Number()`-parseable form — hex (`0x14`), exponent (`2e1`), etc. —
+converts to its numeric value exactly like a plain decimal. There is no dedicated freeze rule keyed
+on notation: OPT-3/OPT-4 bind on the *converted* value, so an out-of-range or malformed field is
+caught by the existing bound checks regardless of how it was written — no unbounded escape via an
+unusual numeric form.
 
 **Evidence contract (D6).** `ROLE_TOKEN_REGISTRY['metric-optimizer']` (see "Export:
 `ROLE_TOKEN_REGISTRY`" below) = `['evidence-binding', 'metric_baseline', 'metric_final',
