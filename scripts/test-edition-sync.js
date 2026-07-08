@@ -6,7 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, syncIfDrift } = require('./edition-sync');
+const { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, syncIfDrift, checkMirrors } = require('./edition-sync');
 
 const REPO = path.resolve(__dirname, '..');
 let passed = 0, failed = 0;
@@ -160,6 +160,69 @@ for (const base of GENERATED_AGGREGATORS) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// T9 (#638): --check/--write ASYMMETRY — `checkMirrors` (the primitive `runCheck` now calls)
+// must red a missing or drifted COMMON_SCRIPTS / BYTE_IDENTICAL_GROUPS mirror on its own, so
+// `--check` covers the same universe `--write` already does (before this, `--check` verified
+// ONLY GENERATED_AGGREGATORS and silently ignored these two families). Runs against a synthetic
+// fixture tree (never the real repo) with a synthetic COMMON_SCRIPTS/byte-group list passed in,
+// mirroring checkByteIdenticalGroup's own "parameterized + exported for a synthetic fixture" style.
+// ---------------------------------------------------------------------------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-edsync-mirrors-'));
+  try {
+    const commonRel = 'scripts/synthetic-common.js';
+    const codexMirrorRel = 'plugins/kaola-workflow/scripts/synthetic-common.js';
+    const groupRefRel = 'hooks/synthetic-hook.sh';
+    const groupCopyRel = 'plugins/kaola-workflow/hooks/synthetic-hook.sh';
+    const commonContent = '#!/usr/bin/env node\nconsole.log("synthetic common script");\n';
+    const hookContent = '#!/bin/sh\necho synthetic hook\n';
+
+    for (const rel of [commonRel, codexMirrorRel, groupRefRel, groupCopyRel]) {
+      fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
+    }
+    fs.writeFileSync(path.join(tmp, commonRel), commonContent);
+    fs.writeFileSync(path.join(tmp, codexMirrorRel), commonContent);
+    fs.writeFileSync(path.join(tmp, groupRefRel), hookContent);
+    fs.writeFileSync(path.join(tmp, groupCopyRel), hookContent);
+
+    const syntheticCommon = ['synthetic-common.js'];
+    const syntheticGroups = [{ label: 'synthetic hook copies', files: [groupRefRel, groupCopyRel] }];
+
+    // GREEN on the in-sync synthetic tree (no false positive).
+    let res = checkMirrors(tmp, syntheticCommon, syntheticGroups);
+    assert(res.missing.length === 0 && res.drift.length === 0,
+      'T9: checkMirrors is green on an in-sync synthetic COMMON_SCRIPTS + byte-group tree, got ' + JSON.stringify(res));
+
+    // RED: delete the codex mirror -> checkMirrors must report it missing.
+    fs.rmSync(path.join(tmp, codexMirrorRel));
+    res = checkMirrors(tmp, syntheticCommon, syntheticGroups);
+    assert(res.missing.some((m) => m.includes('synthetic-common.js')),
+      'T9 RED: checkMirrors reports the missing COMMON_SCRIPTS codex mirror, got ' + JSON.stringify(res));
+
+    // restore the mirror, then RED: drift the byte-group copy -> checkMirrors must report drift.
+    fs.writeFileSync(path.join(tmp, codexMirrorRel), commonContent);
+    fs.writeFileSync(path.join(tmp, groupCopyRel), 'tampered\n');
+    res = checkMirrors(tmp, syntheticCommon, syntheticGroups);
+    assert(res.missing.length === 0, 'T9: no spurious missing after restoring the codex mirror, got ' + JSON.stringify(res));
+    assert(res.drift.some((d) => d.includes('synthetic hook copies')),
+      'T9 RED: checkMirrors reports the drifted byte-identical-group copy, got ' + JSON.stringify(res));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T10 (#638): checkMirrors is green on the REAL repo tree with NO override args (the shape
+// `runCheck` actually calls it with) — proves the widened --check does not false-positive on
+// the committed tree.
+// ---------------------------------------------------------------------------
+{
+  const res = checkMirrors(REPO);
+  assert(res.missing.length === 0, 'T10: checkMirrors(REPO) has no missing mirrors on the real tree, got ' + JSON.stringify(res.missing));
+  assert(res.drift.length === 0, 'T10: checkMirrors(REPO) has no drifted mirrors on the real tree, got ' + JSON.stringify(res.drift));
 }
 
 if (failed > 0) {
