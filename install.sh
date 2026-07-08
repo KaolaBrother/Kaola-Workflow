@@ -417,6 +417,7 @@ model_for_placeholder() {
     IMPLEMENTER_MODEL) resolve_agent_model_for_install implementer ;;
     BUILD_ERROR_RESOLVER_MODEL) resolve_agent_model_for_install build-error-resolver ;;
     CODE_REVIEWER_MODEL) resolve_agent_model_for_install code-reviewer ;;
+    ISSUE_SCOUT_MODEL) resolve_agent_model_for_install issue-scout ;;
     SECURITY_REVIEWER_MODEL) resolve_agent_model_for_install security-reviewer ;;
     DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
     CONTRACTOR_MODEL) resolve_agent_model_for_install contractor ;;
@@ -467,6 +468,7 @@ render_command_file() {
     IMPLEMENTER_MODEL
     BUILD_ERROR_RESOLVER_MODEL
     CODE_REVIEWER_MODEL
+    ISSUE_SCOUT_MODEL
     SECURITY_REVIEWER_MODEL
     DOC_UPDATER_MODEL
     CONTRACTOR_MODEL
