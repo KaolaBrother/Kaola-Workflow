@@ -107,6 +107,20 @@ speculative group is never allowed to form (and silently overwrite the live one)
 already open; the excluded write opens normally, non-speculatively, once the live group drains. See
 `docs/decisions/D-622-01.md`.
 
+**A leg-contained write co-opens alongside live reads (issue #641).** The mirror direction of #622:
+when only writes are ready but the running set holds live reads, a leg-contained writer (a lone
+writer forms a size-1 lane group) now co-opens *behind* those reads instead of returning
+`write_awaits_drain`, provided four preconditions hold — `legCoupled` (`KAOLA_PARALLEL_WRITES=0`
+forces the hold), no live `lane_group`, a clean parent, and validator `--parallel-safe` ok across
+{candidate ∪ live writes}. Any precondition miss returns the byte-identical `write_awaits_drain` hold
+plus a typed `serialDegradeReason` naming the cause (`parallel_writes_off` / `lane_group_live` /
+`parent_dirty` / `overlaps_live_writer` / `parallel_safe_indeterminate`). The group's last-member
+merge is still held by `merge_awaits_read_drain` while any read is live (§4), so the reads observe an
+untouched parent tree. A consent-tier `observes: scratch` `## Nodes` annotation (freeze-legal only on
+an `adversarial-verifier`) additionally permits a *legless* writer whose declared set is
+validation-invisible (allowband docs minus test-consumed prose, plus its own evidence) to co-open
+behind that scratch-only gate over a dirty parent. See `docs/decisions/D-641-01.md`.
+
 `open-ready` returns
 `{result:'ok', kind:'read'|'write', opened:[{id,role,model,declared_write_set,nonce,evidence_file,required_tokens,dispatch}], runningSet:[ids], laneGroup?:{group_id,members,write_union,legs?}}`
 — dispatch every entry in `opened` **in one assistant message**.
@@ -121,7 +135,9 @@ on the serial or read-only path, so `dispatch` there stays byte-identical to bef
 existed. A non-error `ok` that opens
 nothing carries a `reason`: `write_node_exclusive` (a LEGLESS write node — no lane group — is
 already live; a live leg-contained lane-group member no longer triggers this reason, see above),
-`write_awaits_drain` (only writes are ready but read-only members are still live), or
+`write_awaits_drain` (only writes are ready but read-only members are still live — now a
+**conditional** hold: a leg-contained writer co-opens behind the live reads when the four #641
+preconditions hold, else this reason is returned with an additive typed `serialDegradeReason`), or
 `cap_reached`. A crash-safe precondition refuses `reconcile_first` when a prior `open-ready` left
 `running-set.json` mid-transaction (`state: 'opening'` or any member `opening: true`) — run
 `reconcile-running-set` first.

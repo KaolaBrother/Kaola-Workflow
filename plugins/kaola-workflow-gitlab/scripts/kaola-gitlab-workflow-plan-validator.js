@@ -300,6 +300,41 @@ function isValidationInvisible(p, project, testConsumedExtra) {
   return false;
 }
 
+// #641 (D-641-01): a WRITE-target surface is SCRATCH-OBSERVABLE-SAFE — invisible to any chain verdict a
+// concurrent gate could run AND git-merge-silent — iff it is a barrier-INVISIBLE allowband DOCS surface
+// (docs/**, root README/CHANGELOG) that is NOT #547 test-consumed prose. docs/decisions/** and
+// non-test-consumed docs/** qualify; docs/api.md / CHANGELOG.md / README.md (test-consumed, PV:274) do NOT.
+// This is the per-PATH core of the R2 legless-co-open predicate (scratchObservableWriteSet folds in the
+// writer's own .cache evidence file at the set level). Reuses testConsumes (no keep-as-code fork). Pure.
+function isScratchObservableSurface(p, testConsumedExtra) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (testConsumes(rel, testConsumedExtra)) return false;   // verdict-affecting prose is observation-visible
+  return isAllowbandDocsSurface(rel);                        // barrier-invisible + git-merge-silent docs only
+}
+
+// #641 (D-641-01): the R2 legless-co-open legality predicate adaptive-node consumes. An `observes: scratch`
+// adversarial-verifier (verdict from .cache evidence + scratch, never the worktree diff) may co-open behind a
+// LEGLESS parent writer ONLY when the writer's ENTIRE declared set is scratch-observable-safe (above) OR the
+// writer's OWN .cache evidence file (kaola-workflow/{project}/.cache/{ownerNodeId}.md). ANY production /
+// PROTECTED / test-consumed / foreign-workflow-state path disqualifies the whole set (fail-closed). Returns
+// true iff EVERY path qualifies (an empty/read set qualifies vacuously). Pure. opts: { project?, ownerNodeId?,
+// testConsumedExtra? }.
+function scratchObservableWriteSet(writeSet, opts) {
+  opts = opts || {};
+  const ownEvidence = (opts.project && opts.ownerNodeId)
+    ? 'kaola-workflow/' + opts.project + '/.cache/' + String(opts.ownerNodeId) + '.md'
+    : null;
+  for (const raw of Array.from(writeSet || [])) {
+    const rel = String(raw || '').trim().replace(/^\.\//, '');
+    if (!rel) return false;
+    if (isScratchObservableSurface(rel, opts.testConsumedExtra)) continue;
+    if (ownEvidence && rel === ownEvidence) continue;
+    return false;
+  }
+  return true;
+}
+
 // #463 Slice 4: the barrier exemption predicates, LIFTED to module scope (they were local consts in
 // barrierCheck) so the parent-clean fence (--parent-clean-check) classifies a dirty path with the
 // EXACT same carve-out the close barrier uses — a single source of truth (the advisor's #1: the fence
@@ -552,6 +587,11 @@ function parseNodes(content) {
       // #382: optional per-node model tier ({opus|sonnet}). Hash-covered (lives in ## Nodes).
       // Absent column / '—' => '' => today's role-static resolution (back-compat; old plans hash-stable).
       model: (() => { const v = get('model'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
+      // #641 (D-641-01): the observation-scope annotation ({scratch}). Hash-covered (lives in ## Nodes).
+      // Absent column / '—' => '' => today's behavior (back-compat; old plans hash-stable). `scratch`
+      // declares an adversarial-verifier READ gate whose verdict is rendered from .cache evidence + scratch
+      // (never the worktree tree/diff), the contract that lets a LEGLESS parent writer co-open behind it (R2).
+      observes: (() => { const v = get('observes'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
     });
   }
   return nodes;
@@ -1379,6 +1419,21 @@ function validatePlan(content, opts) {
     }
     if (n.role !== TERMINAL_ROLE && !WRITE_ROLES.has(n.role) && n.writeSet.size) {
       errors.push(`read-only role ${n.role} (node ${n.id}) declares a write set`);
+    }
+    // #641 (D-641-01): the `observes: scratch` observation-scope annotation. It declares an
+    // adversarial-verifier READ gate that renders its verdict from .cache evidence + scratch ONLY (never
+    // the worktree tree/diff), the contract that permits a LEGLESS parent writer to co-open behind it (R2).
+    // Authorable ONLY on an adversarial-verifier read node: code-reviewer / security-reviewer /
+    // main-session-gate are DEFINED by tree/diff observation, so the scope is incoherent there (typed
+    // refuse). An unknown scope value is out of grammar. Hash-covered by construction (a ## Nodes column).
+    if (n.observes) {
+      if (n.observes !== 'scratch') {
+        errors.push(`node ${n.id} observes: "${n.observes}" is not a legal observation scope (observes_scope_unsupported) — the only supported scope is \`scratch\``);
+      } else if (n.role !== 'adversarial-verifier') {
+        errors.push(`node ${n.id} (role ${n.role}) declares observes: scratch (observes_scope_role_invalid) — the scratch observation scope is authorable ONLY on an adversarial-verifier read node; ${n.role}'s role IS tree/diff observation, so the annotation is incoherent`);
+      } else if (n.writeSet.size) {
+        errors.push(`node ${n.id} declares observes: scratch but also a write set (observes_scope_not_read) — a scratch-observation gate must be read-only`);
+      }
     }
     // #381: directory-shaped or path-traversal write-set entries freeze in-grammar but are DEAD at
     // the per-node barrier — barrierCheck matches EXACT file paths (declared.has(p)), so a directory
@@ -3269,6 +3324,10 @@ module.exports = {
   parseValidationTestConsumes,
   testConsumes,
   isValidationInvisible,
+  // #641 (D-641-01): the R2 legless-co-open band predicates — the per-path scratch-observable surface test
+  // + the whole-write-set legality predicate adaptive-node consumes for the observes:scratch co-open.
+  isScratchObservableSurface,
+  scratchObservableWriteSet,
   computeCodeTreeHash,
   uniqueSink,
   gateUncovered,

@@ -1220,6 +1220,12 @@ function resolveCodexDispatchMode(context, env) {
   return 'v1-thread-id';
 }
 
+// #641 (D-641-01): the observation contract pinned onto an `observes: scratch` gate's dispatch card — the
+// discipline that makes a LEGLESS co-open behind it sound (R2). The gate must render its verdict from the
+// evidence of CLOSED nodes + its own scratch, never the live worktree (where a co-running writer's
+// uncommitted bytes sit). Single source of truth so the card text can never drift from the R2b contract.
+const SCRATCH_OBSERVATION_CONTRACT = 'verdict from .cache evidence of closed nodes + scratch only; do not read the worktree tree or diff';
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
   const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
@@ -1281,6 +1287,11 @@ function buildDispatch(nodeInfo, context) {
   if (ctx.optimize != null) {
     d.optimize = ctx.optimize;
   }
+  // #641 (D-641-01): pin the observation contract on an `observes: scratch` gate's card so the dispatched
+  // adversarial-verifier renders its verdict from .cache evidence + scratch ONLY (never the worktree
+  // tree/diff). Conditionally attached (like goal_line/leg_path): a non-scratch node has NO `observation`
+  // field ⇒ byte-identical to pre-#641.
+  if (nodeInfo.observes === 'scratch') d.observation = SCRATCH_OBSERVATION_CONTRACT;
   return d;
 }
 
@@ -3817,6 +3828,43 @@ function parentCarriesProductionDirt(planPath, project, shell) {
   return fence.exitCode !== 0 || fence.result !== 'pass';
 }
 
+// #641 (D-641-01) R2b: the consent-tier LEGLESS-co-open decision. Over a DIRTY parent, R1's leg path is
+// unsound — a leg branches off HEAD and would miss the uncommitted serial-sibling context, silently
+// degrading the writer's inputs (accuracy loss, precedence #1). The only sound co-open keeps the writer
+// LEGLESS in the parent (so it sees that context), which means the closed-work-observation invariant must
+// hold CONTRACTUALLY on the READ side. Returns the single highest-priority writer node to co-open when:
+//   (i)  EVERY live read is a freeze-validated `observes: scratch` adversarial-verifier — its verdict is
+//        rendered from .cache evidence of closed nodes + scratch, NEVER the worktree tree/diff; AND
+//   (ii) that writer's declared set is scratch-observable-safe (scratchObservableWriteSet — the docs
+//        allowband minus #547 test-consumed prose, or the writer's own .cache evidence).
+// Returns null otherwise ⇒ the caller's byte-identical parent_dirty hold. Re-reads the FROZEN plan for the
+// reads' role + observes annotation (the running-set entry carries neither); fail-closed on any parse miss.
+function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile) {
+  let parseNodes, scratchObservableWriteSet;
+  try { ({ parseNodes, scratchObservableWriteSet } = require('./kaola-gitlab-workflow-plan-validator')); } catch (_) { return null; }
+  if (typeof parseNodes !== 'function' || typeof scratchObservableWriteSet !== 'function') return null;
+  let planNodes;
+  try { planNodes = parseNodes(readFile(planPath)); } catch (_) { return null; }
+  const byId = new Map(planNodes.map(n => [n.id, n]));
+  const liveReads = (liveNodes || []).filter(n => n.kind === 'read');
+  // (i) every live read must be a freeze-declared observes:scratch adversarial-verifier. No live reads,
+  // or any non-scratch reader (a full-diff observer), fails closed — no legless co-open.
+  const allScratchGates = liveReads.length > 0 && liveReads.every(n => {
+    const pn = byId.get(n.id);
+    return !!(pn && pn.role === 'adversarial-verifier' && pn.observes === 'scratch');
+  });
+  if (!allScratchGates) return null;
+  // (ii) the highest-priority writer (the frontier is longest-path-to-sink ordered) must be
+  // scratch-observable-safe over its OWN declared set.
+  const writer = writeNodes[0];
+  if (!writer) return null;
+  const pn = byId.get(writer.id);
+  let ws = (pn && pn.writeSet) ? pn.writeSet : null;
+  if (!ws) { try { ws = require('./kaola-gitlab-workflow-classifier').parseWriteSetCell(writer.declared_write_set); } catch (_) { ws = []; } }
+  if (!scratchObservableWriteSet(ws, { project, ownerNodeId: writer.id })) return null;
+  return writer;
+}
+
 // ---------------------------------------------------------------------------
 // #463 Slice 2 (D-419 P2 write-axis) — per-leg `.kw` git-worktree provisioning for the write-lane
 // scheduler (ADR-0010: containment, not construction — legs isolate write scope; they do not
@@ -4531,9 +4579,69 @@ function runOpenReady(opts) {
       if (parentDirty) serialDegradeReason = 'parent_dirty';
     }
   } else {
-    // Only write nodes are ready but the running set is non-empty (read-only members live):
-    // the write node must wait until they drain so it can run alone.
-    return { result: 'ok', allDone: false, opened: [], reason: 'write_awaits_drain', taskTransitions: [] };
+    // Only write nodes are ready but the running set is non-empty (read-only members live).
+    // #641 (D-641-01) R1: the G2 `write_awaits_drain` RELAXATION — the mirror of the shipped #622
+    // read-direction relaxation. A write-only frontier arriving while reads are live no longer
+    // UNCONDITIONALLY holds: when the SAME leg-worktree containment #622 used to co-open a READ behind a
+    // live write can make the WRITER invisible to every live read, attempt a LEG-CONTAINED lane-group
+    // open instead (a lone writer forms a size-1 group — the #596 speculative-write machinery reused
+    // verbatim; closeGroupMember already degenerates to "last member" for a 1-member group). FAIL-CLOSED
+    // to today's hold on ANY of exactly four preconditions, each labeled with a typed serialDegradeReason
+    // (mirroring the #616 telemetry pattern) so a persistently-held writer is visible:
+    //   (1) legCoupled — KAOLA_PARALLEL_WRITES=0 forces the hold (G12);
+    //   (2) no live lane_group descriptor — running-set.json carries exactly ONE (G8), overwriting it
+    //       would orphan its still-open members (lost merges + leaked legs);
+    //   (3) parent-clean (parentCarriesProductionDirt() === pass) — G5: a leg branches off HEAD and would
+    //       miss uncommitted serial-sibling work (input freshness) + the close deadlock;
+    //   (4) validator `--parallel-safe` ok across {candidates ∪ live writes} — G6/G7/G13 authoritative
+    //       disjointness re-verification at open time (selectSpeculativeWriteGroup fail-closes on a
+    //       per-pair overlap OR an indeterminate/crashed verdict).
+    // The G1 read-first partition (:4389 above) is UNTOUCHED — reads still open tick 1. The G4 merge
+    // fence (merge_awaits_read_drain in closeGroupMember) STILL holds the group's last-member merge
+    // behind any live read, so the closed-work-observation invariant now holds by ISOLATION (the writer's
+    // bytes live in .kw/legs/**, invisible to the reads) instead of temporal exclusion. The #588
+    // mixed-frontier pin STAYS for LEGLESS writers via precondition (1): KAOLA_PARALLEL_WRITES=0 → hold.
+    const holdDrain = (degradeReason) => ({
+      result: 'ok', allDone: false, opened: [], reason: 'write_awaits_drain',
+      // serialDegradeReason is emitted ONLY on this RELAXED else-branch hold (a running set with live
+      // reads present). The byte-identical serial fallback (AC5 / G12) is the NO-running-set path, which
+      // never reaches this branch — so labeling the KAOLA_PARALLEL_WRITES=0 hold here (AC2) does not
+      // perturb the operator-recovery serial execution. null degradeReason ⇒ no field (defensive).
+      ...(degradeReason ? { serialDegradeReason: degradeReason } : {}),
+      taskTransitions: [],
+    });
+    if (!legCoupled) return holdDrain('parallel_writes_off');
+    if (liveGroupId) return holdDrain('lane_group_live');
+    if (parentCarriesProductionDirt(planPath, project, shell)) {
+      // #641 R2b (consent-tier): R1's leg path is unsound over a dirty parent (a leg would miss the
+      // uncommitted context). Try a LEGLESS co-open behind an `observes: scratch` adversarial-verifier
+      // gate — legal iff EVERY live read is such a gate AND the writer's set is scratch-observable-safe.
+      // Annotation absent / non-qualifying writer ⇒ today's byte-identical parent_dirty hold.
+      const r2bWriter = tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile);
+      if (!r2bWriter) return holdDrain('parent_dirty');
+      // A single LEGLESS writer opens in the parent tree (it must SEE the uncommitted context). NO
+      // groupForm ⇒ no leg provisioning, no lane_group descriptor. The scratch gate never observes the
+      // writer's (docs-band) bytes — verdict from .cache evidence + scratch, by the pinned contract. From
+      // the NEXT tick this legless writer excludes further opens (the #588/G3 invariant for every OTHER
+      // node), deliberately relaxed ONLY for the scratch gate already co-running.
+      toOpen = [r2bWriter];
+      openKind = 'write';
+    } else {
+      // R1 leg-contained co-open. Reuse the #596 size-1-capable selection: authoritative --parallel-safe
+      // re-verification across {candidates ∪ live writes} (live writes are empty here — no legless write,
+      // no live lane_group), a lone writer forms a size-1 group. An empty `chosen` means every candidate
+      // was excluded (overlap or an indeterminate verdict) ⇒ fail-closed to today's hold with the cause.
+      const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
+      if (sel.chosen.length === 0) return holdDrain(sel.excludedReason);
+      toOpen = sel.chosen;
+      openKind = 'write';
+      laneGroupCeiling = sel.ceiling;
+      groupForm = {
+        group_id: laneGroupId(sel.chosen.map(n => n.id)),
+        members: sel.chosen.map(n => n.id).slice().sort(),
+        write_union: laneWriteUnion(sel.chosen),
+      };
+    }
   }
 
   if (toOpen.length === 0) {
@@ -4761,6 +4869,15 @@ function runOpenReady(opts) {
   };
   writeFile(runningSetPath, JSON.stringify(finalSet, null, 2));
 
+  // #641 (D-641-01): the per-node observes annotation (hash-covered ## Nodes column) — threaded onto each
+  // opened node's dispatch card so an `observes: scratch` gate carries the pinned observation contract.
+  // The running-set entry does NOT carry it; read it from the frozen plan once. Fail-soft to an empty map.
+  let observesById = new Map();
+  try {
+    const { parseNodes } = require('./kaola-gitlab-workflow-plan-validator');
+    if (typeof parseNodes === 'function') observesById = new Map(parseNodes(planContent).map(pn => [pn.id, pn.observes]));
+  } catch (_) { observesById = new Map(); }
+
   return {
     result: 'ok',
     allDone: false,
@@ -4786,7 +4903,7 @@ function runOpenReady(opts) {
       // buildDispatch omits the keys ⇒ byte-identical to pre-#591 (mirrors the conditional laneGroup attach).
       const legInfo = (legs && legs[n.id]) ? legs[n.id] : null;
       const dispatch = buildDispatch(
-        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set },
+        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set, observes: observesById.get(n.id) || '' },
         {
           nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null,
           leg_path: legInfo ? legInfo.legPath : null, leg_branch: legInfo ? legInfo.legBranch : null,

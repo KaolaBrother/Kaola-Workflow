@@ -6936,28 +6936,51 @@ function rtHarness(initialFiles, opts) {
 
   // -------------------------------------------------------------------------
   // #588-MIXED-FRONTIER (case c): a ready frontier with BOTH read members (v1,v2) AND a disjoint write pair
-  //   (A,B). open-ready opens ONLY the reads (a write runs strictly alone — reads-first is DELIBERATE); the
-  //   write group DEFERS until the reads drain (write_awaits_drain). Pins exactly which members open + that
-  //   running-set reflects the opened set, with NO lane group / NO legs while reads are live. Behavior PINNED
-  //   as correct (matches the "a write node runs strictly alone" invariant; co-open-by-default is write||write).
+  //   (A,B). TICK 1 opens ONLY the reads (the G1 read-first partition — reads-first is DELIBERATE, and
+  //   UNCHANGED by #641). TICK 2 — a write-only frontier {A,B} behind the live reads — is the exact case
+  //   #641 R1 relaxes: instead of write_awaits_drain, the disjoint LEG-CAPABLE writers CO-OPEN as a
+  //   leg-contained lane group behind the live reads (the mirror of #622's read-direction relaxation). The
+  //   #588 LEGLESS pin still holds under KAOLA_PARALLEL_WRITES=0 (covered by #641-R1-A).
   // -------------------------------------------------------------------------
   {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'v1', role: 'code-explorer', set: '—' }, { id: 'v2', role: 'knowledge-lookup', set: '—' }] });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok', '#588-MIXED: open-ready ok, got ' + JSON.stringify(r));
     const openedIds = (r.opened || []).map(n => n.id).sort();
-    assert(openedIds.join(',') === 'v1,v2', '#588-MIXED: open-ready opens ONLY the read members [v1,v2] (writes defer), got ' + JSON.stringify(openedIds));
+    assert(openedIds.join(',') === 'v1,v2', '#588-MIXED: tick1 opens ONLY the read members [v1,v2] (G1 read-first), got ' + JSON.stringify(openedIds));
     assert(!r.laneGroup, '#588-MIXED: no lane group while opening reads');
     assert(ledgerStatus(planPath, 'v1') === 'in_progress' && ledgerStatus(planPath, 'v2') === 'in_progress', '#588-MIXED: both reads in_progress');
-    assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending', '#588-MIXED: writes A,B DEFERRED (still pending)');
+    assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending', '#588-MIXED: writes A,B DEFERRED at tick1 (still pending)');
     const rs = readRS(cacheDir);
     assert(rs.nodes.map(n => n.id).sort().join(',') === 'v1,v2', '#588-MIXED: running-set reflects EXACTLY the opened read set, got ' + JSON.stringify(rs.nodes.map(n => n.id)));
     assert(!rs.lane_group, '#588-MIXED: running-set has no lane_group (reads only)');
     assert(!worktreePaths(repoRoot).some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), '#588-MIXED: no legs provisioned for a read frontier');
-    // While the reads are live, a second open-ready DEFERS the writes (a write cannot co-run with live reads).
+    // TICK 2 (post-#641 R1): the disjoint leg-capable writers CO-OPEN behind the live reads (mixed running
+    // set), instead of holding on write_awaits_drain.
     const r2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r2.result === 'ok' && Array.isArray(r2.opened) && r2.opened.map(n => n.id).sort().join(',') === 'A,B' && r2.laneGroup,
+      '#588-MIXED (post-#641 R1): the disjoint writers CO-OPEN as a leg group behind the live reads, got ' + JSON.stringify({ opened: r2.opened && r2.opened.map(n => n.id), reason: r2.reason, laneGroup: r2.laneGroup }));
+    const rs2 = readRS(cacheDir);
+    assert(rs2.lane_group && rs2.lane_group.legs && rs2.lane_group.legs.A && rs2.lane_group.legs.B, '#588-MIXED (post-#641 R1): legs provisioned for the co-opened writers');
+    assert(rs2.nodes.some(n => n.id === 'v1' && n.kind === 'read') && rs2.nodes.some(n => n.id === 'A' && n.kind === 'write'),
+      '#588-MIXED (post-#641 R1): MIXED running set — the live reads alongside the leg-writes, got ' + JSON.stringify(rs2.nodes.map(n => ({ id: n.id, kind: n.kind }))));
+    cleanup(repoRoot);
+  }
+  // #588-MIXED-LEGLESS-PIN (post-#641 R1): the #588 pin is PRESERVED for LEGLESS writers — under
+  //   KAOLA_PARALLEL_WRITES=0 the write frontier {A,B} behind the live reads STILL holds (write_awaits_drain),
+  //   labeled serialDegradeReason:parallel_writes_off. (A legless writer mutating the shared parent tree
+  //   would be observed mid-write by a live read — G3 stays; the operator serial kill-switch is byte-identical.)
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'v1', role: 'code-explorer', set: '—' }, { id: 'v2', role: 'knowledge-lookup', set: '—' }] });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok' && (r.opened || []).map(n => n.id).sort().join(',') === 'v1,v2', '#588-MIXED-LEGLESS-PIN: tick1 opens the reads');
+    const r2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     assert(r2.result === 'ok' && Array.isArray(r2.opened) && r2.opened.length === 0 && r2.reason === 'write_awaits_drain',
-      '#588-MIXED: writes wait for the reads to drain (write_awaits_drain), got ' + JSON.stringify({ opened: r2.opened, reason: r2.reason }));
+      '#588-MIXED-LEGLESS-PIN: a LEGLESS write frontier still holds behind live reads (write_awaits_drain), got ' + JSON.stringify({ opened: r2.opened, reason: r2.reason }));
+    assert(r2.serialDegradeReason === 'parallel_writes_off', '#588-MIXED-LEGLESS-PIN: the legless hold is labeled parallel_writes_off, got ' + JSON.stringify(r2.serialDegradeReason));
+    assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending', '#588-MIXED-LEGLESS-PIN: ZERO mutation — A,B stay pending');
+    assert(!readRS(cacheDir).lane_group, '#588-MIXED-LEGLESS-PIN: no lane_group under the legless hold');
     cleanup(repoRoot);
   }
 
@@ -10821,6 +10844,445 @@ function rtHarness(initialFiles, opts) {
       rm612(wt);
     }
     rm612(main);
+  }
+}
+
+// ===========================================================================
+// #641 (D-641-01) — RELAX the read∥write scheduler serialization: a WRITE frontier arriving while
+// only READS are live no longer unconditionally holds (write_awaits_drain). R1 (default-on,
+// structural) attempts a LEG-CONTAINED co-open — the mirror of the shipped #622 read-direction
+// relaxation — fail-closed on four preconditions (legCoupled + parent-clean + --parallel-safe ok +
+// no live lane_group); the G4 merge fence still holds the last-member merge behind live reads. R2b
+// (consent-tier) permits a LEGLESS writer to co-open behind an `observes: scratch` adversarial-verifier
+// over a DIRTY parent iff the writer's declared set is chain-verdict-invisible (R2a predicate).
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// #641-R1 FAIL-CLOSED MATRIX (AC2) — direct runOpenReady unit calls (rsHarness, mocked shell). Each
+// precondition failing individually yields today's `write_awaits_drain` hold with ZERO mutation, PLUS a
+// typed `serialDegradeReason` label naming the cause. These rows return BEFORE any leg provisioning, so
+// no real git is touched. Shape: a live READ `g` in the running set + a ready WRITE `w` frontier.
+// ---------------------------------------------------------------------------
+{
+  // A live read `g` (already in_progress + in the running set) with a ready write `w` → the else-branch
+  // (write-only frontier + non-empty running set) that R1 relaxes.
+  function rwPlan(writeRows) {
+    return makePlan(
+      ['| g | in_progress | |'].concat(writeRows.map(w => '| ' + w.id + ' | pending | |')),
+      [
+        '| g | code-reviewer | — | — | 1 | sequence |',
+      ].concat(writeRows.map(w => '| ' + w.id + ' | implementer | — | ' + w.set + ' | 1 | sequence |')),
+    );
+  }
+  function liveReadSet(extra) {
+    return JSON.stringify(Object.assign({
+      state: 'open', max_concurrent: 8,
+      nodes: [{ id: 'g', role: 'code-reviewer', kind: 'read', baseline: 'recorded' }],
+    }, extra || {}));
+  }
+  function nextActionWrites(writeRows) {
+    return (base) => {
+      if (base === 'kaola-workflow-next-action.js') {
+        return { exitCode: 0, result: 'ok', allDone: false, readyPending: writeRows.map(w => ({ id: w.id, role: 'implementer', declared_write_set: w.set })) };
+      }
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1, result: 'refuse' };
+    };
+  }
+
+  // Row A: KAOLA_PARALLEL_WRITES=0 (legCoupled false) → hold, serialDegradeReason:'parallel_writes_off'.
+  {
+    const plan = rwPlan([{ id: 'w', set: 'scripts/a.js' }]);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: liveReadSet() }, nextActionWrites([{ id: 'w', set: 'scripts/a.js' }]));
+    const r = withParallelWrites('0', () => runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp }));
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R1-A: KAOLA_PARALLEL_WRITES=0 holds (write_awaits_drain), got ' + JSON.stringify({ o: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parallel_writes_off', '#641-R1-A: hold is labeled serialDegradeReason:parallel_writes_off, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#641-R1-A: ZERO mutation — w stays pending');
+    assert(JSON.parse(h.files[RS_SET_PATH]).nodes.length === 1, '#641-R1-A: running set unchanged (still just g)');
+  }
+
+  // Row B: a live lane_group descriptor already present → hold, serialDegradeReason:'lane_group_live'.
+  {
+    const plan = rwPlan([{ id: 'w', set: 'scripts/a.js' }]);
+    const withGroup = liveReadSet({
+      max_concurrent: 2,
+      lane_group: { group_id: 'lg-x', members: ['x'], write_union: ['scripts/z.js'], legs: { x: { legPath: '/lg/x', legBranch: 'kw/x', baseline: 'deadbeef' } } },
+      nodes: [
+        { id: 'g', role: 'code-reviewer', kind: 'read', baseline: 'recorded' },
+        { id: 'x', role: 'implementer', kind: 'write', group_id: 'lg-x', baseline: 'recorded' },
+      ],
+    });
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: withGroup }, nextActionWrites([{ id: 'w', set: 'scripts/a.js' }]));
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R1-B: live lane_group holds, got ' + JSON.stringify({ o: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'lane_group_live', '#641-R1-B: hold labeled serialDegradeReason:lane_group_live, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(JSON.parse(h.files[RS_SET_PATH]).lane_group.group_id === 'lg-x', '#641-R1-B: the live lane_group survives untouched (zero mutation)');
+  }
+
+  // Row C: parent carries production dirt (--parent-clean-check non-pass) → hold, serialDegradeReason:'parent_dirty'.
+  {
+    const plan = rwPlan([{ id: 'w', set: 'scripts/a.js' }]);
+    const validatorStub = (base, args) => {
+      if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (args.includes('--parent-clean-check')) return { exitCode: 0, result: 'parent_dirty' };
+      return { exitCode: 0, result: 'ok' };
+    };
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: liveReadSet() }, nextActionWrites([{ id: 'w', set: 'scripts/a.js' }]), validatorStub);
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R1-C: dirty parent holds, got ' + JSON.stringify({ o: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parent_dirty', '#641-R1-C: hold labeled serialDegradeReason:parent_dirty, got ' + JSON.stringify(r.serialDegradeReason));
+    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#641-R1-C: ZERO mutation — w stays pending');
+  }
+
+  // Row D: two disjoint-declared writers but --parallel-safe reports a per-pair OVERLAP → exclude all →
+  //   hold, serialDegradeReason:'overlaps_live_writer'. (Clean parent; the validator overlap report is
+  //   authoritative — G6/G13.)
+  {
+    const plan = rwPlan([{ id: 'w1', set: 'scripts/a.js' }, { id: 'w2', set: 'scripts/b.js' }]);
+    const validatorStub = (base, args) => {
+      if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (args.includes('--parent-clean-check')) return { exitCode: 0, result: 'pass' };
+      if (args.includes('--parallel-safe')) return { exitCode: 1, result: 'refuse', overlapping: [{ a: 'w1', b: 'w2' }] };
+      return { exitCode: 0, result: 'ok' };
+    };
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: liveReadSet() }, nextActionWrites([{ id: 'w1', set: 'scripts/a.js' }, { id: 'w2', set: 'scripts/b.js' }]), validatorStub);
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R1-D: overlap holds, got ' + JSON.stringify({ o: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'overlaps_live_writer', '#641-R1-D: hold labeled serialDegradeReason:overlaps_live_writer, got ' + JSON.stringify(r.serialDegradeReason));
+  }
+
+  // Row E: two writers, --parallel-safe returns a non-ok WITHOUT an overlapping report (validator crash /
+  //   garbled) → fail-CLOSED exclude-all → hold, serialDegradeReason:'parallel_safe_indeterminate' (G7).
+  {
+    const plan = rwPlan([{ id: 'w1', set: 'scripts/a.js' }, { id: 'w2', set: 'scripts/b.js' }]);
+    const validatorStub = (base, args) => {
+      if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (args.includes('--parent-clean-check')) return { exitCode: 0, result: 'pass' };
+      if (args.includes('--parallel-safe')) return { exitCode: 1, result: 'refuse' }; // no overlapping array
+      return { exitCode: 0, result: 'ok' };
+    };
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: liveReadSet() }, nextActionWrites([{ id: 'w1', set: 'scripts/a.js' }, { id: 'w2', set: 'scripts/b.js' }]), validatorStub);
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R1-E: indeterminate holds, got ' + JSON.stringify({ o: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parallel_safe_indeterminate', '#641-R1-E: hold labeled serialDegradeReason:parallel_safe_indeterminate, got ' + JSON.stringify(r.serialDegradeReason));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #641-AC5 SERIAL-FALLBACK BYTE-IDENTITY: with KAOLA_PARALLEL_WRITES=0 + NO running set + a single
+// write frontier, open-ready opens exactly ONE write serially, NO lane_group, and — critically — emits
+// NO `serialDegradeReason` field (byte-identical to pre-#641; the label is only added on the RELAXED
+// else-branch hold, which the no-running-set path never reaches).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| w | pending | |'], ['| w | implementer | — | scripts/a.js | 1 | sequence |']);
+  const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'w', role: 'implementer', declared_write_set: 'scripts/a.js' }] };
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = withParallelWrites('0', () => runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp }));
+  assert(r.result === 'ok' && r.kind === 'write' && r.opened.length === 1, '#641-AC5: serial single write open, got ' + JSON.stringify({ kind: r.kind, o: r.opened && r.opened.map(n => n.id) }));
+  assert(r.serialDegradeReason === undefined, '#641-AC5: NO serialDegradeReason field on the no-running-set serial path (byte-identical), got ' + JSON.stringify(r.serialDegradeReason));
+  assert(!r.laneGroup, '#641-AC5: no lane_group under the serial fallback');
+}
+
+// ---------------------------------------------------------------------------
+// #641-R1 CO-RUN + MERGE FENCE + CRASH-RECONCILE — REAL git subprocess (leg provisioning touches real
+// git, so the #292 io-shim trap forbids a direct-call test here). Shape: seed(complete) → g(read) ∥
+// w(write scripts/a.js) → review → finalize. Tick 1 opens g (read-first partition, UNCHANGED). Tick 2
+// co-opens w as a LEG-CONTAINED lane group behind the live read g (R1) — mixed read+leg-write running set.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  function makeRWRepo() {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw641-rw-'));
+    const project = 'test-project';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —      | —            | 1 | sequence |',
+      '| g        | code-explorer | seed   | —            | 1 | sequence |',
+      '| w        | tdd-guide     | seed   | scripts/a.js | 1 | sequence |',
+      '| review   | code-reviewer | g,w    | —            | 1 | sequence |',
+      '| finalize | finalize      | review | —            | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |', '| g | pending |', '| w | pending |',
+      '| review | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, project, planPath, projDir, cacheDir };
+  }
+  function runNode(repoRoot, subArgs, extraEnv) {
+    const env = Object.assign({}, process.env, extraEnv || {});
+    try {
+      const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
+      let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {}; try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  }
+  function readRS(cacheDir) { try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) { return null; } }
+  function ledgerStatus(planPath, id) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const start = txt.indexOf('## Node Ledger');
+    const body = start >= 0 ? txt.slice(start) : txt;
+    const m = body.match(new RegExp('^\\|\\s*' + id + '\\s*\\|\\s*(\\S+)\\s*\\|', 'm'));
+    return m ? m[1] : null;
+  }
+  function writeEvidence(cacheDir, id, role, extraLines) {
+    const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
+    let nonce = ''; try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
+    const lines = ['evidence-binding: ' + id + ' ' + nonce];
+    if (role === 'tdd-guide') { lines.push('RED: test_x — AssertionError: expected throw (pre-impl)'); lines.push('GREEN: test_x passes; 1/1 assertions green'); }
+    if (extraLines) lines.push(...extraLines);
+    fs.writeFileSync(path.join(cacheDir, id + '.md'), lines.join('\n') + '\n');
+  }
+  function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
+
+  // Probe git worktree availability once — leg provisioning needs `git worktree add`.
+  let worktreeOK = true;
+  { const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'kw641-probe-'));
+    try {
+      execFileSync('git', ['-C', probe, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      execFileSync('git', ['-C', probe, 'config', 'user.email', 'k@t'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      execFileSync('git', ['-C', probe, 'config', 'user.name', 'k'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      fs.writeFileSync(path.join(probe, 'f'), 'x'); execFileSync('git', ['-C', probe, 'add', '-A'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      execFileSync('git', ['-C', probe, 'commit', '-m', 'i'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { worktreeOK = false; }
+    cleanup(probe);
+  }
+
+  if (!worktreeOK) {
+    assert(true, '#641-R1-CORUN: skipped (git unavailable in this environment)');
+  } else {
+    // -- CO-RUN + MERGE FENCE --------------------------------------------------
+    {
+      const { repoRoot, project, planPath, cacheDir } = makeRWRepo();
+      // Tick 1: read-first partition opens g ALONE (G1 unchanged).
+      const t1 = runNode(repoRoot, ['open-ready', '--project', project, '--json'], {});
+      assert(t1.result === 'ok' && Array.isArray(t1.opened) && t1.opened.length === 1 && t1.opened[0].id === 'g',
+        '#641-R1-CORUN t1: read-first partition opens g alone, got ' + JSON.stringify(t1.opened && t1.opened.map(n => n.id)));
+      assert(!t1.laneGroup, '#641-R1-CORUN t1: no lane_group on the read open');
+      assert(ledgerStatus(planPath, 'g') === 'in_progress' && ledgerStatus(planPath, 'w') === 'pending', '#641-R1-CORUN t1: g in_progress, w still pending');
+
+      // Tick 2: the write-only frontier {w} arrives behind the LIVE read g → R1 co-opens w as a
+      // LEG-CONTAINED lane group (instead of write_awaits_drain).
+      const t2 = runNode(repoRoot, ['open-ready', '--project', project, '--json'], {});
+      assert(t2.result === 'ok' && Array.isArray(t2.opened) && t2.opened.length === 1 && t2.opened[0].id === 'w',
+        '#641-R1-CORUN t2: R1 co-opens the write w behind the live read (NOT write_awaits_drain), got ' + JSON.stringify({ opened: t2.opened && t2.opened.map(n => n.id), reason: t2.reason }));
+      assert(t2.laneGroup && Array.isArray(t2.laneGroup.members) && t2.laneGroup.members.includes('w'),
+        '#641-R1-CORUN t2: w co-opens as a size-1 lane group, got ' + JSON.stringify(t2.laneGroup));
+      const rs2 = readRS(cacheDir);
+      assert(rs2 && rs2.lane_group && rs2.lane_group.legs && rs2.lane_group.legs.w,
+        '#641-R1-CORUN t2: co-open ⟹ a provisioned leg for w (the safe close path), got ' + JSON.stringify(rs2 && rs2.lane_group));
+      assert(rs2.nodes.some(n => n.id === 'g' && n.kind === 'read') && rs2.nodes.some(n => n.id === 'w' && n.kind === 'write'),
+        '#641-R1-CORUN t2: MIXED running set — the live read g alongside the leg-write w, got ' + JSON.stringify(rs2.nodes.map(n => ({ id: n.id, kind: n.kind }))));
+      assert(ledgerStatus(planPath, 'w') === 'in_progress', '#641-R1-CORUN t2: w flipped in_progress');
+
+      // MERGE FENCE (G4 retained): the last-member merge of w's group is HELD while the read g is still
+      // live → close-node w refuses merge_awaits_read_drain (ZERO mutation). Seed real in-lane leg work
+      // (so the per-member vacuity + leg barrier pass and the close reaches the merge fence).
+      writeEvidence(cacheDir, 'w', 'tdd-guide');
+      const legFileW = path.join(rs2.lane_group.legs.w.legPath, 'scripts', 'a.js');
+      fs.mkdirSync(path.dirname(legFileW), { recursive: true });
+      fs.writeFileSync(legFileW, '// w in-lane (leg)\n');
+      const closeW = runNode(repoRoot, ['close-node', '--node-id', 'w', '--project', project, '--json'], {});
+      assert(closeW.result === 'refuse' && closeW.reason === 'merge_awaits_read_drain',
+        '#641-R1-CORUN merge-fence: the leg-write last-member merge is HELD while the read is live (merge_awaits_read_drain), got ' + JSON.stringify({ result: closeW.result, reason: closeW.reason }));
+      assert(ledgerStatus(planPath, 'w') === 'in_progress', '#641-R1-CORUN merge-fence: ZERO mutation — w stays in_progress on the refuse');
+      cleanup(repoRoot);
+    }
+
+    // -- CRASH-RECONCILE of a mixed read+leg-write running set ------------------
+    {
+      const { repoRoot, project, planPath, cacheDir } = makeRWRepo();
+      runNode(repoRoot, ['open-ready', '--project', project, '--json'], {});      // tick1: open g
+      const t2 = runNode(repoRoot, ['open-ready', '--project', project, '--json'], {}); // tick2: co-open w
+      assert(t2.laneGroup && t2.laneGroup.members.includes('w'), '#641-R1-RECONCILE precondition: w co-opened as a lane group');
+      // Simulate a crash mid-open: rewind the running set to state:'opening' with w flagged opening:true
+      // (its ledger row DID flip to in_progress in tick 2 — the roll-FORWARD crash shape).
+      const rsPath = path.join(cacheDir, 'running-set.json');
+      const rs = JSON.parse(fs.readFileSync(rsPath, 'utf8'));
+      rs.state = 'opening';
+      rs.nodes = rs.nodes.map(n => (n.id === 'w' ? { ...n, opening: true } : n));
+      fs.writeFileSync(rsPath, JSON.stringify(rs, null, 2));
+      const rec = runNode(repoRoot, ['reconcile-running-set', '--project', project, '--json'], {});
+      assert(rec.result === 'ok' && rec.reconciled === true, '#641-R1-RECONCILE: reconcile repairs the crashed mixed set, got ' + JSON.stringify({ result: rec.result, reconciled: rec.reconciled, reason: rec.reason }));
+      const after = readRS(cacheDir);
+      assert(after && after.state === 'open', '#641-R1-RECONCILE: state promoted back to open');
+      assert(after.nodes.some(n => n.id === 'g') && after.nodes.some(n => n.id === 'w' && !n.opening),
+        '#641-R1-RECONCILE: BOTH the live read g and the rolled-forward leg-write w survive, got ' + JSON.stringify(after.nodes.map(n => ({ id: n.id, opening: n.opening }))));
+      assert(after.lane_group && after.lane_group.legs && after.lane_group.legs.w,
+        '#641-R1-RECONCILE: the lane_group + its leg manifest survive the reconcile, got ' + JSON.stringify(after.lane_group));
+      cleanup(repoRoot);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #641-R2b CONSUMER (consent-tier) — over a DIRTY parent (R1's leg path can't apply: a leg would branch
+// off HEAD and miss the uncommitted context), a LEGLESS writer may co-open behind an `observes: scratch`
+// adversarial-verifier gate IFF every live read is such a gate AND the writer's declared set is
+// scratch-observable-safe (the R2a predicate). Annotation ABSENT ⇒ serialize (write_awaits_drain,
+// byte-identical). Direct runOpenReady unit calls (a LEGLESS open provisions NO leg ⇒ no real git).
+// ---------------------------------------------------------------------------
+{
+  // A plan WITH the observes column so parseNodes surfaces the gate's annotation. `gate` (live read) +
+  // `w` (ready write). role/observes/write-set parameterized.
+  function makeObservesPlan(gateRole, gateObserves, writeRole, writeSet) {
+    return [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| gate | ' + gateRole + ' | — | — | 1 | sequence | ' + gateObserves + ' |',
+      '| w | ' + writeRole + ' | — | ' + writeSet + ' | 1 | sequence | — |', '',
+      '## Node Ledger', '',
+      '| id | status | notes |', '| --- | --- | --- |',
+      '| gate | in_progress | |', '| w | pending | |', '',
+    ].join('\n') + '\n';
+  }
+  function gateLiveSet(gateRole) {
+    return JSON.stringify({ state: 'open', max_concurrent: 8, nodes: [{ id: 'gate', role: gateRole, kind: 'read', baseline: 'recorded' }] });
+  }
+  function dirtyParentStub(writeRole, writeSet) {
+    return {
+      shell: (base) => {
+        if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'w', role: writeRole, declared_write_set: writeSet }] };
+        if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+        return { exitCode: 1, result: 'refuse' };
+      },
+      validator: (b, args) => {
+        if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+        if (args.includes('--parent-clean-check')) return { exitCode: 0, result: 'parent_dirty' }; // DIRTY parent
+        return { exitCode: 0, result: 'ok' };
+      },
+    };
+  }
+  function runR2b(gateRole, gateObserves, writeRole, writeSet) {
+    const stub = dirtyParentStub(writeRole, writeSet);
+    const plan = makeObservesPlan(gateRole, gateObserves, writeRole, writeSet);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: gateLiveSet(gateRole) }, stub.shell, stub.validator);
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    return { r, h };
+  }
+
+  // A: observes:scratch adversarial-verifier ∥ docs/decisions/** LEGLESS writer → CO-OPEN (legless, no
+  //    leg group), even though the parent is dirty (the writer sees the uncommitted context; the scratch
+  //    gate never observes its docs-band bytes — verdict from .cache + scratch, by contract).
+  {
+    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', 'docs/decisions/D-641-01.md');
+    assert(r.result === 'ok' && r.kind === 'write' && Array.isArray(r.opened) && r.opened.length === 1 && r.opened[0].id === 'w',
+      '#641-R2b-A: observes:scratch gate ∥ docs/decisions writer CO-OPENS legless over a dirty parent, got ' + JSON.stringify({ opened: r.opened && r.opened.map(n => n.id), reason: r.reason, degrade: r.serialDegradeReason }));
+    assert(!r.laneGroup, '#641-R2b-A: the co-open is LEGLESS (no lane group — the writer must see the uncommitted parent context)');
+    const set = JSON.parse(h.files[RS_SET_PATH]);
+    assert(!set.lane_group, '#641-R2b-A: running-set has NO lane_group (legless co-open)');
+    assert(set.nodes.some(n => n.id === 'gate' && n.kind === 'read') && set.nodes.some(n => n.id === 'w' && n.kind === 'write'),
+      '#641-R2b-A: MIXED running set — the scratch gate alongside the legless writer, got ' + JSON.stringify(set.nodes.map(n => ({ id: n.id, kind: n.kind }))));
+    assert(h.files[RS_PLAN_PATH].includes('| w | in_progress | |'), '#641-R2b-A: w flipped in_progress');
+    // The gate's dispatch discipline is pinned when it OPENS (a prior tick) — see #641-R2b-CARD below.
+  }
+
+  // B: observes:scratch gate ∥ a TEST-CONSUMED prose writer (docs/api.md) → HOLD (the writer's set is NOT
+  //    scratch-observable-safe: a chain the gate could run reads it). Byte-identical parent_dirty hold.
+  for (const bad of ['docs/api.md', 'CHANGELOG.md']) {
+    const { r, h } = runR2b('adversarial-verifier', 'scratch', 'doc-updater', bad);
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
+      '#641-R2b-B[' + bad + ']: a test-consumed-prose writer HOLDS behind the scratch gate, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-B[' + bad + ']: labeled parent_dirty (R2b did not apply), got ' + JSON.stringify(r.serialDegradeReason));
+    assert(h.files[RS_PLAN_PATH].includes('| w | pending | |'), '#641-R2b-B[' + bad + ']: ZERO mutation — w stays pending');
+  }
+
+  // C: an UN-annotated gate (a plain code-reviewer, no observes:scratch) ∥ a qualifying docs writer → HOLD.
+  //    A full-diff observer is perturbed by a concurrent write; only the planner-declared scratch scope unlocks R2b.
+  {
+    const { r } = runR2b('code-reviewer', '—', 'doc-updater', 'docs/decisions/D-641-01.md');
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain',
+      '#641-R2b-C: an un-annotated gate HOLDS even a qualifying writer, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-C: labeled parent_dirty (no annotation ⇒ serialize), got ' + JSON.stringify(r.serialDegradeReason));
+  }
+
+  // D: un-annotated gate ∥ a SHARED-TREE (production) writer → HOLD (both the missing annotation AND the
+  //    out-of-band write disqualify — a gate exists precisely to observe production changes).
+  {
+    const { r } = runR2b('code-reviewer', '—', 'implementer', 'scripts/x.js');
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R2b-D: shared-tree writer behind an un-annotated gate HOLDS, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-D: labeled parent_dirty');
+  }
+
+  // E: even an ANNOTATED gate ∥ a SHARED-TREE (production) writer → HOLD (the annotation authorizes only a
+  //    scratch-observable-safe write set; a production path is never observation-invisible).
+  {
+    const { r } = runR2b('adversarial-verifier', 'scratch', 'implementer', 'scripts/x.js');
+    assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_awaits_drain', '#641-R2b-E: a production writer HOLDS even behind a scratch gate, got ' + JSON.stringify({ opened: r.opened, reason: r.reason }));
+    assert(r.serialDegradeReason === 'parent_dirty', '#641-R2b-E: labeled parent_dirty (writer set not scratch-observable-safe)');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #641-R2b-CARD — the dispatch card the aggregator composes for an opened `observes: scratch`
+// adversarial-verifier PINS the observation contract (verdict from .cache evidence of closed nodes +
+// scratch only; do NOT read the worktree tree or diff). A plain read gate's card is byte-identical
+// (no observation field). Direct runOpenReady unit call (read open ⇒ no leg / no real git).
+// ---------------------------------------------------------------------------
+{
+  function makeGateOnlyPlan(gateObserves) {
+    return [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| gate | adversarial-verifier | — | — | 1 | sequence | ' + gateObserves + ' |', '',
+      '## Node Ledger', '',
+      '| id | status | notes |', '| --- | --- | --- |',
+      '| gate | pending | |', '',
+    ].join('\n') + '\n';
+  }
+  function openGate(gateObserves) {
+    const plan = makeGateOnlyPlan(gateObserves);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'gate', role: 'adversarial-verifier', declared_write_set: '—' }] };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1, result: 'refuse' };
+    });
+    return runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  }
+  // observes:scratch → the observation contract is pinned on the card.
+  {
+    const r = openGate('scratch');
+    assert(r.result === 'ok' && r.opened.length === 1 && r.opened[0].dispatch, '#641-R2b-CARD: the scratch gate opens with a dispatch card');
+    const obs = r.opened[0].dispatch.observation;
+    assert(typeof obs === 'string' && /\.cache/.test(obs) && /scratch/.test(obs) && /do not read the worktree/i.test(obs),
+      '#641-R2b-CARD: the observation contract is pinned (evidence + scratch only; do not read the worktree tree/diff), got ' + JSON.stringify(obs));
+  }
+  // un-annotated read gate → byte-identical (NO observation field).
+  {
+    const r = openGate('—');
+    assert(r.result === 'ok' && r.opened.length === 1, '#641-R2b-CARD-neg: the plain gate opens');
+    assert(r.opened[0].dispatch.observation === undefined, '#641-R2b-CARD-neg: a plain read gate card has NO observation field (byte-identical), got ' + JSON.stringify(r.opened[0].dispatch.observation));
   }
 }
 

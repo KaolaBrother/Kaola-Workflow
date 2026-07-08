@@ -85,6 +85,14 @@ here for the full contract.
       serial/read-only run (absent `lane_group` ⟹ `null` ⟹ `closeGroupMember` is never entered).
     - **Absent when no group is live.** The key is cleared (the whole key is deleted, not set to
       `null`) when the last group member passes the group barrier and the group is dissolved.
+    - **Size-1 leg group for a write co-opening behind live reads (issue #641).** When a lone
+      leg-contained writer co-opens *behind* a live read frontier (the mirror of #622), it forms a
+      **size-1** `lane_group` — the same descriptor shape and same `merge_awaits_read_drain` hold at
+      the last-member merge, so the reads observe an untouched parent until the drain. A consent-tier
+      `observes: scratch` R2b co-open is the exception: it is **legless** (no `lane_group`, no leg
+      worktree — the writer must see the dirty parent's uncommitted context) and, being a single
+      legless writer, the next tick's `write_node_exclusive` (G3) blocks any further open until it
+      closes.
     - **Outside `plan_hash`.** `lane_group` is a runtime scheduler artifact, not plan structure.
       It is written into `running-set.json` (a non-hashed `.cache/` artifact), not into
       `workflow-plan.md`. The `plan_hash` covers only `## Meta` and `## Nodes` — `lane_group`

@@ -173,7 +173,14 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   co-open as isolated parallel legs **by default** (D-542-01), while genuinely-overlapping writes
   open **alone** (the serial fallback). Forcing every write frontier serial — the byte-identical
   pre-parallel-write behavior — is now the explicit opt-out path (`KAOLA_PARALLEL_WRITES=0`), not
-  the default.
+  the default. A leg-contained **write** also co-opens *behind live reads* — the mirror of the #622
+  read-direction relaxation — instead of waiting on `write_awaits_drain`, when four preconditions
+  hold (`legCoupled`, clean parent, `--parallel-safe` ok, no live lane group); any miss returns the
+  byte-identical hold with a typed `serialDegradeReason`. The `merge_awaits_read_drain` fence (§ the
+  running-set close) still holds the leg's merge until the reads drain, so the parent tree the reads
+  observe stays untouched — that isolation is what keeps the closed-work-observation invariant intact.
+  A consent-tier `observes: scratch` annotation additionally permits a *legless* docs writer to
+  co-open behind a scratch-only `adversarial-verifier` over a dirty parent (D-641-01).
   The **AC#5 / #293 legality re-keys to the running set**: `orient` accepts `in_progress` rows
   matching the running-set node set (`valid_running_set`) — the residual `active-batch.json` read
   is `orient`'s own read-only legality reconstruction (deliberately KEPT at #594 as a scope

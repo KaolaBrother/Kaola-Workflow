@@ -136,6 +136,35 @@ if (segmentedAdvisories.length) {
   process.stdout.write('validation-allowband ADVISORY (#560): segmented path.join doc construction(s) the literal scan cannot see — confirm each is in testConsumes if read at chain time:\n  ' + segmentedAdvisories.join('\n  ') + '\n');
 }
 
+// 5) #641 (D-641-01) — the R2 legless-co-open band predicate. An `observes: scratch` adversarial-verifier
+//    may co-open behind a LEGLESS parent writer ONLY when the writer's declared set is chain-verdict-
+//    INVISIBLE + git-merge-silent: a barrier-invisible allowband DOCS surface that is NOT #547 test-consumed
+//    prose, OR the writer's own .cache evidence file. This reuses the SAME testConsumes keep-as-code list the
+//    #547 freshness band uses (no predicate fork), so the two can never drift.
+{
+  // Per-PATH surface predicate: admits docs/decisions/** + non-test-consumed docs/**; rejects the
+  // test-consumed prose (docs/api.md / CHANGELOG.md / README.md) and any production path.
+  assert(pv.isScratchObservableSurface('docs/decisions/D-641-01.md') === true, '#641-band: docs/decisions/** is scratch-observable-safe');
+  assert(pv.isScratchObservableSurface('docs/architecture.md') === true, '#641-band: a non-test-consumed docs/** narrative is scratch-observable-safe');
+  assert(pv.isScratchObservableSurface('docs/plan-run-cards/frontier-batch.md') === true, '#641-band: a nested non-test-consumed docs/** is scratch-observable-safe');
+  assert(pv.isScratchObservableSurface('docs/api.md') === false, '#641-band: docs/api.md (chain-asserted) is NOT scratch-observable-safe (test-consumed)');
+  assert(pv.isScratchObservableSurface('CHANGELOG.md') === false, '#641-band: CHANGELOG.md (version-heading asserted) is NOT scratch-observable-safe');
+  assert(pv.isScratchObservableSurface('README.md') === false, '#641-band: README.md (role-catalog asserted) is NOT scratch-observable-safe');
+  assert(pv.isScratchObservableSurface('scripts/kaola-workflow-adaptive-node.js') === false, '#641-band: a production script is NOT scratch-observable-safe');
+  assert(pv.isScratchObservableSurface('kaola-workflow/foo/.cache/x.md') === false, '#641-band: a foreign workflow-state path is NOT a docs surface (own-evidence is folded in at the SET level, not per-path)');
+
+  // Set-level predicate: EVERY path must qualify; the writer's OWN evidence file is admitted.
+  assert(pv.scratchObservableWriteSet(['docs/decisions/D-641-01.md', 'docs/architecture.md']) === true, '#641-band-set: an all-docs-decisions set qualifies for legless co-open');
+  assert(pv.scratchObservableWriteSet(['docs/decisions/D-641-01.md', 'docs/api.md']) === false, '#641-band-set: a set containing docs/api.md (test-consumed) does NOT qualify');
+  assert(pv.scratchObservableWriteSet(['CHANGELOG.md']) === false, '#641-band-set: a CHANGELOG.md writer does NOT qualify');
+  assert(pv.scratchObservableWriteSet(['docs/decisions/D-641-01.md', 'kaola-workflow/test-project/.cache/n4-docs.md'], { project: 'test-project', ownerNodeId: 'n4-docs' }) === true,
+    '#641-band-set: the writer\'s OWN .cache evidence file is admitted alongside its docs surfaces');
+  assert(pv.scratchObservableWriteSet(['kaola-workflow/test-project/.cache/other.md'], { project: 'test-project', ownerNodeId: 'n4-docs' }) === false,
+    '#641-band-set: ANOTHER node\'s .cache file is NOT admitted (own-evidence only)');
+  assert(pv.scratchObservableWriteSet(['scripts/x.js']) === false, '#641-band-set: a production write disqualifies the whole set');
+  assert(pv.scratchObservableWriteSet([]) === true, '#641-band-set: an empty/read set qualifies vacuously');
+}
+
 if (failed) {
   process.stderr.write('\nvalidation-allowband guard FAILED (' + failed + ' failures, ' + passed + ' passed)\n');
   process.exit(1);

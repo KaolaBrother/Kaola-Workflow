@@ -1403,6 +1403,108 @@ function runMirrorHandoffCase(mirrorResponse) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #641 (D-641-01) R2a — the `observes: scratch` freeze contract, end-to-end through the REAL validator
+// subprocess (shellHandoff). The annotation is authorable ONLY on an adversarial-verifier READ node; the
+// freeze validator REFUSES it on code-reviewer / security-reviewer / main-session-gate (their role IS
+// tree/diff observation, so the scope is incoherent) and on an unknown scope value. A refuse surfaces as
+// handoff_status:'plan_invalid' carrying the typed error token; a legal annotation freezes.
+// ---------------------------------------------------------------------------
+{
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  // A complete, freezable adaptive plan: seed(complete-able) → gate(read) ∥ w(write) → finalize sink. The
+  // `observes` column carries the annotation on the gate row. `role`/`observes` are parameterized.
+  function observesPlan(gateRole, observesValue) {
+    return [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —      | —              | 1 | sequence | — |',
+      '| gate     | ' + gateRole + ' | seed | —            | 1 | sequence | ' + observesValue + ' |',
+      '| w        | doc-updater   | seed   | docs/decisions/D-641-01.md | 1 | sequence | — |',
+      '| finalize | finalize      | gate,w | —              | 1 | sequence | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+  }
+
+  // Drive the freeze validator DIRECTLY (the authoritative gate the handoff surfaces verbatim) in a real
+  // temp dir, then assert the validator verdict. This is the freeze contract the handoff's SPAWN-1
+  // (--freeze-checked) consumes; a refuse here IS the plan_invalid the handoff returns.
+  function freezeVerdict(planContent) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw641-obs-'));
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planContent);
+    const verdict = shellHandoff(VALIDATOR, [planPath, '--json']);
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    return verdict;
+  }
+
+  // (a) observes: scratch on an adversarial-verifier READ node → in-grammar (freezes).
+  {
+    const v = freezeVerdict(observesPlan('adversarial-verifier', 'scratch'));
+    assert(v.result !== 'refuse', '#641-R2a-accept: observes:scratch on an adversarial-verifier freezes (in-grammar), got ' + JSON.stringify({ result: v.result, errors: v.errors }));
+  }
+  // (b) observes: scratch on a code-reviewer → REFUSE plan_invalid, typed observes_scope_role_invalid.
+  for (const badRole of ['code-reviewer', 'security-reviewer', 'main-session-gate']) {
+    const v = freezeVerdict(observesPlan(badRole, 'scratch'));
+    assert(v.result === 'refuse' && v.reason === 'plan_invalid', '#641-R2a-refuse[' + badRole + ']: observes:scratch on ' + badRole + ' refuses plan_invalid, got ' + JSON.stringify({ result: v.result, reason: v.reason }));
+    assert(Array.isArray(v.errors) && v.errors.some(e => /observes_scope_role_invalid/.test(e)),
+      '#641-R2a-refuse[' + badRole + ']: the typed observes_scope_role_invalid token is present, got ' + JSON.stringify(v.errors));
+  }
+  // (c) an unknown observes scope value → REFUSE plan_invalid, typed observes_scope_unsupported.
+  {
+    const v = freezeVerdict(observesPlan('adversarial-verifier', 'worktree'));
+    assert(v.result === 'refuse' && v.reason === 'plan_invalid', '#641-R2a-unsupported: an unknown observes scope refuses plan_invalid, got ' + JSON.stringify({ result: v.result, reason: v.reason }));
+    assert(Array.isArray(v.errors) && v.errors.some(e => /observes_scope_unsupported/.test(e)),
+      '#641-R2a-unsupported: the typed observes_scope_unsupported token is present, got ' + JSON.stringify(v.errors));
+  }
+  // (d) HASH COVERAGE: the annotation lives in the hash-covered ## Nodes region — flipping observes changes
+  //     the plan_hash (tamper-evident), so a post-freeze scope change is caught by --resume-check.
+  {
+    const { computePlanHash } = require('./kaola-workflow-plan-validator');
+    const withScope = observesPlan('adversarial-verifier', 'scratch');
+    const withoutScope = observesPlan('adversarial-verifier', '—');
+    assert(computePlanHash(withScope) !== computePlanHash(withoutScope),
+      '#641-R2a-hash: observes:scratch is hash-covered (plan_hash differs from the un-annotated plan)');
+  }
+  // (e) END-TO-END: the handoff surfaces the validator refuse as plan_invalid (SPAWN-1 --freeze-checked
+  //     runs the SAME validatePlan). Drive runHandoff with the REAL validator shell over a bad-observes plan.
+  {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw641-obs-h-'));
+    try {
+      const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+      fs.mkdirSync(proj, { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      const statePath = path.join(proj, 'workflow-state.md');
+      fs.writeFileSync(planPath, observesPlan('code-reviewer', 'scratch'));
+      fs.writeFileSync(statePath, makeStateContent({ issueNumber: 5 }));
+      let freezeShelled = false;
+      const result = runHandoff({
+        planPath, statePath, project: 'test-project', json: true,
+        shell: (scriptPath, args) => {
+          const a = args || [];
+          if (path.basename(scriptPath) === 'kaola-workflow-plan-validator.js' && a.includes('--freeze')) freezeShelled = true;
+          return shellHandoff(scriptPath, a);
+        },
+        computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+        resolveModel: () => 'sonnet',
+        readFile: (fpath) => fs.readFileSync(fpath, 'utf8'),
+        writeFile: (fpath, content) => fs.writeFileSync(fpath, content),
+        stateMtime: undefined,
+      });
+      assert(result.handoff_status === 'plan_invalid', '#641-R2a-e2e: the handoff surfaces the observes refuse as plan_invalid, got ' + JSON.stringify(result.handoff_status));
+      assert(Array.isArray(result.errors) && result.errors.some(e => /observes_scope_role_invalid/.test(e)), '#641-R2a-e2e: the typed token reaches the handoff packet, got ' + JSON.stringify(result.errors));
+      assert(freezeShelled === false, '#641-R2a-e2e: --freeze NEVER shelled on the refuse (no mutation)');
+    } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
+  }
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
