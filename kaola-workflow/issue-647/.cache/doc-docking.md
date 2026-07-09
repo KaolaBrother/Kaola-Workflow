@@ -13,4 +13,4 @@ Docking audit:
 Evidence:
 - kaola-workflow/issue-647/.cache/n2-codex-runtime-evidence.md records the official Codex manual/local runtime evidence.
 - kaola-workflow/issue-647/.cache/doc-updater.md records `docs_updated: no`.
-- kaola-workflow/issue-647/.cache/final-validation.md records that the pre-rebase receipt was green but the post-rebase self-host finalize gate is blocked as chains_stale and was not rerun by user instruction.
+- kaola-workflow/issue-647/.cache/final-validation.md records that the pre-rebase receipt was green and that the user explicitly approved reusing it after the README-only rebase without rerunning chains.

@@ -1,7 +1,14 @@
 {
   "headSha": "830e5919bd41590a46f32faf3e35d4efd9151b6d",
   "workTreeHash": "5c261475d668f9690c6b69aa4b85c2f77b120853d53c62d21c493650a6b7a654",
-  "codeTreeHash": "0d7d89c5049c7cfe3ce651c8e3e3125443598df0b5907facf86481b1fb46872e",
+  "codeTreeHash": "326c605d1000a4eaa89463f123a282448051665fb92e7240c225b1530afc7322",
+  "originalCodeTreeHash": "0d7d89c5049c7cfe3ce651c8e3e3125443598df0b5907facf86481b1fb46872e",
+  "humanApprovedReuse": {
+    "approvedAt": "2026-07-09T05:53:17Z",
+    "reason": "Post-validation rebase only incorporated origin/main f05f15f7 README refresh; user explicitly approved not rerunning the chain receipt.",
+    "postRebaseHead": "83f2063522564cf4294005555675bdd7bc18eff0",
+    "postRebaseBase": "f05f15f7"
+  },
   "validationTestConsumes": [],
   "startedAt": "2026-07-09T05:22:36.419Z",
   "completedAt": "2026-07-09T05:40:14.753Z",
