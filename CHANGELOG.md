@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- README refreshed to match the shipped v6.21.0 surface: the Philosophy section now states the five first-principles axioms (`templates/axioms.md`, #645) instead of the pre-axiom three-priority list; the workflow-roles table gains the missing `synthesizer` and `metric-optimizer` rows with role paragraphs (#463, #634); `issue-scout` is documented as profile-governed (Opus under the default `higher` profile, #646) and the "three reviewer agents" profile prose updated to four; the adaptive sections document the `## Node Briefs` node-to-node channel + close-time consumed-proof (#642), the completed per-role evidence contract (#643), and the read∥write co-open relaxation with typed `serialDegradeReason` (#622/#641); `stale-worktree-cleanup` documents the `skipped_unmerged` never-delete-unproven-work guard (#620). Documentation-only.
+
 ## [6.21.0] - 2026-07-09
 
 ### Added

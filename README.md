@@ -12,11 +12,15 @@ That discipline comes from one creed:
 
 **Make coding agents do more — more automation, less manual toil, faster results — without ever trading away accuracy.**
 
-That creed sets a strict order of priorities. When they conflict, the higher one wins:
+The creed is codified as five **first-principles axioms** (`templates/axioms.md`), applied in priority order whenever a situation is not already resolved by a specific rule, gate, or refusal. When they conflict, the higher one wins:
 
-1. **Accuracy is non-negotiable.** It is never traded for speed or cost. Redoing wrong work is the most expensive outcome there is.
-2. **Then automation and efficiency.** Reach the right answer with as little human toil as possible.
-3. **Then the simplest, cheapest mechanism** that achieves the first two. No clever machinery for its own sake.
+1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome there is.
+2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
+3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and higher model tiers are means, not goals.
+4. **Machines decide facts; humans decide values.** Route irreversible or value-laden calls to the consent valve; leave everything checkable to run automatically.
+5. **Own your own verdicts.** Never let a system the workflow does not own — CI, an external service — be the judge of done.
+
+The axiom layer is embedded byte-identically into every generated project's guidance (all six `workflow-init` surfaces, with a machine-enforced drift guard) and is **tighten-only**: an axiom may make an agent stricter, but never licenses skipping a typed gate, refusal, or barrier.
 
 A few beliefs follow from that order.
 
@@ -52,6 +56,7 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
 - **Multi-model** across Claude Code, Codex, and opencode, right-sizing the model for each step.
 - **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work. Write frontiers the planner proves **disjoint** co-open as isolated parallel legs **by default** (per-leg worktree isolation + a mandatory synthesizer reconcile are the correctness net); only genuinely-overlapping writes stay serial/consent-gated, and any host without worktree support degrades to serial.
 - **Independent adversarial verification** plus fail-closed quality gates.
+- **Optimize-shaped work** ("make it faster / smaller / less flaky") via a bounded metric-ratchet role — direction, not destination, with a regression gate on every step.
 - **Durable per-step artifacts** with full resumability across sessions and context resets.
 - A locked **claim → isolated worktree → free design → finalization** frame.
 - **Three agent runtimes** (Claude Code, Codex, opencode) across **three forges** (GitHub, GitLab, Gitea).
@@ -166,11 +171,14 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `adversarial-verifier` | Adaptive path — read-only skeptic (never a gate) | Sonnet | |
 | `contractor` | All paths — mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
 | `workflow-planner` | Adaptive path — front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically) | Opus | no |
-| `issue-scout` | Bundle lane — read-only selection agent (recommends same-scope issue sets; never claims, writes, or dispatches) | Sonnet | |
+| `issue-scout` | Bundle lane — read-only selection agent (recommends same-scope issue sets; never claims, writes, or dispatches) | Sonnet | yes |
+| `synthesizer` | Adaptive path — parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | Opus | no |
+| `metric-optimizer` | Adaptive path — bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | Sonnet | |
 
 The **Model** column is the `common` profile. The **default** install profile is
-`higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
-`security-reviewer`) install on **Opus** unless you pass `--profile=common`.
+`higher`, so the four agents marked _yes_ (`code-architect`, `code-reviewer`,
+`security-reviewer`, `issue-scout`) install on **Opus** unless you pass
+`--profile=common`.
 
 `adversarial-verifier` is locally authored for the [adaptive workflow](#adaptive-workflow-the-default-path)
 (issue #227) rather than derived from ECC — a dedicated refute-by-default skeptic that
@@ -187,8 +195,10 @@ role, judges, gates, or asks the user, and stays Sonnet even under `--profile=hi
 
 `workflow-planner` is locally authored for the [adaptive workflow](#adaptive-workflow-the-default-path) front end: a
 fixed-Opus agent the main session dispatches **once** at the start of the adaptive path. It runs the
-claim/startup (worktree + `workflow-state.md`), **authors** the `## Nodes` DAG plus an empty
-`## Node Ledger` into `workflow-plan.md`, runs the plan-validator `--json` as a self-check, and then
+claim/startup (worktree + `workflow-state.md`), **authors** the `## Nodes` DAG, per-node
+`## Node Briefs` (each node's goal line — the durable node-to-node information channel,
+hash-covered when present), plus an empty `## Node Ledger` into `workflow-plan.md`, runs the
+plan-validator `--json` as a self-check, and then
 **runs `kaola-workflow-adaptive-handoff.js`** — which freezes mechanically on `result:in-grammar`,
 resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`
 (preserving the `## Sink` block) — returning a checklist-backed packet (`handoff_status: ready_to_run`
@@ -202,7 +212,11 @@ returns control to main), and stays Opus regardless of profile (there is no
 `profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored read-only `planner`, which
 stays a read-only in-plan node role.
 
-`issue-scout` is locally authored for the [bundle lane](#multi-issue-bundle-lane-adaptive-only) (issue #328): a read-only selection agent the orchestrator may dispatch to recommend a same-scope issue set for a bundle claim. It reads forge issues, the local roadmap, and active folders to surface candidate sets, then returns a structured recommendation. It MUST NOT claim issues, write files, author plans, close issues, or dispatch other agents. Its output is advisory input — the orchestrator decides whether to proceed as a bundle.
+`issue-scout` is locally authored for the [bundle lane](#multi-issue-bundle-lane-adaptive-only) (issue #328): a read-only selection agent the orchestrator may dispatch to recommend a same-scope issue set for a bundle claim. It reads forge issues, the local roadmap, and active folders to surface candidate sets, then returns a structured recommendation. It MUST NOT claim issues, write files, author plans, close issues, or dispatch other agents. Its output is advisory input — the orchestrator decides whether to proceed as a bundle. Since issue #646 its model tier is governed like the reviewers': the default `higher` profile installs it on Opus (`common` keeps Sonnet), and the router dispatches it with the install-rendered model rather than a hardcoded tier.
+
+`synthesizer` is locally authored for the adaptive parallel-write path (issue #463): a reasoning-class (Opus) write-convergence specialist. When planner-proven-disjoint write legs co-open as isolated worktrees, the last member's close octopus-merges them mechanically; the `synthesizer` is dispatched **only** when that mechanical merge hits a real conflict, and reconciles the legs into the feature branch by *intent* rather than by textual hunks. It is never invoked for cleanly-disjoint legs and stays Opus regardless of profile (there is no `profiles/higher/synthesizer.md`).
+
+`metric-optimizer` is locally authored for optimize-shaped work (issue #634) — *direction-not-destination* deliverables ("make it faster / smaller / less flaky") where no acceptance threshold is knowable at freeze. Each iteration of its bounded, budget-capped ratchet loop proposes a change, applies it, runs the regression gate, measures the metric (median-of-K), and accepts or reverts against the running baseline, until a stop condition fires. It is an ordinary `sequence`-shaped implement role — `code-reviewer` still post-dominates it, its contract lives in the plan's `## Meta` `optimize(<node-id>)` block, and a change-gate `adversarial-verifier` reproduces the final metric before finalize.
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -215,9 +229,10 @@ differs from the agent's frontmatter). **After installing or re-running
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
 >   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `knowledge-lookup`,
->   `doc-updater`, `adversarial-verifier`) run silently. Opus-dispatched agents (`planner`,
->   `code-architect`, `code-reviewer`, `security-reviewer` on the default
->   `higher` profile) badge as expected.
+>   `doc-updater`, `adversarial-verifier`, `contractor`, `metric-optimizer`) run silently.
+>   Opus-dispatched agents (`planner`, `workflow-planner`, `synthesizer`, plus
+>   `code-architect`, `code-reviewer`, `security-reviewer`, and `issue-scout` on the
+>   default `higher` profile) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
 >
 > The badge is a model-switch indicator: it renders when the subagent's model
@@ -298,21 +313,21 @@ cd Kaola-Workflow
 
 #### Agent profiles
 
-The default profile is `higher`: `code-architect`, `code-reviewer`, and
-`security-reviewer` install on Opus (deeper threat modeling and architecture
-analysis; roughly 3× cost for those three agents). All other agents are
-unaffected. The `common` profile (those three on Sonnet) must be requested
-explicitly with `--profile=common`.
+The default profile is `higher`: `code-architect`, `code-reviewer`,
+`security-reviewer`, and `issue-scout` install on Opus (deeper threat modeling,
+architecture analysis, and backlog clustering; roughly 3× cost for those four
+agents). All other agents are unaffected. The `common` profile (those four on
+Sonnet) must be requested explicitly with `--profile=common`.
 
 ```bash
 ./install.sh                              # GitHub edition, higher profile (Opus reviewers) by default
 ./install.sh --forge=gitlab               # GitLab edition, higher profile by default
 ```
 
-To install the three reviewer agents on Sonnet, request the `common` profile:
+To install the four profile-governed agents on Sonnet, request the `common` profile:
 
 ```bash
-./install.sh --profile=common             # Sonnet assignments for the three reviewer agents
+./install.sh --profile=common             # Sonnet assignments for the four profile-governed agents
 ```
 
 #### Adaptive workflow path
@@ -705,11 +720,11 @@ This is Kaola-Workflow's primary design. For most issues — from a one-line fix
 KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — startup records `run_posture: worktree` in the `## Sink` block, derived from the actual worktree resolution; the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — startup records `run_posture: worktree` in the `## Sink` block, derived from the actual worktree resolution; the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG, per-node `## Node Briefs`, plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
 
-The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
+Beyond the vendored set, the adaptive path adds locally-authored roles: `adversarial-verifier` (a read-only, refute-by-default skeptic used in verification fan-outs — never a review gate, touches zero repository files), `synthesizer` (parallel-write convergence on a real merge conflict), and `metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the `workflow-planner`/`contractor`/`issue-scout` orchestration roles described in [Workflow roles](#workflow-roles).
 
-**Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `issue-scout`, recorded as `goal_check` in the closure receipt). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
+**Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `issue-scout`, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
 
 #### Supported adaptive patterns
 
@@ -744,6 +759,8 @@ The executor runs **one FRONTIER UNIT at a time** rather than strictly one node 
 **`workflow-planner` now authors efficient DAGs**: expose independent work as siblings (a shared ready frontier) so the executor can open them together; serialize only for true dependencies, shared file lanes, selectors, loops, or gates.
 
 **Running-set scheduler (#377):** the executor tracks a *running set* — the set of nodes currently open and executing. Serial execution is simply the running set at a concurrency ceiling of one; a fan-out raises the cap up to `FANOUT_CAP` (write, default 4) or `FANOUT_CAP_READONLY` (read-only, default 8). `open-ready` enters a node into the running set, `close-node` removes it, and `reconcile-running-set` repairs the set after a crash. There is no separate "serial mode" — serial is just the running-set scheduler with a cap of one. The prior standalone `parallel-batch` aggregator was retired (D-586-01): it was off the live executor path (nothing shelled it), and the running-set scheduler above already owns the frontier path in full, including default-on disjoint write co-open.
+
+**Read∥write co-open (#622/#641):** read and write frontiers may also overlap, in both directions. A read node co-opens behind a live leg-contained write, and a leg-contained write co-opens *behind live reads*, whenever four fail-closed preconditions hold (leg-coupled write, clean parent tree, disjointness proven, no live lane group) — any miss returns the byte-identical serial hold with a typed `serialDegradeReason` explaining why. A consent-tier `observes: scratch` plan annotation additionally lets a legless docs writer co-open behind a scratch-only `adversarial-verifier` gate. The `merge_awaits_read_drain` fence is the isolation net: each leg's merge is held until live reads drain, so the parent tree the reads observe stays untouched.
 
 For the design history, see `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
@@ -852,7 +869,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `sink-fallback` | `node scripts/kaola-workflow-claim.js sink-fallback --project <name> [--reason <text>]` | Records merge-impossible fallback; updates Sink block to sink: pr; writes .cache/sink-fallback.json |
 | `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when the forge reports MERGED or CLOSED. GitLab edition uses `watch-mr` (`kaola-gitlab-workflow-claim.js watch-mr`) instead. |
 | `stale-worktree-check` | `node scripts/kaola-workflow-claim.js stale-worktree-check` | Detects and reports worktrees and branches for closed or archived issues that are not currently active |
-| `stale-worktree-cleanup` | `node scripts/kaola-workflow-claim.js stale-worktree-cleanup [--execute] [--archive] [--export] [--force] [--keep-branch]` | Removes stale worktrees and branches found by `stale-worktree-check`. Dry-run by default; `--execute` performs removal. For dirty worktrees: `--archive` stashes changes first (recoverable via `git stash list`), `--export` writes a patch to `kaola-workflow/archive/exports/`, `--force` discards. `--keep-branch` removes the worktree but keeps the branch (for open PRs). No strategy flag = dirty worktrees are skipped. When multiple strategy flags given, precedence is: archive > export > force. |
+| `stale-worktree-cleanup` | `node scripts/kaola-workflow-claim.js stale-worktree-cleanup [--execute] [--archive] [--export] [--force] [--keep-branch]` | Removes stale worktrees and branches found by `stale-worktree-check`. Dry-run by default; `--execute` performs removal. For dirty worktrees: `--archive` stashes changes first (recoverable via `git stash list`), `--export` writes a patch to `kaola-workflow/archive/exports/`, `--force` discards. `--keep-branch` removes the worktree but keeps the branch (for open PRs). No strategy flag = dirty worktrees are skipped. When multiple strategy flags given, precedence is: archive > export > force. A branch that cannot be *proven* merged is never deleted — it is reported `skipped_unmerged` with its tip SHA for manual recovery. |
 | `audit-labels` | `node scripts/kaola-workflow-claim.js audit-labels` | Scans for closed issues that still carry `workflow:in-progress` label; outputs JSON with stale issues and count |
 | `repair-labels` | `node scripts/kaola-workflow-claim.js repair-labels [--execute]` | Finds and removes `workflow:in-progress` labels from closed issues. Dry-run by default; `--execute` performs actual removal |
 | `worktree-status` / `worktree-finalize` | see `--help` usage errors | Lists workflow worktrees and mirrors final artifacts into the linked worktree |
