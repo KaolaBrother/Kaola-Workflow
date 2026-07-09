@@ -2368,6 +2368,41 @@ function computeCodeTreeHash(root, project, testConsumedExtra) {
   lines.sort();
   return crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
 }
+
+const STALE_PATHS_LIMIT = 20;
+function computeChainsStaleDiagnostics(root, project, receipt) {
+  if (!receipt || typeof receipt !== 'object') return null;
+  const stampedHead = String(receipt.headSha || '').trim();
+  if (!stampedHead || receipt.workTreeHash !== 'clean') return null;
+  const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+  let diffOut = '';
+  let untrackedOut = '';
+  try {
+    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, '--name-only'], { encoding: 'utf8' });
+    untrackedOut = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
+  } catch (_) {
+    return null;
+  }
+  const seen = new Set();
+  const paths = [];
+  for (const raw of (diffOut + '\n' + untrackedOut).split('\n')) {
+    const rel = String(raw || '').trim().replace(/^\.\//, '');
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    if (!isValidationInvisible(rel, project, extra)) paths.push(rel);
+  }
+  if (!paths.length) return null;
+  paths.sort();
+  const proseCount = paths.filter(p => testConsumes(p, extra)).length;
+  const staleKind = proseCount === paths.length ? 'prose-only' : (proseCount === 0 ? 'code' : 'mixed');
+  const out = { stale_paths: paths.slice(0, STALE_PATHS_LIMIT), stale_kind: staleKind };
+  if (paths.length > STALE_PATHS_LIMIT) out.stale_paths_truncated = true;
+  return out;
+}
+function attachChainsStaleDiagnostics(payload, root, project, receipt) {
+  const diag = computeChainsStaleDiagnostics(root, project, receipt);
+  return diag ? Object.assign(payload, diag) : payload;
+}
 // #239 (v3.21.0): a per-node baseline must SURVIVE `git gc` between node-start and the barrier (an
 // explicit `gc --prune=now`, or default gc on a >2-week-paused resume — the exact resume case this
 // targets). A bare `write-tree` object is unreachable and therefore prunable, which bricked the node.
@@ -3151,13 +3186,17 @@ function main() {
         try { hashRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { hashRoot = root; }
         const currentCodeTree = flagVal('--current-code-tree') || computeCodeTreeHash(hashRoot, projTag, extra);
         if (!currentCodeTree || String(receipt.codeTreeHash).trim() !== currentCodeTree) {
-          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt codeTreeHash "' + receipt.codeTreeHash + '" != current code-tree hash "' + (currentCodeTree || '(unresolved)') + '" — code (or test-consumed prose) changed since the chains ran; regenerate the receipt'] }) : 'typed refusal: chains_stale (codeTree ' + receipt.codeTreeHash + ' != ' + (currentCodeTree || 'unresolved') + ')') + '\n');
+          const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt codeTreeHash "' + receipt.codeTreeHash + '" != current code-tree hash "' + (currentCodeTree || '(unresolved)') + '" — code (or test-consumed prose) changed since the chains ran; regenerate the receipt'] }, hashRoot, projTag, receipt);
+          process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: chains_stale (codeTree ' + receipt.codeTreeHash + ' != ' + (currentCodeTree || 'unresolved') + ')') + '\n');
           process.exitCode = 1; return;
         }
       } else {
-        const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
+        let headRoot = root;
+        try { headRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { headRoot = root; }
+        const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', headRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
         if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
-          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+          const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }, headRoot, projTag, receipt);
+          process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
           process.exitCode = 1; return;
         }
       }

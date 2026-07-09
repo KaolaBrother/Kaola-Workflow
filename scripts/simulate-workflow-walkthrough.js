@@ -3646,18 +3646,92 @@ function testBundle424432433ValidatorGates() {
     } finally { cleanup(grepo); } }
 
   // --- #547 (D-547-01, d) ACCURACY (real git): a CODE commit after the chains ran flips the code-tree
-  //     hash → chains_stale (early regression detection retained).
+  //     hash → chains_stale (early regression detection retained), with a best-effort culprit payload.
   { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
     try {
       const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
-      writeReceipt(proj, { headSha: headOf(grepo), codeTreeHash: h0, validationTestConsumes: [],
+      writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'clean', codeTreeHash: h0, validationTestConsumes: [],
         chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
       fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 1;\n');
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'code change'], { cwd: grepo, encoding: 'utf8' });
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
-      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
-        '#547 (d): a code commit after the chains ran must refuse chains_stale, got status ' + r.status + ' ' + r.stdout);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_kind === 'code'
+        && JSON.stringify(out.stale_paths) === JSON.stringify(['newcode.js']),
+        '#547 (d): a code commit after the chains ran must refuse chains_stale with code stale_paths, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- stale culprit diagnostics: validation-consumed prose is reported as prose-only stale.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const extra = ['docs/custom.md'];
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', extra);
+      writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'clean', codeTreeHash: h0, validationTestConsumes: extra,
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      fs.mkdirSync(path.join(grepo, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'docs', 'custom.md'), 'contracted prose\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'validation prose change'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_kind === 'prose-only'
+        && JSON.stringify(out.stale_paths) === JSON.stringify(['docs/custom.md']),
+        'stale culprit diagnostics: validation-consumed prose must report prose-only stale_paths, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- stale culprit diagnostics: code + validation-consumed prose is reported as mixed stale.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const extra = ['docs/custom.md'];
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', extra);
+      writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'clean', codeTreeHash: h0, validationTestConsumes: extra,
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      fs.mkdirSync(path.join(grepo, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'docs', 'custom.md'), 'contracted prose\n');
+      fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 2;\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'mixed stale change'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_kind === 'mixed'
+        && JSON.stringify(out.stale_paths) === JSON.stringify(['docs/custom.md', 'newcode.js']),
+        'stale culprit diagnostics: code plus validation-consumed prose must report mixed stale_paths, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- stale culprit diagnostics: an unresolvable stamped head degrades to the generic stale refusal.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
+      writeReceipt(proj, { headSha: '0000000000000000000000000000000000000001', workTreeHash: 'clean',
+        codeTreeHash: h0, validationTestConsumes: [], chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 3;\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'code change after bad receipt head'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_paths === undefined && out.stale_kind === undefined && out.stale_paths_truncated === undefined,
+        'stale culprit diagnostics: an unresolvable receipt head must degrade to generic chains_stale, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- stale culprit diagnostics: a dirty-stamped receipt degrades to the generic stale refusal.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
+      writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'dirty', codeTreeHash: h0, validationTestConsumes: [],
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 4;\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'code change after dirty receipt'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_paths === undefined && out.stale_kind === undefined && out.stale_paths_truncated === undefined,
+        'stale culprit diagnostics: a dirty-stamped receipt must degrade to generic chains_stale, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   // --- #424 (3, finalize sweep) UNATTRIBUTED_CHANGE: a branch change owned by NO complete node and
