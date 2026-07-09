@@ -6,10 +6,11 @@ Changed behavior:
 
 Docking audit:
 - CHANGELOG.md has a #647 entry under 6.21.0 Fixed.
-- README.md and docs/ do not expose the internal parseTomlTableName helper or document the broken table-state behavior as a public contract.
+- After rebasing onto origin/main f05f15f7, the issue branch has no README.md diff. README.md and docs/ do not expose the internal parseTomlTableName helper or document the broken table-state behavior as a public contract.
 - .env.example is not involved; this change reads Codex TOML config, not project environment variables.
 - kaola-workflow/ROADMAP.md validates and was refreshed with `node scripts/kaola-workflow-roadmap.js generate` -> up-to-date.
 
 Evidence:
 - kaola-workflow/issue-647/.cache/n2-codex-runtime-evidence.md records the official Codex manual/local runtime evidence.
-- kaola-workflow/issue-647/.cache/final-validation.md records the green self-host chain receipt.
+- kaola-workflow/issue-647/.cache/doc-updater.md records `docs_updated: no`.
+- kaola-workflow/issue-647/.cache/final-validation.md records that the pre-rebase receipt was green but the post-rebase self-host finalize gate is blocked as chains_stale and was not rerun by user instruction.
