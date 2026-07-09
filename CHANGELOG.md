@@ -6,6 +6,10 @@
 
 - README refreshed to match the shipped v6.21.0 surface: the Philosophy section now states the five first-principles axioms (`templates/axioms.md`, #645) instead of the pre-axiom three-priority list; the workflow-roles table gains the missing `synthesizer` and `metric-optimizer` rows with role paragraphs (#463, #634); `issue-scout` is documented as profile-governed (Opus under the default `higher` profile, #646) and the "three reviewer agents" profile prose updated to four; the adaptive sections document the `## Node Briefs` node-to-node channel + close-time consumed-proof (#642), the completed per-role evidence contract (#643), and the read∥write co-open relaxation with typed `serialDegradeReason` (#622/#641); `stale-worktree-cleanup` documents the `skipped_unmerged` never-delete-unproven-work guard (#620). Documentation-only.
 
+### Fixed
+
+- **Finalize-tail validation now avoids blind repeat four-chain runs where the workflow can reason about freshness — #648.** The plan-run/finalize runtime prose now makes the self-host chain receipt stamp the last pre-Finalization action after all code and test-consumed prose land, and clarifies that workflow state plus inert, non-test-consumed docs do not stale the receipt. `plan-validator --finalize-check --json` keeps the fail-closed `reason: "chains_stale"` contract but may add best-effort `stale_paths`, `stale_paths_truncated`, and `stale_kind` diagnostics for clean, resolvable stamped receipts; unresolvable or dirty stamped receipts degrade to the prior generic stale refusal. Consumer final-validation prose now allows a truthful citation of an unchanged terminal change-gate validation run (`source: cited:<node-id>`, `validated_command`, `validated_at_head`, `reuse_boundary`) while leaving the machine gate unchanged: column-0 `verdict: pass` remains the parsed requirement. Decision record: `docs/decisions/D-648-01.md`. Cross-edition: generated validator ports and routing surfaces stayed in sync; walkthrough coverage includes code/prose/mixed stale diagnostics, truncation, inert-doc freshness, and degradation cases.
+
 ## [6.21.0] - 2026-07-09
 
 ### Added

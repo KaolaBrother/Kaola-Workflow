@@ -3663,6 +3663,28 @@ function testBundle424432433ValidatorGates() {
         '#547 (d): a code commit after the chains ran must refuse chains_stale with code stale_paths, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
+  // --- stale culprit diagnostics: emitted paths are capped and marked truncated when the culprit set is large.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
+      writeReceipt(proj, { headSha: headOf(grepo), workTreeHash: 'clean', codeTreeHash: h0, validationTestConsumes: [],
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      fs.mkdirSync(path.join(grepo, 'many'), { recursive: true });
+      for (let i = 0; i < 25; i++) {
+        fs.writeFileSync(path.join(grepo, 'many', 'file-' + String(i).padStart(2, '0') + '.js'), 'module.exports = ' + i + ';\n');
+      }
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'many code changes'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      const out = JSON.parse(r.stdout);
+      const expectedPaths = Array.from({ length: 20 }, (_, i) => 'many/file-' + String(i).padStart(2, '0') + '.js');
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_kind === 'code'
+        && out.stale_paths_truncated === true
+        && JSON.stringify(out.stale_paths) === JSON.stringify(expectedPaths),
+        'stale culprit diagnostics: more than 20 stale paths must be capped with stale_paths_truncated, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
   // --- stale culprit diagnostics: validation-consumed prose is reported as prose-only stale.
   { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
     try {
