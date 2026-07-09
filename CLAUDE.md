@@ -10,17 +10,23 @@ Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, G
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
 - Active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and per-node `.cache/{node-id}.md` evidence; the `fast` path's optional `fast-summary.md` is an install-time opt-in.
 
+## First Principles
+
+These are the workflow's tie-breaking axioms, applied in priority order whenever a situation is not already resolved by a specific rule, gate, or refusal.
+
+1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome.
+2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
+3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and higher model tiers are means, not goals.
+4. **Machines decide facts; humans decide values.** Route irreversible or value-laden calls to the consent valve; leave everything checkable to run automatically.
+5. **Own your own verdicts.** Never let a system the workflow does not own (CI, an external service) be the judge of done.
+
+**Tie-breaker protocol:** when no shipped rule covers a situation, resolve it by walking these axioms in order and record a one-line derivation in the node's evidence file. This derivation is optional — its absence never blocks a gate.
+
+**Tighten-only boundary:** an axiom may only make an agent stricter, never looser. Never cite an axiom to skip a typed gate, refusal, or barrier — gates define the allowed space; axioms only break ties inside it.
+
 ## Workflow Design Principles
 
-**Design theory.** Kaola-Workflow exists to enhance what agents do — more automation, less human toil, shorter wall-clock — **without ever sacrificing accuracy.** Every mechanism is a *means*, ordered by this precedence when they conflict:
-
-1. **Accuracy is non-negotiable** — never trade correctness for speed or cost; rework is the most expensive outcome of all.
-2. **Then automation & efficiency** — remove human steps and shorten makespan.
-3. **Then the cheapest sufficient mechanism** — parallelism, speculation, extra agents, and higher model tiers are means, not goals. Pick the simplest one that achieves 1–2; don't over-engineer, and don't spend tokens a smaller approach wouldn't. Size fan-out width, agent count, and model tier to the *genuine scope* of the work.
-
-Parallelism is one such means: powerful when work genuinely decomposes, wasteful when forced — over-fanning burns tokens and context for no accuracy or makespan gain.
-
-### Agent Owns Reasoning; Scripts Own Atomicity (issue #44)
+### Agent Owns Reasoning; Scripts Own Atomicity
 
 Issue selection is an agent decision, not a hidden script decision.
 
@@ -29,25 +35,25 @@ Issue selection is an agent decision, not a hidden script decision.
 - **Startup scripts validate, not select**: `cmdStartup`, `cmdPickNext`, and `cmdBootstrap` now require explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
 - **Ambiguity handling**: When next issue is ambiguous or conflicts with active state, ask or stop. Do not let a script silently choose.
 
-### Maximize Workflow Efficiency by Faithful Decomposition (#472, #463, #439, #486)
+### Maximize Workflow Efficiency by Faithful Decomposition
 
 The objective is **minimum makespan and minimum wasted work at fixed correctness.** Efficiency comes from faithfully decomposing a task into its genuinely-independent units and running them at the highest *safe* concurrency — **not** from maximizing fan-out width (over-fanning fragments context and adds synthesis overhead — itself a cost), and **not** from cutting correctness gates (rework is the most expensive inefficiency of all). The adaptive path composes a task-shaped DAG for *any* shape of work; serve a new shape by composing existing roles, never a special-case lane.
 
-- **Decompose to genuine independence, then dispatch concurrently** — fan out exactly as wide as the task decomposes, no wider, no narrower (width is the planner's call, #472). Reserve `sequence` for true dependencies.
-- **Read frontiers run concurrently today** (shipped #472 seam — `code-explorer`, `knowledge-lookup`, `adversarial-verifier`; the `adversarial-verifier` majority-refute fan-out, `plan-validator.js:688-707`, is the parallel-skeptic shape). **Planner-proven-disjoint (`parallel_safe` antichain) write** frontiers co-open in isolated legs BY DEFAULT (#463 landed; D-542-01) — contained per-leg + reconciled by the synthesizer; only uncertain/overlapping writes stay serial (or consent-gated).
-- **Schedule critical-path-first; right-size the model tier** (don't spend Opus where Sonnet suffices — raise only at the reasoning floor); consider speculative-open (#439, `speculative_open_policy`) where a gate is very likely to pass.
-- **Correctness is efficiency.** Fail-closed gates + adversarial verify prevent the rework that dwarfs any parallelism win. Investigation composes as probe → assume → adversarial critique → converge (read phases fanned out; shape-first read-only then re-plan when the shape depends on findings, freeze-once). Question/bug-shaped handling is designed in **#486** (not yet shipped).
-- **Escalate values, not facts** — route value / standing / irreversible calls to the `consent`-halt valve; never bolt an approval gate onto the planner (planner-first, #44/#287).
+- **Decompose to genuine independence, then dispatch concurrently** — fan out exactly as wide as the task decomposes, no wider, no narrower. Reserve `sequence` for true dependencies.
+- **Read frontiers run concurrently today** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`; the `adversarial-verifier` majority-refute fan-out is the parallel-skeptic shape). **Planner-proven-disjoint (`parallel_safe` antichain) write** frontiers co-open in isolated legs by default — contained per-leg + reconciled by the synthesizer; only uncertain/overlapping writes stay serial or consent-gated.
+- **Schedule critical-path-first; right-size the model tier** (don't spend Opus where Sonnet suffices — raise only at the reasoning floor); consider `speculative_open_policy` where a gate is very likely to pass.
+- **Correctness is efficiency.** Fail-closed gates + adversarial verify prevent the rework that dwarfs any parallelism win. Investigation composes as probe → assume → adversarial critique → converge (read phases fanned out; shape-first read-only then re-plan when the shape depends on findings, freeze-once). Question/bug-shaped handling is not yet shipped.
+- **Escalate values, not facts** — route value / standing / irreversible calls to the `consent`-halt valve; never bolt an approval gate onto the planner.
 
-### Self-Sufficient by Default; CI/CD Is Not a Gate (#501)
+### Self-Sufficient by Default; CI/CD Is Not a Gate
 
 Minimize **synergy** (coupling to systems the workflow does not own); maximize **independence**. A run must complete on a repo with **no CI/CD configured**, with no degradation.
 
 - **CI/CD is never a required gate** — not a plan node, not a finalization precondition, not something the orchestrator / `--sink` / finalize waits on or blocks on. Coupling correctness to an external pipeline assumes infrastructure that may not exist and hands the verdict to a system we don't own.
 - **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
-- **Accuracy still comes from inside** — this does not weaken precedence #1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*. Same direction as the consumer finalize gate (push validation inward to agent checks, retire external chain/CI receipts — #475/#464).
+- **Accuracy still comes from inside** — this does not weaken axiom 1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*.
 
-### Adaptive Is the Default; Don't Make the Agent Pick a Path (#538)
+### Adaptive Is the Default; Don't Make the Agent Pick a Path
 
 The orchestrator should not spend tokens or wall-clock deciding between adaptive / fast / full on every run. Adaptive just runs.
 
@@ -60,12 +66,12 @@ The orchestrator should not spend tokens or wall-clock deciding between adaptive
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
 - `scripts/kaola-workflow-roadmap.js` — roadmap generation from GitHub issues
-- `scripts/kaola-workflow-plan-validator.js` — adaptive-path (#227) plan validator: closed-library + three-shape grammar + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`/`--freeze-checked`/`--governance-ack`); `plan_hash` lives inside `workflow-plan.md`. Emits a typed `reason` field in `barrierCheck` output (the emit envelope — precedence-ordered failure family so callers classify structurally, never by string-match). Toggle-agnostic.
+- `scripts/kaola-workflow-plan-validator.js` — adaptive-path plan validator: closed-library + three-shape grammar + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`/`--freeze-checked`/`--governance-ack`); `plan_hash` lives inside `workflow-plan.md`. Emits a typed `reason` field in `barrierCheck` output (the emit envelope — precedence-ordered failure family so callers classify structurally, never by string-match). Toggle-agnostic.
 - `scripts/kaola-workflow-adaptive-schema.js` — adaptive-path forge-neutral constants + toggle resolution; byte-identical across all four editions (cross-edition drift anchor).
 - `scripts/kaola-workflow-next-action.js` — adaptive aggregator: ready-set / next node / resolved model from a frozen `workflow-plan.md` (n/a-aware; typed refusal on a stalled/corrupt DAG). Shelled by `kaola-workflow-adaptive-node.js`.
 - `scripts/kaola-workflow-commit-node.js` — adaptive aggregator: composes the per-node barrier choreography (`--record-base` → `--barrier-check` + `--gate-verify`) by shelling the plan-validator. Shelled by `kaola-workflow-adaptive-node.js`; fails closed on a missing baseline; never mutates the ledger/state.
-- `scripts/kaola-workflow-adaptive-handoff.js` — adaptive aggregator (#255): collapses the planner freeze/orient chain into ONE mechanical transaction. `--freeze-checked --json` (SPAWN 1) validates and returns the governance payload WITHOUT writing; `--freeze --governance-ack <planHash> --json` (SPAWN 2) re-validates, asserts hash unchanged (`governance_ack_stale` refuse on tamper), writes atomically, and folds `--resume-check` into its emission. Branches on validator `result` (in-grammar → freeze + roadmap + Planning Evidence → `ready_to_run`; refuse → `plan_invalid`, no mutation). Does NOT open node1 or record its baseline — plan-run owns the full node lifecycle. `decision:ask` is audit metadata, not a gate. Run by the `workflow-planner`; the orchestrator drives the bounded repair loop on `plan_invalid`.
-- `scripts/kaola-workflow-adaptive-node.js` — adaptive aggregator (#272): owns the per-node lifecycle for `/kaola-workflow-plan-run` (subcommands: `orient` [read-only], `open-next` [ledger + baseline], `open-ready` [running-set scheduler open], `record-evidence` [.cache], `close-and-open-next` [evidence-check + barrier + close + compliance + selector + fused advance], `close-node` [running-set scheduler close], `reconcile-running-set` [crash repair for running-set], `write-halt` [consent/security/test_thrash escalation]). Runs a layered guard prologue (#383 mutual-exclusion guard) before every mutating subcommand: integrity → consent-halt fence → live-coordination mutual exclusion → body. `--freeze-checked`/`--governance-ack` are handled by `kaola-workflow-adaptive-handoff.js` (not this script). Pure composition over `next-action.js` + `commit-node.js` + `plan-validator.js`; never imports-and-mutates them. Runs every node including the first. Ships in 4 editions; registered in COMMON_SCRIPTS and all three install.sh SUPPORT_SCRIPT_NAMES blocks.
+- `scripts/kaola-workflow-adaptive-handoff.js` — adaptive aggregator: collapses the planner freeze/orient chain into ONE mechanical transaction. `--freeze-checked --json` validates and returns the governance payload WITHOUT writing; `--freeze --governance-ack <planHash> --json` re-validates, asserts hash unchanged (`governance_ack_stale` refuse on tamper), writes atomically, and folds `--resume-check` into its emission. Branches on validator `result` (in-grammar → freeze + roadmap + Planning Evidence → `ready_to_run`; refuse → `plan_invalid`, no mutation). Does NOT open node1 or record its baseline — plan-run owns the full node lifecycle. `decision:ask` is audit metadata, not a gate. Run by the `workflow-planner`; the orchestrator drives the bounded repair loop on `plan_invalid`.
+- `scripts/kaola-workflow-adaptive-node.js` — adaptive aggregator: owns the per-node lifecycle for `/kaola-workflow-plan-run` (subcommands: `orient` [read-only], `open-next` [ledger + baseline], `open-ready` [running-set scheduler open], `record-evidence` [.cache], `close-and-open-next` [evidence-check + barrier + close + compliance + selector + fused advance], `close-node` [running-set scheduler close], `reconcile-running-set` [crash repair for running-set], `write-halt` [consent/security/test_thrash escalation]). Runs a layered guard prologue before every mutating subcommand: integrity → consent-halt fence → live-coordination mutual exclusion → body. `--freeze-checked`/`--governance-ack` are handled by `kaola-workflow-adaptive-handoff.js` (not this script). Pure composition over `next-action.js` + `commit-node.js` + `plan-validator.js`; never imports-and-mutates them. Runs every node including the first. Ships in 4 editions; registered in COMMON_SCRIPTS and all three install.sh SUPPORT_SCRIPT_NAMES blocks.
 
 ## Running Tests
 ```bash
@@ -105,15 +111,15 @@ npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
 - Verify facts, don't fabricate: do not guess API/library behavior, interfaces, or signatures — confirm them against documentation, source, or a run before relying on them. Do not claim to understand code, errors, or requirements you have not verified; name what you do not know and find out.
 - Reuse before adding: before writing a new interface, search for an existing equivalent and extend it rather than duplicate functionality.
 - Escalate irreversible changes: do not unilaterally make hard-to-reverse changes or alter a user-owned contract (public API, schema or data migration, dependency or build-tooling swap, deletion of working capability); state the decision and its evidence, then get confirmation before proceeding.
-- **Keep provenance out of agent-facing prompts.** Agent definitions, commands, and skills carry the *rule*, never its origin — no issue refs (`#NNN`), decision IDs (`D-NNN-NN`), invariant tags (`[INV-NN]`), or ADR citations in those surfaces (dispatch-time noise). Provenance belongs in `CHANGELOG.md`, `docs/decisions/`, and commit messages. Runtime target-issue variables (`KAOLA_TARGET_ISSUE=N`, `"issue N"`) are not provenance. See `docs/conventions.md`.
+- **Keep provenance out of agent-facing prompts.** Agent definitions, commands, and skills carry the *rule*, never its origin — no issue refs, decision IDs, invariant tags, or ADR citations in those surfaces. Provenance belongs in `CHANGELOG.md`, `docs/decisions/`, and commit messages. Runtime target-issue variables (`KAOLA_TARGET_ISSUE=N`, `"issue N"`) are not provenance. See `docs/conventions.md`.
 
 ## Validation Policy
 
 - Background hooks (pre-commit, subagent-dispatch-log) are advisory; do not re-run their checks redundantly.
 - Verify with `node scripts/simulate-workflow-walkthrough.js` before claiming workflow-related changes complete.
-- **Cross-edition diffs require all four chains green (#307).** A diff touching the edition trees (`plugins/kaola-workflow-{gitlab,gitea}/`, the codex/forge contract validators, or any edition-port script) MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green — run sequentially — recorded before Finalization. A green claude chain alone is **insufficient evidence**: `npm test` chains the four with `&&`, so it short-circuits on the first failure and a red codex/gitlab/gitea chain behind a green claude one is never reached. See `docs/conventions.md`.
-- **Adaptive / routing / finalize-wiring prose propagates to SIX surfaces (#400)** — the 3 Claude commands + the 3 Codex SKILL packs (incl. the two forge-codex SKILL packs, the historic dead zone). A change reaching only 4 of 6 (the CHANGELOG "×4" wording is the symptom) is a propagation gap; the route-reachability contract (`scripts/test-route-reachability.js` + all four `validate-*-contracts.js`) machine-enforces it. See `docs/conventions.md` § Routing / adaptive prose.
-- **opencode edition is additive (D-530-02)** — a runtime edition, not a forge: it is **not** wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX routing surfaces. An opencode-only diff triggers **no** #307 four-chain obligation; run its own suite (`node scripts/test-opencode-edition.js`) instead.
+- **Cross-edition diffs require all four chains green.** A diff touching the edition trees (`plugins/kaola-workflow-{gitlab,gitea}/`, the codex/forge contract validators, or any edition-port script) MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green — run sequentially — recorded before Finalization. A green claude chain alone is **insufficient evidence**: `npm test` chains the four with `&&`, so it short-circuits on the first failure and a red codex/gitlab/gitea chain behind a green claude one is never reached. See `docs/conventions.md`.
+- **Adaptive / routing / finalize-wiring prose propagates to SIX surfaces.** The propagation surfaces are the 3 Claude commands + the 3 Codex SKILL packs, including the two forge-codex SKILL packs. A change reaching only 4 of 6 is a propagation gap; the route-reachability contract (`scripts/test-route-reachability.js` + all four `validate-*-contracts.js`) machine-enforces it. See `docs/conventions.md` § Routing / adaptive prose.
+- **opencode edition is additive.** It is a runtime edition, not a forge: it is **not** wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX routing surfaces. An opencode-only diff triggers no four-chain obligation; run its own suite (`node scripts/test-opencode-edition.js`) instead.
 
 ## Documentation Map
 
