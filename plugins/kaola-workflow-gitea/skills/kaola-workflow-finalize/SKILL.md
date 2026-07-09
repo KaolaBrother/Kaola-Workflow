@@ -71,23 +71,26 @@ the script-enforced barrier. Run /kaola-workflow-plan-run first.`
 
 ### Chain-Receipt Gate
 
-Finalization is **machine-gated** on a fresh, valid chain receipt. Before
-proceeding past the prerequisite check, verify `.cache/chain-receipt.json` and
-stop with a typed refusal if any of the following are true (checked in
-precedence order):
+Finalization is **machine-gated** on a fresh, valid chain receipt. The main session stamps that
+receipt after all code changes and test-consumed prose/docs for the final candidate have landed, as
+the last action before Finalization. Before proceeding past the prerequisite check, verify
+`.cache/chain-receipt.json` and stop with a typed refusal if any of the following are true (checked
+in precedence order):
 
 - **`chains_unverified`** — `.cache/chain-receipt.json` is absent. No chains have
   been run through the gated runner; prose attestation is not accepted.
   Remedy: the orchestrator (main session) must run `kaola-workflow-run-chains.js`
-  (resolved the same way as `validator_script` above) after the last commit so the
-  receipt is written and `headSha` matches HEAD. Do NOT delegate this to the contractor
+  (resolved the same way as `validator_script` above) after the final candidate is assembled so the
+  receipt is written against the current HEAD. Do NOT delegate this to the contractor
   subagent — the contractor only verifies.
 - **`chains_stale`** — the receipt's `codeTreeHash` no longer matches the current
   code-relevant tree: code or a chain-asserted doc changed since the chains ran.
-  A docs-only / workflow-state commit does NOT trigger it; a legacy receipt without
-  `codeTreeHash` falls back to the `headSha`-vs-HEAD pin.
+  Workflow state and inert, non-test-consumed docs do NOT trigger it; a legacy receipt without
+  `codeTreeHash` falls back to the `headSha`-vs-HEAD pin. Diagnostics may identify stale paths or
+  a stale kind, but the remedy is still a full restamp.
   Remedy: the orchestrator (main session) must re-run `kaola-workflow-run-chains.js`
-  to regenerate the receipt against HEAD. Do NOT delegate this to the contractor subagent.
+  to regenerate the receipt against HEAD. Do NOT patch the receipt, and do NOT delegate this to
+  the contractor subagent.
 - **`chains_red`** — at least one chain has a non-zero exit code and
   `accepted_red: false`. A real failing chain that has not been explicitly waived
   blocks finalization.
@@ -104,6 +107,10 @@ A consumer repo whose validation is not npm-based (no `test:kaola-workflow:*` sc
 `package.json`) does **NOT** run `kaola-workflow-run-chains.js` — the agent owns verification. It records `.cache/final-validation.md` with a column-0 **`verdict: pass`**, and
 `--finalize-check` (consumer mode, auto-detected by the absent npm scripts) gates on that file:
 `final_validation_unverified` if it is absent, `final_validation_failed` if it lacks `verdict: pass`.
+If an unchanged terminal change-gate validation run covers the final candidate, the agent may cite
+that run instead of rerunning by recording column-0 `verdict: pass`, `source: cited:<node-id>`,
+`validated_command`, `validated_at_head`, and `reuse_boundary`. Any doubt about the boundary means
+run the command.
 The attribution sweep runs for **both** repo kinds. The v6.2.0 `kaola-workflow/chains.json` opt-in
 is **retired** — there is no middle-ground; a consumer repo finalizes on the agent's evidence.
 
@@ -154,7 +161,7 @@ choices, or ambiguity that blocks correctness.
 
 ## Required Steps
 
-1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build); on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence. Save output to `.cache/final-validation.md`.
+1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build) after all test-consumed prose/docs and code changes have landed, as the last pre-Finalization action; on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence with `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. Save output to `.cache/final-validation.md`. Any doubt about the boundary means run the command.
 <!-- PIN: fast-compliance-backstop -->
 2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a real delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real evidence path or skip\_reason — not `pending`, `invoked` without evidence, or bare `N/A` without skip\_reason — whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` with a documented skip\_reason is allowed only for the trivial band (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script refusal enforces this fail-closed at `summary-write` time; this step is a second-line gate.
    ```bash
@@ -207,15 +214,21 @@ choices, or ambiguity that blocks correctness.
 
    - **Self-host (npm)** — the repo's `package.json` declares the `test:kaola-workflow:*`
      scripts: run `kaola-workflow-run-chains.js` (main session, resolved the same way as
-     `claim_script` above) to produce `.cache/chain-receipt.json` bound to the current HEAD.
-     The contractor only VERIFIES the receipt — it does not run the chains. `cmdFinalize`
-     (Step 8b) enforces the finalize gate fail-closed before the archive rename; the contractor
-     will return `finalize_gate_unverified` if the receipt is absent, stale, or red.
+     `claim_script` above) after all test-consumed prose/docs and code changes have landed, as the
+     last pre-Finalization action. The contractor only VERIFIES the resulting
+     `.cache/chain-receipt.json` — it does not run the chains. `cmdFinalize` (Step 8b) enforces the
+     finalize gate fail-closed before the archive rename; the contractor will return
+     `finalize_gate_unverified` if the receipt is absent, stale, or red. If `chains_stale` fires,
+     rerun the full gated runner; validation-invisible workflow state and inert docs do not stale
+     the receipt.
    - **Consumer (non-npm)** — the repo has no `test:kaola-workflow:*` scripts: do **NOT**
      invoke `kaola-workflow-run-chains.js` (it would only return `chains_config_missing`). The
      gate is the agent's own `.cache/final-validation.md` with a column-0 `verdict: pass`,
-     produced by running the plan's `## Meta` `validation_command`; `--finalize-check`
-     auto-detects consumer mode (absence of the npm scripts) and gates on that file.
+     produced by running the plan's `## Meta` `validation_command` or by citing an unchanged
+     terminal change-gate validation run with `source: cited:<node-id>`, `validated_command`,
+     `validated_at_head`, and `reuse_boundary`; `--finalize-check` auto-detects consumer mode
+     (absence of the npm scripts) and gates on that file. Any doubt about the boundary means run
+     the command.
 
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
 
