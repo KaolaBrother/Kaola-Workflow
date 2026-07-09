@@ -517,12 +517,22 @@ vs `KAOLA_FANOUT_CAP_READONLY`)
 **Invoke run-chains with `--project {project}`.** Always pass `--project {project}` to the
 run-chains script so its receipt lands at `kaola-workflow/{project}/.cache/chain-receipt.json` where
 Finalization's `--finalize-check` reads it — do NOT rely on cwd to locate the receipt.
+The self-host chain receipt stamp is the last action before Finalization: run it only after every
+code change and every test-consumed prose/doc update for the final candidate has landed. If any
+code-relevant or chain-asserted doc changes after the stamp, the receipt is stale and
+`chains_stale` requires a full re-run of the gated runner; do not patch or hand-edit the receipt.
+Workflow state and inert, non-test-consumed docs are validation-invisible and do not stale the
+receipt.
 
 **Consumer (non-npm) repo — no `test:kaola-workflow:*` scripts:** Do NOT invoke `run-chains.js`
 (it can only return `chains_config_missing` in a consumer repo). Instead, run the plan's `## Meta`
 `validation_command` and record the result in `kaola-workflow/{project}/.cache/final-validation.md`
 with a column-0 `verdict: pass`. Finalization's `--finalize-check` auto-detects consumer mode
 (absence of the `test:kaola-workflow:*` scripts) and gates on `final-validation.md`.
+If an unchanged terminal change-gate validation run already covers the final candidate, you may
+cite that evidence instead of rerunning. Record column-0 lines for `verdict: pass`,
+`source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`; if
+there is any doubt about the boundary, run the command.
 <!-- REGION:command+github -->
 
 Then proceed to `/kaola-workflow-finalize {project}`.
@@ -549,4 +559,5 @@ Avoid redundant validation runs.
   any later edits are outside it. Do NOT write a terminal absolute like `No files changed
   after those runs` when a node afterward changes relevant files — say e.g. `validation
   reuse covers code/test impact through node nN; the later edit is docs-only and outside
-  the rerun trigger`.
+  the rerun trigger`. Consumer final-validation citations must also record `source: cited:<node-id>`,
+  `validated_command`, `validated_at_head`, and `reuse_boundary`; uncertainty means run the command.

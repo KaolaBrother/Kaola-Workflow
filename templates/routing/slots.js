@@ -103,11 +103,11 @@ const SPLICES = {
   // route, skill uses delegate/unslashed route).
   'pr-alldone-intro': {
     command: {
-      github: "When `allDone: true`, detect the repo type and run the appropriate validation:\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:**\n\n```bash\nnode \"$KAOLA_SCRIPTS/kaola-workflow-run-chains.js\" --project {project}\n```",
-      gitlab: "When `allDone: true`, detect the repo type and run the appropriate validation, then proceed to\n`/kaola-workflow-finalize {project}`.\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`\nwith `--project {project}`.",
-      gitea: "When `allDone: true`, detect the repo type and run the appropriate validation, then proceed to\n`/kaola-workflow-finalize {project}`.\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`\nwith `--project {project}`.",
+      github: "When `allDone: true`, detect the repo type and run the terminal validation appropriate to that repo:\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:**\n\n```bash\nnode \"$KAOLA_SCRIPTS/kaola-workflow-run-chains.js\" --project {project}\n```",
+      gitlab: "When `allDone: true`, detect the repo type and run the terminal validation appropriate to that repo, then proceed to\n`/kaola-workflow-finalize {project}`.\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`\nwith `--project {project}`.",
+      gitea: "When `allDone: true`, detect the repo type and run the terminal validation appropriate to that repo, then proceed to\n`/kaola-workflow-finalize {project}`.\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`\nwith `--project {project}`.",
     },
-    skill: "When `allDone: true`, detect the repo type and run the appropriate validation, then delegate to\n`kaola-workflow-finalize {project}`.\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`\nwith `--project {project}`.",
+    skill: "When `allDone: true`, detect the repo type and run the terminal validation appropriate to that repo, then delegate to\n`kaola-workflow-finalize {project}`.\n\n**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`\nwith `--project {project}`.",
   },
 
   // ---- next: forge-noun / structural substitutions (3-way, per-forge).
