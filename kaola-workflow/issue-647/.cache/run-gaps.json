@@ -1,0 +1,20 @@
+{
+  "project": "issue-647",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-review",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n5-adversarial-repro",
+      "count": 3
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n6-finalize",
+      "count": 1
+    }
+  ]
+}

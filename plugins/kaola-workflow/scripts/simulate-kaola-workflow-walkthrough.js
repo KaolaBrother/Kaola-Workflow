@@ -1008,6 +1008,19 @@ function testCodexPreflight266() {
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 inline object enabled false', false);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 table enabled true', true);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 table enabled false', false);
+        assertDispatchModeForConfig(configWithFeatureLine('["features.multi_agent_v2"]\nenabled = true'), 'v1-thread-id', '#647 basic quoted literal dotted table must not enable v2', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[\'features.multi_agent_v2\']\nenabled = true'), 'v1-thread-id', '#647 literal quoted dotted table must not enable v2', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[[features.multi_agent_v2]]\nenabled = true'), 'v1-thread-id', '#647 R2 array-of-table dotted v2 table must not enable v2', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[[features."multi_agent_v2"]]\nenabled = true'), 'v1-thread-id', '#647 R2 quoted-segment array-of-table v2 table must not enable v2', false);
+        assertDispatchModeForConfig(
+          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[projects."/tmp/kaola-project"]\nenabled = true\n\n[plugins."sample@test"]\nenabled = true'),
+          'v2-task-name', '#647 quoted project/plugin tables after dotted v2 table reset parser state', true);
+        assertDispatchModeForConfig(
+          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[plugins.\'sample@test\'.mcp_servers]]\nenabled = true'),
+          'v2-task-name', '#647 array-of-table literal quoted segment after dotted v2 table resets parser state', false);
+        assertDispatchModeForConfig(
+          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[features.multi_agent_v2]]\nenabled = false'),
+          'v2-task-name', '#647 R2 exact array-of-table after dotted v2 table resets parser state', false);
         assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 warning suppression only', false);
         assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 top-level key ignored', false);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 inline object missing enabled fails closed', false);
@@ -1223,6 +1236,31 @@ function testCodexMultiAgentV2Bounds611() {
     const observedDefault = mod.deriveMultiAgentV2Bounds('[features]\nmulti_agent_v2 = true\n', true);
     assert(observedDefault.max_concurrent_threads_per_session === 4 && observedDefault.effective_subagent_width === 3,
       '#611: absent threads value must derive the observed default 4 (width 3), got ' + JSON.stringify(observedDefault));
+    const quotedUnrelated = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99\n', true);
+    assert(quotedUnrelated.max_concurrent_threads_per_session === 4
+      && quotedUnrelated.max_concurrent_threads_per_session_source === 'observed_default'
+      && quotedUnrelated.effective_subagent_width === 3,
+      '#647: quoted unrelated table after dotted v2 table must not over-collect bounds, got ' + JSON.stringify(quotedUnrelated));
+    const basicQuotedLiteral = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\n\n["features.multi_agent_v2"]\nmax_concurrent_threads_per_session = 99\n', true);
+    assert(basicQuotedLiteral.max_concurrent_threads_per_session === 4
+      && basicQuotedLiteral.max_concurrent_threads_per_session_source === 'observed_default'
+      && basicQuotedLiteral.effective_subagent_width === 3,
+      '#647: basic quoted literal dotted table after dotted v2 table must not over-collect bounds, got ' + JSON.stringify(basicQuotedLiteral));
+    const literalQuotedLiteral = mod.deriveMultiAgentV2Bounds('[features.multi_agent_v2]\nenabled = true\n\n[\'features.multi_agent_v2\']\nmax_concurrent_threads_per_session = 99\n', true);
+    assert(literalQuotedLiteral.max_concurrent_threads_per_session === 4
+      && literalQuotedLiteral.max_concurrent_threads_per_session_source === 'observed_default'
+      && literalQuotedLiteral.effective_subagent_width === 3,
+      '#647: literal quoted dotted table after dotted v2 table must not over-collect bounds, got ' + JSON.stringify(literalQuotedLiteral));
+    const arrayTableLiteral = mod.deriveMultiAgentV2Bounds('[[features.multi_agent_v2]]\nmax_concurrent_threads_per_session = 99\n', true);
+    assert(arrayTableLiteral.max_concurrent_threads_per_session === 4
+      && arrayTableLiteral.max_concurrent_threads_per_session_source === 'observed_default'
+      && arrayTableLiteral.effective_subagent_width === 3,
+      '#647 R2: array-of-table dotted v2 table must not collect bounds, got ' + JSON.stringify(arrayTableLiteral));
+    const quotedArrayTableLiteral = mod.deriveMultiAgentV2Bounds('[[features."multi_agent_v2"]]\nmax_concurrent_threads_per_session = 99\n', true);
+    assert(quotedArrayTableLiteral.max_concurrent_threads_per_session === 4
+      && quotedArrayTableLiteral.max_concurrent_threads_per_session_source === 'observed_default'
+      && quotedArrayTableLiteral.effective_subagent_width === 3,
+      '#647 R2: quoted-segment array-of-table v2 table must not collect bounds, got ' + JSON.stringify(quotedArrayTableLiteral));
 
     console.log('testCodexMultiAgentV2Bounds611 (#611 AC6 installer report): PASSED');
   } finally {

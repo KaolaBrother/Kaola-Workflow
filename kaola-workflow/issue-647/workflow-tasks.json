@@ -1,0 +1,42 @@
+{
+  "source_plan_hash": "91aa999583f96fa1d277dd46ee4b6f6315f39b6983602104753ddb0bfb1d5bb2",
+  "tasks": [
+    {
+      "id": "n1-map-surfaces",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-codex-runtime-evidence",
+      "role": "knowledge-lookup",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-fix-toml-parser",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-adversarial-repro",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-09T05:22:09.808Z"
+}

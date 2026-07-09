@@ -357,6 +357,19 @@ try {
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 inline object enabled false', false);
       assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 table enabled true', true);
       assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 table enabled false', false);
+      assertDispatchModeForConfig(configWithFeatureLine('["features.multi_agent_v2"]\nenabled = true'), 'v1-thread-id', '#647 basic quoted literal dotted table must not enable v2', false);
+      assertDispatchModeForConfig(configWithFeatureLine('[\'features.multi_agent_v2\']\nenabled = true'), 'v1-thread-id', '#647 literal quoted dotted table must not enable v2', false);
+      assertDispatchModeForConfig(configWithFeatureLine('[[features.multi_agent_v2]]\nenabled = true'), 'v1-thread-id', '#647 R2 array-of-table dotted v2 table must not enable v2', false);
+      assertDispatchModeForConfig(configWithFeatureLine('[[features."multi_agent_v2"]]\nenabled = true'), 'v1-thread-id', '#647 R2 quoted-segment array-of-table v2 table must not enable v2', false);
+      assertDispatchModeForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[projects."/tmp/kaola-project"]\nenabled = true\n\n[plugins."sample@test"]\nenabled = true'),
+        'v2-task-name', '#647 quoted project/plugin tables after dotted v2 table reset parser state', true);
+      assertDispatchModeForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[plugins.\'sample@test\'.mcp_servers]]\nenabled = true'),
+        'v2-task-name', '#647 array-of-table literal quoted segment after dotted v2 table resets parser state', false);
+      assertDispatchModeForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[features.multi_agent_v2]]\nenabled = false'),
+        'v2-task-name', '#647 R2 exact array-of-table after dotted v2 table resets parser state', false);
       assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + configText, 'v1-thread-id', '#584 warning suppression only', false);
       assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + configText, 'v1-thread-id', '#584 top-level key ignored', false);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 inline object missing enabled fails closed', false);
@@ -448,6 +461,66 @@ try {
           max_wait_timeout_ms: 1800000,
           default_wait_timeout_ms: 60000,
         }, '#611 v2 enabled via dotted table form, all four numeric fields configured');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99'),
+        {
+          max_concurrent_threads_per_session: 4,
+          max_concurrent_threads_per_session_source: 'observed_default',
+          effective_subagent_width: 3,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#647 quoted unrelated table after dotted v2 table must not over-collect bounds');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n["features.multi_agent_v2"]\nmax_concurrent_threads_per_session = 99'),
+        {
+          max_concurrent_threads_per_session: 4,
+          max_concurrent_threads_per_session_source: 'observed_default',
+          effective_subagent_width: 3,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#647 basic quoted literal dotted table must not over-collect bounds');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[\'features.multi_agent_v2\']\nmax_concurrent_threads_per_session = 99'),
+        {
+          max_concurrent_threads_per_session: 4,
+          max_concurrent_threads_per_session_source: 'observed_default',
+          effective_subagent_width: 3,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#647 literal quoted dotted table must not over-collect bounds');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[[features.multi_agent_v2]]\nenabled = true\nmax_concurrent_threads_per_session = 9'),
+        {
+          max_concurrent_threads_per_session: null,
+          max_concurrent_threads_per_session_source: 'not_applicable',
+          effective_subagent_width: null,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#647 R2 array-of-table dotted v2 table must not enable v2 or collect bounds');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[[features."multi_agent_v2"]]\nenabled = true\nmax_concurrent_threads_per_session = 9'),
+        {
+          max_concurrent_threads_per_session: null,
+          max_concurrent_threads_per_session_source: 'not_applicable',
+          effective_subagent_width: null,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#647 R2 quoted-segment array-of-table v2 table must not enable v2 or collect bounds');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[features.multi_agent_v2]]\nmax_concurrent_threads_per_session = 99'),
+        {
+          max_concurrent_threads_per_session: 4,
+          max_concurrent_threads_per_session_source: 'observed_default',
+          effective_subagent_width: 3,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#647 R2 exact array-of-table after dotted v2 table must not over-collect bounds');
       assertMultiAgentV2BoundsForConfig(
         configWithFeatureLine('multi_agent_v2 = { enabled = false, max_concurrent_threads_per_session = 8 }'),
         {
@@ -575,6 +648,10 @@ try {
       { label: 'multi_agent=false + effort=ultra (features gate wins)', cfg: 'model_reasoning_effort = "ultra"\n\n[features]\nmulti_agent = false\n', expected: 'none' },
       { label: 'multi_agent_v2=true only (no multi_agent key)', cfg: '[features]\nmulti_agent_v2 = true\n', expected: 'explicitRequestOnly' },
       { label: 'multi_agent=false + multi_agent_v2=true, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features]\nmulti_agent = false\nmulti_agent_v2 = true\n', expected: 'proactive' },
+      { label: 'basic quoted literal dotted v2 table does not enable v2', cfg: '["features.multi_agent_v2"]\nenabled = true\n', expected: 'none' },
+      { label: 'literal quoted dotted v2 table does not enable v2', cfg: '[\'features.multi_agent_v2\']\nenabled = true\n', expected: 'none' },
+      { label: 'array-of-table dotted v2 table does not enable v2', cfg: '[[features.multi_agent_v2]]\nenabled = true\n', expected: 'none' },
+      { label: 'quoted-segment array-of-table v2 table does not enable v2', cfg: '[[features."multi_agent_v2"]]\nenabled = true\n', expected: 'none' },
       // TOML root-key rule: model_reasoning_effort placed AFTER the first [table] header is NOT
       // a root key (it would belong to that table), so it must not gate the posture.
       { label: 'effort after first table is not a root key (ignored)', cfg: '[features]\nmulti_agent = true\nmodel_reasoning_effort = "ultra"\n', expected: 'explicitRequestOnly' },
@@ -615,6 +692,16 @@ try {
         expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 5, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'v2 enabled via dotted table form, all four numeric fields configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 2, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 1, min_wait_timeout_ms: 1000, max_wait_timeout_ms: 1800000, default_wait_timeout_ms: 60000 } },
+      { label: 'quoted unrelated table after dotted v2 table does not over-collect bounds', cfg: '[features.multi_agent_v2]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'basic quoted literal dotted table after dotted v2 table does not over-collect bounds', cfg: '[features.multi_agent_v2]\nenabled = true\n\n["features.multi_agent_v2"]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'literal quoted dotted table after dotted v2 table does not over-collect bounds', cfg: '[features.multi_agent_v2]\nenabled = true\n\n[\'features.multi_agent_v2\']\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'array-of-table dotted v2 table does not collect bounds', cfg: '[[features.multi_agent_v2]]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'quoted-segment array-of-table v2 table does not collect bounds', cfg: '[[features."multi_agent_v2"]]\nmax_concurrent_threads_per_session = 99\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'non-integer configured threads value falls back to observed default', cfg: '[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = "six" }\n', v2Enabled: true,
         expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
       { label: 'zero configured threads value falls back to observed default (Codex itself rejects < 1)', cfg: '[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 0 }\n', v2Enabled: true,

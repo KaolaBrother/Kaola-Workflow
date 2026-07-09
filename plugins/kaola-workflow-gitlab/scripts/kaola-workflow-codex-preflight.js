@@ -117,8 +117,76 @@ function stripTomlComment(line) {
 }
 
 function parseTomlTableName(line) {
-  const m = line.match(/^\s*\[([A-Za-z0-9_.-]+)\]\s*$/);
-  return m ? m[1] : null;
+  const trimmed = String(line || '').trim();
+  let body = null;
+  let isArrayTable = false;
+  if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
+    body = trimmed.slice(2, -2).trim();
+    isArrayTable = true;
+  } else if (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.startsWith('[[')) {
+    body = trimmed.slice(1, -1).trim();
+  } else {
+    return null;
+  }
+  if (!body) return null;
+
+  const segments = [];
+  let i = 0;
+  function skipSpace() {
+    while (i < body.length && /\s/.test(body[i])) i++;
+  }
+
+  while (i < body.length) {
+    skipSpace();
+    if (i >= body.length) return null;
+    const quote = body[i];
+    if (quote === '"' || quote === "'") {
+      i++;
+      let value = '';
+      let escaped = false;
+      let closed = false;
+      while (i < body.length) {
+        const ch = body[i];
+        if (quote === '"' && ch === '\\' && !escaped) {
+          escaped = true;
+          value += ch;
+          i++;
+          continue;
+        }
+        if (ch === quote && (quote === "'" || !escaped)) {
+          closed = true;
+          i++;
+          break;
+        }
+        value += ch;
+        escaped = false;
+        i++;
+      }
+      if (!closed) return null;
+      segments.push({ value, quoted: true });
+    } else {
+      const m = body.slice(i).match(/^[A-Za-z0-9_-]+/);
+      if (!m) return null;
+      segments.push({ value: m[0], quoted: false });
+      i += m[0].length;
+    }
+
+    skipSpace();
+    if (i >= body.length) break;
+    if (body[i] !== '.') return null;
+    i++;
+  }
+
+  return { segments, isArrayTable };
+}
+
+function tomlTableNameMatches(tableName, dottedPath) {
+  if (!tableName || tableName.isArrayTable) return false;
+  const segments = Array.isArray(tableName) ? tableName : tableName.segments;
+  if (!Array.isArray(segments)) return false;
+  const expected = String(dottedPath || '').split('.');
+  if (segments.length !== expected.length) return false;
+  return segments.every((segment, index) => segment.value === expected[index]);
 }
 
 function parseTomlBoolean(value) {
@@ -178,7 +246,7 @@ function parseMultiAgentV2Value(value) {
 
 function detectCodexDispatchMode(configContent) {
   const lines = String(configContent || '').split(/\r?\n/);
-  let table = '';
+  let table = null;
   let seen = false;
   let enabled = false;
   let ambiguous = false;
@@ -203,10 +271,10 @@ function detectCodexDispatchMode(configContent) {
       continue;
     }
 
-    if (table === 'features') {
+    if (tomlTableNameMatches(table, 'features')) {
       const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
       if (m) record(parseMultiAgentV2Value(m[1]));
-    } else if (table === 'features.multi_agent_v2') {
+    } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
       const m = line.match(/^enabled\s*=\s*(.+)$/);
       if (m) record({ valid: parseTomlBoolean(m[1]) !== null, enabled: parseTomlBoolean(m[1]) === true });
     }
@@ -245,7 +313,7 @@ const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture
 // short-circuits to false rather than guessing.
 function parseFeaturesMultiAgentEnabled(configContent) {
   const lines = String(configContent || '').split(/\r?\n/);
-  let table = '';
+  let table = null;
   let seen = false;
   let enabled = false;
   let ambiguous = false;
@@ -260,7 +328,7 @@ function parseFeaturesMultiAgentEnabled(configContent) {
       continue;
     }
 
-    if (table === 'features') {
+    if (tomlTableNameMatches(table, 'features')) {
       const m = line.match(/^multi_agent\s*=\s*(.+)$/);
       if (m) {
         const b = parseTomlBoolean(m[1]);
@@ -391,7 +459,7 @@ function parseMultiAgentV2NumericFields(configContent) {
   }
 
   const lines = String(configContent || '').split(/\r?\n/);
-  let table = '';
+  let table = null;
   for (const rawLine of lines) {
     const line = stripTomlComment(rawLine).trim();
     if (!line) continue;
@@ -402,13 +470,13 @@ function parseMultiAgentV2NumericFields(configContent) {
       continue;
     }
 
-    if (table === 'features') {
+    if (tomlTableNameMatches(table, 'features')) {
       const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
       if (m) {
         const v = m[1].trim();
         if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
       }
-    } else if (table === 'features.multi_agent_v2') {
+    } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
       const m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
       if (m) recordField(m[1], m[2]);
     }

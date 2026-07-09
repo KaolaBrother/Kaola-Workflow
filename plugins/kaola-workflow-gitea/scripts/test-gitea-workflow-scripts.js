@@ -3600,6 +3600,19 @@ function testGiteaPreflight266() {
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 gt inline object enabled false', false);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 gt table enabled true', true);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 gt table enabled false', false);
+        assertDispatchModeForConfig(configWithFeatureLine('["features.multi_agent_v2"]\nenabled = true'), 'v1-thread-id', '#647 gt basic quoted literal dotted table must not enable v2', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[\'features.multi_agent_v2\']\nenabled = true'), 'v1-thread-id', '#647 gt literal quoted dotted table must not enable v2', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[[features.multi_agent_v2]]\nenabled = true'), 'v1-thread-id', '#647 R2 gt array-of-table dotted v2 table must not enable v2', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[[features."multi_agent_v2"]]\nenabled = true'), 'v1-thread-id', '#647 R2 gt quoted-segment array-of-table v2 table must not enable v2', false);
+        assertDispatchModeForConfig(
+          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[projects."/tmp/kaola-project"]\nenabled = true\n\n[plugins."sample@test"]\nenabled = true'),
+          'v2-task-name', '#647 gt quoted project/plugin tables after dotted v2 table reset parser state', true);
+        assertDispatchModeForConfig(
+          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[plugins.\'sample@test\'.mcp_servers]]\nenabled = true'),
+          'v2-task-name', '#647 gt array-of-table literal quoted segment after dotted v2 table resets parser state', false);
+        assertDispatchModeForConfig(
+          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[features.multi_agent_v2]]\nenabled = false'),
+          'v2-task-name', '#647 R2 gt exact array-of-table after dotted v2 table resets parser state', false);
         assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 gt warning suppression only', false);
         assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 gt top-level key ignored', false);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 gt inline object missing enabled fails closed', false);

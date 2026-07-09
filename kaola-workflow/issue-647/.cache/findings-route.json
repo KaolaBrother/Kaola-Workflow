@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=N5-OOS1 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=full_four_chain_interrupted_after_unrelated_test_adaptive_node_fixture_output_not_used_for_parser_verdict",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
