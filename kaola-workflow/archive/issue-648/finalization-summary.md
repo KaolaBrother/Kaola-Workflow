@@ -10,12 +10,12 @@
 ## Final Validation Evidence
 
 - `node scripts/kaola-workflow-plan-validator.js kaola-workflow/issue-648/workflow-plan.md --finalize-check --json` -> `{"result":"pass","mode":"chain-receipt","checkedChanges":54,"chains":[{"name":"claude","exitCode":0,"accepted_red":false},{"name":"codex","exitCode":0,"accepted_red":false},{"name":"gitlab","exitCode":0,"accepted_red":false},{"name":"gitea","exitCode":0,"accepted_red":false}]}`
-- Evidence path: `kaola-workflow/issue-648/.cache/chain-receipt.json`.
+- Archived evidence path: `kaola-workflow/archive/issue-648/.cache/chain-receipt.json`.
 
 ## Documentation Docking
 
-- `docs_updated: docs/api.md; docs/decisions/D-648-01.md` per `kaola-workflow/issue-648/.cache/n5-docs.md`.
-- `changelog_updated: CHANGELOG.md` and `roadmap_refresh: node scripts/kaola-workflow-roadmap.js generate -> up-to-date; node scripts/kaola-workflow-roadmap.js validate -> ok` per `kaola-workflow/issue-648/.cache/n7-finalize.md`.
+- `docs_updated: docs/api.md; docs/decisions/D-648-01.md` per `kaola-workflow/archive/issue-648/.cache/n5-docs.md`.
+- `changelog_updated: CHANGELOG.md` and `roadmap_refresh: node scripts/kaola-workflow-roadmap.js generate -> up-to-date; node scripts/kaola-workflow-roadmap.js validate -> ok` per `kaola-workflow/archive/issue-648/.cache/n7-finalize.md`.
 
 ## Run gaps
 
@@ -33,4 +33,4 @@
 | doc-updater (n5-docs) | subagent-invoked | evidence-binding: n5-docs 0ed5bca52ad1 | |
 | adversarial-verifier (n6-adversarial) | subagent-invoked | evidence-binding: n6-adversarial c35a0f74e153 | |
 | finalize (n7-finalize) | main-session-direct | evidence-binding: n7-finalize 846d7b8aab38 | |
-| finalization contractor | subagent-invoked | `cmdFinalize --attest-contractor-spawn` pending | |
+| finalization contractor | subagent-invoked | closure receipt `finalize_contractor_attested: attested` | |
