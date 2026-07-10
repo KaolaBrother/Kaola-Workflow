@@ -124,6 +124,9 @@ const REQUIRED_BLOCKS = [
       '--verify --json',
       'delegation_outcome: returned_partial',
       'transport_error: encrypted_return',
+      'direct collaboration tool',
+      'never through `functions.exec` or Code Mode',
+      'codex_v2_encrypted_transport_unsafe',
     ],
   },
   {
@@ -255,7 +258,12 @@ const REQUIRED_BLOCKS = [
     topic: 'next',
     runtime_tag: 'codex-live',
     surface_type_tag: 'skill',
-    content_tokens: ['--codex-dispatch-mode'],
+    content_tokens: [
+      '--codex-dispatch-mode',
+      'direct collaboration tool',
+      'never through `functions.exec` or Code Mode',
+      'codex_v2_encrypted_transport_unsafe',
+    ],
   },
   {
     // `watch-pr` is forge-renamed to `watch-mr` on the gitlab next command, so

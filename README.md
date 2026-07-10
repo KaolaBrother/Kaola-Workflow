@@ -550,6 +550,11 @@ The audit must keep these facts separate:
 - The active Codex config may express V2 as `multi_agent_v2 = true`,
   `multi_agent_v2 = { enabled = true, ... }`, or
   `[features.multi_agent_v2]` with `enabled = true`.
+- On Codex 0.144.1, V2 collaboration must remain direct-only: omit
+  `non_code_mode_only` (the runtime default is `true`) or set it explicitly to
+  `true`. Setting it to `false` exposes collaboration through the nested Code
+  Mode adapter, which cannot supply the Responses-encrypted task argument that
+  MultiAgentV2 expects.
 - `[notice].suppress_unstable_features_warning = true` only suppresses the
   under-development warning; it is not evidence that V2 is enabled.
 - `[agents].max_threads` and `[agents].max_depth`, when present, must be high
@@ -569,8 +574,16 @@ suppress_unstable_features_warning = true
 
 [features]
 multi_agent = true
-multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }
+multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }
 ```
+
+After changing this setting, start a fresh Codex session so the tool surface is
+rebuilt. The preflight and doctor report `codex_v2_transport_mode`,
+`codex_v2_direct_transport_ready`, and `codex_v2_transport_warning`; an enabled
+V2 config that permits nested collaboration refuses with
+`codex_v2_encrypted_transport_unsafe` instead of attempting a spawn. Routing
+skills likewise call collaboration tools directly, never through
+`functions.exec` or Code Mode.
 
 If the audit finds a missing required setting and the user has not authorized
 config changes, stop with the minimal diff and reason. Do not claim Codex is
@@ -584,6 +597,7 @@ the Codex runtime will actually enforce — features enabled is not the same as
 dispatch-ready:
 
 ```text
+Kaola-Workflow Codex multi_agent_v2 transport: direct-only
 Kaola-Workflow Codex dispatch posture: explicitRequestOnly (model_reasoning_effort unset)
 Kaola-Workflow Codex dispatch posture: Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
 Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on codex-tui 0.142.5; it may change in a future Codex release.
@@ -1262,12 +1276,12 @@ under it. Dirty worktrees are skipped unless `--archive`, `--export`, or
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `6.21.3`
-- Claude Code command install, GitLab edition: `6.21.3`
-- Claude Code command install, Gitea edition: `6.21.3`
-- Codex `kaola-workflow` plugin manifest: `4.21.3`
-- Codex `kaola-workflow-gitlab` plugin manifest: `4.21.3`
-- Codex `kaola-workflow-gitea` plugin manifest: `4.21.3`
+- Claude Code command install, GitHub edition: `6.21.4`
+- Claude Code command install, GitLab edition: `6.21.4`
+- Claude Code command install, Gitea edition: `6.21.4`
+- Codex `kaola-workflow` plugin manifest: `4.21.4`
+- Codex `kaola-workflow-gitlab` plugin manifest: `4.21.4`
+- Codex `kaola-workflow-gitea` plugin manifest: `4.21.4`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that

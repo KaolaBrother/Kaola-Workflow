@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.21.4] - 2026-07-10
+
+### Fixed
+
+- Adapted Codex MultiAgentV2 dispatch for Codex CLI 0.144.1 by requiring its direct-only collaboration transport, refusing unsafe nested Code Mode exposure with `codex_v2_encrypted_transport_unsafe`, and routing issue-scout and adaptive role dispatch through direct collaboration tools so plaintext task prompts are not misclassified as encrypted payloads.
+- **Restored the v6.21.3 release validation gates after the strict evidence-shape migration left test fixtures stale — #649.** Real-git scheduler fixtures now use one registry-driven, leg-aware evidence writer that populates the same authoritative parent or isolated-leg cache the runtime resolves; role-specific speculative, race, fused-gate, and mixed-frontier fixtures carry non-empty column-0 values; raw merge-diff assertions exclude workflow cache artifacts just as the production allowband does; and the walkthrough interrupted-outcome fixture uses `build-green: pass`. The production matcher remains strict, with hollow tdd-guide and implementer seeds still refused. This repairs a test/release-gate regression, not an unproven runtime defect.
+
 ## [6.21.3] - 2026-07-10
 
 ### Changed

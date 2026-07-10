@@ -76,6 +76,8 @@ const {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync: execFixtureFileSync } = require('child_process');
+const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
 
 let passed = 0;
 let failed = 0;
@@ -87,6 +89,43 @@ function assert(condition, message) {
     failed++;
     console.error('FAIL: ' + message);
   }
+}
+
+// #649: write populated fixture evidence to the same authoritative cache path the runtime resolves.
+// A live isolated write member owns its leg-local copy; every other node owns the parent cache copy.
+// Token lines are generated from the production registry so future evidence-contract tightening cannot
+// leave real-git fixtures writing a hollow tracked seed or a stale bare token.
+function writeLegAwareEvidence(cacheDir, id, role, extraLines) {
+  const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
+  let nonce = '';
+  try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
+
+  const lines = ['evidence-binding: ' + id + ' ' + nonce];
+  for (const tokenClass of (ROLE_TOKEN_REGISTRY[role] || []).filter(t => t !== 'evidence-binding')) {
+    const token = tokenClass.split('|')[0];
+    if (token === 'RED') lines.push('RED: fixture fails before implementation');
+    else if (token === 'GREEN') lines.push('GREEN: fixture passes after implementation');
+    else if (token === 'verdict') lines.push('verdict: pass');
+    else if (token === 'findings_blocking') lines.push('findings_blocking: 0');
+    else lines.push(token + ': fixture');
+  }
+  if (role === 'main-session-gate') lines.push('instrumentation: none');
+  if (extraLines) lines.push(...extraLines);
+
+  let evidencePath = path.join(cacheDir, id + '.md');
+  let running = null;
+  try { running = JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) {}
+  const leg = running && running.lane_group && running.lane_group.legs
+    ? running.lane_group.legs[id]
+    : null;
+  if (leg && leg.legPath) {
+    const root = execFixtureFileSync('git', ['-C', cacheDir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+    evidencePath = path.join(leg.legPath,
+      path.relative(fs.realpathSync(root), fs.realpathSync(cacheDir)), id + '.md');
+  }
+  fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+  fs.writeFileSync(evidencePath, lines.join('\n') + '\n');
+  return evidencePath;
 }
 
 // #542 (D-542-01): in-process unit calls (runOpenReady / runCloseNode) read
@@ -5435,16 +5474,7 @@ function rtHarness(initialFiles, opts) {
   // Write an evidence file for a tdd-guide node carrying its open-time nonce (barrier-base SHA prefix)
   // + the RED/GREEN token classes its role requires (so the close-side evidence-shape check passes).
   function writeEvidence(cacheDir, id, extraLines) {
-    const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
-    let nonce = '';
-    try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
-    const lines = [
-      'evidence-binding: ' + id + ' ' + nonce,
-      'RED: test_x — AssertionError: expected throw (pre-impl)',
-      'GREEN: test_x passes; 1/1 assertions green',
-    ];
-    if (extraLines) lines.push(...extraLines);
-    fs.writeFileSync(path.join(cacheDir, id + '.md'), lines.join('\n') + '\n');
+    return writeLegAwareEvidence(cacheDir, id, 'tdd-guide', extraLines);
   }
   function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
   const ON = { KAOLA_LANE_CONTAINMENT: '1' };
@@ -6344,7 +6374,8 @@ function rtHarness(initialFiles, opts) {
     const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
     assert(parents.length >= 3, 'SYNTH-DISJOINT: M is the octopus merge (≥3 parents = feature + legA + legB), got ' + parents.length);
     assert(gitOut(repoRoot, ['rev-parse', M + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', M + ':by.js']) !== '', 'SYNTH-DISJOINT: M contains BOTH legs\' files');
-    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
+      .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
     assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js']), 'SYNTH-DISJOINT: diff base→M == union(declared), got ' + JSON.stringify(mDiff));
     const timings = fs.existsSync(path.join(cacheDir, 'node-timings.jsonl')) ? fs.readFileSync(path.join(cacheDir, 'node-timings.jsonl'), 'utf8') : '';
     assert(/level_merged/.test(timings), 'SYNTH-DISJOINT: a level_merged telemetry event was recorded');
@@ -6827,7 +6858,8 @@ function rtHarness(initialFiles, opts) {
       assert(gitOut(repoRoot, ['rev-parse', M + ':scripts/aa.js']) !== '' && gitOut(repoRoot, ['rev-parse', M + ':scripts/bb.js']) !== '',
         '#500-POSITIVE-E2E: M contains BOTH scripts/aa.js and scripts/bb.js');
       // diff base→M == exactly the two declared files.
-      const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+      const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
+        .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
       assert(JSON.stringify(mDiff) === JSON.stringify(['scripts/aa.js', 'scripts/bb.js']),
         '#500-POSITIVE-E2E: diff base→M == union declared {scripts/aa.js, scripts/bb.js}, got ' + JSON.stringify(mDiff));
       // Legs torn down.
@@ -6934,7 +6966,8 @@ function rtHarness(initialFiles, opts) {
     assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === M, '#588-3LEG: HEAD advanced to M');
     const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
     assert(parents.length === 4, '#588-3LEG: octopus merge has EXACTLY 4 parents (feature + 3 legs), got ' + parents.length);
-    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
+      .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
     assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js', 'cz.js']), '#588-3LEG: diff base→M == union(declared) {ax,by,cz}, got ' + JSON.stringify(mDiff));
     for (const id of ['A', 'B', 'C']) assert(gitOut(repoRoot, ['rev-parse', M + ':' + setOf[id]]) !== '', '#588-3LEG: M contains ' + setOf[id]);
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete' && ledgerStatus(planPath, 'C') === 'complete', '#588-3LEG: all 3 members complete');
@@ -7006,7 +7039,8 @@ function rtHarness(initialFiles, opts) {
     const M = last.mergeCommit;
     const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
     assert(parents.length === 5, '#588-WIDE-DRAIN: octopus has EXACTLY 5 parents (feature + 4 legs), got ' + parents.length);
-    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
+      .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
     assert(JSON.stringify(mDiff) === JSON.stringify(openedIds.map(id => setOf[id]).sort()), '#588-WIDE-DRAIN: diff base→M == union of the 4 opened declared sets, got ' + JSON.stringify(mDiff));
     for (const id of openedIds) assert(ledgerStatus(planPath, id) === 'complete', '#588-WIDE-DRAIN: ' + id + ' complete');
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, '#588-WIDE-DRAIN: legs torn down after the width-4 merge');
@@ -7243,15 +7277,6 @@ function rtHarness(initialFiles, opts) {
   // post-dominance requirement without gating probe's early readiness) -> finalize.
   // -------------------------------------------------------------------------
   {
-    function write622LegEvidence(legPath, cacheDir, id) {
-      const legCacheDir = path.join(legPath, 'kaola-workflow', 'test-project', '.cache');
-      fs.mkdirSync(legCacheDir, { recursive: true });
-      let nonce = '';
-      try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
-      fs.writeFileSync(path.join(legCacheDir, id + '.md'),
-        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' failed before implementation\nGREEN: test_' + id + ' passes after implementation\n');
-    }
-
     function make622Repo() {
       const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd622-mixed-'));
       const project = 'test-project';
@@ -7301,8 +7326,8 @@ function rtHarness(initialFiles, opts) {
     const legB = open1.laneGroup.legs.B.legPath;
     fs.writeFileSync(path.join(legA, 'ax622.js'), '// A in-lane\n');
     fs.writeFileSync(path.join(legB, 'by622.js'), '// B in-lane\n');
-    write622LegEvidence(legA, cacheDir, 'A');
-    write622LegEvidence(legB, cacheDir, 'B');
+    writeLegAwareEvidence(cacheDir, 'A', 'tdd-guide');
+    writeLegAwareEvidence(cacheDir, 'B', 'tdd-guide');
 
     // Close A (non-last member) — defers to the group; A's ledger flips to complete, so `probe`
     // (depends on A) becomes ready WHILE B (the group's last member) is still live.
@@ -9006,9 +9031,7 @@ function rtHarness(initialFiles, opts) {
     openGate439(repoRoot, cacheDir);
     run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
     // docs has valid evidence + nonce, but its gate is still in_progress.
-    let docsNonce = '';
-    try { docsNonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-docs'), 'utf8').trim().slice(0, 12); } catch (_) {}
-    fs.writeFileSync(path.join(cacheDir, 'docs.md'), 'evidence-binding: docs ' + docsNonce + '\n');
+    writeLegAwareEvidence(cacheDir, 'docs', 'doc-updater');
     const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'docs', '--json']);
     assert(r.result === 'refuse' && r.reason === 'gate_not_complete',
       'T439-9: closing a speculative node while its gate is open refuses gate_not_complete, got ' + JSON.stringify(r));
@@ -9024,9 +9047,7 @@ function rtHarness(initialFiles, opts) {
     const gateNonce = openGate439(repoRoot, cacheDir);
     run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
     // docs tries to close first but is HELD (gate open) — proving the held state precedes the gate close.
-    let docsNonce = '';
-    try { docsNonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-docs'), 'utf8').trim().slice(0, 12); } catch (_) {}
-    fs.writeFileSync(path.join(cacheDir, 'docs.md'), 'evidence-binding: docs ' + docsNonce + '\n');
+    writeLegAwareEvidence(cacheDir, 'docs', 'doc-updater');
     const held = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'docs', '--json']);
     assert(held.reason === 'gate_not_complete', 'T439-10: docs is held before the gate resolves');
     // Now the gate closes verdict:fail → review names docs (still in the running set).
@@ -9217,10 +9238,7 @@ function rtHarness(initialFiles, opts) {
   // tdd-guide requires evidence-binding + RED + GREEN tokens (ROLE_TOKEN_REGISTRY); writerW/writerW1/
   // writerW2 are all tdd-guide in these fixtures.
   function writeValidEvidence596(cacheDir, id) {
-    let nonce = '';
-    try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
-    fs.writeFileSync(path.join(cacheDir, id + '.md'),
-      'evidence-binding: ' + id + ' ' + nonce + '\nRED: pre-impl failing assertion\nGREEN: assertion now passes\n');
+    return writeLegAwareEvidence(cacheDir, id, 'tdd-guide');
   }
   function rm596(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
 
@@ -10261,10 +10279,8 @@ function rtHarness(initialFiles, opts) {
     }
   }
   function writeEvidence(cacheDir, id) {
-    const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
-    let nonce = ''; try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
-    fs.writeFileSync(path.join(cacheDir, id + '.md'),
-      ['evidence-binding: ' + id + ' ' + nonce, id + ' read-frontier probe complete', 'findings: none'].join('\n') + '\n');
+    return writeLegAwareEvidence(cacheDir, id,
+      id === 'rb' ? 'knowledge-lookup' : 'code-explorer');
   }
   function readRS(cacheDir) { try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) { return null; } }
   function ledgerStatuses(planPath) {
@@ -10601,7 +10617,7 @@ function rtHarness(initialFiles, opts) {
   const cachePath = '/p/.cache/impl.md';
   const h = rsHarness({
     [RS_PLAN_PATH]: plan,
-    [cachePath]: 'evidence-binding: impl implbase0000\nnon_tdd_reason: config\nbuild-green\n',
+    [cachePath]: 'evidence-binding: impl implbase0000\nnon_tdd_reason: config\nbuild-green: fixture passes\n',
     ['/p/.cache/barrier-base-impl']: 'implbase0000zzzz',
   }, (base) => {
     if (base === 'kaola-workflow-next-action.js') {
@@ -11202,12 +11218,7 @@ function rtHarness(initialFiles, opts) {
     return m ? m[1] : null;
   }
   function writeEvidence(cacheDir, id, role, extraLines) {
-    const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
-    let nonce = ''; try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
-    const lines = ['evidence-binding: ' + id + ' ' + nonce];
-    if (role === 'tdd-guide') { lines.push('RED: test_x — AssertionError: expected throw (pre-impl)'); lines.push('GREEN: test_x passes; 1/1 assertions green'); }
-    if (extraLines) lines.push(...extraLines);
-    fs.writeFileSync(path.join(cacheDir, id + '.md'), lines.join('\n') + '\n');
+    return writeLegAwareEvidence(cacheDir, id, role, extraLines);
   }
   function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
 

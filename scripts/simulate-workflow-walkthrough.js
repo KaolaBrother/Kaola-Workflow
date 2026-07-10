@@ -1953,7 +1953,7 @@ function testAdaptiveValidatorGovernance() {
         '#611 AC5: evidence with NO delegation_outcome token defaults to completed (unaffected)');
       assert(an611.checkEvidenceShape('tdd-guide', 'jn', 'delegation_outcome: completed\nRED: r\nGREEN: g').ok === true,
         '#611 AC5: delegation_outcome: completed passes');
-      assert(an611.checkEvidenceShape('implementer', 'jn', 'delegation_outcome: interrupted_unresponsive\nnon_tdd_reason: x\nbuild-green').ok === true,
+      assert(an611.checkEvidenceShape('implementer', 'jn', 'delegation_outcome: interrupted_unresponsive\nnon_tdd_reason: x\nbuild-green: pass').ok === true,
         '#611 AC5: an interrupted-path outcome (interrupted_unresponsive) passes with role tokens present');
       const jnBad = an611.checkEvidenceShape('tdd-guide', 'jn', 'delegation_outcome: made_up\nRED\nGREEN');
       assert(jnBad.ok === false && jnBad.missingTokenClass === 'delegation_outcome',

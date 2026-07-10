@@ -3644,7 +3644,7 @@ function testGitlabPreflight266() {
         assertDispatchModeForConfig(origConfig, 'v1-thread-id', '#584 gl no multi_agent_v2 key', false);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 gl boolean true', true);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 gl boolean false', false);
-        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v2-task-name', '#584 gl inline object enabled true', true);
+        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }'), 'v2-task-name', '#584 gl inline object direct-only true', true);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 gl inline object enabled false', false);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 gl table enabled true', true);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 gl table enabled false', false);

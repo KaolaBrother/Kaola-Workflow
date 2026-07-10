@@ -331,6 +331,12 @@ try {
         const json = JSON.parse(result.stdout);
         assert.strictEqual(json.dispatch_mode, expectedMode, label + ': dispatch_mode');
         assert.strictEqual(json.multi_agent_v2_enabled, expectedMode === 'v2-task-name', label + ': multi_agent_v2_enabled');
+        assert.strictEqual(json.codex_v2_transport_mode,
+          expectedMode === 'v2-task-name' ? 'direct-only' : 'not_applicable',
+          label + ': codex_v2_transport_mode');
+        assert.strictEqual(json.codex_v2_direct_transport_ready,
+          expectedMode === 'v2-task-name' ? true : null,
+          label + ': codex_v2_direct_transport_ready');
         if (checkDoctor) {
           const doctorResult = spawnSync(process.execPath, [codexPreflightPath, '--doctor', '--project-root', cproj, '--home', chome, '--json'], {
             cwd: path.join(root, 'plugins', 'kaola-workflow'),
@@ -340,7 +346,47 @@ try {
           const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
           assert(projectScope && projectScope.dispatch_mode === expectedMode,
             label + ': doctor project scope reports ' + expectedMode + ', got ' + JSON.stringify(projectScope));
+          assert.strictEqual(projectScope.codex_v2_transport_mode,
+            expectedMode === 'v2-task-name' ? 'direct-only' : 'not_applicable',
+            label + ': doctor codex_v2_transport_mode');
         }
+      }
+
+      function assertUnsafeV2TransportForConfig(body, label, expectedMode = 'nested-allowed') {
+        fs.writeFileSync(projectConfigPath, body);
+        const result = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          encoding: 'utf8'
+        });
+        assert.notStrictEqual(result.status, 0,
+          label + ': nested-allowed V2 transport must fail preflight: ' + result.stderr + result.stdout);
+        const json = JSON.parse(result.stdout);
+        assert.strictEqual(json.status, 'codex_v2_encrypted_transport_unsafe', label + ': typed refusal');
+        assert.strictEqual(json.codex_v2_transport_mode, expectedMode, label + ': transport mode');
+        assert.strictEqual(json.codex_v2_direct_transport_ready, false, label + ': transport readiness');
+
+        const doctorResult = spawnSync(process.execPath, [codexPreflightPath, '--doctor', '--project-root', cproj, '--home', chome, '--json'], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          encoding: 'utf8'
+        });
+        assert.notStrictEqual(doctorResult.status, 0, label + ': doctor must fail on nested-allowed V2 transport');
+        const doctorJson = JSON.parse(doctorResult.stdout);
+        const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
+        assert(projectScope && projectScope.codex_v2_transport_mode === expectedMode
+          && projectScope.codex_v2_direct_transport_ready === false,
+        label + ': doctor must expose unsafe transport fields, got ' + JSON.stringify(projectScope));
+        assert(/non_code_mode_only = true/.test(projectScope.repair),
+          label + ': doctor repair must name the direct-only setting, got ' + projectScope.repair);
+
+        const installResult = spawnSync(process.execPath, [codexInstallerPath, cproj], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          env: { ...process.env, HOME: chome },
+          encoding: 'utf8'
+        });
+        assert.notStrictEqual(installResult.status, 0,
+          label + ': installer must refuse unsafe transport before writing');
+        assert(/codex_v2_encrypted_transport_unsafe/.test(installResult.stderr),
+          label + ': installer must print the typed transport refusal: ' + installResult.stderr);
       }
 
       let preflight = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
@@ -353,9 +399,13 @@ try {
       assertDispatchModeForConfig(configText, 'v1-thread-id', '#584 no multi_agent_v2 key', false);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 boolean true', true);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 boolean false', false);
-      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v2-task-name', '#584 inline object enabled true', true);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }'), 'v2-task-name', '#584 inline object direct-only true', true);
+      assertUnsafeV2TransportForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), '#584 inline object nested transport');
+      assertUnsafeV2TransportForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, non_code_mode_only = "maybe" }'), '#584 inline object ambiguous transport', 'unknown');
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 inline object enabled false', false);
       assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 table enabled true', true);
+      assertUnsafeV2TransportForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\nnon_code_mode_only = false'), '#584 dotted table nested transport');
+      assertUnsafeV2TransportForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\nnon_code_mode_only = "maybe"'), '#584 dotted table ambiguous transport', 'unknown');
       assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 table enabled false', false);
       assertDispatchModeForConfig(configWithFeatureLine('["features.multi_agent_v2"]\nenabled = true'), 'v1-thread-id', '#647 basic quoted literal dotted table must not enable v2', false);
       assertDispatchModeForConfig(configWithFeatureLine('[\'features.multi_agent_v2\']\nenabled = true'), 'v1-thread-id', '#647 literal quoted dotted table must not enable v2', false);
@@ -552,6 +602,8 @@ try {
         });
         assert.strictEqual(freshInstall.status, 0, '#598 AC1: dispatch-posture report must never fail an otherwise-good install: ' + freshInstall.stderr);
         assert(/status: ok/.test(freshInstall.stdout), '#598 AC1: existing "status: ok" output must be unchanged');
+        assert(/Kaola-Workflow Codex multi_agent_v2 transport: not_applicable/.test(freshInstall.stdout),
+          '#598 AC1: fresh v1 install must report its transport mode: ' + freshInstall.stdout);
         assert(/Kaola-Workflow Codex dispatch posture: explicitRequestOnly/.test(freshInstall.stdout),
           '#598 AC1: fresh install (multi_agent=true, no effort configured) must report explicitRequestOnly posture: ' + freshInstall.stdout);
         assert(/model_reasoning_effort = "ultra"/.test(freshInstall.stdout),
@@ -665,6 +717,26 @@ try {
           '#598 ' + f.label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(result));
       }
     }
+
+    const transportFixtures = [
+      { label: 'v2 omitted transport uses direct-only default', cfg: '[features]\nmulti_agent_v2 = true\n', mode: 'direct-only', ready: true },
+      { label: 'inline true is direct-only', cfg: '[features]\nmulti_agent_v2 = { enabled = true, non_code_mode_only = true }\n', mode: 'direct-only', ready: true },
+      { label: 'inline false permits unsafe nested adapter', cfg: '[features]\nmulti_agent_v2 = { enabled = true, non_code_mode_only = false }\n', mode: 'nested-allowed', ready: false },
+      { label: 'malformed inline transport fails closed', cfg: '[features]\nmulti_agent_v2 = { enabled = true, non_code_mode_only = "maybe" }\n', mode: 'unknown', ready: false },
+      { label: 'malformed dotted transport fails closed', cfg: '[features.multi_agent_v2]\nenabled = true\nnon_code_mode_only = "maybe"\n', mode: 'unknown', ready: false },
+      { label: 'disabled v2 is not applicable', cfg: '[features]\nmulti_agent_v2 = false\n', mode: 'not_applicable', ready: null },
+    ];
+    for (const mod of [preflightMod, installerMod]) {
+      for (const f of transportFixtures) {
+        const result = mod.detectCodexDispatchMode(f.cfg);
+        assert.strictEqual(result.codex_v2_transport_mode, f.mode,
+          '#v2-transport ' + f.label + ': mode, got ' + JSON.stringify(result));
+        assert.strictEqual(result.codex_v2_direct_transport_ready, f.ready,
+          '#v2-transport ' + f.label + ': readiness, got ' + JSON.stringify(result));
+      }
+    }
+    assert.strictEqual(installerMod.CODEX_V2_DIRECT_TRANSPORT_NOTE, preflightMod.CODEX_V2_DIRECT_TRANSPORT_NOTE,
+      '#v2-transport: installer and preflight repair notes must match verbatim');
 
     // The installer and preflight must ship the identical version-guard note (semantic
     // lock-step check, distinct from the whole-file byte-identity the sync validator enforces).

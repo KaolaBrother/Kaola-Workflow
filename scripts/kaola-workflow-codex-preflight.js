@@ -240,25 +240,43 @@ function splitInlineTomlFields(body) {
 function parseMultiAgentV2Value(value) {
   const trimmed = String(value || '').trim();
   const bool = parseTomlBoolean(trimmed);
-  if (bool !== null) return { valid: true, enabled: bool };
+  if (bool !== null) return { valid: true, enabled: bool, non_code_mode_only: null };
 
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
-    return { valid: false, enabled: false };
+    return { valid: false, enabled: false, non_code_mode_only: null };
   }
 
-  let found = false;
+  let enabledFound = false;
   let enabled = false;
+  let transportFound = false;
+  let transportAmbiguous = false;
+  let nonCodeModeOnly = null;
   for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
-    const m = field.match(/^enabled\s*=\s*(.+)$/);
-    if (!m) continue;
-    if (found) return { valid: false, enabled: false };
-    const fieldBool = parseTomlBoolean(m[1]);
-    if (fieldBool === null) return { valid: false, enabled: false };
-    found = true;
-    enabled = fieldBool;
+    const enabledMatch = field.match(/^enabled\s*=\s*(.+)$/);
+    if (enabledMatch) {
+      if (enabledFound) return { valid: false, enabled: false, non_code_mode_only: null };
+      const fieldBool = parseTomlBoolean(enabledMatch[1]);
+      if (fieldBool === null) return { valid: false, enabled: false, non_code_mode_only: null };
+      enabledFound = true;
+      enabled = fieldBool;
+      continue;
+    }
+    const transportMatch = field.match(/^non_code_mode_only\s*=\s*(.+)$/);
+    if (transportMatch) {
+      if (transportFound) {
+        transportAmbiguous = true;
+        continue;
+      }
+      const fieldBool = parseTomlBoolean(transportMatch[1]);
+      transportFound = true;
+      if (fieldBool === null) transportAmbiguous = true;
+      else nonCodeModeOnly = fieldBool;
+    }
   }
 
-  return found ? { valid: true, enabled } : { valid: false, enabled: false };
+  return enabledFound
+    ? { valid: true, enabled, non_code_mode_only: nonCodeModeOnly, transport_ambiguous: transportAmbiguous }
+    : { valid: false, enabled: false, non_code_mode_only: null };
 }
 
 function detectCodexDispatchMode(configContent) {
@@ -267,6 +285,20 @@ function detectCodexDispatchMode(configContent) {
   let seen = false;
   let enabled = false;
   let ambiguous = false;
+  let transportSeen = false;
+  let transportAmbiguous = false;
+  let nonCodeModeOnly = null;
+
+  function recordTransport(value) {
+    if (value === null || value === undefined) return;
+    if (transportSeen || typeof value !== 'boolean') {
+      transportAmbiguous = true;
+      nonCodeModeOnly = null;
+      return;
+    }
+    transportSeen = true;
+    nonCodeModeOnly = value;
+  }
 
   function record(parsed) {
     if (!parsed.valid || seen) {
@@ -276,6 +308,8 @@ function detectCodexDispatchMode(configContent) {
     }
     seen = true;
     enabled = parsed.enabled;
+    recordTransport(parsed.non_code_mode_only);
+    if (parsed.transport_ambiguous) transportAmbiguous = true;
   }
 
   for (const rawLine of lines) {
@@ -292,17 +326,42 @@ function detectCodexDispatchMode(configContent) {
       const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
       if (m) record(parseMultiAgentV2Value(m[1]));
     } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-      const m = line.match(/^enabled\s*=\s*(.+)$/);
-      if (m) record({ valid: parseTomlBoolean(m[1]) !== null, enabled: parseTomlBoolean(m[1]) === true });
+      const enabledMatch = line.match(/^enabled\s*=\s*(.+)$/);
+      if (enabledMatch) {
+        record({
+          valid: parseTomlBoolean(enabledMatch[1]) !== null,
+          enabled: parseTomlBoolean(enabledMatch[1]) === true,
+          non_code_mode_only: null,
+        });
+      }
+      const transportMatch = line.match(/^non_code_mode_only\s*=\s*(.+)$/);
+      if (transportMatch) {
+        const transportValue = parseTomlBoolean(transportMatch[1]);
+        if (transportValue === null) transportAmbiguous = true;
+        else recordTransport(transportValue);
+      }
     }
   }
 
   enabled = seen && !ambiguous && enabled;
+  const transportMode = !enabled
+    ? 'not_applicable'
+    : (transportAmbiguous
+      ? 'unknown'
+      : (nonCodeModeOnly === false ? 'nested-allowed' : 'direct-only'));
   return {
     dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
     multi_agent_v2_enabled: enabled,
+    codex_v2_transport_mode: transportMode,
+    codex_v2_direct_transport_ready: enabled ? transportMode === 'direct-only' : null,
+    codex_v2_transport_warning: enabled && transportMode !== 'direct-only'
+      ? CODEX_V2_DIRECT_TRANSPORT_NOTE
+      : null,
   };
 }
+
+const CODEX_V2_TRANSPORT_UNSAFE_STATUS = 'codex_v2_encrypted_transport_unsafe';
+const CODEX_V2_DIRECT_TRANSPORT_NOTE = 'Codex MultiAgentV2 encrypted task messages require direct-only collaboration tools. Set non_code_mode_only = true in the enabled [features] multi_agent_v2 inline object or [features.multi_agent_v2] table (or omit that field to use the Codex 0.144.1 direct-only default), then start a fresh Codex session; never dispatch spawn_agent, send_message, or followup_task through functions.exec or Code Mode.';
 
 // ---------------------------------------------------------------------------
 // #598: MultiAgentMode dispatch-POSTURE derivation. This is DIFFERENT from
@@ -902,6 +961,9 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     manifest: manifestStatus,
     dispatch_mode: dispatchMode.dispatch_mode,
     multi_agent_v2_enabled: dispatchMode.multi_agent_v2_enabled,
+    codex_v2_transport_mode: dispatchMode.codex_v2_transport_mode,
+    codex_v2_direct_transport_ready: dispatchMode.codex_v2_direct_transport_ready,
+    codex_v2_transport_warning: dispatchMode.codex_v2_transport_warning,
     dispatch_posture: posture.dispatch_posture,
     model_reasoning_effort: posture.model_reasoning_effort,
     multi_agent_enabled: posture.multi_agent_enabled,
@@ -946,6 +1008,42 @@ function runInstaller(installerPath, projectRoot) {
   } catch (e) {
     return { success: false, stderr: e.message };
   }
+}
+
+function codexV2TransportEnvelope(scope) {
+  return {
+    codex_v2_transport_mode: scope.codex_v2_transport_mode,
+    codex_v2_direct_transport_ready: scope.codex_v2_direct_transport_ready,
+    codex_v2_transport_warning: scope.codex_v2_transport_warning,
+  };
+}
+
+function unsafeCodexV2Transport(scope, scopeName, codexDir) {
+  return {
+    exitCode: 7,
+    result: {
+      status: CODEX_V2_TRANSPORT_UNSAFE_STATUS,
+      scope: scopeName,
+      stale: true,
+      safe_autofix: false,
+      repair: CODEX_V2_DIRECT_TRANSPORT_NOTE,
+      extra_unmanaged: scope.extraUnmanaged,
+      dispatch_mode: scope.dispatch_mode,
+      multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+      ...codexV2TransportEnvelope(scope),
+      dispatch_posture: scope.dispatch_posture,
+      model_reasoning_effort: scope.model_reasoning_effort,
+      multi_agent_enabled: scope.multi_agent_enabled,
+      dispatch_posture_warning: scope.dispatch_posture_warning,
+      max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
+      max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
+      effective_subagent_width: scope.effective_subagent_width,
+      min_wait_timeout_ms: scope.min_wait_timeout_ms,
+      max_wait_timeout_ms: scope.max_wait_timeout_ms,
+      default_wait_timeout_ms: scope.default_wait_timeout_ms,
+      config_path: path.join(codexDir, 'config.toml'),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,6 +1109,9 @@ function runPreflight(opts) {
   // project-scope inspection + autofix path UNCHANGED (back-compat + fail-closed preserved).
   const globalCodexDir = path.join(homeDir, '.codex');
   const globalScope = inspectScope({ codexDir: globalCodexDir, templateRoles, templateEntries });
+  if (globalScope.codex_v2_direct_transport_ready === false) {
+    return unsafeCodexV2Transport(globalScope, 'global', globalCodexDir);
+  }
   if (scopeIsFresh(globalScope)) {
     return {
       exitCode: 0,
@@ -1022,6 +1123,7 @@ function runPreflight(opts) {
         autofixed: false,
         dispatch_mode: globalScope.dispatch_mode,
         multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(globalScope),
         dispatch_posture: globalScope.dispatch_posture,
         model_reasoning_effort: globalScope.model_reasoning_effort,
         multi_agent_enabled: globalScope.multi_agent_enabled,
@@ -1038,6 +1140,9 @@ function runPreflight(opts) {
 
   // --- Inspect the project scope (template roles only; plan roles handled below) ---
   const scope = inspectScope({ codexDir, templateRoles, templateEntries });
+  if (scope.codex_v2_direct_transport_ready === false) {
+    return unsafeCodexV2Transport(scope, 'project', codexDir);
+  }
 
   // --- Conflicting [agents.*] outside managed block is UNSAFE to autofix ---
   if (scope.conflictingRolesOutside.length > 0) {
@@ -1052,6 +1157,7 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1078,6 +1184,7 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1121,6 +1228,7 @@ function runPreflight(opts) {
         autofixed: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1146,6 +1254,7 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1168,6 +1277,7 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1190,6 +1300,7 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1212,6 +1323,7 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1234,6 +1346,7 @@ function runPreflight(opts) {
       safe_autofix: true,
       dispatch_mode: scope.dispatch_mode,
       multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+      ...codexV2TransportEnvelope(scope),
       dispatch_posture: scope.dispatch_posture,
       model_reasoning_effort: scope.model_reasoning_effort,
       multi_agent_enabled: scope.multi_agent_enabled,
@@ -1267,6 +1380,7 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1293,6 +1407,7 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -1309,6 +1424,9 @@ function runPreflight(opts) {
 
   // --- Re-verify after autofix: re-run ALL checks (#332). ---
   const after = inspectScope({ codexDir, templateRoles, templateEntries });
+  if (after.codex_v2_direct_transport_ready === false) {
+    return unsafeCodexV2Transport(after, 'project', codexDir);
+  }
   const { missingRoles: afterMissingPlan } = checkProfiles(agentsDir, planRoles);
   const afterMissingProfiles = [...new Set([...after.missingProfiles, ...afterMissingPlan])];
   const afterMissingFromBlock = requiredRoles.filter(r => !after.rolesInBlock.includes(r));
@@ -1333,6 +1451,7 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: after.dispatch_mode,
         multi_agent_v2_enabled: after.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(after),
         dispatch_posture: after.dispatch_posture,
         model_reasoning_effort: after.model_reasoning_effort,
         multi_agent_enabled: after.multi_agent_enabled,
@@ -1356,6 +1475,7 @@ function runPreflight(opts) {
       autofixed: true,
       dispatch_mode: after.dispatch_mode,
       multi_agent_v2_enabled: after.multi_agent_v2_enabled,
+      ...codexV2TransportEnvelope(after),
       dispatch_posture: after.dispatch_posture,
       model_reasoning_effort: after.model_reasoning_effort,
       multi_agent_enabled: after.multi_agent_enabled,
@@ -1384,7 +1504,8 @@ function scopeIsStale(s) {
     s.missingFromBlock.length > 0 ||
     s.staleRolesInBlock.length > 0 ||
     s.conflictingRolesOutside.length > 0 ||
-    s.manifest === 'unsupported'
+    s.manifest === 'unsupported' ||
+    s.codex_v2_direct_transport_ready === false
   );
 }
 
@@ -1413,6 +1534,7 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     manifest: scope.manifest,
     dispatch_mode: scope.dispatch_mode,
     multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+    ...codexV2TransportEnvelope(scope),
     dispatch_posture: scope.dispatch_posture,
     model_reasoning_effort: scope.model_reasoning_effort,
     multi_agent_enabled: scope.multi_agent_enabled,
@@ -1424,7 +1546,9 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     max_wait_timeout_ms: scope.max_wait_timeout_ms,
     default_wait_timeout_ms: scope.default_wait_timeout_ms,
     read_only: !!readOnly,
-    repair,
+    repair: scope.codex_v2_direct_transport_ready === false
+      ? CODEX_V2_DIRECT_TRANSPORT_NOTE
+      : repair,
   };
 }
 
@@ -1517,6 +1641,9 @@ function runDoctor(opts) {
       manifest: 'n/a',
       dispatch_mode: 'n/a',
       multi_agent_v2_enabled: false,
+      codex_v2_transport_mode: 'n/a',
+      codex_v2_direct_transport_ready: null,
+      codex_v2_transport_warning: null,
       dispatch_posture: 'n/a',
       model_reasoning_effort: null,
       multi_agent_enabled: false,
@@ -1561,11 +1688,12 @@ if (require.main === module) {
     } else {
       for (const s of (result.scopes || [])) {
         const stale = (s.scope !== 'plugin_cache')
-          ? (s.exists && (s.malformed.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest === 'unsupported'))
+          ? (s.exists && (s.malformed.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest === 'unsupported' || s.codex_v2_direct_transport_ready === false))
           : (s.malformed.length > 0);
         const state = !s.exists ? 'absent' : (stale ? 'stale' : 'ok');
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
         if (stale) process.stdout.write(`  repair: ${s.repair}\n`);
+        if (s.codex_v2_transport_warning) process.stdout.write(`  transport: ${s.codex_v2_transport_warning}\n`);
         // #598: ATTESTATION-STYLE / NON-FATAL — dispatch-posture WARN never affects exitCode.
         if (s.dispatch_posture_warning) process.stdout.write(`  warn: ${s.dispatch_posture_warning}\n`);
         // MultiAgentV2 bounds: report-only, never affects exitCode. null when v2 not active.
@@ -1637,6 +1765,9 @@ module.exports = {
   CODEX_REASONING_EFFORT,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
+  codexV2TransportEnvelope,
+  CODEX_V2_TRANSPORT_UNSAFE_STATUS,
+  CODEX_V2_DIRECT_TRANSPORT_NOTE,
   deriveDispatchPosture,
   parseFeaturesMultiAgentEnabled,
   parseTopLevelModelReasoningEffort,

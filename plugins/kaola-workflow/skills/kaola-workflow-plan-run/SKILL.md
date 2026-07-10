@@ -95,6 +95,13 @@ output/decryption failure does not erase valid JSONL profile evidence. For real 
 separate transport failure handled only by the durable-result contract below: verified child-written
 cache evidence may continue as `returned_partial`; missing or invalid cache evidence cannot.
 
+Codex collaboration transport is a hard pre-dispatch gate. In v2 task-name mode, invoke every
+collaboration operation with a direct collaboration tool, never through `functions.exec` or Code Mode.
+If preflight reports `codex_v2_encrypted_transport_unsafe`, or the runtime exposes collaboration only
+through that nested adapter, refuse before spawning. Do not retry an encrypted-output decode failure
+and do not fall back to a default role: the same nested plaintext task will be misclassified as an
+encrypted task again.
+
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
 passes, call `spawn_agent` with `task_name: dispatch.codex_task_name`, `agent_type:
 dispatch.agent_type`, and `fork_turns: "none"` on EVERY role dispatch — the dispatch card

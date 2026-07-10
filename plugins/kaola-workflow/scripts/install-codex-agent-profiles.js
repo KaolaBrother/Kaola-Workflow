@@ -906,25 +906,43 @@ function splitInlineTomlFields(body) {
 function parseMultiAgentV2Value(value) {
   const trimmed = String(value || '').trim();
   const bool = parseTomlBoolean(trimmed);
-  if (bool !== null) return { valid: true, enabled: bool };
+  if (bool !== null) return { valid: true, enabled: bool, non_code_mode_only: null };
 
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
-    return { valid: false, enabled: false };
+    return { valid: false, enabled: false, non_code_mode_only: null };
   }
 
-  let found = false;
+  let enabledFound = false;
   let enabled = false;
+  let transportFound = false;
+  let transportAmbiguous = false;
+  let nonCodeModeOnly = null;
   for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
-    const m = field.match(/^enabled\s*=\s*(.+)$/);
-    if (!m) continue;
-    if (found) return { valid: false, enabled: false };
-    const fieldBool = parseTomlBoolean(m[1]);
-    if (fieldBool === null) return { valid: false, enabled: false };
-    found = true;
-    enabled = fieldBool;
+    const enabledMatch = field.match(/^enabled\s*=\s*(.+)$/);
+    if (enabledMatch) {
+      if (enabledFound) return { valid: false, enabled: false, non_code_mode_only: null };
+      const fieldBool = parseTomlBoolean(enabledMatch[1]);
+      if (fieldBool === null) return { valid: false, enabled: false, non_code_mode_only: null };
+      enabledFound = true;
+      enabled = fieldBool;
+      continue;
+    }
+    const transportMatch = field.match(/^non_code_mode_only\s*=\s*(.+)$/);
+    if (transportMatch) {
+      if (transportFound) {
+        transportAmbiguous = true;
+        continue;
+      }
+      const fieldBool = parseTomlBoolean(transportMatch[1]);
+      transportFound = true;
+      if (fieldBool === null) transportAmbiguous = true;
+      else nonCodeModeOnly = fieldBool;
+    }
   }
 
-  return found ? { valid: true, enabled } : { valid: false, enabled: false };
+  return enabledFound
+    ? { valid: true, enabled, non_code_mode_only: nonCodeModeOnly, transport_ambiguous: transportAmbiguous }
+    : { valid: false, enabled: false, non_code_mode_only: null };
 }
 
 function detectCodexDispatchMode(configContent) {
@@ -933,6 +951,20 @@ function detectCodexDispatchMode(configContent) {
   let seen = false;
   let enabled = false;
   let ambiguous = false;
+  let transportSeen = false;
+  let transportAmbiguous = false;
+  let nonCodeModeOnly = null;
+
+  function recordTransport(value) {
+    if (value === null || value === undefined) return;
+    if (transportSeen || typeof value !== 'boolean') {
+      transportAmbiguous = true;
+      nonCodeModeOnly = null;
+      return;
+    }
+    transportSeen = true;
+    nonCodeModeOnly = value;
+  }
 
   function record(parsed) {
     if (!parsed.valid || seen) {
@@ -942,6 +974,8 @@ function detectCodexDispatchMode(configContent) {
     }
     seen = true;
     enabled = parsed.enabled;
+    recordTransport(parsed.non_code_mode_only);
+    if (parsed.transport_ambiguous) transportAmbiguous = true;
   }
 
   for (const rawLine of lines) {
@@ -958,17 +992,42 @@ function detectCodexDispatchMode(configContent) {
       const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
       if (m) record(parseMultiAgentV2Value(m[1]));
     } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-      const m = line.match(/^enabled\s*=\s*(.+)$/);
-      if (m) record({ valid: parseTomlBoolean(m[1]) !== null, enabled: parseTomlBoolean(m[1]) === true });
+      const enabledMatch = line.match(/^enabled\s*=\s*(.+)$/);
+      if (enabledMatch) {
+        record({
+          valid: parseTomlBoolean(enabledMatch[1]) !== null,
+          enabled: parseTomlBoolean(enabledMatch[1]) === true,
+          non_code_mode_only: null,
+        });
+      }
+      const transportMatch = line.match(/^non_code_mode_only\s*=\s*(.+)$/);
+      if (transportMatch) {
+        const transportValue = parseTomlBoolean(transportMatch[1]);
+        if (transportValue === null) transportAmbiguous = true;
+        else recordTransport(transportValue);
+      }
     }
   }
 
   enabled = seen && !ambiguous && enabled;
+  const transportMode = !enabled
+    ? 'not_applicable'
+    : (transportAmbiguous
+      ? 'unknown'
+      : (nonCodeModeOnly === false ? 'nested-allowed' : 'direct-only'));
   return {
     dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
     multi_agent_v2_enabled: enabled,
+    codex_v2_transport_mode: transportMode,
+    codex_v2_direct_transport_ready: enabled ? transportMode === 'direct-only' : null,
+    codex_v2_transport_warning: enabled && transportMode !== 'direct-only'
+      ? CODEX_V2_DIRECT_TRANSPORT_NOTE
+      : null,
   };
 }
+
+const CODEX_V2_TRANSPORT_UNSAFE_STATUS = 'codex_v2_encrypted_transport_unsafe';
+const CODEX_V2_DIRECT_TRANSPORT_NOTE = 'Codex MultiAgentV2 encrypted task messages require direct-only collaboration tools. Set non_code_mode_only = true in the enabled [features] multi_agent_v2 inline object or [features.multi_agent_v2] table (or omit that field to use the Codex 0.144.1 direct-only default), then start a fresh Codex session; never dispatch spawn_agent, send_message, or followup_task through functions.exec or Code Mode.';
 
 // `[features] multi_agent = <bool>` — the base (v1) tool-exposure flag, distinct from
 // multi_agent_v2 (already parsed by detectCodexDispatchMode above). Same strict
@@ -1192,6 +1251,16 @@ function main() {
   const templateRoles = sourceCheck.roles;
   const templateEntries = sourceCheck.entries;
 
+  // MultiAgentV2 encrypts message arguments before direct tool execution. Code Mode nested-tool
+  // calls bypass that Responses encryption boundary, so a config that exposes collaboration tools
+  // there is an execution blocker rather than a warning. Refuse before writing profiles/config.
+  const preInstallConfigContent = fs.existsSync(targetConfig) ? read(targetConfig) : '';
+  const preInstallDispatchMode = detectCodexDispatchMode(preInstallConfigContent);
+  if (preInstallDispatchMode.codex_v2_direct_transport_ready === false) {
+    process.stderr.write(`${CODEX_V2_TRANSPORT_UNSAFE_STATUS}: ${CODEX_V2_DIRECT_TRANSPORT_NOTE}\n`);
+    process.exit(1);
+  }
+
   // 2. Refuse to prune against a future manifest schema.
   const prevManifest = readManifest(targetAgentsDir);
   if (prevManifest && typeof prevManifest.schema_version === 'number'
@@ -1273,6 +1342,7 @@ function main() {
   // ATTESTATION-STYLE / NON-FATAL treatment as the dispatch posture above (never
   // changes the exit code). Read back the same post-install config.toml content.
   const v2DispatchMode = detectCodexDispatchMode(postInstallConfigContent);
+  console.log(`Kaola-Workflow Codex multi_agent_v2 transport: ${v2DispatchMode.codex_v2_transport_mode}`);
   const v2Bounds = deriveMultiAgentV2Bounds(postInstallConfigContent, v2DispatchMode.multi_agent_v2_enabled);
   if (v2Bounds.max_concurrent_threads_per_session !== null) {
     console.log(
@@ -1326,6 +1396,8 @@ module.exports = {
   CODEX_REASONING_EFFORT,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
+  CODEX_V2_TRANSPORT_UNSAFE_STATUS,
+  CODEX_V2_DIRECT_TRANSPORT_NOTE,
   deriveDispatchPosture,
   parseFeaturesMultiAgentEnabled,
   parseTopLevelModelReasoningEffort,

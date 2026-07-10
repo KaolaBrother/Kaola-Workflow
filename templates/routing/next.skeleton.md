@@ -674,6 +674,12 @@ startup.** Scripts validate but never select or substitute issues.
 issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
 
+On Codex v2, use a direct collaboration tool for issue-scout; never through `functions.exec` or Code Mode.
+If preflight reports
+`codex_v2_encrypted_transport_unsafe`, or only the nested adapter is available, refuse before the
+scout spawn. Do not retry the encrypted-output decode failure and do not fall back to a default role:
+the same nested plaintext task will fail deterministically again.
+
 **Ordering — resolve the path BEFORE consuming a bundle:** the bundle lane is
 adaptive-only, so resolve the path intent (Startup Step 0a-1) *before*
 acting on the scout's recommendation. Pursue a bundle ONLY when the resolved path is
