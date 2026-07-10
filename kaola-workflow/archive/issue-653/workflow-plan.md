@@ -255,7 +255,7 @@ remote issue actually closed (a zero exit can still leave it open).
 | n7-review | complete |
 | n8-adversary | complete |
 | n9-docs | complete |
-| n10-finalize | in_progress |
+| n10-finalize | complete |
 ## Required Agent Compliance
 
 | Requirement | Status | Evidence | Skip Reason |
@@ -269,3 +269,4 @@ remote issue actually closed (a zero exit can still leave it open).
 | code-reviewer | subagent-invoked | evidence-binding: n7-review 5457dbfeedcc | |
 | adversarial-verifier (n8-adversary) | subagent-invoked | evidence-binding: n8-adversary 4f8238411572 | |
 | doc-updater (n9-docs) | subagent-invoked | evidence-binding: n9-docs 47d7e98fe9eb | |
+| finalize (n10-finalize) | main-session-direct | evidence-binding: n10-finalize 85eb04b623f3 | |
