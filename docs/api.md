@@ -523,6 +523,64 @@ alter refusal precedence, `operator_hint`, chain decision semantics, or the attr
 2. **Consumer (non-npm)** — a product repo whose validation is not npm-based (a Swift/Xcode app, a Makefile project) does **NOT** run `run-chains.js`. The agent **owns verification** ("Agent Owns Reasoning; Scripts Own Atomicity", #44): it records `.cache/final-validation.md` with a column-0 `verdict: pass`, and `--finalize-check` (consumer mode) gates on that file — `final_validation_unverified` (absent/empty) > `final_validation_failed` (no `verdict: pass`). When a terminal change-gate validation run is cited instead of rerun, agent-facing workflow prose requires column-0 citation lines `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`; these lines document the reuse boundary for humans and later agents. The machine gate intentionally remains unchanged and does not parse those citation fields. The v6.2.0 `kaola-workflow/chains.json` opt-in is **retired** (Pure option A — no opt-in middle-ground).
 3. The **attribution sweep** (every `git diff <base>...HEAD` change must be in the `.md` allowband or a `complete` node's declared write set, else `unattributed_change`) runs for **both** modes — the allowband-aware freshness check, so an un-attributed code change is caught regardless of repo kind.
 
+**Pre-tag release gate — `--release-check` (issue #651 / D-651-01).** A check-only,
+PLAN-INDEPENDENT twin of the `--finalize-check` chain-receipt arm, invoked directly on
+`kaola-workflow-plan-validator.js` with no plan path — at release time the adaptive run is long
+archived:
+
+```bash
+node scripts/kaola-workflow-plan-validator.js --release-check [--json] [--candidate <sha-ish>] [--receipt <path>]
+```
+
+- **Receipt default:** `<git-toplevel>/.cache/chain-receipt.json` — the same bare-cwd path
+  `kaola-workflow-run-chains.js`'s default stamp and `kaola-workflow-release.js` both read;
+  override with `--receipt`.
+- **Candidate:** defaults to `HEAD`; `--candidate <sha-ish>` normalizes via
+  `git rev-parse --verify <arg>^{commit}` (an unresolvable candidate fails CLOSED into the stale
+  arm). STRICT sha equality against the receipt's `headSha` — the #547 `codeTreeHash`
+  content-address relaxation used at adaptive finalize does NOT apply here; a release tag names
+  one exact commit.
+- **Coverage requirement.** The receipt must COVER every `test:kaola-workflow:*` edition chain
+  `package.json` declares. Expected set resolution: `['claude','codex','gitlab','gitea'].filter(n
+  => typeof scripts['test:kaola-workflow:'+n] === 'string')` — the identical predicate
+  `kaola-workflow-run-chains.js`'s own chain resolution and the `--finalize-check` repo-kind
+  discriminator both use, so producer and gate can never disagree about what "the full chain set"
+  means. A legitimately-produced subset receipt (e.g. `run-chains.js --chains claude`) is valid
+  *producer* output but is never sufficient *release* evidence.
+- **Typed refusal precedence** (structural `reason`, never string-matched):
+  `chains_unverified` (missing or unparseable receipt) > `chains_stale` (`headSha`
+  unbound/`'unknown'`/missing, or `headSha` != candidate — both attempt the hint-only
+  `stale_paths`/`stale_kind` culprit diagnostics reused from `--finalize-check`/D-648-01,
+  degrading to none when the stamped receipt has no clean bound `headSha` to diff from; or
+  `workTreeHash !== 'clean'`, i.e. stamped over a dirty worktree, which attaches no diagnostics)
+  > `chains_empty` (empty `chains[]`) > `repo_kind_undetermined` (the expected chain set cannot
+  be resolved — `package.json` missing, unreadable, or unparseable, or zero
+  `test:kaola-workflow:*` scripts declared; fails CLOSED rather than treat an unresolvable set as
+  vacuously covered — deliberately stricter than `--finalize-check`'s ENOENT→consumer-mode
+  downgrade, since a release is self-host-by-definition) > `chains_incomplete` (the receipt's
+  `chains[]` is a strict subset of the resolved expected set) > `chains_red` (an unwaived red
+  chain) > `chains_waived` (ANY `accepted_red` chain refuses — a waiver is legal at adaptive
+  finalize but never for a release tag). Coverage is checked BEFORE greenness, so an incomplete
+  receipt refuses `chains_incomplete` even when every chain it does carry is green.
+- **Pass envelope:**
+  ```json
+  { "result": "pass", "mode": "release-check", "candidate": "<full sha>", "chains": [{ "name": "claude", "exitCode": 0, "accepted_red": false }] }
+  ```
+- **Refuse envelope:** the shared `{ result: "refuse", reason, operator_hint, errors: [...] }`
+  shape, plus mode-specific fields — `missingChains: string[]` + `expectedChains: string[]` on
+  `chains_incomplete` (e.g.
+  `{"missingChains":["codex","gitlab","gitea"],"expectedChains":["claude","codex","gitlab","gitea"]}`
+  for a claude-only receipt), `redChains: [{name, exitCode, timed_out}]` on `chains_red`,
+  `waivedChains: [{name, exitCode, accepted_red_issue}]` on `chains_waived`, and
+  `stale_paths`/`stale_paths_truncated`/`stale_kind` (see above) on a sha-mismatch or
+  unbound-headSha `chains_stale`. `repo_kind_undetermined` carries no extra structural fields
+  beyond the shared shape.
+- Self-owned (Self-Sufficient by Default): reads only the receipt file and local `git`; no forge
+  or CI/CD calls; zero fs writes; `process.exitCode` only.
+
+See `docs/conventions.md` § Release for the documented pre-tag sequence this gate is wired into,
+and `docs/decisions/D-651-01.md` for the design record.
+
 ### Export: `ROLE_TOKEN_REGISTRY` (issue #433)
 
 Exported from `scripts/kaola-workflow-plan-validator.js`. The single source of truth for the evidence token vocabulary per role — the token shapes that `open-next`/`open-ready` seed into `.cache/<node-id>.md` stubs and that the close gate verifies.

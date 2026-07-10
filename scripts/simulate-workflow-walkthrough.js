@@ -3765,15 +3765,22 @@ function testBundle424432433ValidatorGates() {
   // (a release tag names an exact commit); (3) headSha 'unknown'/missing REFUSES (release.js's
   // chainReceiptGreenness treats 'unknown' as green — the gate must NOT copy that leniency);
   // (4) a WAIVED chain (accepted_red) refuses chains_waived — legal at adaptive finalize, never for
-  // a release tag. Precedence: chains_unverified > chains_stale > chains_empty > chains_red >
+  // a release tag; (5) the receipt must COVER the full resolved chain set (every test:kaola-workflow:*
+  // edition chain package.json declares) — a legitimately-produced SUBSET receipt (run-chains
+  // --chains claude) refuses chains_incomplete, and an unresolvable chain set (no/corrupt
+  // package.json) fails CLOSED. Precedence: chains_unverified > chains_stale > chains_empty >
+  // repo_kind_undetermined (unresolvable chain set) > chains_incomplete > chains_red >
   // chains_waived. Fixtures mirror the real repo: root /.cache/ is gitignored, so the untracked
-  // receipt itself never pollutes the culprit hints.
+  // receipt itself never pollutes the culprit hints; package.json declares all four edition chains.
   const mkReleaseRepo = () => {
     const grepo = adaptiveTmp('release651-git');
     initGitRepo(grepo);
     fs.writeFileSync(path.join(grepo, '.gitignore'), '/.cache/\n');
-    spawnSync('git', ['-C', grepo, 'add', '.gitignore'], { encoding: 'utf8' });
-    spawnSync('git', ['-C', grepo, 'commit', '-m', 'ignore root .cache'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(grepo, 'package.json'), JSON.stringify({ scripts: {
+      'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
+      'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } }) + '\n');
+    spawnSync('git', ['-C', grepo, 'add', '.gitignore', 'package.json'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', grepo, 'commit', '-m', 'ignore root .cache + self-host chains'], { encoding: 'utf8' });
     return grepo;
   };
   const writeRootReceipt = (grepo, obj) => {
@@ -3901,6 +3908,47 @@ function testBundle424432433ValidatorGates() {
       const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
       assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
         '#651 (10): a dirty-stamped receipt must refuse chains_stale even at the candidate sha, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (11) SUBSET receipt → chains_incomplete: a green, fresh, clean-stamped receipt covering
+  //     only ONE declared chain (legitimately producible via run-chains --chains claude) must refuse
+  //     with the missing chains named STRUCTURALLY — one green chain is not four-chain evidence.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean',
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_incomplete'
+        && JSON.stringify(out.missingChains) === JSON.stringify(['codex', 'gitlab', 'gitea']),
+        '#651 (11): a subset (claude-only) receipt must refuse chains_incomplete naming the missing chains, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (12) PRECEDENCE slot: an incomplete receipt whose one chain is also RED refuses
+  //     chains_incomplete (coverage before greenness — the family's empty > red ordering extended);
+  //     chains_empty stays ABOVE it (case 8: an empty receipt refuses chains_empty, not incomplete).
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean',
+        chains: [{ name: 'claude', exitCode: 1, accepted_red: false }] });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_incomplete',
+        '#651 (12): an incomplete receipt with a red member must refuse chains_incomplete (precedence over chains_red), got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (13) UNRESOLVABLE chain set (no package.json) → repo_kind_undetermined, fail-closed:
+  //     with no declared test:kaola-workflow:* set to verify coverage against, a full green receipt
+  //     must NOT pass (an empty expected set would make the coverage check vacuous — a fail-open).
+  { const grepo = adaptiveTmp('release651-nopkg-git');
+    try {
+      initGitRepo(grepo);
+      fs.writeFileSync(path.join(grepo, '.gitignore'), '/.cache/\n');
+      spawnSync('git', ['-C', grepo, 'add', '.gitignore'], { encoding: 'utf8' });
+      spawnSync('git', ['-C', grepo, 'commit', '-m', 'ignore root .cache'], { encoding: 'utf8' });
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'repo_kind_undetermined',
+        '#651 (13): an unresolvable chain set (no package.json) must refuse repo_kind_undetermined, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   // --- #424 (3, finalize sweep) UNATTRIBUTED_CHANGE: a branch change owned by NO complete node and

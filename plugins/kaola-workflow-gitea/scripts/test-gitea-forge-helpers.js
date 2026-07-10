@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
+// Hermetic against ambient KAOLA_WORKFLOW_OFFLINE: this suite manages the var itself (the OFFLINE
+// sub-test below sets, cache-busts, and restores it explicitly). The claim module captures OFFLINE
+// at require time, so an inherited value from the caller's environment (e.g. a blanket offline
+// pre-tag test run) would silently flip every online-path sub-test to the offline short-circuit.
+// Drop it BEFORE any require that captures it; the deliberate offline sub-test is unaffected.
+delete process.env.KAOLA_WORKFLOW_OFFLINE;
+
 const assert = require('assert');
 const forge = require('./kaola-gitea-forge');
 

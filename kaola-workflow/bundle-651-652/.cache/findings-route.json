@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=documented-release-sequence-dead-end-FIXED-forge-helpers-hermeticity-verified-and-full-sequence-re-walked-to-green-by-this-gate",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=fix status=resolved severity=medium fix_role=tdd-guide rationale=partial-chain-receipt-fail-open-FIXED-coverage-arm-chains_incomplete-verified-against-crafted-AND-official-producer-subset-receipts",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

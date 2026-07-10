@@ -100,6 +100,10 @@ const OPERATOR_HINT_REGISTRY = {
   // #651: release-only strictness — a waiver (accepted_red) is legal at adaptive finalize but a
   // release tag demands an UNWAIVED all-green receipt, so ANY waived chain is a typed refusal here.
   chains_waived: (ctx) => `Chain(s) waived (accepted_red) in the receipt${ctx && Array.isArray(ctx.waivedChains) && ctx.waivedChains.length ? ': ' + ctx.waivedChains.join(', ') : ''}. A waiver is legal at adaptive finalize but a release tag requires an UNWAIVED all-green four-chain receipt — fix the waived chain and regenerate the receipt with kaola-gitea-workflow-run-chains.js at the release-candidate commit.`,
+  // #651: release-only coverage — a SUBSET receipt (run-chains --chains <subset>) is a legitimate
+  // producer output but is never four-chain release evidence; the receipt must cover EVERY declared
+  // edition chain.
+  chains_incomplete: (ctx) => `Chain receipt does not cover the full declared chain set${ctx && Array.isArray(ctx.missingChains) && ctx.missingChains.length ? ' — missing: ' + ctx.missingChains.join(', ') : ''}. A release requires a receipt over EVERY declared test:kaola-workflow:* edition chain — regenerate with kaola-gitea-workflow-run-chains.js (no --chains subset) at the release-candidate commit.`,
   // #475: consumer (non-npm) finalize gate — the agent's recorded validation IS the gate (no chain receipt).
   final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification (#44): record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
   final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
@@ -2423,8 +2427,17 @@ function attachChainsStaleDiagnostics(payload, root, project, receipt) {
 //     PLUS uncommitted edits, not the tree the tag would name.
 //   • ANY waived chain (accepted_red) refuses chains_waived — a waiver is legal at adaptive
 //     finalize, never for a release tag (release demands an UNWAIVED all-green receipt).
+//   • the receipt must COVER the full resolved chain set — every test:kaola-workflow:* edition
+//     chain package.json declares (the same self-owned probe the finalize-time repo-kind
+//     discriminator uses). A SUBSET receipt (run-chains --chains claude) is a legitimate producer
+//     output but never four-chain release evidence: chains_incomplete. An unresolvable chain set
+//     (missing/unreadable/unparseable package.json, or zero declared chains) fails CLOSED with
+//     repo_kind_undetermined — stricter than finalize's ENOENT→consumer downgrade, because a
+//     release is self-host-by-definition and an empty expected set would make coverage vacuous.
 // Typed precedence family (structural `reason`, never string-matched):
-//   chains_unverified > chains_stale > chains_empty > chains_red > chains_waived.
+//   chains_unverified > chains_stale > chains_empty > repo_kind_undetermined (unresolvable chain
+//   set) > chains_incomplete > chains_red > chains_waived — coverage before greenness, extending
+//   the family's existing empty > red ordering.
 // The sha-mismatch arm attaches the hint-only culprit diagnostics (stale_paths/stale_kind) and
 // degrades to the generic refusal on uncertainty, exactly like the finalize gate.
 function releaseCheck(args) {
@@ -2472,6 +2485,27 @@ function releaseCheck(args) {
   const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
   if (chains.length === 0) {
     refuse({ result: 'refuse', reason: 'chains_empty', operator_hint: getOperatorHint('chains_empty'), errors: ['chain receipt at ' + receiptPath + ' has an empty chains[] array — zero chains were verified; regenerate the receipt with kaola-gitea-workflow-run-chains.js over a resolved chain set'] }, 'chains_empty (empty chains[] at ' + receiptPath + ')');
+    return;
+  }
+  // COVERAGE: resolve the expected chain set from package.json (KNOWN_CHAINS membership — the exact
+  // predicate run-chains resolveChains and the finalize discriminator use, so producer and gate
+  // never disagree). Fail CLOSED on an unresolvable set: passing coverage against an empty expected
+  // set would let ANY receipt through (a fail-open).
+  const pkgPath = path.join(root, 'package.json');
+  let expectedChains = null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+    expectedChains = ['claude', 'codex', 'gitlab', 'gitea'].filter(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+  } catch (_) { expectedChains = null; }
+  if (!expectedChains || expectedChains.length === 0) {
+    refuse({ result: 'refuse', reason: 'repo_kind_undetermined', operator_hint: getOperatorHint('repo_kind_undetermined'), errors: ['cannot resolve the release chain set from ' + pkgPath + ' (missing/unreadable/unparseable package.json, or no test:kaola-workflow:* edition chain scripts declared) — the release gate verifies the receipt against the FULL declared chain set and refuses rather than passing a vacuous coverage check'] }, 'repo_kind_undetermined (unresolvable chain set at ' + pkgPath + ')');
+    return;
+  }
+  const gotChains = new Set(chains.map(c => c && c.name).filter(Boolean));
+  const missingChains = expectedChains.filter(n => !gotChains.has(n));
+  if (missingChains.length) {
+    refuse({ result: 'refuse', reason: 'chains_incomplete', operator_hint: getOperatorHint('chains_incomplete', { missingChains }), missingChains, expectedChains, errors: ['chain receipt covers only [' + Array.from(gotChains).join(', ') + '] of the declared chain set [' + expectedChains.join(', ') + '] — missing: ' + missingChains.join(', ') + '; a release demands the FULL unwaived set — regenerate with kaola-gitea-workflow-run-chains.js (no --chains subset) at the candidate commit'] }, 'chains_incomplete (missing ' + missingChains.join(', ') + ')');
     return;
   }
   const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
@@ -2536,11 +2570,13 @@ function printHelp() {
     '                 the .md allowband OR a `complete` node\'s declared write set, else unattributed_change.\n' +
     '                 [--base REF (default main)] [--receipt PATH (self-host)] [--head SHA (self-host)]\n' +
     '  --release-check  the PRE-TAG RELEASE gate (check-only, PLAN-INDEPENDENT — no plan path; self-owned: reads only the\n' +
-    '                 receipt + local git, no CI/CD or forge calls). Refuses unless <git-toplevel>/.cache/chain-receipt.json\n' +
-    '                 is a clean-stamped, all-green, UNWAIVED receipt whose headSha EQUALS the release-candidate commit\n' +
-    '                 (STRICT sha pin — no codeTreeHash relaxation; headSha "unknown"/missing refuses). Typed precedence:\n' +
-    '                 chains_unverified > chains_stale (with stale_paths/stale_kind culprit hints) > chains_empty >\n' +
-    '                 chains_red > chains_waived. [--candidate SHA (default HEAD)] [--receipt PATH] [--json]\n' +
+    '                 receipt + package.json + local git, no CI/CD or forge calls). Refuses unless <git-toplevel>/\n' +
+    '                 .cache/chain-receipt.json is a clean-stamped, all-green, UNWAIVED receipt COVERING every declared\n' +
+    '                 test:kaola-workflow:* chain, whose headSha EQUALS the release-candidate commit (STRICT sha pin — no\n' +
+    '                 codeTreeHash relaxation; headSha "unknown"/missing refuses). Typed precedence: chains_unverified >\n' +
+    '                 chains_stale (with stale_paths/stale_kind culprit hints) > chains_empty > repo_kind_undetermined\n' +
+    '                 (unresolvable chain set) > chains_incomplete > chains_red > chains_waived.\n' +
+    '                 [--candidate SHA (default HEAD)] [--receipt PATH] [--json]\n' +
     '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
     '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +

@@ -373,8 +373,45 @@ Decision record: `docs/decisions/D-435-01.md`.
 
 ## Release
 
+- **Pre-tag release gate (issue #651, D-651-01).** Before creating the release tag — whether
+  tagging manually or via `kaola-workflow-release.js --cut` — run the check-only,
+  plan-independent pre-tag gate: `node scripts/kaola-workflow-plan-validator.js --release-check
+  [--json] [--candidate <sha>] [--receipt <path>]`. It reads only `.cache/chain-receipt.json`
+  (git-toplevel default, overridable via `--receipt`), local git, and `package.json` (to resolve
+  the expected `test:kaola-workflow:*` chain set) — no CI/CD or forge calls — and refuses with a
+  typed `reason` unless the receipt is a clean-stamped, all-green, UNWAIVED receipt COVERING
+  every declared chain, whose `headSha` STRICTLY equals the release-candidate commit (default
+  `HEAD`; `--candidate` for an explicit commit — the #547 `codeTreeHash` freshness relaxation
+  used at adaptive finalize is deliberately NOT applied here; a release tag names an exact
+  commit). A red, missing, stale, incomplete, waived, or unresolvable-chain-set receipt is a
+  typed refusal, never a judgment call: `chains_unverified` (no/unparseable receipt) >
+  `chains_stale` (`headSha` unbound/mismatched, or the receipt stamped over a dirty worktree —
+  with hint-only `stale_paths`/`stale_kind` culprit diagnostics on a sha mismatch) >
+  `chains_empty` (zero chains recorded) > `repo_kind_undetermined` (the expected chain set
+  cannot be resolved from `package.json` — fails CLOSED, never treated as a vacuous pass) >
+  `chains_incomplete` (the receipt is a legitimate but partial subset — e.g. a
+  `run-chains.js --chains claude` receipt — missing one or more declared chains; refuse carries
+  structural `missingChains`/`expectedChains`) > `chains_red` (an unwaived red chain) >
+  `chains_waived` (ANY `accepted_red` chain — legal at adaptive finalize, never for a release
+  tag). Only a typed `pass` envelope
+  (`{result:'pass', mode:'release-check', candidate, chains:[...]}`) clears the gate. See
+  `docs/api.md` for the full envelope shapes and `docs/decisions/D-651-01.md` for the design.
+- **Working sequence** (tag-before-test posture unchanged — see below): bump commit (version +
+  release docs only — see the release-commit hygiene rule below) →
+  `KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js` at the bump commit
+  (OFFLINE both skips the tag-existence check that would otherwise fail before the tag exists,
+  and lets the chains stamp `headSha` at the candidate with no tag needed yet) →
+  `--release-check` passes → create the tag → the online `npm test` run below → push the tag.
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).
 - Push the tag explicitly BEFORE `gh release create` (issue #402). An unpushed tag makes `gh release create` create the remote tag at the default-branch tip — a different commit than the local tag target. `npm test` also enforces the tag's commit is an ancestor of HEAD: a release stack rebased after tagging orphans the tag onto the pre-rebase commit, so re-point it (`git tag -f kaola-workflow--v<version> <new-sha>`) and force-push the moved tag (`git push --force origin kaola-workflow--v<version>`) after any rebase.
+- **Release-commit hygiene (issue #651).** A release/tag commit is version bump + release docs
+  only — `package.json`, the Codex/Claude-plugin manifests, `CHANGELOG.md`, and the README
+  release-version lines — never unrelated behavior-changing code. Bundling more (as happened at
+  `kaola-workflow--v6.21.3`, tagged with a red Claude chain and zero receipt because a breaking
+  change rode along under an unrelated commit subject) invalidates whatever receipt was checked:
+  the receipt's `headSha` no longer names the tree the tag actually covers. Anything beyond
+  version bump + release docs re-runs the whole sequence above — regenerate the receipt at the
+  new candidate, re-pass `--release-check`, re-tag.
 
 ### Release cutting (kaola-workflow-release.js)
 
@@ -383,6 +420,15 @@ Decision record: `docs/decisions/D-435-01.md`.
 - **`--verify`** — read-only pre-release check. Derives the closed-issue set by combining git-log commit messages since the last `kaola-workflow--v*` tag with every `#N` mention in the `[Unreleased]` CHANGELOG section, then cross-checks them. When the forge is reachable the check confirms referenced issues are actually closed; when offline the receipt carries `verification: "offline"` — a silent pass is never permitted. Changelog refs that cannot be accounted for produce a typed refusal: `{ result: "refuse", reason: "changelog_incomplete", missing: [N, ...] }`. Greenness is read from `.cache/chain-receipt.json` (#432); `--verify` surfaces chain warnings but does not block on them (only `--cut` requires green chains to proceed).
 - **`--cut --version X.Y.Z`** — `--version` is required; omitting it is a typed refusal (`missing_version`). Non-monotonic versions (not strictly greater than the last released version — the most recent `kaola-workflow--v*` tag) are refused before any mutation (`non_monotonic_version`). The three Codex manifests (`plugins/kaola-workflow{,-gitlab,-gitea}/.codex-plugin/plugin.json`) must all be at the same version before cutting (`lockstep_violation` otherwise). Codex version resolution (issue #455): `--cut` resolves the Codex target version in its own independent series (root `5.x` ↔ Codex `3.x`, per #193). By default it derives the Codex version by applying the same bump-KIND as root (e.g. `5.16.0→5.17.0` minor ⇒ `3.16.0→3.17.0`; major ⇒ next Codex major); override with `--codex-version A.B.C`. Two additional pre-mutation refusals: `codex_version_underivable` (no last root tag and no `--codex-version` provided) and `non_monotonic_codex_version` (resolved Codex version ≤ the Codex baseline — envelope includes `requested_codex_version` and `codex_baseline`). Both fire before any content mutation. On a passing in-process re-verification, `--cut` executes the following steps, writing a step-receipt JSONL at `.cache/release-receipt.jsonl` (#429 crash-resume pattern) after each: (0) persist `codex_resolution` receipt entry (after all guards pass, before content mutation — resumes reuse this and skip re-derive + monotonic re-guard); (1) rename `## [Unreleased]` → `## [X.Y.Z] - <ISO date>` in `CHANGELOG.md`; (2) bump `package.json`; (3) bump the three Codex manifests to the resolved Codex version (not the root version); (3b) bump the 2 `.claude-plugin` manifests (`plugins/kaola-workflow-{gitlab,gitea}/.claude-plugin/plugin.json`) to the ROOT version; (4) update README — Codex manifest version lines → Codex version; Claude Code command install edition lines → root version; (5) create the local `kaola-workflow--vX.Y.Z` tag (tag-before-test preserved). The success envelope gains `codex_version` and `codex_version_source` (`"derived"` or `"explicit"`). A re-run of a fully completed cut is idempotent (`idempotent: true`).
 - **`--push`** — the only remote-mutation path. Emits forge-neutral operator guidance for pushing the local tag and running the forge `release-create --latest` command. No forge CLI binary (`gh`, `glab`, `tea`) is invoked by the script itself; the actual publish step remains a manual or forge-specific invocation.
+
+**Interplay with the pre-tag `--release-check` gate (issue #651; non-reversal of D-632-01).**
+`--cut` itself still does not read chain greenness — the D-632-01 decision that `--cut` stays
+informational-only stands unchanged, for the same structural reason: the pre-cut receipt
+necessarily predates the tag `--cut` creates internally in its own step (5). The pre-tag
+`--release-check` gate documented above is a separate, script-independent step layered in front
+of `--cut`, not inside it: after stamping a fresh receipt at the bump commit, run
+`--release-check` before invoking `--cut --version X.Y.Z`. A `--release-check` refusal is a hard
+stop before `--cut` ever runs, not a judgment call bolted onto `--cut`'s own reporting.
 
 **Registration surface:** `kaola-workflow-release.js` is registered in `COMMON_SCRIPTS` (so the canonical-to-codex byte-mirror is enforced by `validate-script-sync.js`) and in the rename-normalized forge-ports family, but **NOT** in the install-manifest `SUPPORT_SCRIPT_NAMES` block. It is a maintainer/dev tool on the same operational profile as `release-surface-drift.js` (D-442-01 §6). If a chain goes red demanding manifest registration, stop and surface it rather than silently widening SUPPORT_SCRIPTS.
 
