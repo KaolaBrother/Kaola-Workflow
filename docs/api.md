@@ -294,7 +294,7 @@ Every mutating `adaptive-node.js` subcommand runs a layered guard prologue **bef
 - **`no_barrier_base` — new `adaptive-node.js` hint (issue #590).** The close-time reason itself is pre-existing, emitted by `plan-validator.js` when no per-node baseline was recorded (unchanged). What's new is that `adaptive-node.js`'s own `OPERATOR_HINT_REGISTRY` now carries an entry for it (previously it fell through to the generic fallback hint), naming the idempotent `open-next` re-invoke as the repair — re-running `open-next` re-records the baseline without disturbing an already-`in_progress` row. See `docs/decisions/D-590-01.md` (the companion baseline-first `open-next` reorder that makes the underlying dead-end unreachable on a fresh open).
 - Non-blocking warnings (informational, do not refuse): **`verdict_unparsed`** (#403.4 — a verdict-bearing role's evidence has a `Verdict:` line the strict column-0 finalize check won't recognize, e.g. a capital key), and **`baselineReused`** (#403.3 — `open-next` surfaces the validator's anti-laundering baseline-reuse decision).
 - **Finalize-check typed refusals (#424):** `drop_base_window_open` (`--drop-base` called while a node is `in_progress`); `unattributed_change` (a file in the whole-plan diff is declared only by a non-complete node — attribution sweep); `root_mismatch` (plan-path root does not match the project root).
-- **Finalize validation-gate typed refusals (#432/#475, dual-mode):** SELF-HOST (npm) — `chains_unverified` (no `.cache/chain-receipt.json` exists or is readable); `chains_stale` (the receipt's `codeTreeHash` does not match the current code-relevant tree — #547 D-547-01; a legacy receipt lacking the field falls back to the `headSha`-vs-`HEAD` pin); `chains_red` (one or more chains recorded a non-zero exit code in the receipt — use `--accept-known-red name:issue` to waive a known-red chain with a tracking issue). A JSON `chains_stale` refusal may add best-effort stale culprit diagnostics (`stale_paths`, `stale_paths_truncated`, `stale_kind`), but the typed `reason`, decision order, operator hint, and remedy remain unchanged. CONSUMER (non-npm; #475) — `final_validation_unverified` (no/empty `.cache/final-validation.md`); `final_validation_failed` (present but no column-0 `verdict: pass`). The repo kind is auto-detected (package.json `test:kaola-workflow:*` scripts).
+- **Finalize validation-gate typed refusals (#432/#475, dual-mode):** SELF-HOST (npm) — `chains_unverified` (no `.cache/chain-receipt.json` exists or is readable); `chains_stale` (the receipt's `codeTreeHash` does not match the current code-relevant tree — #547 D-547-01; a legacy receipt lacking the field falls back to the `headSha`-vs-`HEAD` pin); `chains_red` (one or more chains recorded a non-zero exit code in the receipt — use `--accept-known-red name:issue` to waive a known-red chain with a tracking issue). A JSON `chains_stale` refusal may add best-effort stale culprit diagnostics (`stale_paths`, `stale_paths_truncated`, `stale_kind`), but the typed `reason`, decision order, operator hint, and remedy remain unchanged. CONSUMER (non-npm; #475) — `final_validation_unverified` (no/empty `.cache/final-validation.md`); `final_validation_failed` (present but no column-0 `verdict: pass`); **`final_validation_unbound`** (issue #653 — no well-formed column-0 `validated_candidate_hash:` line, so the pass verdict is not bound to a candidate snapshot); **`final_validation_stale`** (issue #653 — the recorded hash no longer equals a fresh recompute over the current tree; payload carries `recorded_candidate_hash` + `current_candidate_hash`). Consumer precedence: `final_validation_unverified > final_validation_failed > final_validation_unbound > final_validation_stale`. The repo kind is auto-detected (package.json `test:kaola-workflow:*` scripts). See § Candidate-hash binding for consumer final-validation (issue #653) below for the producer mode and parser.
 - **Speculative-open kernel typed outcomes (#439, D-419 Part 4; write graduation #596, D-596-01):** `gate_not_complete` fires in TWO slots — at **open** (`open-next` of a node — read-only, or since #596 also write-bearing — whose ONLY unsatisfied dependency is an open gate; it is speculative-eligible and is NOT opened serially; carries `speculativeGate`, points at `open-ready --speculative-consent`) and at **close** (a `speculative:true` member cannot commit to `complete` until its gate is `complete` — it is held, so its review pointer + discard handle survive; never deadlocks since the gate is an upstream dependency; unchanged by #596). `speculative_review_required` (NON-blocking, attached to a successful gate `close-node`/`close-and-open-next` whose verdict was `fail` — names the `speculative` members that bet on it; a READ member the operator KEEPs or `discard-speculative`s, a WRITE member is `discard-speculative`-ONLY — no KEEP option, see below); `not_speculative` / `not_in_running_set` (`discard-speculative` of a non-speculative or non-live node). **`speculative_write_excluded` (#596; `parent_dirty` added #615)** — `open-ready`'s `reason` when zero speculative writers opened this call because ALL candidates were excluded; the accompanying `speculativeWriteExcluded: { reason, nodeIds }` object also rides alongside a `result:'ok'` PARTIAL open (some speculative writers opened, siblings excluded) — `reason` is `'no_leg_capability'` (the host cannot provision a leg, so EVERY write candidate is excluded; read speculation is unaffected), `'overlaps_live_writer'` (a candidate's declared set collides with a currently-live writer per the SAME `--parallel-safe` re-check normal write co-open uses; only the overlapping candidate(s) are excluded, disjoint siblings still open), or `'parent_dirty'` (#615 — the parent worktree carries out-of-allowband production dirt from already-closed serial siblings, verified via the SAME `--parent-clean-check` fence the last-member close runs; co-opening over that dirt would reach a structurally unsatisfiable last-member close, so EVERY write candidate is excluded from THIS open — read speculation is unaffected, and the excluded write(s) simply wait for their gate normally). See the speculative-open kernel section below.
 - **`serialDegradeReason` (#616) — the non-speculative co-open sibling of `speculativeWriteExcluded`.** `open-ready`'s response carries an additive `serialDegradeReason: 'parent_dirty'` field (string) on a **SUCCESSFUL single-write open** (`result:'ok'`, `opened:[<one write node>]`) — the opposite polarity of `speculativeWriteExcluded`, which rides an **empty/no-open** response — set ONLY when a normal (non-speculative) ≥2-member write frontier never even attempted a lane-group co-open, and instead degraded straight to a single serial write, BECAUSE `parentCarriesProductionDirt()` returned true (the SAME `--parent-clean-check` fence #615's `speculativeWriteExcluded: { reason: 'parent_dirty' }` reuses — a persistently dirty parent is now visible on the non-speculative path too, instead of silently serializing every write frontier forever). The field is **absent** (no key on the response at all — byte-identical to pre-#616) for every other serial-degrade cause, none of which ever evaluate the parent-clean fence: a single ready write node (`writeNodes.length < 2`), `!legCoupled` (no leg capability), `groupCeiling < 2` (an operator-capped fan-out below 2), or `!grp.ok` (the validator's `--parallel-safe` re-check found a genuine overlap).
 
@@ -522,6 +522,71 @@ alter refusal precedence, `operator_hint`, chain decision semantics, or the attr
 1. **Self-host (npm)** — `package.json` declares `test:kaola-workflow:*` scripts. The contractor runs `run-chains.js` to produce `.cache/chain-receipt.json`, and `--finalize-check` enforces the chain-receipt gate (`chains_unverified` > `chains_stale` > `chains_red`). `run-chains.js` resolves only the built-in npm edition chains; with no such scripts it refuses `chains_config_missing` and writes no receipt.
 2. **Consumer (non-npm)** — a product repo whose validation is not npm-based (a Swift/Xcode app, a Makefile project) does **NOT** run `run-chains.js`. The agent **owns verification** ("Agent Owns Reasoning; Scripts Own Atomicity", #44): it records `.cache/final-validation.md` with a column-0 `verdict: pass`, and `--finalize-check` (consumer mode) gates on that file — `final_validation_unverified` (absent/empty) > `final_validation_failed` (no `verdict: pass`). When a terminal change-gate validation run is cited instead of rerun, agent-facing workflow prose requires column-0 citation lines `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`; these lines document the reuse boundary for humans and later agents. The machine gate intentionally remains unchanged and does not parse those citation fields. The v6.2.0 `kaola-workflow/chains.json` opt-in is **retired** (Pure option A — no opt-in middle-ground).
 3. The **attribution sweep** (every `git diff <base>...HEAD` change must be in the `.md` allowband or a `complete` node's declared write set, else `unattributed_change`) runs for **both** modes — the allowband-aware freshness check, so an un-attributed code change is caught regardless of repo kind.
+
+### Candidate-hash binding for consumer final-validation (issue #653 / D-653-01)
+
+The consumer-mode gate above (`final_validation_unverified` / `final_validation_failed`)
+previously accepted a bare column-0 `verdict: pass` with no proof it was ever computed against
+the candidate tree being finalized — a stale `.cache/final-validation.md` left over from an
+earlier candidate would pass silently. `--finalize-check` (consumer mode) now additionally binds
+the verdict to a content-address hash of the tree it validated.
+
+**Producer:**
+
+```bash
+node scripts/kaola-workflow-plan-validator.js <workflow-plan.md> --candidate-hash [--json]
+```
+
+Read-only; executes no tests. Emits the deterministic `computeCodeTreeHash` snapshot of the
+CURRENT candidate (committed + working landable tree, minus validation-invisible paths) over the
+same `validation_test_consumes` band the self-host chain-receipt producer uses — the frozen
+plan's `## Meta` block is the shared source, so producer and gate can never disagree about what
+counts as code-relevant. The hash root is `git rev-parse --show-toplevel` (the same discipline as
+the #547 self-host arm).
+
+```json
+{ "result": "ok", "mode": "candidate-hash", "validated_candidate_hash": "<64-hex-lowercase>" }
+```
+
+A git failure (cannot snapshot the worktree) refuses the typed `candidate_hash_unavailable`
+(exit 1) instead of emitting a partial or default hash. Non-JSON output prints the exact
+recordable column-0 line (`validated_candidate_hash: <hash>`).
+
+**Recording contract.** The agent records the emitted value as a column-0
+`validated_candidate_hash:` line in `.cache/final-validation.md`, computed LAST — after every
+file the validation covered has landed. Any later relevant edit stales the binding.
+
+**Parser.** `parseValidatedCandidateHash(text)`, exported from `kaola-workflow-adaptive-schema.js`
+(×4 byte-identical), follows the exact `parseNodeVerdict` discipline: pure, native multiline
+regex, fence-blind column-0 anchor (`^validated_candidate_hash:[ \t]*([0-9a-fA-F]{64})[ \t]*$`,
+case-insensitive on the hex, lowercased on read), last-well-formed-match-wins. Returns
+`{ present, hash }` — `present` is `true` on any column-0 `validated_candidate_hash:` line
+regardless of well-formedness, so a malformed 64-hex value trips the same fail-closed refusal as
+an absent field, never a silent partial bind.
+
+**Gate.** In the consumer arm of `--finalize-check`, after the existing `verdict: pass` check:
+`!present || !hash` refuses **`final_validation_unbound`**; otherwise the gate recomputes the
+current candidate hash (via the same `computeCodeTreeHash` call, or the `--current-code-tree`
+test seam) and, on a mismatch, refuses **`final_validation_stale`** with payload
+`recorded_candidate_hash` + `current_candidate_hash`. A matching hash's pass payload gains
+`validated_candidate_hash`. Extended consumer precedence: `final_validation_unverified >
+final_validation_failed > final_validation_unbound > final_validation_stale`. Two operator hints:
+`final_validation_unbound` → "final-validation.md lacks a column-0 validated_candidate_hash —
+recompute via --candidate-hash --json and re-record after confirming the tree still matches the
+validated candidate; if uncertain, re-run the validation command"; `final_validation_stale` → "a
+relevant source/test/test-consumed file changed after validation — re-run the recorded
+validation_command and re-record final-validation.md (including a fresh hash); never hand-patch
+the hash".
+
+**The gate compares two hashes and never re-executes a test.** #475's "the agent owns
+verification" boundary is unchanged — this closes only the missing-binding hole, not the
+verification boundary itself. The self-host chain-receipt arm is untouched in decision terms
+(`boundCandidateHash` stays `null` there, so the key is omitted from that arm's pass payload).
+#648's citation fields (`source: cited:<node-id>`, `validated_command`, `validated_at_head`,
+`reuse_boundary`) are likewise untouched — prose-only, no parser exists for them — but a citation
+now additionally requires a FRESH `validated_candidate_hash:` line computed at citation time,
+since the binding is what proves the cited run still covers the candidate. See
+`docs/decisions/D-653-01.md` for the full design.
 
 **Pre-tag release gate — `--release-check` (issue #651 / D-651-01).** A check-only,
 PLAN-INDEPENDENT twin of the `--finalize-check` chain-receipt arm, invoked directly on
@@ -2248,6 +2313,7 @@ unpopulated receipt reads as total failure, never silent success) and
   "branch_removed": "removed|kept|failed",
   "claim_planner_attested": "attested|missing|failed",
   "finalize_contractor_attested": "attested|missing|failed",
+  "selection_evidence": "present|absent",
   "warnings": []
 }
 ```
@@ -2304,6 +2370,19 @@ unpopulated receipt reads as total failure, never silent success) and
   bundle close is never reported as a clean success.
 
 `claim_planner_attested` and `finalize_contractor_attested` are WARN-FIRST detection fields (issue #277 M2). Both default to `'failed'` in `emptyReceipt()`. `checkDispatchAttestations` (called from the closure path in `kaola-workflow-claim.js`) reads `.cache/dispatch-log.jsonl`, sets each field to `attested` or `missing`, and pushes any warnings. It never modifies `closure_invariants.violations` — missing attestation is advisory only.
+
+**Attestation warning persistence to the archive (issue #653 / D-653-01).** The receipt fields above are otherwise ephemeral — recorded only in the finalize CLI's JSON stdout and the mutable `.cache/dispatch-log.jsonl`. `persistAttestationToSummary(destDir, receipt)` (`kaola-workflow-claim.js` + byte-identical Codex copy) durably appends a script-owned, presence-guarded (`/^## Attestation$/m`, create-if-absent) `## Attestation` section to the archived `finalization-summary.md`:
+
+```
+## Attestation
+claim_planner_attested: <value>
+finalize_contractor_attested: <value>
+<every receipt.warnings entry starting with 'ATTESTATION WARNING' or 'attestation:', verbatim, one per line>
+```
+
+Both column-0 status fields are always written, even when both are `attested` — a clean result is a positive statement, not an absence. Called in `cmdFinalize` immediately after `checkDispatchAttestations`, before `computeGoalCheck`. `appendClosureBlock`'s field set independently gains the same two attestation fields in the archived `workflow-state.md`'s `## Closure` block (see `docs/workflow-state-contract.md`), so the archive carries two durable, mutually-reinforcing copies of the attestation outcome. **Known residual:** a contractor-authored summary that pre-seeds a column-0 `## Attestation` heading before finalize suppresses the append (the presence guard exists for crash-resume idempotence, not tamper-resistance) — fenced by the `## Closure` block + stdout receipt still carrying the true fields in the same run, and by finalize prose forbidding removal/summarization of the section; see `docs/decisions/D-653-01.md`.
+
+**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since `issue-scout` only runs on the auto-bundle branch. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
 
 Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`
@@ -2639,6 +2718,43 @@ Remediation: commit or discard the worktree changes, then re-run `--sink`.
   "detail": "sink-merge refused: the linked worktree for branch ... has uncommitted changes ..."
 }
 ```
+
+### Sink journal disposal at terminal success (issue #653 / D-653-01)
+
+`sink-receipt.json` and `sink-fallback.json` are crash-resume transaction journals owned by
+`sink-merge.js` — previously they had no terminal cleanup and accumulated indefinitely in both
+the live and archived `.cache/` directories after a successful sink.
+
+`disposeSinkJournals(mainRoot, project)` (`kaola-workflow-sink-merge.js` + byte-identical Codex
+copy, hand-mirrored into the divergent gitlab/gitea sink-merge ports) unlinks all four candidate
+paths:
+
+```
+kaola-workflow/<project>/.cache/sink-receipt.json
+kaola-workflow/<project>/.cache/sink-fallback.json
+kaola-workflow/archive/<project>/.cache/sink-receipt.json
+kaola-workflow/archive/<project>/.cache/sink-fallback.json
+```
+
+Per-file `try`/`catch`: `ENOENT` is treated as already-disposed (not a failure); any other unlink
+error is a non-fatal stderr warning that never fails an otherwise-successful sink. Returns `true`
+iff nothing remains on disk afterward.
+
+**Call-site ordering is the correctness argument.** The call sits immediately after
+`finalReceipt` is parsed from disk into memory, strictly AFTER every `SINK_STEPS` entry, the #484
+ancestry freshness guard, and worktree/branch teardown have all completed — so ANY earlier crash
+or refusal path returns before ever reaching the dispose call, and the journal survives for
+resume exactly as before this issue (`testSinkTransactionCrashResume`'s pre-terminal-success
+assertions are byte-unchanged). The terminal-success emit gains `journal_disposed: true|false`
+alongside the unchanged `result`/`status`/`receipt` fields:
+
+```json
+{ "result": "ok", "status": "sinked", "journal_disposed": true, "receipt": { "...": "..." } }
+```
+
+A stray `sink-receipt.json`/`sink-fallback.json` found on a later "clean and synced" check (an
+older cycle's residue, or a receipt from a pre-#653 run) must be deleted, never committed — a
+journal is never part of the deliverable. See `docs/decisions/D-653-01.md`.
 
 ### `audit-labels` and `repair-labels` (issue #163; GitLab port #166, Gitea port #167)
 

@@ -664,7 +664,12 @@ function testGitlabAdaptive() {
     // The #324 AC3 assertion (archived copy does not contain 'No files changed after those runs')
     // still passes because 'verdict: pass\n...' does not contain that string.
     fs.mkdirSync(path.join(m2dir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(m2dir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    // #653: the consumer gate also verifies a column-0 validated_candidate_hash binding the verdict
+    // to the current code tree — produce it with the validator's --candidate-hash mode.
+    const m2Cand = JSON.parse(spawnNode(valScript,
+      [path.join(m2dir, 'workflow-plan.md'), '--candidate-hash', '--json'], tmp).stdout).validated_candidate_hash;
+    fs.writeFileSync(path.join(m2dir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + m2Cand + '\n');
     const roadmapM2Dir = path.join(tmp, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapM2Dir, { recursive: true });
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-970.md'),
@@ -1039,6 +1044,118 @@ function testGitlabPlannerAttestBackfill() {
     assert.ok(plannerLine, 'gitlab #347: dispatch-log must carry a workflow-planner back-fill entry, got: ' + lines.join('|'));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testGitlabPlannerAttestBackfill: PASSED');
+}
+
+// n6 (#653 finding A, gitlab port): a non-empty ATTESTATION WARNING must not live only in stdout
+// JSON — cmdFinalize's persistAttestationToSummary transcribes it (and the two column-0 status
+// fields) into the archived finalization-summary.md, and appendClosureBlock's ## Closure block
+// carries the same fields. Mirrors root's testAttestationWarningPersistence modulo forge nouns.
+function testGitlabAttestationWarningPersistence() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-653-attest-')));
+  try {
+    glInitGitRepo(tmp);
+    const project = 'issue-653gl';
+    glWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## GitLab', 'issue_iid: 653101', 'path_with_namespace: test/repo', '',
+        '## Sink', 'branch: workflow/' + project, 'issue_number: 653101', 'sink: merge', ''
+      ].join('\n')
+    });
+    glPlantRoadmapIssue(tmp, 653101);
+    // Seed .cache/dispatch-log.jsonl with ONLY a contractor entry (no workflow-planner entry) —
+    // the exact inline-bypass scenario the ATTESTATION WARNING exists to catch.
+    const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
+      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'contractor', agent_id: 'test-seed', cwd: tmp }) + '\n');
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result.status, 0,
+      'gitlab #653 attestation persistence: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = glLastJson(result.stdout);
+    assert.strictEqual(out.status, 'closed', 'gitlab #653 attestation persistence: status must be closed, got ' + JSON.stringify(out.status));
+    const receipt = out.closure_receipt;
+    assert.ok(receipt != null, 'gitlab #653 attestation persistence: closure_receipt must be present');
+    assert.strictEqual(receipt.claim_planner_attested, 'missing',
+      'gitlab #653 attestation persistence: claim_planner_attested must be missing, got ' + JSON.stringify(receipt.claim_planner_attested));
+
+    assert.ok(out.dest && fs.existsSync(out.dest), 'gitlab #653 attestation persistence: archive dest must exist');
+    const finSummaryPath = path.join(out.dest, 'finalization-summary.md');
+    assert.ok(fs.existsSync(finSummaryPath),
+      'gitlab #653 attestation persistence: archived finalization-summary.md must exist');
+    const finContent = fs.readFileSync(finSummaryPath, 'utf8');
+    assert.ok(/^claim_planner_attested:\s*missing\s*$/m.test(finContent),
+      'gitlab #653 attestation persistence: finalization-summary.md must carry column-0 claim_planner_attested: missing, got: ' + finContent);
+    assert.ok(finContent.includes('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log'),
+      'gitlab #653 attestation persistence: finalization-summary.md must carry the verbatim ATTESTATION WARNING, got: ' + finContent);
+
+    const stateContent = fs.readFileSync(path.join(out.dest, 'workflow-state.md'), 'utf8');
+    assert.ok(/^## Closure$/m.test(stateContent),
+      'gitlab #653 attestation persistence: archived workflow-state.md must carry ## Closure');
+    assert.ok(/^claim_planner_attested:\s*missing\s*$/m.test(stateContent),
+      'gitlab #653 attestation persistence: archived workflow-state.md ## Closure block must carry claim_planner_attested: missing, got: ' + stateContent);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabAttestationWarningPersistence: PASSED');
+}
+
+// n6 (#653 finding D3, gitlab port): a selection-evidence.md docked pre-finalize (simulating the
+// router's D2 docking) must be probed into closure_receipt.selection_evidence ('present'), and
+// survive archival; a claim with no docked file reads 'absent'. Mirrors root's
+// testSelectionEvidenceDocking modulo forge nouns.
+function testGitlabSelectionEvidenceDocking() {
+  const tmpPresent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-653-selev-present-')));
+  const tmpAbsent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-653-selev-absent-')));
+  try {
+    for (const entry of [{ tmp: tmpPresent, seed: true, issue: 653201 }, { tmp: tmpAbsent, seed: false, issue: 653202 }]) {
+      const { tmp, seed, issue } = entry;
+      glInitGitRepo(tmp);
+      const project = 'issue-' + issue + 'gl';
+      glWriteProject(tmp, project, {
+        'workflow-state.md': [
+          '# Kaola-Workflow State', '',
+          '## Project', 'name: ' + project, 'status: active', '',
+          '## GitLab', 'issue_iid: ' + issue, 'path_with_namespace: test/repo', '',
+          '## Sink', 'branch: workflow/' + project, 'issue_number: ' + issue, 'sink: merge', ''
+        ].join('\n')
+      });
+      glPlantRoadmapIssue(tmp, issue);
+      if (seed) {
+        const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
+        fs.mkdirSync(cacheDir, { recursive: true });
+        fs.writeFileSync(path.join(cacheDir, 'selection-evidence.md'),
+          'selection_mode: single-issue\n\n```json\n{"recommended_bundle":{"primary_issue":' + issue + ',"issues":[' + issue + '],"confidence":"low"}}\n```\n');
+      }
+
+      const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+        cwd: tmp, encoding: 'utf8', timeout: 60000,
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+      });
+      assert.strictEqual(result.status, 0,
+        'gitlab #653 selection-evidence docking: exit 0 expected (seed=' + seed + '), got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      const out = glLastJson(result.stdout);
+      assert.strictEqual(out.status, 'closed', 'gitlab #653 selection-evidence docking: status must be closed (seed=' + seed + ')');
+      const receipt = out.closure_receipt;
+      assert.ok(receipt != null, 'gitlab #653 selection-evidence docking: closure_receipt must be present (seed=' + seed + ')');
+      assert.strictEqual(receipt.selection_evidence, seed ? 'present' : 'absent',
+        'gitlab #653 selection-evidence docking: selection_evidence must be ' + (seed ? 'present' : 'absent') +
+        ' (seed=' + seed + '), got ' + JSON.stringify(receipt.selection_evidence));
+
+      if (seed) {
+        assert.ok(out.dest && fs.existsSync(out.dest), 'gitlab #653 selection-evidence docking: archive dest must exist');
+        assert.ok(fs.existsSync(path.join(out.dest, '.cache', 'selection-evidence.md')),
+          'gitlab #653 selection-evidence docking: selection-evidence.md must survive under the archived .cache/');
+      }
+    }
+  } finally {
+    fs.rmSync(tmpPresent, { recursive: true, force: true });
+    fs.rmSync(tmpAbsent, { recursive: true, force: true });
+  }
+  console.log('testGitlabSelectionEvidenceDocking: PASSED');
 }
 
 // S2: a refused bundle claim (closed member #47) leaves NO active folder and applies
@@ -1499,6 +1616,8 @@ testGitlabWriteLaneHookExists();
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGitlabBundleClaimCreatesOneFolder();
 testGitlabPlannerAttestBackfill();
+testGitlabAttestationWarningPersistence();
+testGitlabSelectionEvidenceDocking();
 testGitlabBundleRefusalLeavesNoFolder();
 testGitlabBundleDuplicateIssueBlocking();
 testGitlabBundleOrientSurfacesBundleIdentity();

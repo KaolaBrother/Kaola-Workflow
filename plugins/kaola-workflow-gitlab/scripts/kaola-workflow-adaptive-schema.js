@@ -538,6 +538,23 @@ function parseNodeVerdict(cacheText) {
   return { found, verdict, findings_blocking: lastBlocking };
 }
 
+// #653: PURE parse of the consumer finalize BINDING field in .cache/final-validation.md. Same
+// discipline as parseNodeVerdict: native multiline regex ONLY (no classifier — cross-edition
+// byte-identity). FENCE-BLIND BY ANCHOR: recognised ONLY at column 0 (`^validated_candidate_hash:`
+// no leading whitespace). LAST-MATCH-WINS (a re-run appends a fresh line; the final line is the
+// binding). `present` reports ANY column-0 field line — even malformed — so the gate can refuse a
+// mangled hash the same as an absent one (both fail-closed via !present || !hash) without a
+// malformed value silently reading as "legacy file, field never recorded". `hash` is the last
+// WELL-FORMED 64-hex value, lowercased; null when none. Returns { present, hash }.
+function parseValidatedCandidateHash(text) {
+  const src = String(text || '');
+  const present = /^validated_candidate_hash:/m.test(src);
+  const re = /^validated_candidate_hash:[ \t]*([0-9a-fA-F]{64})[ \t]*$/gm;
+  let m, last = null;
+  while ((m = re.exec(src)) !== null) { last = m[1].toLowerCase(); }
+  return { present, hash: last };
+}
+
 // #634 (metric-optimizer): PURE parse of a metric_command's stdout for its single machine metric.
 // Same discipline as parseNodeVerdict: native multiline regex ONLY (no classifier — cross-edition
 // byte-identity). FENCE-BLIND BY ANCHOR: a metric line is recognised ONLY at column 0
@@ -1261,6 +1278,7 @@ module.exports = {
   WRITE_OVERLAP_POLICY_LEGAL,
   WRITE_OVERLAP_POLICY_REFUSED_AT_FREEZE,
   parseNodeVerdict,
+  parseValidatedCandidateHash,
   parseMetricValue,
   parseNodeSelector,
   FINDING_SCOPE_VOCABULARY,

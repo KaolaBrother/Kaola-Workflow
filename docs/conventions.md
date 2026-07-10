@@ -339,12 +339,18 @@ refuse/pass decision (`redChains.length` check) is unchanged.
 
 The gate enforces this: `chains_unverified` (no receipt), `chains_stale` (receipt headSha mismatch), and `chains_red` (any non-zero exit) are all typed blocking refusals. A known-red chain may be waived with `--accept-known-red name:open-issue-N`; the waiver must reference a real open tracking issue.
 
-**Consumer (non-npm) repos (#475).** A product repo whose validation is not npm-based does NOT run `run-chains.js` (it refuses `chains_config_missing` — self-host-only). The agent **owns verification** (#44) and records `.cache/final-validation.md` with a column-0 `verdict: pass`; `--finalize-check` (consumer mode) gates on it — `final_validation_unverified` (absent) / `final_validation_failed` (no `verdict: pass`). The v6.2.0 `kaola-workflow/chains.json` opt-in is retired (Pure option A — no middle-ground). The attribution sweep runs for both modes (an un-attributed code change is still caught).
+**Consumer (non-npm) repos (#475).** A product repo whose validation is not npm-based does NOT run `run-chains.js` (it refuses `chains_config_missing` — self-host-only). The agent **owns verification** (#44) and records `.cache/final-validation.md` with a column-0 `verdict: pass`; `--finalize-check` (consumer mode) gates on it — `final_validation_unverified` (absent) / `final_validation_failed` (no `verdict: pass`). **The verdict must also be bound to the candidate it validated (issue #653 / D-653-01).** Record a column-0 `validated_candidate_hash:` line — produced via `node scripts/kaola-workflow-plan-validator.js <plan> --candidate-hash --json` (read-only, no tests executed), computed LAST after every file the validation covered has landed — or the gate refuses `final_validation_unbound` (no well-formed hash line) / `final_validation_stale` (the recorded hash no longer equals a fresh recompute over the current tree; payload carries `recorded_candidate_hash` + `current_candidate_hash`). The gate compares two hashes only; it never re-runs the validation command, so the agent-owns-verification boundary above is unchanged. A citation of a prior terminal validation run still requires a FRESH hash computed at citation time. The v6.2.0 `kaola-workflow/chains.json` opt-in is retired (Pure option A — no middle-ground). The attribution sweep runs for both modes (an un-attributed code change is still caught).
 
 ## Run-gap capture is gated at finalize (#435)
 
 Prose assertions about "no defects found" or "gaps addressed" are insufficient evidence of
-run-gap coverage at Finalization. The contractor MUST:
+run-gap coverage at Finalization. Before Finalization's gap sweep runs, the orchestrator seeds
+any run gap it directly observed but the automated scanners cannot see (transient tool noise, a
+manual retry, an environmental flake) by appending a `gap: <class> — <text>` line to
+`.cache/run-gaps-manual.md` (issue #653 / D-653-01) — the reverse-containment check in step 3
+below refuses a `## Run gaps` entry with no matching seeded or scanned source.
+
+The contractor MUST:
 
 1. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --json` to produce
    `.cache/run-gaps.json`. The scanner reads only `kaola-workflow/<P>/.cache/` (scope guard —
@@ -358,18 +364,23 @@ run-gap coverage at Finalization. The contractor MUST:
    - `- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.
    - `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not
      worth tracking.
-3. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --check` as the gate. A
-   vacuous pass is returned when `sweptClasses` is empty (no section required). When any
-   class is swept and not mapped, the gate emits
-   `{ result: 'refuse', reason: 'gaps_unswept', unmapped: [{reasonClass, sample}] }` and
-   exits 1; this blocks finalization until the section is complete.
+3. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --check` as the gate. It checks
+   BOTH directions (issue #653 / D-653-01): a swept-but-unmapped tuple refuses `gaps_unswept`
+   (forward, unchanged — `{ result: 'refuse', reason: 'gaps_unswept', unmapped: [{reasonClass,
+   sample}] }`); a `## Run gaps` entry matching the strict `- <class> (<sample>): filed:|noise:
+   ...` grammar with no matching seeded/scanned source refuses `observed_gap_unseeded`
+   (`unseeded: [{reasonClass, sample}]`, reverse — new). A vacuous pass now requires BOTH sides
+   empty — no swept classes AND no strict-grammar `## Run gaps` entries; free-text lines that
+   don't match the grammar (e.g. `- none`) are ignored by design, preserving back-compat with
+   existing summaries. Either refusal exits 1 and blocks finalization until resolved.
 4. Cite the gate exit code as evidence in the contractor summary. Never record a
    `gaps_addressed: true` prose attestation without a passing `--check` invocation.
 
 The `--check` gate is the ONLY valid run-gap evidence; classify its result structurally by the
-typed `reason` field (`gaps_unswept`), never by string-matching error text.
+typed `reason` field (`gaps_unswept`, `observed_gap_unseeded`), never by string-matching error
+text.
 
-Decision record: `docs/decisions/D-435-01.md`.
+Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
 
 ## Release
 

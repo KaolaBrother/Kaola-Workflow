@@ -244,8 +244,28 @@ function testKeepOpenArchiveStamp() {
     // #522: seed final-validation.md (consumer-mode repo — no package.json → final-validation gate).
     // No feature branch here so git diff main...HEAD is empty → attribution sweep passes vacuously.
     fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    // #653 NEGATIVE LEG FIRST: a WRONG validated_candidate_hash must refuse final_validation_stale
+    // BEFORE any archive/commit side effect — cmdFinalize shells --finalize-check ahead of
+    // archiveProjectDir, so the live folder must survive and no archive may exist.
+    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + 'f'.repeat(64) + '\n');
     plantRoadmapIssue(tmp, 333, '');
+    {
+      const staleRun = runNode(claimScript, ['finalize', '--project', 'issue-333', '--keep-open'], tmp);
+      const staleOut = JSON.parse(staleRun.stdout.trim().split('\n').filter(Boolean).pop());
+      assert(staleRun.status !== 0 && staleOut.result === 'refuse'
+        && staleOut.reason === 'finalize_gate_unverified' && staleOut.inner_reason === 'final_validation_stale',
+        '#653: a mismatched validated_candidate_hash must refuse finalize_gate_unverified/final_validation_stale, got ' + staleRun.stdout);
+      assert(fs.existsSync(path.join(dir, 'workflow-state.md')),
+        '#653: the stale refusal must fire BEFORE the archive rename — live folder must survive');
+      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-333')),
+        '#653: the stale refusal must leave NO archive side effect');
+    }
+    // Re-record with the REAL current hash (the --candidate-hash producer) → gate passes.
+    const cand333 = json(runNode(planValidatorScript,
+      [path.join(dir, 'workflow-plan.md'), '--candidate-hash', '--json'], tmp)).validated_candidate_hash;
+    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand333 + '\n');
 
     const result = json(runNode(claimScript, ['finalize', '--project', 'issue-333', '--keep-open'], tmp));
     assert(result.status === 'closed', '#333: keep-open finalize should report closed');
@@ -3976,6 +3996,8 @@ function testBundle424432433ValidatorGates() {
   };
 
   // --- #475 (a) consumer + valid final-validation.md (verdict: pass) + clean sweep → PASS.
+  //     (#653: the fixture also records validated_candidate_hash — a bare verdict now refuses
+  //      final_validation_unbound, covered by the #653 cases below.)
   { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
     try {
       // node a's only branch change (aaa/x.js) is covered by complete node a → sweep clean.
@@ -3983,7 +4005,8 @@ function testBundle424432433ValidatorGates() {
       fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
-      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nxcodebuild test: exit 0 (126 + 74 tests).\n');
+      const ch = JSON.parse(runNode(planValidatorScript, [planPath, '--candidate-hash', '--json'], grepo).stdout).validated_candidate_hash;
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + ch + '\nxcodebuild test: exit 0 (126 + 74 tests).\n');
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
       const out = JSON.parse(r.stdout);
       assert(r.status === 0 && out.result === 'pass' && out.mode === 'final-validation',
@@ -4015,7 +4038,10 @@ function testBundle424432433ValidatorGates() {
       fs.writeFileSync(path.join(grepo, 'orphan', 'residue.js'), 'crash residue\n');
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'orphan residue'], { cwd: grepo, encoding: 'utf8' });
-      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\n');
+      // #653: the fixture binds a CURRENT (matching) hash so the refusal below is the SWEEP's —
+      // proving the sweep still runs behind a satisfied validation gate.
+      const ch = JSON.parse(runNode(planValidatorScript, [planPath, '--candidate-hash', '--json'], grepo).stdout).validated_candidate_hash;
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + ch + '\n');
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
       assert(r.status === 1 && JSON.parse(r.stdout).reason === 'unattributed_change',
         '#475 (d): consumer repo attribution sweep still catches an orphan code change, got status ' + r.status + ' ' + r.stdout);
@@ -4059,6 +4085,107 @@ function testBundle424432433ValidatorGates() {
       const reason = JSON.parse(r.stdout).reason;
       assert(reason !== 'repo_kind_undetermined' && reason === 'final_validation_unverified',
         '#556 (g): ENOENT package.json must stay consumer (final_validation_unverified), NOT repo_kind_undetermined, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // #653: consumer finalize BINDING — a `verdict: pass` proves the validation PASSED, not that it
+  // validated THIS candidate. final-validation.md must also carry a column-0 validated_candidate_hash
+  // equal to the current code-tree hash (produced by the new --candidate-hash mode, recomputed by the
+  // gate over the same band). The gate COMPARES TWO HASHES and never re-executes tests (#475 stands —
+  // these consumer fixtures have no package.json and no runnable suite at all, so a pass can only come
+  // from the hash comparison). The refusal fires inside --finalize-check, i.e. BEFORE cmdFinalize's
+  // archive/commit side effects (the #522 gate shells this check first — pinned by the keep-open and
+  // #539 finalize tests).
+  const candidateHashOf = (planPath, grepo) => {
+    const r = runNode(planValidatorScript, [planPath, '--candidate-hash', '--json'], grepo);
+    const out = JSON.parse(r.stdout);
+    assert(r.status === 0 && out.result === 'ok' && out.mode === 'candidate-hash'
+      && /^[0-9a-f]{64}$/.test(String(out.validated_candidate_hash || '')),
+      '#653 (producer): --candidate-hash --json must emit result:ok mode:candidate-hash with a 64-hex validated_candidate_hash, got status ' + r.status + ' ' + r.stdout);
+    return out.validated_candidate_hash;
+  };
+  const commitImpl = grepo => {
+    fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true });
+    fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
+  };
+
+  // --- #653 (a) LEGACY SHAPE FAIL-CLOSED: pass verdict but NO validated_candidate_hash →
+  //     final_validation_unbound (an omitted field must not bypass the binding).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      commitImpl(grepo);
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'final_validation_unbound',
+        '#653 (a): a pass verdict with no validated_candidate_hash must refuse final_validation_unbound, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #653 (b) STALE: hash recorded, then a RELEVANT source file changes (uncommitted working-tree
+  //     edit — the snapshot covers committed+working) → final_validation_stale with BOTH hash fields.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      commitImpl(grepo);
+      const recorded = candidateHashOf(planPath, grepo);
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + recorded + '\n');
+      fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'mutated after validation\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'final_validation_stale'
+        && out.recorded_candidate_hash === recorded
+        && /^[0-9a-f]{64}$/.test(String(out.current_candidate_hash || ''))
+        && out.current_candidate_hash !== recorded,
+        '#653 (b): a relevant edit after the recorded hash must refuse final_validation_stale carrying recorded_candidate_hash + current_candidate_hash, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #653 (c) BOUND: hash recorded and matching → pass; the pass payload echoes
+  //     validated_candidate_hash (and this ALSO proves the gate's recompute equals the producer's).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      commitImpl(grepo);
+      const recorded = candidateHashOf(planPath, grepo);
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + recorded + '\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 0 && out.result === 'pass' && out.mode === 'final-validation'
+        && out.validated_candidate_hash === recorded,
+        '#653 (c): a matching validated_candidate_hash must pass and be echoed in the pass payload, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #653 (d) VALIDATION-INVISIBLE EDITS DO NOT STALE: after recording the hash, mutate workflow
+  //     state (kaola-workflow/ tree) + an inert non-test-consumed doc (docs/decisions/) → still pass.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      commitImpl(grepo);
+      const recorded = candidateHashOf(planPath, grepo);
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + recorded + '\n');
+      fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'status: active\nlast_result: bookkeeping\n');
+      fs.mkdirSync(path.join(grepo, 'docs', 'decisions'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'docs', 'decisions', 'D-000-00.md'), 'inert narrative doc\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 0 && out.result === 'pass' && out.validated_candidate_hash === recorded,
+        '#653 (d): validation-invisible bookkeeping (workflow state, inert docs) must NOT stale the binding, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #653 (e) DETERMINISM + SEAM: --candidate-hash is stable across invocations; the gate honors
+  //     the --current-code-tree test seam in consumer mode (seeding the recorded value passes; seeding
+  //     a different 64-hex refuses stale) — comparing hashes is the ONLY mechanism on this path.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      commitImpl(grepo);
+      const recorded = candidateHashOf(planPath, grepo);
+      assert(candidateHashOf(planPath, grepo) === recorded,
+        '#653 (e): --candidate-hash must be deterministic over an unchanged tree');
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + recorded + '\n');
+      const rPass = runNode(planValidatorScript, [planPath, '--finalize-check', '--current-code-tree', recorded, '--json'], grepo);
+      assert(rPass.status === 0 && JSON.parse(rPass.stdout).result === 'pass',
+        '#653 (e): the --current-code-tree seam seeded with the recorded hash must pass in consumer mode, got status ' + rPass.status + ' ' + rPass.stdout);
+      const rStale = runNode(planValidatorScript, [planPath, '--finalize-check', '--current-code-tree', 'e'.repeat(64), '--json'], grepo);
+      const outStale = JSON.parse(rStale.stdout);
+      assert(rStale.status === 1 && outStale.reason === 'final_validation_stale'
+        && outStale.recorded_candidate_hash === recorded && outStale.current_candidate_hash === 'e'.repeat(64),
+        '#653 (e): a divergent seeded current hash must refuse final_validation_stale, got status ' + rStale.status + ' ' + rStale.stdout);
     } finally { cleanup(grepo); } }
 
   console.log('testBundle424432433ValidatorGates: PASSED');
@@ -10005,6 +10132,13 @@ function testKeepOpenMergeFullChain() {
 
     runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-860'], tmp, binDir);
 
+    // #653: bind the consumer evidence LAST — after the feature commit + worktree-finalize, so the
+    // recorded hash matches the candidate the finalize gate recomputes over the worktree.
+    const cand860 = JSON.parse(runNode(planValidatorScript,
+      [path.join(wt860, 'kaola-workflow', 'issue-860', 'workflow-plan.md'), '--candidate-hash', '--json'], wt860).stdout).validated_candidate_hash;
+    fs.appendFileSync(path.join(wt860, 'kaola-workflow', 'issue-860', '.cache', 'final-validation.md'),
+      'validated_candidate_hash: ' + cand860 + '\n');
+
     // finalize --keep-worktree WITHOUT --keep-open: exercises state-field derivation (OFFLINE).
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-860', '--keep-worktree'
@@ -10118,6 +10252,12 @@ function testKeepOpenFinalizeFlagAlias() {
     });
 
     runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-861'], tmp, binDir);
+
+    // #653: bind the consumer evidence LAST (post feature commit + worktree-finalize).
+    const cand861 = JSON.parse(runNode(planValidatorScript,
+      [path.join(wt861, 'kaola-workflow', 'issue-861', 'workflow-plan.md'), '--candidate-hash', '--json'], wt861).stdout).validated_candidate_hash;
+    fs.appendFileSync(path.join(wt861, 'kaola-workflow', 'issue-861', '.cache', 'final-validation.md'),
+      'validated_candidate_hash: ' + cand861 + '\n');
 
     // finalize WITH the explicit --keep-issue-open flag, NO issue_action field → the flag must
     // drive the keep-open terminal entirely on its own (OFFLINE).
@@ -13857,6 +13997,12 @@ function testAdaptiveWorktreeProvisionedE2E() {
     const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-530'], tmp, binDir);
     assert(wfResult.finalized === true, 'worktree-finalize should succeed for adaptive e2e');
 
+    // #653: bind the consumer evidence LAST — after the impl commit, so the recorded hash matches
+    // the candidate the finalize gate recomputes.
+    const cand530 = JSON.parse(runNode(planValidatorScript,
+      [path.join(projDst, 'workflow-plan.md'), '--candidate-hash', '--json'], wt530).stdout).validated_candidate_hash;
+    fs.appendFileSync(path.join(cacheDir, 'final-validation.md'), 'validated_candidate_hash: ' + cand530 + '\n');
+
     // Step 5: finalize --keep-worktree
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-530', '--keep-worktree'
@@ -14371,13 +14517,19 @@ function testSinkTransactionCrashResume() {
 
     assert(run2.status === 0, '#429 crash-resume: second --sink run must exit 0\nstdout: ' + run2.stdout + '\nstderr: ' + run2.stderr);
 
-    // Verify all steps done
-    const receiptExistsAfter = fs.existsSync(receiptPath) || fs.existsSync(archiveReceiptPath);
-    assert(receiptExistsAfter, '#429 crash-resume: sink-receipt.json must exist after completed run');
-    const receiptRaw2 = fs.existsSync(archiveReceiptPath) ? fs.readFileSync(archiveReceiptPath, 'utf8') : fs.readFileSync(receiptPath, 'utf8');
-    const receipt2 = JSON.parse(receiptRaw2);
-    const allDone = receipt2.steps && Object.values(receipt2.steps).every(v => v === 'done' || v === 'skipped');
-    assert(allDone, '#429 crash-resume: all steps must be done after second run, got: ' + JSON.stringify(receipt2.steps));
+    // #653: the second run reaches TERMINAL success, so the journal is disposed from disk on
+    // completion — read the completed receipt from stdout (the post-disposal source of truth)
+    // rather than the on-disk file, which is gone by the time this run returns.
+    const parsedRun2 = JSON.parse(run2.stdout.trim().split('\n').pop());
+    assert(parsedRun2.journal_disposed === true,
+      '#653: the resumed run must reach terminal success and dispose its journal, got: ' + JSON.stringify(parsedRun2));
+    const receipt2 = parsedRun2.receipt;
+    const allDone = receipt2 && receipt2.steps && Object.values(receipt2.steps).every(v => v === 'done' || v === 'skipped');
+    assert(allDone, '#429 crash-resume: all steps must be done after second run, got: ' + JSON.stringify(receipt2 && receipt2.steps));
+    // #653: the on-disk journal must be GONE now that the resumed run reached terminal success —
+    // still present here would mean disposeSinkJournals never ran (or ran but failed silently).
+    assert(!fs.existsSync(receiptPath) && !fs.existsSync(archiveReceiptPath),
+      '#653: sink-receipt.json must NOT remain on disk after the resumed run reaches terminal success');
 
     // No double-merge: the feature commit (merge) landed exactly once.
     // main's HEAD must contain featureHead as an ancestor after run1 (it was merged).
@@ -14481,27 +14633,41 @@ function testSinkTransactionCleanEndToEnd() {
     const ancestorCheck = spawnSync('git', ['-C', tmp, 'merge-base', '--is-ancestor', featureHead, 'main'], { encoding: 'utf8' });
     assert(ancestorCheck.status === 0, '#429 e2e: feature HEAD must be an ancestor of main after --sink (feature was merged)\nfeatureHead: ' + featureHead + '\nmainAfter: ' + mainAfter);
 
-    // sink-receipt.json must exist with all steps done
+    // #653: sink-receipt.json must exist with all steps done — read from the STDOUT receipt (the
+    // post-disposal source of truth), not the on-disk file, which a terminally successful sink
+    // disposes of itself.
+    const parsedResult = JSON.parse(result.stdout.trim().split('\n').pop());
+    assert(parsedResult.result === 'ok' && parsedResult.status === 'sinked',
+      '#429 e2e: --sink must emit result:ok status:sinked, got: ' + JSON.stringify(parsedResult));
+    assert(parsedResult.journal_disposed === true,
+      '#653: a terminally successful sink must report journal_disposed:true, got: ' + JSON.stringify(parsedResult));
+    const receipt = parsedResult.receipt;
+    const allDone = receipt && receipt.steps && Object.values(receipt.steps).every(v => v === 'done' || v === 'skipped');
+    assert(allDone, '#429 e2e: all receipt steps must be done, got: ' + JSON.stringify(receipt && receipt.steps));
+
+    // #653: sink-receipt.json / sink-fallback.json are transaction journals that exist on disk only
+    // for crash-resume — a terminally successful sink deletes them itself, so NEITHER live nor
+    // archive location may still have them after --sink returns.
     const archiveReceiptPath = path.join(tmp, 'kaola-workflow', 'archive', 'issue-4293', '.cache', 'sink-receipt.json');
     const liveReceiptPath = path.join(tmp, 'kaola-workflow', 'issue-4293', '.cache', 'sink-receipt.json');
-    const receiptExists = fs.existsSync(archiveReceiptPath) || fs.existsSync(liveReceiptPath);
-    assert(receiptExists, '#429 e2e: sink-receipt.json must exist after completed sink\nstdout: ' + result.stdout);
-    const receiptRaw = fs.existsSync(archiveReceiptPath) ? fs.readFileSync(archiveReceiptPath, 'utf8') : fs.readFileSync(liveReceiptPath, 'utf8');
-    const receipt = JSON.parse(receiptRaw);
-    const allDone = receipt.steps && Object.values(receipt.steps).every(v => v === 'done' || v === 'skipped');
-    assert(allDone, '#429 e2e: all receipt steps must be done, got: ' + JSON.stringify(receipt.steps));
+    const archiveFallbackPath = path.join(tmp, 'kaola-workflow', 'archive', 'issue-4293', '.cache', 'sink-fallback.json');
+    const liveFallbackPath = path.join(tmp, 'kaola-workflow', 'issue-4293', '.cache', 'sink-fallback.json');
+    assert(!fs.existsSync(archiveReceiptPath) && !fs.existsSync(liveReceiptPath),
+      '#653: sink-receipt.json must NOT remain on disk after a terminally successful sink');
+    assert(!fs.existsSync(archiveFallbackPath) && !fs.existsSync(liveFallbackPath),
+      '#653: sink-fallback.json must NOT remain on disk after a terminally successful sink');
 
     // #520: journals (sink-receipt.json, sink-fallback.json) must NOT be committed into main.
-    // Assert by tracked-status (git ls-files), not disk-existence — the on-disk files must still
-    // exist for crash-resume (#429) and the #484 freshness guard.
     const lsFiles = spawnSync('git', ['-C', tmp, 'ls-files',
       'kaola-workflow/archive/issue-4293/.cache/sink-receipt.json',
       'kaola-workflow/archive/issue-4293/.cache/sink-fallback.json'
     ], { encoding: 'utf8' }).stdout.trim();
     assert(lsFiles === '', '#520: sink journals must NOT be tracked in git after --sink; got: ' + lsFiles);
-    // The receipt must still be on disk (crash-resume invariant)
-    assert(fs.existsSync(archiveReceiptPath) || fs.existsSync(liveReceiptPath),
-      '#520: sink-receipt.json must still exist on disk after --sink (crash-resume invariant)');
+    // #653: a `git status --porcelain` "clean and synced" check must see no journal residue either
+    // (the files are gone from disk, not merely untracked).
+    const statusPorcelain = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    assert(!/sink-(receipt|fallback)\.json/.test(statusPorcelain),
+      '#653: git status --porcelain must show no sink-receipt/sink-fallback residue after --sink; got: ' + statusPorcelain);
 
     console.log('testSinkTransactionCleanEndToEnd: PASSED');
   } finally {
@@ -14830,6 +14996,8 @@ function buildRegistry() {
   add('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568', testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568);
   add('testContractorAttestFlagBackfills338',             testContractorAttestFlagBackfills338);
   add('testContractorAttestAbsentWarnsNonBlocking338',    testContractorAttestAbsentWarnsNonBlocking338);
+  add('testAttestationWarningPersistence',                testAttestationWarningPersistence);
+  add('testSelectionEvidenceDocking',                     testSelectionEvidenceDocking);
   add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
   add('testFinalizeIncompleteNegativeControlAlreadyDone', testFinalizeIncompleteNegativeControlAlreadyDone);
   add('testFinalizeIncompleteNegativeControlRepoDirty',   testFinalizeIncompleteNegativeControlRepoDirty);
@@ -14934,6 +15102,113 @@ async function main() {
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── attestation warning durable persistence — a non-empty ATTESTATION WARNING must land in the
+// archived finalization-summary.md and workflow-state.md ## Closure block, not just stdout JSON.
+// Seed a contractor-only dispatch-log (no workflow-planner entry) so the planner seam surfaces
+// the warning, finalize, then assert both archived artifacts carry it verbatim.
+function testAttestationWarningPersistence() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653101'], tmp, binDir);
+    assert(sResult.claim === 'acquired', 'attestation persistence: startup must acquire');
+    const project = sResult.selected_project || 'issue-653101';
+
+    // Seed dispatch-log with ONLY a contractor entry (no workflow-planner) — the inline-bypass
+    // scenario the ATTESTATION WARNING exists to catch.
+    const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
+      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'contractor', agent_id: 'test-seed', cwd: tmp }) + '\n');
+
+    const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
+    assert(finResult.status === 'closed',
+      'attestation persistence: finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt && finReceipt.claim_planner_attested === 'missing',
+      'attestation persistence: seeded contractor-only dispatch-log must leave claim_planner_attested missing, got: ' +
+      JSON.stringify(finReceipt));
+
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+    const summaryPath = path.join(archiveDir, 'finalization-summary.md');
+    assert(fs.existsSync(summaryPath), 'attestation persistence: archived finalization-summary.md must exist');
+    const summary = fs.readFileSync(summaryPath, 'utf8');
+    assert(/^claim_planner_attested: missing$/m.test(summary),
+      'attestation persistence: archived finalization-summary.md must carry column-0 claim_planner_attested: missing, got: ' + summary);
+    assert(summary.includes('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log'),
+      'attestation persistence: archived finalization-summary.md must carry the verbatim ATTESTATION WARNING, got: ' + summary);
+
+    const statePath = path.join(archiveDir, 'workflow-state.md');
+    const state = fs.readFileSync(statePath, 'utf8');
+    assert(/^## Closure$/m.test(state), 'attestation persistence: archived workflow-state.md must carry ## Closure block');
+    assert(/^claim_planner_attested: missing$/m.test(state),
+      'attestation persistence: archived workflow-state.md ## Closure block must carry claim_planner_attested, got: ' + state);
+
+    console.log('testAttestationWarningPersistence: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// n5 (#653 finding D3): selection-evidence probe. Case (a) seeds .cache/selection-evidence.md
+// pre-finalize (simulating the router's D2 docking) -> closure_receipt.selection_evidence must
+// read 'present' and the file must survive under the archived project's .cache/. Case (b), a
+// separate project with no docked file (the user-named-claim shape), must read 'absent'.
+function testSelectionEvidenceDocking() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-selection-evidence-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // (a) present — router docked selection-evidence.md before finalize.
+    const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653201'], tmp, binDir);
+    assert(sResult.claim === 'acquired', 'selection-evidence: startup must acquire');
+    const project = sResult.selected_project || 'issue-653201';
+
+    const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'selection-evidence.md'),
+      'selection_mode: single-issue\n\n```json\n{"recommended_bundle":{"primary_issue":653201,"issues":[653201],"confidence":"low"}}\n```\n');
+
+    const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
+    assert(finResult.status === 'closed',
+      'selection-evidence: finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt && finReceipt.selection_evidence === 'present',
+      'selection-evidence: seeded selection-evidence.md must read closure_receipt.selection_evidence === present, got: ' +
+      JSON.stringify(finReceipt));
+
+    const archivedEvidencePath = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache', 'selection-evidence.md');
+    assert(fs.existsSync(archivedEvidencePath),
+      'selection-evidence: selection-evidence.md must survive under the archived project .cache/, expected at ' + archivedEvidencePath);
+
+    // (b) absent — a second project with no docked selection-evidence file (user-named claim shape).
+    const sResult2 = runClaimOnlineLastJson(['startup', '--target-issue', '653202'], tmp, binDir);
+    assert(sResult2.claim === 'acquired', 'selection-evidence: second startup must acquire');
+    const project2 = sResult2.selected_project || 'issue-653202';
+
+    const finResult2 = runClaimOnlineLastJson(['finalize', '--project', project2], tmp, binDir);
+    assert(finResult2.status === 'closed',
+      'selection-evidence: second finalize must return status:closed, got: ' + JSON.stringify(finResult2));
+    const finReceipt2 = finResult2.closure_receipt;
+    assert(finReceipt2 && finReceipt2.selection_evidence === 'absent',
+      'selection-evidence: a claim with no docked selection-evidence.md must read closure_receipt.selection_evidence === absent, got: ' +
+      JSON.stringify(finReceipt2));
+
+    console.log('testSelectionEvidenceDocking: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
   }
 }
 
@@ -16309,7 +16584,12 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
       '| impl | complete |', '| done | complete |', ''
     ].join('\n'));
     // CONSUMER-mode gate (no package.json with test:kaola-workflow:*): final-validation.md.
-    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    // #653: bound to the current candidate (code commits land before seedProject; later mutations
+    // in this test are all under kaola-workflow/ — validation-invisible, so the hash stays fresh).
+    const cand539 = JSON.parse(runNode(planValidatorScript,
+      [path.join(dir, 'workflow-plan.md'), '--candidate-hash', '--json'], tmp).stdout).validated_candidate_hash;
+    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand539 + '\n');
   };
   try {
     initGitRepo(tmp);                                  // main: README.md

@@ -355,6 +355,29 @@ assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('final_validation_unverified'),
   'Gitea finalize skill must document the consumer (non-npm) final-validation.md gate (#475)'
 );
+// #653: the consumer candidate binding (validated_candidate_hash) must reach BOTH consumer-recording
+// surfaces — the plan-run All-done consumer block and the finalize gate prose.
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md').includes('validated_candidate_hash') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('validated_candidate_hash'),
+  'Gitea plan-run + finalize skills must document the consumer validated_candidate_hash binding (#653)'
+);
+// n5 (#653 finding D): selection-evidence docking must reach the router (command + SKILL); the
+// observed_gap_unseeded refusal and run-gap manual-seed prose must reach finalize/plan-run.
+assert(
+  read(pluginRoot + '/commands/workflow-next.md').includes('selection-evidence') &&
+  read(pluginRoot + '/skills/kaola-workflow-next/SKILL.md').includes('selection-evidence'),
+  'Gitea next command + skill must document selection-evidence docking (#653)'
+);
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('observed_gap_unseeded'),
+  'Gitea finalize skill must document the observed_gap_unseeded refusal (#653)'
+);
+assert(
+  read(pluginRoot + '/commands/kaola-workflow-plan-run.md').includes('run-gaps-manual.md') &&
+  read(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md').includes('run-gaps-manual.md'),
+  'Gitea plan-run command + skill must document the run-gap manual-seed rule (#653)'
+);
 // #336: keep-open partial-close sink lane — command + skill must carry the durable field, the
 // sink-merge flag, and the merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard's only
 // mechanical enforcement).
@@ -743,6 +766,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-
 // #347: the planner self-attest back-fill flag must be ported to the forge claim (the #280 producer
 // was canonical-only while #300 ported its consumer — without this pin the asymmetry is invisible).
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-planner-spawn');
+// the planner startup surfaces themselves must instruct the flag, not just the producer script.
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', '--attest-planner-spawn');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--attest-planner-spawn');
 // #359: producer-attested evidence-token vocabulary in the forge agent profiles.
 assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
 assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'non-empty column-0 `RED:`');

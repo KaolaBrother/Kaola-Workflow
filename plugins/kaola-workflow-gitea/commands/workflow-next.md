@@ -169,6 +169,16 @@ with an explicit `KAOLA_PATH=fast`/`full` the router takes only the scout's
   → set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`.
 - Never set both (`target_ambiguity`).
 
+**Selection Evidence Docking.** On this no-issue-named branch, once the target project's active
+folder exists — after claim completes (the Startup Transaction for `fast`/`full`, or the adaptive
+front end's claim inside `/kaola-workflow-adapt`), before dispatching the executor — persist the
+issue-scout's ENTIRE JSON reply verbatim, fenced, to
+`kaola-workflow/{project}/.cache/selection-evidence.md`, prefixed with a one-line header
+`selection_mode: auto-bundle` (bundle recommendation adopted) or `selection_mode: single-issue`
+(the scout fell back to a single `primary_issue`). This durable selection evidence archives
+automatically with the project when the run finalizes. Skip this step entirely on the
+user-named-issue branch — a user-named claim legitimately has no selection evidence.
+
 Auto-bundle mode emits a bundle only when:
 - all candidate issues are open and unclaimed;
 - no dependency is unresolved outside the bundle;

@@ -1221,16 +1221,21 @@ console.log('Gitea #496/#497/#506 fail-closed sink guard tests passed');
     const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', project, '--sink', '--json'],
       { cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
     assert.strictEqual(r.status, 0, '#520-gitea: --sink must exit 0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    // #653: a terminally successful sink emits journal_disposed:true and disposes the on-disk journal
+    // itself — read the completed receipt from stdout (the post-disposal source of truth).
+    const p520 = JSON.parse(String(r.stdout || '').trim().split('\n').pop());
+    assert.strictEqual(p520.journal_disposed, true, '#653-gitea: a terminally successful sink must report journal_disposed:true, got ' + JSON.stringify(p520));
     // Journals must NOT be tracked in git after --sink
     const lsFiles = spawnSync('git', ['-C', root, 'ls-files',
       'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json',
       'kaola-workflow/archive/' + project + '/.cache/sink-fallback.json'
     ], { encoding: 'utf8' }).stdout.trim();
     assert.strictEqual(lsFiles, '', '#520-gitea: sink journals must NOT be tracked in git after --sink; got: ' + lsFiles);
-    // Receipt must still exist on disk (crash-resume invariant)
+    // #653: the receipt must be GONE from disk after terminal success (it exists on disk only for
+    // crash-resume; a completed sink disposes of it itself).
     const rcptOnDisk = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json')) ||
       fs.existsSync(path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json'));
-    assert.ok(rcptOnDisk, '#520-gitea: sink-receipt.json must still exist on disk after --sink');
+    assert.ok(!rcptOnDisk, '#653-gitea: sink-receipt.json must NOT remain on disk after a terminally successful sink');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1356,17 +1361,18 @@ console.log('Gitea #548 consumer-aware test-gate: PASSED');
     assert.ok(calls.includes('close:9601'), '#592-gitea: issue 9601 close must be ATTEMPTED (bug: closure loop skipped entirely when --issue is absent); calls=' + JSON.stringify(calls));
     assert.ok(calls.includes('close:9602'), '#592-gitea: issue 9602 close must be ATTEMPTED; calls=' + JSON.stringify(calls));
 
-    // The receipt must record the actually-closed set (not report closure:done having closed
-    // zero issues) so a resume can verify rather than skip.
-    const rp = [path.join(root, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'), path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json')].find(x => fs.existsSync(x));
-    assert.ok(rp, '#592-gitea: a sink-receipt must exist after the transaction');
-    const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+    // #653: the receipt must record the actually-closed set (not report closure:done having closed
+    // zero issues) so a resume can verify rather than skip. Read it from the stdout `p.receipt` — a
+    // terminally successful sink disposes of the on-disk journal itself.
+    assert.ok(p.receipt, '#592-gitea: a sink-receipt must be present on the stdout emit after the transaction');
+    const receipt = p.receipt;
     assert.strictEqual(receipt.steps.closure, 'done', '#592-gitea: closure step reports done once it genuinely ran; got ' + JSON.stringify(receipt.steps));
     assert.ok(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 2,
       '#592-gitea: receipt.closed_issues must record both actually-closed members, got ' + JSON.stringify(receipt.closed_issues));
     assert.ok(receipt.closed_issues.includes(9601) && receipt.closed_issues.includes(9602),
       '#592-gitea: receipt.closed_issues must include 9601 and 9602, got ' + JSON.stringify(receipt.closed_issues));
     assert.strictEqual(p.status, 'sinked', '#592-gitea: expected status:sinked once closure genuinely succeeds, got ' + JSON.stringify(p));
+    assert.strictEqual(p.journal_disposed, true, '#653-gitea: a terminally successful sink must report journal_disposed:true, got ' + JSON.stringify(p));
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     fs.rmSync(remote, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });

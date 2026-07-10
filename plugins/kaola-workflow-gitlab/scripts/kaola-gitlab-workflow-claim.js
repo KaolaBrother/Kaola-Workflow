@@ -1509,10 +1509,51 @@ function appendClosureBlock(destDir, fields) {
       'issue_disposition: ' + fields.issueDisposition + '\n' +
       'claim_label_removed: ' + fields.claimLabelRemoved + '\n' +
       'worktree_removed: ' + fields.worktreeRemoved + '\n' +
-      'closure_invariants: ' + fields.closureInvariants + '\n';
+      'closure_invariants: ' + fields.closureInvariants + '\n' +
+      'claim_planner_attested: ' + fields.claimPlannerAttested + '\n' +
+      'finalize_contractor_attested: ' + fields.finalizeContractorAttested + '\n';
     fs.writeFileSync(p, s);
     return true;
   } catch (_) { return false; }
+}
+
+// n2 (#653 finding A): durably persist a non-empty attestation warning into the archived
+// finalization-summary.md. checkDispatchAttestations only surfaced the warning on stdout JSON —
+// an archive-only audit could never see it. Presence-guarded on /^## Attestation$/m (idempotent
+// across crash-resume re-runs); creates the file when absent; swallow-on-error. Always writes the
+// two column-0 status fields, even when both are attested — a clean result is a positive
+// statement, not an absence.
+function persistAttestationToSummary(destDir, receipt) {
+  try {
+    const p = path.join(destDir, 'finalization-summary.md');
+    let s = '';
+    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
+    if (/^## Attestation$/m.test(s)) return false;
+    const attestationWarnings = (receipt.warnings || []).filter(w =>
+      typeof w === 'string' && (w.indexOf('ATTESTATION WARNING') === 0 || w.indexOf('attestation:') === 0));
+    let block = '## Attestation\n' +
+      'claim_planner_attested: ' + receipt.claim_planner_attested + '\n' +
+      'finalize_contractor_attested: ' + receipt.finalize_contractor_attested + '\n';
+    for (const w of attestationWarnings) block += w + '\n';
+    fs.writeFileSync(p, s ? (s.trimEnd() + '\n\n' + block) : block);
+    return true;
+  } catch (_) { return false; }
+}
+
+// n5 (#653 finding D3): advisory selection-evidence probe. A file matching selection-evidence.*
+// in either cache dir means the router docked the issue-scout's recommendation (see
+// workflow-next.md § Selection Evidence Docking) before dispatching the executor. Advisory
+// only — no invariant, no warning on absence: a user-named claim legitimately has none, since
+// the scout never runs on that branch.
+function probeSelectionEvidence(cacheDirCandidates) {
+  for (const dir of (cacheDirCandidates || [])) {
+    if (!dir) continue;
+    try {
+      const entries = fs.readdirSync(dir);
+      if (entries.some(f => /^selection-evidence\./.test(f))) return 'present';
+    } catch (_) { /* dir missing/unreadable — keep probing candidates */ }
+  }
+  return 'absent';
 }
 
 // #395.2: shared roadmap-removal + MAIN-orphan reconcile + regenerate, reused by archiveProjectDir's
@@ -2334,6 +2375,12 @@ function cmdFinalize() {
     } catch (_) { /* fail-open: attestation is warn-first */ }
   }
   checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
+  // n2 (#653 finding A): a non-empty ATTESTATION WARNING must not live only in stdout JSON —
+  // transcribe it (and the two status fields) into the archived finalization-summary.md.
+  if (result.dest) persistAttestationToSummary(result.dest, closureReceipt);
+  // n5 (#653 finding D3): advisory selection-evidence probe, computed beside the attestation
+  // probe using the same archive-then-live candidate order (archiveProjectDir already ran).
+  closureReceipt.selection_evidence = probeSelectionEvidence([archiveCacheDir, liveCacheDir]);
   // #441: advisory goal_check — probe archive-dest first (plan was already renamed there),
   // then live location as fallback (crash-resume where archive did not complete).
   closureReceipt.goal_check = computeGoalCheck([
@@ -2352,7 +2399,9 @@ function cmdFinalize() {
       issueDisposition: issueDisposition,
       claimLabelRemoved: claimLabelRemoved,
       worktreeRemoved: worktreeRemoved,
-      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length)
+      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length),
+      claimPlannerAttested: closureReceipt.claim_planner_attested,
+      finalizeContractorAttested: closureReceipt.finalize_contractor_attested
     });
   }
   // #333: keep-worktree commit block MOVED here (commit-last) — after the ## Closure append so the
@@ -2805,7 +2854,9 @@ function watchMergeRequests(root, args) {
           issueDisposition: issueDisposition,
           claimLabelRemoved: claimLabelStatus,
           worktreeRemoved: worktreeRemoved,
-          closureInvariants: folderInvariants.ok ? 'ok' : ('violations:' + folderInvariants.violations.length)
+          closureInvariants: folderInvariants.ok ? 'ok' : ('violations:' + folderInvariants.violations.length),
+          claimPlannerAttested: folderReceipt.claim_planner_attested,
+          finalizeContractorAttested: folderReceipt.finalize_contractor_attested
         });
       }
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });

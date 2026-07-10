@@ -213,6 +213,9 @@ record this otherwise-unloggable spawn window (the SubagentStart hook can miss a
 dispatched into a linked worktree) into `.cache/dispatch-log.jsonl` so the closure receipt reads
 `finalize_contractor_attested: attested`. Only the genuinely-dispatched contractor running
 this Step 8b passes it; the main session must NEVER pass it when finalize is run inline.
+`cmdFinalize` also appends a `## Attestation` section to the archived `finalization-summary.md`,
+recording both status fields plus any non-empty ATTESTATION WARNING verbatim — never remove or
+summarize that section away.
 
 When it runs, `cmdFinalize` first enforces the finalize gate (`--finalize-check`) fail-closed — verifying the chain receipt (or consumer `final-validation.md`) BEFORE any irreversible side effect. Only on a `pass` does it proceed to atomically write `status: closed` + `step: complete` to `workflow-state.md`, terminal-stamp the archived state (neutralizes `next_command`/`next_skill` to `none (archived)`, refreshes the Planning Evidence `plan_hash` from the final plan + the `## Last Updated` line, and appends a `## Closure` receipt block), and rename `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. On any non-pass gate result, `cmdFinalize` exits non-zero with `finalize_gate_unverified` (inner reason attached) and no archive rename occurs. The rename and the `## Closure` append are included in the Step 8 commit via git rename detection (the commit choreography runs commit-last so the append lands inside the `chore: archive` commit). When `SINK_ISSUE_ACTION` is `comment_keep_open` (keep-open partial-close terminal), `$SINK_KEEP_OPEN_FLAG` adds `--keep-issue-open` to the finalize command — it stamps `last_result: closed_keep_open` + `issue_disposition: kept-open`, skips the remote close probe, and PRESERVES the per-issue roadmap source (no preserve/restore caveat needed: `archiveProjectDir` skips the unlink, so stage `kaola-workflow/.roadmap/` + `ROADMAP.md` at Step 7 without expecting a deletion). `sink-merge` will refuse with exit 1 if `kaola-workflow/{project}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
 
@@ -277,9 +280,15 @@ before any irreversible side effect occurs.
 **Consumer (non-npm) repos.** In a product repo without `test:kaola-workflow:*`
 scripts, `kaola-workflow-run-chains.js` refuses `chains_config_missing` — it is **self-host-only**,
 and that refusal is EXPECTED, not a failure. A consumer repo's finalize gate is the
-agent-recorded `.cache/final-validation.md` (a column-0 `verdict: pass`), enforced by
+agent-recorded `.cache/final-validation.md` (a column-0 `verdict: pass` plus a column-0
+`validated_candidate_hash` binding the verdict to the exact tree it validated), enforced by
 `--finalize-check` in consumer mode. Skip the chain receipt and confirm that validation evidence
 exists before Step 8; do NOT author a `kaola-workflow/chains.json` (the v6.2.0 opt-in is retired).
+A missing hash line refuses `final_validation_unbound`; a hash that no longer matches the
+recomputed current tree refuses `final_validation_stale` (a relevant file changed after
+validation) — the remedy is to re-run the recorded validation command and re-record the evidence
+with a fresh hash produced by the plan-validator's `--candidate-hash --json`; never hand-patch the
+hash. The gate compares two hashes — it never re-runs tests.
 
 **Subagent incomplete contract.** If you cannot complete a gated step (e.g., the receipt is absent
 and the orchestrator must regenerate it), you MUST return a structured typed status such as

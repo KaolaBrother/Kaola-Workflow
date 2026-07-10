@@ -135,12 +135,26 @@ by the absence of the `test:kaola-workflow:*` scripts) gates on that file:
   agent must record its validation evidence before finalize.
 - **`final_validation_failed`** — the file is present but does not carry a column-0 `verdict: pass`.
   The agent's own validation did not pass; remediate and re-record.
+- **`final_validation_unbound`** — the file lacks a well-formed column-0
+  `validated_candidate_hash:` line, so the pass verdict is not bound to the candidate it
+  validated. Produce the hash with the plan-validator's `--candidate-hash --json` mode — computed
+  LAST, after every file the validation covered has landed — and re-record.
+- **`final_validation_stale`** — the recorded `validated_candidate_hash` no longer equals the
+  recomputed current code-tree hash (the refusal payload carries `recorded_candidate_hash` +
+  `current_candidate_hash`): a relevant source/test/test-consumed file changed after validation.
+  Re-run the recorded validation command and re-record the evidence with a fresh hash — never
+  hand-patch the hash. Workflow state and inert, non-test-consumed docs are validation-invisible
+  and do not stale the binding.
+
+The binding gate compares the recorded hash to a recomputation over the same band — it never
+re-runs the suite; test execution stays owned by the agent.
 
 When the final candidate is unchanged since a terminal change-gate validation run, the agent may
 cite that run instead of rerunning. The citation must record column-0 `verdict: pass`,
-`source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. If
-there is any doubt about whether the cited boundary still covers the final candidate, run the
-command and record the new result.
+`source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`, plus a
+fresh `validated_candidate_hash:` computed at citation time (the binding is what proves the cited
+run still covers the candidate). If there is any doubt about whether the cited boundary still
+covers the final candidate, run the command and record the new result.
 
 The attribution sweep (below) runs for **both** repo kinds, so an un-attributed code change
 since `main` is still caught (the allowband-aware freshness check). The v6.2.0
@@ -167,6 +181,15 @@ Gate above):
   `filed: #N` in the `## Run gaps` section. If the item is not a product
   defect (upstream flake, tool-environment noise, or an already-filed and
   tracked waiver), record `noise: <one-line justification>` instead.
+- **`observed_gap_unseeded`** — emitted by the same `--check` call when an
+  entry already written into `finalization-summary.md`'s `## Run gaps`
+  section (mapped to `filed:` or `noise:`) has no matching machine-swept
+  entry in `.cache/run-gaps.json` — i.e. someone hand-typed a `## Run gaps`
+  row for a gap the scanner never observed, bypassing machine verification
+  entirely. Remedy: append the matching `gap: <class> — <text>` line to
+  `.cache/run-gaps-manual.md`, re-run the scanner
+  (`node $KAOLA_SCRIPTS/kaola-workflow-gap-sweep.js --project <project> --json`)
+  so it is actually swept, then re-run `--check`.
 
 These typed refusals are classified structurally — do not string-match.
 
@@ -832,6 +855,11 @@ evidence in Required Agent Compliance, and (b) NOT pass `--attest-contractor-spa
 `finalize_contractor_attested: missing` plus the ATTESTATION WARNING is then the truthful, expected
 outcome — attestation is warn-first and never blocks finalization.
 
+**Warning persistence.** `cmdFinalize` also appends a `## Attestation` section to the archived
+`finalization-summary.md`, recording both status fields plus any non-empty ATTESTATION WARNING
+verbatim — a clean-looking summary must never silently drop a warning that occurred. This section
+is written mechanically at archive time; never remove or summarize it away.
+
 ## Crash Recovery
 
 If the session crashes after `cmdFinalize` archives the project folder but before the Step 8 `git commit` runs, finalize is resumable.
@@ -949,10 +977,14 @@ node "$SINK_MERGE_JS" \
 **Co-tenant merge protocol.** Each lane cleans up its own branch, worktree, and `kaola-workflow/<project>/` folder ONLY AFTER its own merge lands — cleanup follows the merge, not the other way around. When two sessions run concurrently: the first finisher merges normally; the later finisher rebases onto the updated main and retries the fast-forward merge. A true content conflict halts and asks a human — it is NEVER auto-resolved. Do not clean up another session's branch, worktree, or project folder.
 
 **Crash-resume**: a step-receipt at `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each step.
-Re-running the command after a crash resumes from the last incomplete step — no double-apply.
+Re-running the command after a crash resumes from the last incomplete step — no double-apply. `sink-receipt.json`
+and `sink-fallback.json` are transaction journals owned by the sink script: they exist on disk only for
+crash-resume, and a terminally successful sink deletes them itself (the JSON success emit carries
+`journal_disposed: true`). A `clean and synced` check that finds one afterwards (an older cycle's residue)
+must DELETE the file, never commit it; a journal is never part of the deliverable.
 
 `sink-merge.js` exit codes:
-- Exit 0: branch merged onto main, issue closed (online), local branch deleted. Confirm worktree is on main with `git status --short --branch`.
+- Exit 0: branch merged onto main, issue closed (online), local branch deleted, sink journals disposed. Confirm worktree is on main with `git status --short --branch` — a clean tree includes no lingering `sink-receipt.json`/`sink-fallback.json`.
 - Exit 1: conflict or fatal error. Rebase conflict remediation printed to stderr. Re-run after resolving.
 - Exit 2: FF race exhausted after MAX_AUTOMERGE_RETRIES retries. Follow printed remediation instructions.
 - Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Finalization pivots to PR creation automatically — except on keep-open runs (`SINK_KEEP_OPEN_FLAG` set), where exit 3 is a typed BLOCKED refusal requiring manual remediation of the merge blocker; keep-open is merge-sink-only.

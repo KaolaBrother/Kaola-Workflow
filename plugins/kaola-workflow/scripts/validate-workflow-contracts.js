@@ -478,6 +478,9 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_STATE_FILE="kaola-wo
 // is the gate (not a chain receipt). Pin the distinctive typed refusal so the dual-mode prose cannot drift.
 assertIncludes('commands/kaola-workflow-finalize.md', 'final-validation.md');
 assertIncludes('commands/kaola-workflow-finalize.md', 'final_validation_unverified');
+// #653: the consumer candidate binding (validated_candidate_hash) — the plan-run All-done consumer
+// block must instruct recording the hash so the verdict is bound to the exact validated tree.
+assertIncludes('commands/kaola-workflow-plan-run.md', 'validated_candidate_hash');
 // #277 M3: --keep-worktree procedure relocated from phase6 inline body to agents/contractor.md;
 // still asserted in the dispatch prompt string inside finalize.md (pass-through reference).
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
@@ -719,6 +722,10 @@ assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
 // #347: pin the planner self-attest back-fill flag (the #280 producer) so the forge-port asymmetry
 // it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
+// the planner startup surface itself must instruct the flag, not just the producer script.
+assertIncludes('agents/workflow-planner.md', '--attest-planner-spawn');
+// persistence lock: a non-empty attestation warning must be transcribed into the durable summary.
+assertIncludes('scripts/kaola-workflow-claim.js', '## Attestation');
 assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
 // #399: the Step-8a artifact mirror must run the ledger-regression guard (forge-neutral
 // kaola-workflow-ledger-compare.js) BEFORE its `cp -R`, and the finalization preamble must
@@ -1116,6 +1123,12 @@ for (const file of claudeJoinProtocolSurfaces611) {
 assertIncludes('commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');
 assertIncludes('commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
 assertIncludes('commands/kaola-workflow-finalize.md', '## Staging Guard');
+
+// n5 (#653 finding D): selection-evidence docking + run-gap manual-seed prose must reach the
+// router + finalize/plan-run surfaces, and the observed_gap_unseeded refusal must be documented.
+assertIncludes('commands/workflow-next.md', 'selection-evidence');
+assertIncludes('commands/kaola-workflow-finalize.md', 'observed_gap_unseeded');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'run-gaps-manual.md');
 
 // PROVENANCE_BAN: agent-facing prompt surfaces (agents/*.md, commands/*.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or

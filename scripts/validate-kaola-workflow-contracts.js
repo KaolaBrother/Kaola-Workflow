@@ -174,6 +174,15 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documen
 // #475: pin the consumer (non-npm) finalize gate prose so the dual-mode concept cannot drift out of the SKILL.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final-validation.md');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final_validation_unverified');
+// #653: the consumer candidate binding (validated_candidate_hash) must reach BOTH consumer-recording
+// surfaces — the plan-run All-done consumer block and the finalize gate prose.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'validated_candidate_hash');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'validated_candidate_hash');
+// n5 (#653 finding D): selection-evidence docking must reach the next SKILL; the
+// observed_gap_unseeded refusal and run-gap manual-seed prose must reach the finalize/plan-run SKILLs.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'selection-evidence');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'observed_gap_unseeded');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'run-gaps-manual.md');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'metadata captured before archive');
@@ -602,6 +611,9 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contra
 // #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
 // claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-planner-spawn');
+// the planner startup surfaces themselves must instruct the flag, not just the producer script.
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, '--attest-planner-spawn');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--attest-planner-spawn');
 assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
 // #359: producer-attested evidence-token vocabulary in the codex agent profiles.
 assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');

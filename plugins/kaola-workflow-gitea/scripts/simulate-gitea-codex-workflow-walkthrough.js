@@ -47,6 +47,14 @@ if (!giteaClaimSrc.includes('run_posture')) {
 if (!giteaClaimSrc.includes('claim_planner_attested')) {
   throw new Error('M2 (#277): gitea-codex: kaola-gitea-workflow-claim.js must implement claim_planner_attested (warn-first attestation)');
 }
+// n6 (#653 finding A + D3, gitea-codex mirror): the ported claim.js must carry the attestation-
+// warning persistence + selection-evidence probe added by the root #653 mirror.
+if (!giteaClaimSrc.includes('## Attestation')) {
+  throw new Error('#653: gitea-codex: kaola-gitea-workflow-claim.js must implement attestation-warning persistence (## Attestation)');
+}
+if (!giteaClaimSrc.includes('selection_evidence')) {
+  throw new Error('#653: gitea-codex: kaola-gitea-workflow-claim.js must implement the selection_evidence probe');
+}
 
 // #284: config/hooks.json must exist, parse, and register the SubagentStart dispatch-log hook.
 const hooksConfigPath = path.join(root, 'plugins/kaola-workflow-gitea/config/hooks.json');

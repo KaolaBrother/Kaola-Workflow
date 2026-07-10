@@ -45,6 +45,15 @@ here for the full contract.
     from the agent manifest and `model` the runtime-supplied tier — codex CLI
     only; empty otherwise). Used by `checkDispatchAttestations`
     at closure time for WARN-FIRST subagent-seam attestation (see `docs/api.md` § Closure Contract).
+  - `selection-evidence.md` (issue #653 / D-653-01) — written by the `workflow-next.md` router,
+    BEFORE the executor is dispatched, only on the no-issue-named auto-bundle branch: the
+    `issue-scout`'s entire JSON recommendation, verbatim and fenced, with a one-line
+    `selection_mode: auto-bundle|single-issue` header. Archives with the cycle automatically (no
+    special-casing at `archiveProjectDir`). `probeSelectionEvidence` (`kaola-workflow-claim.js`)
+    checks `[archiveCacheDir, liveCacheDir]` for any file matching `/^selection-evidence\./` and
+    attaches `selection_evidence: present|absent` to the closure receipt (advisory only — a
+    user-named claim legitimately has none, since the scout never runs on that branch). See
+    `docs/api.md` § Closure Contract.
   - `running-set.json` — tracks which nodes are currently in the running set
     (`{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`; per-node fields: `id`, `role`, `kind`,
     `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at
@@ -173,6 +182,19 @@ here for the full contract.
     `chains_empty` refusal in `--finalize-check`, precedence-ordered between `chains_stale` and
     `chains_red`, mirroring the producer's own `no_chains` refusal to *write* an empty-chains
     receipt in the first place. See `docs/decisions/D-617-01.md`.
+  - `final-validation.md` — the CONSUMER (non-npm) repo-kind equivalent of `chain-receipt.json`;
+    recorded by the agent, not a producer script. A column-0 `verdict: pass` line is the base
+    gate; a column-0 `validated_candidate_hash: <64-hex>` line (issue #653 / D-653-01) binds that
+    verdict to the exact candidate tree it validated. Produce the hash via
+    `kaola-workflow-plan-validator.js --candidate-hash --json` (read-only, no tests executed),
+    computed LAST — after every file the validation covered has landed. `--finalize-check`
+    (consumer mode) refuses `final_validation_unbound` (no well-formed hash line) or
+    `final_validation_stale` (the recorded hash no longer equals a fresh recompute over the
+    current tree, once workflow-state and inert non-test-consumed docs are excluded) before
+    accepting the verdict. A citation of a prior terminal validation run (`source: cited:<node-id>`
+    / `validated_command` / `validated_at_head` / `reuse_boundary`, #648) still requires a FRESH
+    hash computed at citation time. See `docs/api.md` § Candidate-hash binding for consumer
+    final-validation and `docs/decisions/D-653-01.md`.
 - `kaola-workflow/archive/{project}/` keeps completed, abandoned, or stale
   project folders after finalize or discard.
 - **Closure normalization (#324):** when `archiveProjectDir` archives a project with
@@ -195,7 +217,8 @@ here for the full contract.
   mid-run re-freeze re-stamps only the plan file, leaving the state on the claim-time hash); and the
   `## Last Updated` line refreshed to the archive timestamp. After the rename, a compact `## Closure`
   block is appended recording `archived_at`, `issue_disposition`, `claim_label_removed`,
-  `worktree_removed`, and `closure_invariants` (presence-guarded / idempotent). `issue_disposition`
+  `worktree_removed`, `closure_invariants`, and (issue #653 / D-653-01) `claim_planner_attested` /
+  `finalize_contractor_attested` (presence-guarded / idempotent). `issue_disposition`
   enum: `kept-open | close-pending | closed | unknown`. On the `cmdFinalize` lane disposition is
   DECISION-derived — the default merge lane is honestly `close-pending` because the orchestrator
   closes the issue AFTER sink-merge, and `--keep-open` records `kept-open` + `last_result:
@@ -209,6 +232,12 @@ here for the full contract.
   writes land inside the `chore: archive` commit. NOTE for out-of-repo tooling: a `next_command:
   none (archived)` only ever appears under `kaola-workflow/archive/`; `resume`/`status`/`repair-state`
   read active folders only and never see it.
+- **Attestation persistence (issue #653 / D-653-01):** independently of the `## Closure` block's
+  `claim_planner_attested`/`finalize_contractor_attested` fields above, `cmdFinalize` also appends
+  a script-owned, presence-guarded `## Attestation` section to the archived
+  `finalization-summary.md` — the same two status fields plus every non-empty `ATTESTATION
+  WARNING`/`attestation:` warning, verbatim — so a warning that fired during the run survives the
+  archive even if a summary is otherwise read as clean. See `docs/api.md` § Closure Contract.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),
@@ -272,6 +301,17 @@ here for the full contract.
     preferring the fresh field and falling back to `branch_head` only for legacy receipts written
     before this field existed. This closes a false `impl_commit_not_ancestor` verify-sink failure
     on a cleanly rebased, genuinely published sink. See `docs/decisions/D-619-01.md`.
+
+  - **Terminal journal disposal (issue #653 / D-653-01).** `sink-receipt.json` and
+    `sink-fallback.json` are crash-resume transaction journals, not durable deliverable state.
+    `disposeSinkJournals(mainRoot, project)` unlinks all four candidate paths (live + archive
+    `.cache/`, both filenames) once `finalReceipt` has been captured into memory and every
+    `SINK_STEPS` entry, the `branch_head`/`published_head` ancestry guard, and worktree/branch
+    teardown have all completed — so an earlier crash or refusal never reaches the dispose call
+    and the journal survives for resume unchanged. The terminal-success emit gains
+    `journal_disposed: true|false`. A stray journal found on a later "clean and synced" check (an
+    older cycle's residue) must be deleted, never committed. See `docs/api.md` § Sink journal
+    disposal at terminal success.
 
 ## Workflow State Fields
 

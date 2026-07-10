@@ -56,6 +56,12 @@ const CLOSURE_RECEIPT_FIELDS = {
   // #441: advisory goal-check field. 'satisfied' = AC verified; 'unsatisfied' = AC failed;
   // 'absent' = no AC defined. null in emptyReceipt() (not yet evaluated). Non-blocking in v1.
   goal_check: ['satisfied', 'unsatisfied', 'absent'],
+  // #653 (D3): advisory selection-evidence probe. 'present' = a selection-evidence.* file was
+  // found under the project's .cache/ (the router docked the issue-scout's recommendation
+  // before dispatching the executor); 'absent' = none found — expected for a user-named claim,
+  // which never runs the scout. null in emptyReceipt() (not yet probed). Advisory only: no
+  // invariant, no warning on absence.
+  selection_evidence: ['present', 'absent'],
 };
 
 // The closure invariants for a completed linked issue N. `id` is a stable
@@ -99,6 +105,8 @@ function emptyReceipt(project, issueNumber) {
     warnings: [],
     // #441: advisory goal-check — null until evaluated.
     goal_check: null,
+    // #653 (D3): advisory selection-evidence probe — null until evaluated.
+    selection_evidence: null,
   };
 }
 

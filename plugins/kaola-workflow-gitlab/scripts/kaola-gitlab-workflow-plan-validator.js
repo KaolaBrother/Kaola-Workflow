@@ -107,6 +107,11 @@ const OPERATOR_HINT_REGISTRY = {
   // #475: consumer (non-npm) finalize gate — the agent's recorded validation IS the gate (no chain receipt).
   final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification (#44): record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
   final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
+  // #653: consumer finalize BINDING — the pass verdict must be bound to the exact candidate it
+  // validated via a column-0 validated_candidate_hash equal to the current code-tree hash.
+  final_validation_unbound: () => 'final-validation.md lacks a column-0 validated_candidate_hash — recompute via --candidate-hash --json and re-record after confirming the tree still matches the validated candidate; if uncertain, re-run the validation command.',
+  final_validation_stale: () => 'A relevant source/test/test-consumed file changed after validation — re-run the recorded validation_command and re-record final-validation.md (including a fresh hash); never hand-patch the hash.',
+  candidate_hash_unavailable: () => 'Cannot snapshot the current worktree for the candidate code-tree hash (git failure). Ensure the plan lives inside a functional git worktree, then re-run --candidate-hash.',
   // #556: package.json present but unreadable/unparseable — repo kind (self-host npm vs consumer) is INDETERMINATE.
   repo_kind_undetermined: () => 'package.json is present but UNREADABLE/unparseable, so the repo kind (self-host npm vs consumer) cannot be determined. The finalize gate refuses rather than silently using the weaker consumer gate. Fix the file permissions or the malformed JSON, or remove package.json if this is genuinely a non-npm consumer repo, then re-run.',
   plan_not_frozen: () => 'plan_hash missing — the plan is not frozen. Run --freeze to stamp the hash.',
@@ -2565,10 +2570,16 @@ function printHelp() {
     '  --finalize-check  the FINALIZE-TIME gate (#424/#432/#475): (A) validation gate, DUAL-MODE by repo kind —\n' +
     '                 SELF-HOST (package.json declares test:kaola-workflow:*): a fresh HEAD-bound all-green\n' +
     '                 .cache/chain-receipt.json (chains_unverified > chains_stale > chains_red); CONSUMER (non-npm):\n' +
-    '                 the agent-recorded .cache/final-validation.md with a column-0 `verdict: pass` (final_validation_unverified\n' +
-    '                 > final_validation_failed). Then (B) attribution sweep — every `git diff <base>...HEAD` change must be in\n' +
-    '                 the .md allowband OR a `complete` node\'s declared write set, else unattributed_change.\n' +
-    '                 [--base REF (default main)] [--receipt PATH (self-host)] [--head SHA (self-host)]\n' +
+    '                 the agent-recorded .cache/final-validation.md with a column-0 `verdict: pass` AND a column-0\n' +
+    '                 `validated_candidate_hash` equal to the recomputed current code-tree hash (final_validation_unverified\n' +
+    '                 > final_validation_failed > final_validation_unbound > final_validation_stale; the binding compares\n' +
+    '                 two hashes — it never re-runs tests). Then (B) attribution sweep — every `git diff <base>...HEAD`\n' +
+    '                 change must be in the .md allowband OR a `complete` node\'s declared write set, else unattributed_change.\n' +
+    '                 [--base REF (default main)] [--receipt PATH (self-host)] [--head SHA (self-host)] [--current-code-tree HASH]\n' +
+    '  --candidate-hash  emit the deterministic code-tree snapshot hash of the CURRENT candidate (committed + working\n' +
+    '                 landable set minus validation-invisible paths; band = the plan\'s ## Meta validation_test_consumes) for\n' +
+    '                 the agent to record as a column-0 `validated_candidate_hash:` line in .cache/final-validation.md.\n' +
+    '                 Compute it LAST, after every file the validation covered has landed. Read-only; runs no tests. [--json]\n' +
     '  --release-check  the PRE-TAG RELEASE gate (check-only, PLAN-INDEPENDENT — no plan path; self-owned: reads only the\n' +
     '                 receipt + package.json + local git, no CI/CD or forge calls). Refuses unless <git-toplevel>/\n' +
     '                 .cache/chain-receipt.json is a clean-stamped, all-green, UNWAIVED receipt COVERING every declared\n' +
@@ -3222,6 +3233,27 @@ function main() {
     if (r.result !== 'pass') process.exitCode = 1;
     return;
   }
+  if (args.includes('--candidate-hash')) {
+    // #653: PRODUCER for the consumer finalize binding — emit the deterministic code-tree snapshot
+    // hash of the CURRENT candidate (committed + working landable set, minus validation-invisible
+    // paths) so the agent can record it as a column-0 `validated_candidate_hash:` line in
+    // .cache/final-validation.md. The plan's `## Meta` `validation_test_consumes` is the SHARED band
+    // source: consumer mode has no chain receipt to replay the band from, and the frozen plan is
+    // freeze/plan_hash-covered, so this producer and the --finalize-check gate derive the IDENTICAL
+    // band by construction. Compute over the GIT TOP-LEVEL (same root discipline as the gate, see
+    // the #547 note there). Read-only; NO tests are executed. Non-JSON output prints the exact
+    // recordable column-0 line.
+    const extra = parseValidationTestConsumes(content);
+    let hashRoot = root;
+    try { hashRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { hashRoot = root; }
+    const candidate = computeCodeTreeHash(hashRoot, projTag, extra);
+    if (!candidate) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'candidate_hash_unavailable', operator_hint: getOperatorHint('candidate_hash_unavailable'), errors: ['could not snapshot the current worktree for the candidate code-tree hash (git failure) — the binding cannot be produced'] }) : 'typed refusal: candidate_hash_unavailable') + '\n');
+      process.exitCode = 1; return;
+    }
+    process.stdout.write((json ? JSON.stringify({ result: 'ok', mode: 'candidate-hash', validated_candidate_hash: candidate }) : 'validated_candidate_hash: ' + candidate) + '\n');
+    return;
+  }
   if (args.includes('--finalize-check')) {
     // #424 (D-424-01) part 3 + #432 (D-432-01) part 3 + #475: the FINALIZE-TIME gate. Runs ONLY at
     // finalization (cmdFinalize), never per-node. Two coupled checks, precedence-ordered:
@@ -3232,8 +3264,12 @@ function main() {
     //       • CONSUMER (non-npm product repo, e.g. Swift/Xcode): the agent OWNS verification (#44), so
     //         the gate is the agent's recorded `.cache/final-validation.md` (presence + a column-0
     //         `verdict: pass`) — NOT a re-executed chain receipt. A script that re-ran the suite the
-    //         `final-validation` node already ran is the over-engineering #475 removes.
-    //         final_validation_unverified > final_validation_failed.
+    //         `final-validation` node already ran is the over-engineering #475 removes. #653: the
+    //         verdict must additionally be BOUND to the candidate it validated via a column-0
+    //         `validated_candidate_hash` equal to the recomputed current code-tree hash (the gate
+    //         compares two hashes — it never re-executes tests, so #475 stands).
+    //         final_validation_unverified > final_validation_failed > final_validation_unbound >
+    //         final_validation_stale.
     //   (B) attribution sweep (#424): every file changed since the branch diverged from main must be
     //       either in the narrow allowband OR covered by a `complete` node's declared write set; an
     //       orphan (crash residue, out-of-window edit) surfaces as `unattributed_change`. This sweep is
@@ -3288,6 +3324,7 @@ function main() {
       }
     }
     let chains = [];
+    let boundCandidateHash = null; // #653: consumer-mode verified binding, echoed in the pass payload
     const validationMode = selfHostNpm ? 'chain-receipt' : 'final-validation';
     if (selfHostNpm) {
       // ---- (A) chain-receipt gate (#432) — SELF-HOST only; behavior UNCHANGED ----
@@ -3366,6 +3403,31 @@ function main() {
         process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'final_validation_failed', operator_hint: getOperatorHint('final_validation_failed'), errors: ['.cache/final-validation.md does not record `verdict: pass` (column 0) — the agent\'s own validation did not pass (found verdict: ' + (fv.found ? fv.verdict : '(none)') + ')'] }) : 'typed refusal: final_validation_failed (verdict: ' + (fv.found ? fv.verdict : 'none') + ')') + '\n');
         process.exitCode = 1; return;
       }
+      // #653 BINDING: the verdict proves the validation PASSED, not that it validated THIS candidate.
+      // The recorded column-0 `validated_candidate_hash` (produced via --candidate-hash AFTER the last
+      // relevant edit) must equal the CURRENT code-tree hash, recomputed here over the same band (the
+      // frozen plan's `## Meta` `validation_test_consumes` — the shared band source, so producer and
+      // gate never disagree). Fail-closed BOTH ways: an absent/malformed field refuses
+      // final_validation_unbound (an omitted field must not bypass the binding — the legacy no-hash
+      // shape degrades to a typed refusal, never a silent pass); a mismatch refuses
+      // final_validation_stale with both hashes in the payload. The gate COMPARES TWO HASHES — it
+      // never re-executes tests (#475 stands). Validation-invisible bookkeeping (workflow state,
+      // inert non-test-consumed docs) is outside the hash band and does not stale the binding.
+      // `--current-code-tree` overrides the recompute (same test seam as the self-host arm).
+      const bind = schema.parseValidatedCandidateHash(fvRaw);
+      if (!bind.present || !bind.hash) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'final_validation_unbound', operator_hint: getOperatorHint('final_validation_unbound'), errors: ['.cache/final-validation.md carries no well-formed column-0 `validated_candidate_hash:` line — the pass verdict is not bound to a candidate snapshot; produce one with --candidate-hash --json (computed after the last relevant edit) and re-record'] }) : 'typed refusal: final_validation_unbound (no validated_candidate_hash in ' + fvPath + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      const extra = parseValidationTestConsumes(content);
+      let hashRoot = root;
+      try { hashRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { hashRoot = root; }
+      const currentCandidate = flagVal('--current-code-tree') || computeCodeTreeHash(hashRoot, projTag, extra);
+      if (!currentCandidate || currentCandidate !== bind.hash) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'final_validation_stale', operator_hint: getOperatorHint('final_validation_stale'), recorded_candidate_hash: bind.hash, current_candidate_hash: currentCandidate || null, errors: ['recorded validated_candidate_hash "' + bind.hash + '" != current code-tree hash "' + (currentCandidate || '(unresolved)') + '" — a relevant source/test/test-consumed file changed after the recorded validation; re-run the validation_command and re-record final-validation.md with a fresh hash'] }) : 'typed refusal: final_validation_stale (' + bind.hash + ' != ' + (currentCandidate || 'unresolved') + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      boundCandidateHash = currentCandidate;
     }
     // ---- (B) attribution sweep (#424) ----
     // Enumerate every file changed since the branch diverged from main (`git diff <base>...HEAD`).
@@ -3393,7 +3455,11 @@ function main() {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', operator_hint: getOperatorHint('unattributed_change'), unattributed, errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] }) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
       process.exitCode = 1; return;
     }
-    process.stdout.write((json ? JSON.stringify({ result: 'pass', mode: validationMode, checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) }) : 'finalize ok (' + changed.length + ' changes attributed, ' + (validationMode === 'chain-receipt' ? chains.length + ' chains verified' : 'agent validation verified') + ')') + '\n');
+    // #653: the pass payload echoes the verified binding in consumer mode ONLY (boundCandidateHash
+    // stays null on the self-host arm, so the chain-receipt pass emission is byte-unchanged).
+    const passPayload = { result: 'pass', mode: validationMode, checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) };
+    if (boundCandidateHash) passPayload.validated_candidate_hash = boundCandidateHash;
+    process.stdout.write((json ? JSON.stringify(passPayload) : 'finalize ok (' + changed.length + ' changes attributed, ' + (validationMode === 'chain-receipt' ? chains.length + ' chains verified' : 'agent validation verified') + ')') + '\n');
     return;
   }
   if (args.includes('--node-end')) {

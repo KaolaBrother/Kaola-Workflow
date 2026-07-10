@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=persistAttestationToSummary presence-guard (/^## Attestation$/m) exists for crash-resume idempotence but means a contractor-authored summary that pre-seeds a column-0 \"## Attestation\" heading would suppress the script append; fenced by the script-owned ## Closure block + stdout receipt carrying the same fields, and A5 prose forbids removing/summarizing",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=the bundle watch-pr merged-closure lane records claim_planner_attested/finalize_contractor_attested in each member's ## Closure block but does not transcribe verbatim ATTESTATION WARNING text to a summary on that lane (single-issue cmdFinalize does); design-scoped by n1-design A3 (call site = cmdFinalize only), status fields are the audit signal",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  }
+]

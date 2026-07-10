@@ -47,6 +47,14 @@ if (!gitlabClaimSrc.includes('run_posture')) {
 if (!gitlabClaimSrc.includes('claim_planner_attested')) {
   throw new Error('M2 (#277): gitlab-codex: kaola-gitlab-workflow-claim.js must implement claim_planner_attested (warn-first attestation)');
 }
+// n6 (#653 finding A + D3, gitlab-codex mirror): the ported claim.js must carry the attestation-
+// warning persistence + selection-evidence probe added by the root #653 mirror.
+if (!gitlabClaimSrc.includes('## Attestation')) {
+  throw new Error('#653: gitlab-codex: kaola-gitlab-workflow-claim.js must implement attestation-warning persistence (## Attestation)');
+}
+if (!gitlabClaimSrc.includes('selection_evidence')) {
+  throw new Error('#653: gitlab-codex: kaola-gitlab-workflow-claim.js must implement the selection_evidence probe');
+}
 
 // #284: static assertion — config/hooks.json must exist, parse, and register the SubagentStart
 // dispatch-log hook (M1), proving the Codex lifecycle hook producer is wired in this edition.

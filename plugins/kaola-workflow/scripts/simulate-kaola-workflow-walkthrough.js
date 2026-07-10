@@ -276,6 +276,119 @@ function testAC3AttestationSeeded() {
   }
 }
 
+// Attestation warning durable persistence (codex edition): a non-empty ATTESTATION WARNING must
+// land in the archived finalization-summary.md and workflow-state.md ## Closure block, not just
+// stdout JSON. Seed a contractor-only dispatch-log (no workflow-planner entry).
+function testAttestationWarningPersistenceCodex() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-codex-'));
+  try {
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roadmapDir, 'issue-653102.md'),
+      'issue: #653102\ntitle: —\nstatus: open\nworkflow_project: issue-653102\nnext_step: ready\n'
+    );
+    const acquired = runClaim(['startup', '--target-issue', '653102', '--runtime', 'codex', '--sink', 'pr'], root);
+    assert(acquired.claim === 'acquired', 'attestation persistence (codex): startup must acquire issue-653102, got: ' + JSON.stringify(acquired));
+
+    // Seed dispatch-log with ONLY a contractor entry (no workflow-planner).
+    const cacheDir = path.join(root, 'kaola-workflow', 'issue-653102', '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
+      JSON.stringify({ ts: '2026-06-09T00:00:00Z', agent_type: 'contractor', agent_id: 'test-contractor', cwd: root }) + '\n');
+
+    plantRoadmap(root, 653102, '');
+
+    const finalizeResult = runClaim(['finalize', '--project', 'issue-653102'], root);
+    assert(finalizeResult.status === 'closed',
+      'attestation persistence (codex): finalize must return status:closed, got: ' + JSON.stringify(finalizeResult));
+    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested === 'missing',
+      'attestation persistence (codex): claim_planner_attested must be missing, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested));
+
+    const archived = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-653102'));
+    assert(archived.length === 1, 'attestation persistence (codex): finalize must archive issue-653102');
+    const archiveDir = path.join(root, 'kaola-workflow', 'archive', archived[0]);
+
+    const summaryPath = path.join(archiveDir, 'finalization-summary.md');
+    assert(fs.existsSync(summaryPath), 'attestation persistence (codex): archived finalization-summary.md must exist');
+    const summary = fs.readFileSync(summaryPath, 'utf8');
+    assert(/^claim_planner_attested: missing$/m.test(summary),
+      'attestation persistence (codex): archived finalization-summary.md must carry column-0 claim_planner_attested: missing, got: ' + summary);
+    assert(summary.includes('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log'),
+      'attestation persistence (codex): archived finalization-summary.md must carry the verbatim ATTESTATION WARNING, got: ' + summary);
+
+    const state = fs.readFileSync(path.join(archiveDir, 'workflow-state.md'), 'utf8');
+    assert(/^## Closure$/m.test(state), 'attestation persistence (codex): archived workflow-state.md must carry ## Closure block');
+    assert(/^claim_planner_attested: missing$/m.test(state),
+      'attestation persistence (codex): archived workflow-state.md ## Closure block must carry claim_planner_attested, got: ' + state);
+
+    console.log('testAttestationWarningPersistenceCodex: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// n5 (#653 finding D3, codex edition): selection-evidence probe. Case (a) seeds
+// .cache/selection-evidence.md pre-finalize (simulating the router's D2 docking) ->
+// closure_receipt.selection_evidence must read 'present' and the file must survive under the
+// archived project's .cache/. Case (b), a separate project with no docked file, must read 'absent'.
+function testSelectionEvidenceDockingCodex() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-selection-evidence-codex-'));
+  try {
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roadmapDir, 'issue-653203.md'),
+      'issue: #653203\ntitle: —\nstatus: open\nworkflow_project: issue-653203\nnext_step: ready\n'
+    );
+    const acquired = runClaim(['startup', '--target-issue', '653203', '--runtime', 'codex', '--sink', 'pr'], root);
+    assert(acquired.claim === 'acquired', 'selection-evidence (codex): startup must acquire issue-653203, got: ' + JSON.stringify(acquired));
+
+    const cacheDir = path.join(root, 'kaola-workflow', 'issue-653203', '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'selection-evidence.md'),
+      'selection_mode: single-issue\n\n```json\n{"recommended_bundle":{"primary_issue":653203,"issues":[653203],"confidence":"low"}}\n```\n');
+
+    plantRoadmap(root, 653203, '');
+
+    const finalizeResult = runClaim(['finalize', '--project', 'issue-653203'], root);
+    assert(finalizeResult.status === 'closed',
+      'selection-evidence (codex): finalize must return status:closed, got: ' + JSON.stringify(finalizeResult));
+    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.selection_evidence === 'present',
+      'selection-evidence (codex): seeded selection-evidence.md must read closure_receipt.selection_evidence === present, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.selection_evidence));
+
+    const archived = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-653203'));
+    assert(archived.length === 1, 'selection-evidence (codex): finalize must archive issue-653203');
+    const archivedEvidencePath = path.join(root, 'kaola-workflow', 'archive', archived[0], '.cache', 'selection-evidence.md');
+    assert(fs.existsSync(archivedEvidencePath),
+      'selection-evidence (codex): selection-evidence.md must survive under the archived project .cache/, expected at ' + archivedEvidencePath);
+
+    // (b) absent — a second project with no docked selection-evidence file.
+    const roadmapDir2 = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.writeFileSync(
+      path.join(roadmapDir2, 'issue-653204.md'),
+      'issue: #653204\ntitle: —\nstatus: open\nworkflow_project: issue-653204\nnext_step: ready\n'
+    );
+    const acquired2 = runClaim(['startup', '--target-issue', '653204', '--runtime', 'codex', '--sink', 'pr'], root);
+    assert(acquired2.claim === 'acquired', 'selection-evidence (codex): second startup must acquire issue-653204, got: ' + JSON.stringify(acquired2));
+
+    plantRoadmap(root, 653204, '');
+
+    const finalizeResult2 = runClaim(['finalize', '--project', 'issue-653204'], root);
+    assert(finalizeResult2.status === 'closed',
+      'selection-evidence (codex): second finalize must return status:closed, got: ' + JSON.stringify(finalizeResult2));
+    assert(finalizeResult2.closure_receipt && finalizeResult2.closure_receipt.selection_evidence === 'absent',
+      'selection-evidence (codex): a claim with no docked selection-evidence.md must read closure_receipt.selection_evidence === absent, got: ' +
+      JSON.stringify(finalizeResult2.closure_receipt && finalizeResult2.closure_receipt.selection_evidence));
+
+    console.log('testSelectionEvidenceDockingCodex: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // #333: keep-open partial-close archive stamp (codex edition). Plant an active project, finalize
 // with --keep-open, assert last_result: closed_keep_open + issue_disposition: kept-open.
 function testKeepOpenArchiveStamp333() {
@@ -1950,6 +2063,8 @@ function main() {
     testUpdateHooksHardening325();
     test409StableHomeSurvivesDirDeletion();   // #409
     testAC3AttestationSeeded();
+    testAttestationWarningPersistenceCodex();
+    testSelectionEvidenceDockingCodex();
     testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();
     testAC4SubagentDispatchLog();

@@ -179,6 +179,8 @@ Fields:
 
 When confidence is not `"high"`, set `issues` to a single-element array and note the reason in `rationale`. The orchestrator decides whether to proceed with the recommended set, adjust it, or fall back to single-issue mode — you only recommend.
 
+When dispatched pre-claim (the router's auto-bundle survey, before any project exists), the router persists your JSON output verbatim as the durable selection evidence — return it complete and valid.
+
 ### Empty-Backlog Alternative Shape
 
 When, after completing the full survey, there is no claimable, unblocked, same-scope bundle to recommend — because all open issues are already claimed, classified red, have unresolved external dependencies, or the backlog contains no open issues at all — emit the following shape instead of the standard `recommended_bundle` object:

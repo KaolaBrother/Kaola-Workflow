@@ -898,6 +898,28 @@ function resolveSinkReceiptPath(mainRoot, project) {
   return archive;
 }
 
+// #653: dispose the sink-receipt.json / sink-fallback.json transaction journals at TERMINAL
+// SUCCESS — they exist on disk only for crash-resume, never as tracked or lingering debris.
+// Per-file try/catch: a failed unlink must never fail an otherwise-successful sink. Returns true
+// iff no candidate journal remains on disk afterward.
+function disposeSinkJournals(mainRoot, project) {
+  const candidates = [
+    path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json'),
+    path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-fallback.json'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-fallback.json'),
+  ];
+  let allDisposed = true;
+  for (const p of candidates) {
+    try { fs.unlinkSync(p); } catch (e) {
+      if (e && e.code === 'ENOENT') continue;
+      allDisposed = false;
+      process.stderr.write('sink-merge --sink: WARNING: failed to dispose sink journal ' + p + ': ' + (e.message || String(e)) + '\n');
+    }
+  }
+  return allDisposed;
+}
+
 // #518: cycle-identity guard — stamp branch_head at init; on resume, if steps.merge is 'done'
 // and branch_head diverges from the current tip (new cycle, same branch name reused), reinitialize
 // all steps to pending so the merge actually runs. Genuine mid-cycle resumes (branch_head matches
@@ -1384,7 +1406,10 @@ function runSinkTransaction(args, mainRoot, defBranch) {
     try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
   } catch (_) { try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {} }
   const finalReceipt = JSON.parse(fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : JSON.stringify(receipt));
-  process.stdout.write(JSON.stringify({ result: 'ok', status: 'sinked', receipt: finalReceipt }) + '\n');
+  // #653: dispose the crash-resume journals now that finalReceipt is captured — strictly after
+  // every step, the freshness guard, and teardown, so an earlier crash leaves the journal intact.
+  const journalDisposed = disposeSinkJournals(mainRoot, args.project);
+  process.stdout.write(JSON.stringify({ result: 'ok', status: 'sinked', journal_disposed: journalDisposed, receipt: finalReceipt }) + '\n');
 }
 
 const SINK_USAGE = 'usage: kaola-gitlab-workflow-sink-merge.js --branch B --project P [--issue N] [--issue-numbers A,B] [--keep-issue-open] [--sink]\n'

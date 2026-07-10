@@ -347,6 +347,143 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T9 (#653 finding D1): reverse containment — an observed ## Run gaps entry that was NEVER
+// seeded through the scanner (sweptClasses is empty) must refuse observed_gap_unseeded, not
+// pass vacuously. Before the fix, gate mode returned early on empty sweptClasses and never even
+// read the summary — this is the exact vacuous-pass hole D1 closes.
+// ---------------------------------------------------------------------------
+const fix9 = makeFixture('proj-t9');
+try {
+  // Clean provenance/chain-receipt: sweptClasses will be empty.
+  writeProvenance(fix9.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix9.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  run(fix9.root, ['--project', 'proj-t9', '--json']); // produces sweptClasses: []
+  const projDir9 = path.join(fix9.root, 'kaola-workflow', 'proj-t9');
+  writeSummary(fix9.cacheDir, projDir9, [
+    '- manual:coresim-busy (one transient Busy event): noise: environment',
+  ]);
+
+  const r9 = run(fix9.root, [
+    '--project', 'proj-t9',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir9, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r9.exitCode !== 0, 'T9: gate exits non-zero on an observed-but-unseeded gap even with empty sweep');
+  assert(r9.jsonOut !== null, 'T9: JSON output parseable on refuse');
+  if (r9.jsonOut) {
+    assert(r9.jsonOut.result === 'refuse', 'T9: result = refuse');
+    assert(r9.jsonOut.reason === 'observed_gap_unseeded', 'T9: reason = observed_gap_unseeded, got ' + r9.jsonOut.reason);
+    assert(Array.isArray(r9.jsonOut.unseeded) && r9.jsonOut.unseeded.length === 1, 'T9: unseeded array has exactly 1 entry');
+    if (r9.jsonOut.unseeded && r9.jsonOut.unseeded[0]) {
+      assert(r9.jsonOut.unseeded[0].reasonClass === 'manual:coresim-busy', 'T9: unseeded[0].reasonClass = manual:coresim-busy');
+      assert(r9.jsonOut.unseeded[0].sample === 'one transient Busy event', 'T9: unseeded[0].sample = one transient Busy event');
+    }
+    assert(typeof r9.jsonOut.detail === 'string' && r9.jsonOut.detail.indexOf('run-gaps-manual.md') !== -1, 'T9: detail names run-gaps-manual.md');
+  }
+} finally {
+  try { fs.rmSync(fix9.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T10 (#653 finding D1): the same gap, once seeded through run-gaps-manual.md, is emitted by the
+// scanner as manual:coresim-busy — the reverse-containment check must then pass, and the existing
+// forward mapping (noise:) still applies. result:pass, mapped:1, noise:1.
+// ---------------------------------------------------------------------------
+const fix10 = makeFixture('proj-t10');
+try {
+  writeProvenance(fix10.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix10.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix10.cacheDir, 'run-gaps-manual.md'),
+    'gap: coresim-busy — one transient Busy event\n',
+    'utf8'
+  );
+  run(fix10.root, ['--project', 'proj-t10', '--json']); // sweptClasses now includes manual:coresim-busy
+  const projDir10 = path.join(fix10.root, 'kaola-workflow', 'proj-t10');
+  writeSummary(fix10.cacheDir, projDir10, [
+    '- manual:coresim-busy (one transient Busy event): noise: environment',
+  ]);
+
+  const r10 = run(fix10.root, [
+    '--project', 'proj-t10',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir10, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r10.exitCode === 0, 'T10: gate exits 0 once the observed gap is seeded through run-gaps-manual.md');
+  assert(r10.jsonOut !== null, 'T10: JSON output parseable on pass');
+  if (r10.jsonOut) {
+    assert(r10.jsonOut.result === 'pass', 'T10: result = pass');
+    assert(r10.jsonOut.mapped === 1, 'T10: mapped = 1, got ' + r10.jsonOut.mapped);
+    assert(r10.jsonOut.noise === 1, 'T10: noise = 1, got ' + r10.jsonOut.noise);
+  }
+} finally {
+  try { fs.rmSync(fix10.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T11 (#653 finding D1): forward direction still refuses gaps_unswept. Reverse containment
+// (every ## Run gaps entry is seeded) is satisfied here, but a SECOND swept class (an
+// in_run_repair reopen) has no matching ## Run gaps entry — the pre-existing forward check must
+// still catch it, proving the new reverse check does not weaken or replace the forward one.
+// ---------------------------------------------------------------------------
+const fix11 = makeFixture('proj-t11');
+try {
+  // n1 opened twice -> in_run_repair swept class, left unmapped in the summary below.
+  writeProvenance(fix11.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+  writeChainReceipt(fix11.cacheDir, [
+    { name: 'claude', exitCode: 0, accepted_red: false, accepted_red_issue: null },
+  ]);
+  fs.writeFileSync(
+    path.join(fix11.cacheDir, 'run-gaps-manual.md'),
+    'gap: coresim-busy — one transient Busy event\n',
+    'utf8'
+  );
+  run(fix11.root, ['--project', 'proj-t11', '--json']); // sweptClasses: in_run_repair(n1) + manual:coresim-busy
+  const projDir11 = path.join(fix11.root, 'kaola-workflow', 'proj-t11');
+  // Only the manual gap is mapped in the summary — in_run_repair(n1) is left unmapped.
+  writeSummary(fix11.cacheDir, projDir11, [
+    '- manual:coresim-busy (one transient Busy event): noise: environment',
+  ]);
+
+  const r11 = run(fix11.root, [
+    '--project', 'proj-t11',
+    '--check',
+    '--json',
+    '--summary', path.join(projDir11, 'finalization-summary.md'),
+    '--offline',
+  ]);
+
+  assert(r11.exitCode !== 0, 'T11: gate still exits non-zero on a swept-but-unmapped class (forward direction unchanged)');
+  if (r11.jsonOut) {
+    assert(r11.jsonOut.result === 'refuse', 'T11: result = refuse');
+    assert(r11.jsonOut.reason === 'gaps_unswept', 'T11: reason = gaps_unswept (not observed_gap_unseeded), got ' + r11.jsonOut.reason);
+    assert(Array.isArray(r11.jsonOut.unmapped) && r11.jsonOut.unmapped.some(u => u.reasonClass === 'in_run_repair'), 'T11: unmapped includes in_run_repair');
+  }
+} finally {
+  try { fs.rmSync(fix11.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

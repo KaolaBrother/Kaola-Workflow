@@ -454,8 +454,28 @@ If an unchanged terminal change-gate validation run already covers the final can
 cite that evidence instead of rerunning. Record column-0 lines for `verdict: pass`,
 `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`; if
 there is any doubt about the boundary, run the command.
+After recording the verdict (and the citation fields when citing), bind the evidence to the exact
+candidate it validated: run the plan-validator (`$KAOLA_SCRIPTS/…-plan-validator.js`) over
+`kaola-workflow/{project}/workflow-plan.md` with `--candidate-hash --json` and record the emitted
+value as a column-0 `validated_candidate_hash:` line in `final-validation.md`. Compute it LAST —
+after every file the validation covered has landed; any later relevant edit stales the binding and
+`--finalize-check` refuses `final_validation_stale` (re-run the validation command and re-record
+with a fresh hash — never hand-patch the hash), while a missing line refuses
+`final_validation_unbound`. Workflow state and inert, non-test-consumed docs are
+validation-invisible and do not stale the binding; the gate compares the recorded hash to a
+recomputation and never re-runs tests.
 
-Then proceed to `/kaola-workflow-finalize {project}`.
+**Run-Gap Manual Seeding.** When the orchestrator observes a run gap the automated scanners
+cannot see — transient tool noise, a manual retry, an environmental flake — append a
+`gap: <class> — <text>` line to `kaola-workflow/{project}/.cache/run-gaps-manual.md`
+immediately, BEFORE Finalization's gap sweep runs, so the mapping to `noise:`/`filed:` is
+machine-checked, never vacuous. A `## Run gaps` entry with no matching seeded/scanned source
+refuses `observed_gap_unseeded` at Finalization.
+
+Then proceed to `/kaola-workflow-finalize {project}`. Finalization's sink step owns its own
+crash-resume journals (`sink-receipt.json` / `sink-fallback.json`) and disposes of them itself at
+terminal success; if a stray one turns up on a later `clean and synced` check, delete it — never
+commit it.
 
 #### Validation De-Duplication
 
@@ -480,3 +500,6 @@ Avoid redundant validation runs.
   reuse covers code/test impact through node nN; the later edit is docs-only and outside
   the rerun trigger`. Consumer final-validation citations must also record `source: cited:<node-id>`,
   `validated_command`, `validated_at_head`, and `reuse_boundary`; uncertainty means run the command.
+  A citation still requires a fresh `validated_candidate_hash:` line computed at citation time —
+  the binding is what proves the tree is unchanged; if the hash no longer matches at finalize, the
+  cited run does not cover the candidate and the command must be re-run.

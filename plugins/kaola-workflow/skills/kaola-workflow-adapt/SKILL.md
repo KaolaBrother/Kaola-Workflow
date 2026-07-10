@@ -182,8 +182,10 @@ label is created until git is clean** (the front end claims here at repo-root �
 **Co-tenant clean-check.** The dirty-worktree check above disregards `kaola-workflow/*` and `.kw/*` paths belonging to OTHER active lanes (lanes this session did not claim), so a second concurrent session starting alongside an already-running first lane does not receive a false "dirty main" refusal. The check STILL fails on any uncommitted code change; this session's OWN in-progress state is still enforced. Only non-owned lane scratch — another session's `kaola-workflow/<project>/` folder and its `.kw/worktrees/<project>/` worktree — is selectively disregarded.
 
 Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-workflow-claim.js startup --runtime <runtime> --workflow-path adaptive
---target-issue <issue>` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
-KAOLA_PATH; add `--sink pr` only for a requested PR sink; on Codex, first run the same preflight
+--target-issue <issue> --attest-planner-spawn` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
+KAOLA_PATH; `--attest-planner-spawn` is REQUIRED on every planner-run startup — it back-fills the
+planner's own dispatch marker into .cache/dispatch-log.jsonl for closure attestation; only the
+dispatched workflow-planner passes it; add `--sink pr` only for a requested PR sink; on Codex, first run the same preflight
 doctor detection as `kaola-workflow-next`'s Codex Dispatch Mode Detection step and append
 `--codex-dispatch-mode <detected>` when a mode was found — absent detection leaves the claim on
 its fail-closed `v1-thread-id` default), authors the `## Meta` + `## Nodes` DAG +
@@ -242,6 +244,7 @@ node "$claim_script" startup \
   --runtime codex \
   --workflow-path adaptive \
   --target-issues 42,47,53 \
+  --attest-planner-spawn \
   $KAOLA_DISPATCH_MODE_FLAG
 ```
 

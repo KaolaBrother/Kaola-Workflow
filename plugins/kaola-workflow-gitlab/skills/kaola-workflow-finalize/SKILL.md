@@ -106,11 +106,21 @@ finalize/verdict path and are classified structurally — do not match by string
 A consumer repo whose validation is not npm-based (no `test:kaola-workflow:*` scripts in
 `package.json`) does **NOT** run `kaola-workflow-run-chains.js` — the agent owns verification. It records `.cache/final-validation.md` with a column-0 **`verdict: pass`**, and
 `--finalize-check` (consumer mode, auto-detected by the absent npm scripts) gates on that file:
-`final_validation_unverified` if it is absent, `final_validation_failed` if it lacks `verdict: pass`.
+`final_validation_unverified` if it is absent, `final_validation_failed` if it lacks `verdict: pass`,
+`final_validation_unbound` if it lacks a well-formed column-0 `validated_candidate_hash:` line, and
+`final_validation_stale` if that recorded hash no longer equals the recomputed current code-tree
+hash (the refusal payload carries `recorded_candidate_hash` + `current_candidate_hash`). Produce
+the hash with the plan-validator's `--candidate-hash --json` mode (`$validator_script`) — computed
+LAST, after every file the validation covered has landed — and record it as a column-0
+`validated_candidate_hash:` line. On `final_validation_stale`, re-run the recorded validation
+command and re-record with a fresh hash — never hand-patch the hash; workflow state and inert,
+non-test-consumed docs are validation-invisible and do not stale the binding. The binding gate
+compares two hashes and never re-runs tests.
 If an unchanged terminal change-gate validation run covers the final candidate, the agent may cite
 that run instead of rerunning by recording column-0 `verdict: pass`, `source: cited:<node-id>`,
-`validated_command`, `validated_at_head`, and `reuse_boundary`. Any doubt about the boundary means
-run the command.
+`validated_command`, `validated_at_head`, and `reuse_boundary`, plus a fresh
+`validated_candidate_hash:` computed at citation time (the binding is what proves the cited run
+still covers the candidate). Any doubt about the boundary means run the command.
 The attribution sweep runs for **both** repo kinds. The v6.2.0 `kaola-workflow/chains.json` opt-in
 is **retired** — there is no middle-ground; a consumer repo finalizes on the agent's evidence.
 
@@ -132,8 +142,16 @@ refusal if the following is true (checked after the Chain-Receipt Gate above):
   not a product defect (upstream flake, tool-environment noise, or an
   already-filed and tracked waiver), record `noise: <one-line justification>`
   instead.
+- **`observed_gap_unseeded`** — emitted by the same `--check` call when an
+  entry already written into `finalization-summary.md`'s `## Run gaps`
+  section (mapped to `filed:` or `noise:`) has no matching machine-swept
+  entry in `.cache/run-gaps.json` — i.e. someone hand-typed a `## Run gaps`
+  row for a gap the scanner never observed, bypassing machine verification
+  entirely. Remedy: append the matching `gap: <class> — <text>` line to
+  `.cache/run-gaps-manual.md`, re-run the scanner so it is actually swept,
+  then re-run `--check`.
 
-This typed refusal is classified structurally — do not string-match.
+These typed refusals are classified structurally — do not string-match.
 
 ### Goal Attestation (advisory, v1)
 
@@ -161,7 +179,7 @@ choices, or ambiguity that blocks correctness.
 
 ## Required Steps
 
-1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build) after all test-consumed prose/docs and code changes have landed, as the last pre-Finalization action; on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence with `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. Save output to `.cache/final-validation.md`. Any doubt about the boundary means run the command.
+1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build) after all test-consumed prose/docs and code changes have landed, as the last pre-Finalization action; on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence with `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. Save output to `.cache/final-validation.md`, then bind it: record a column-0 `validated_candidate_hash:` line produced by the plan-validator's `--candidate-hash --json` as the LAST action, after every file the validation covered has landed. Any doubt about the boundary means run the command.
 <!-- PIN: fast-compliance-backstop -->
 2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a real delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real evidence path or skip\_reason — not `pending`, `invoked` without evidence, or bare `N/A` without skip\_reason — whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` with a documented skip\_reason is allowed only for the trivial band (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script refusal enforces this fail-closed at `summary-write` time; this step is a second-line gate.
    ```bash
@@ -233,6 +251,8 @@ choices, or ambiguity that blocks correctness.
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
 
    Attestation boundary: the contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely delegated run back-fills its own dispatch marker and the closure receipt reads `finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a contractor dispatched into a linked worktree, or a hookless harness) — the main session must never pass that flag on an inline run. The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded `main-session-direct` (its in-plan sink bookkeeping is main-session-direct by the plan-run contract); that row neither requires nor replaces the contractor's delegation of mechanical finalization here. When the session legitimately runs the mechanical finalization inline (tooling unavailable), it records `local-fallback-tool-unavailable` with evidence and does NOT pass `--attest-contractor-spawn`; the resulting `finalize_contractor_attested: missing` plus the ATTESTATION WARNING is the truthful, expected, non-blocking outcome.
+
+   Warning persistence: `cmdFinalize` also appends a `## Attestation` section to the archived `finalization-summary.md`, recording both status fields plus any non-empty ATTESTATION WARNING verbatim — a clean-looking summary must never silently drop a warning that occurred; never remove or summarize this section away.
 
    **Finalization recovery contract (tribal knowledge).** Three recovery rules are binding,
    not optional lore: (1) **sync order is worktree→main BEFORE the mirror** — the worktree holds the
@@ -478,6 +498,11 @@ DOCKED, .cache/doc-docking.md
 | archive completed folder | invoked | kaola-workflow/archive/{project} | |
 | final commit and push | invoked | git status --short --branch | clean and synced |
 ```
+
+`sink-receipt.json` / `sink-fallback.json` are transaction journals owned by the sink script — they
+exist on disk only for crash-resume, and a terminally successful sink deletes them itself. A "clean
+and synced" check that finds one afterwards (an older cycle's residue) must DELETE the file, never
+commit it; a journal is never part of the deliverable.
 
 State remains in `workflow-state.md` until archive is complete.
 
