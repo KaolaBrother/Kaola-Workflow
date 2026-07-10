@@ -1,0 +1,5 @@
+issue: #652
+title: tests: two strictness-lock gaps in the evidence-shape / merge-diff suites (post-#649 audit)
+status: open
+workflow_project: —
+next_step: Two LOW test-only gaps from the #649 post-ship audit: (1) no bare colon-less change-type token negative control — hollow-seed controls (T6b-seed/T7e-seed) catch a full checkEvidenceShape revert but a partial weakening accepting bare tokens while refusing empty values slips through green; (2) four merge-diff equality assertions (test-adaptive-node.js:6378/6862/6970/7043) filter !startsWith(kaola-workflow/) — broader than the production isBarrierInvisible band kaola-workflow/{project}/** (plan-validator.js:249-262), so a cross-project leak escapes them. Fix (S, test-only): bare-token refusal controls for implementer change-type + tdd-guide RED/GREEN name-only lines beside the hollow-seed controls; narrow the four filters to the production band shape with a red-first cross-project-leak case; claude chain green. Full body on GitHub #652.
