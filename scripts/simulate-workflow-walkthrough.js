@@ -3757,6 +3757,152 @@ function testBundle424432433ValidatorGates() {
         'stale culprit diagnostics: a dirty-stamped receipt must degrade to generic chains_stale, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
+  // === #651 PRE-TAG RELEASE GATE (--release-check): a check-only, plan-independent twin of the
+  // --finalize-check chain-receipt arm, pinned STRICTLY to the release-candidate commit. Key deltas
+  // vs finalize: (1) NO plan path — at release time the run is archived, so the gate reads only
+  // <git-toplevel>/.cache/chain-receipt.json (or --receipt); (2) STRICT headSha EQUALITY against the
+  // candidate (default HEAD, or --candidate) — never the #547 codeTreeHash content-address relaxation
+  // (a release tag names an exact commit); (3) headSha 'unknown'/missing REFUSES (release.js's
+  // chainReceiptGreenness treats 'unknown' as green — the gate must NOT copy that leniency);
+  // (4) a WAIVED chain (accepted_red) refuses chains_waived — legal at adaptive finalize, never for
+  // a release tag. Precedence: chains_unverified > chains_stale > chains_empty > chains_red >
+  // chains_waived. Fixtures mirror the real repo: root /.cache/ is gitignored, so the untracked
+  // receipt itself never pollutes the culprit hints.
+  const mkReleaseRepo = () => {
+    const grepo = adaptiveTmp('release651-git');
+    initGitRepo(grepo);
+    fs.writeFileSync(path.join(grepo, '.gitignore'), '/.cache/\n');
+    spawnSync('git', ['-C', grepo, 'add', '.gitignore'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', grepo, 'commit', '-m', 'ignore root .cache'], { encoding: 'utf8' });
+    return grepo;
+  };
+  const writeRootReceipt = (grepo, obj) => {
+    fs.mkdirSync(path.join(grepo, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(grepo, '.cache', 'chain-receipt.json'),
+      typeof obj === 'string' ? obj : JSON.stringify(obj));
+  };
+  const greenChains651 = () => ['claude', 'codex', 'gitlab', 'gitea'].map(
+    name => ({ name, exitCode: 0, accepted_red: false }));
+
+  // --- #651 (1) PASS: a green, unwaived, clean-stamped receipt at the candidate sha (default HEAD)
+  //     passes with a typed envelope (mode + candidate + chains).
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 0 && out.result === 'pass' && out.mode === 'release-check'
+        && out.candidate === headOf(grepo) && Array.isArray(out.chains) && out.chains.length === 4,
+        '#651 (1): a green unwaived receipt at the candidate sha must pass with a typed envelope, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (2) MISSING receipt → chains_unverified (typed, never a pass).
+  { const grepo = mkReleaseRepo();
+    try {
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_unverified',
+        '#651 (2): release-check with no chain receipt must refuse chains_unverified, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (3) UNPARSEABLE receipt → chains_unverified.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, '{not json');
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_unverified',
+        '#651 (3): release-check with an unparseable receipt must refuse chains_unverified, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (4) OLDER-SHA receipt → chains_stale WITH the culprit hint payload (stale_paths /
+  //     stale_kind), exactly the finalize-gate diagnostics reused.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: greenChains651() });
+      fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 651;\n');
+      spawnSync('git', ['-C', grepo, 'add', 'newcode.js'], { encoding: 'utf8' });
+      spawnSync('git', ['-C', grepo, 'commit', '-m', 'code after receipt'], { encoding: 'utf8' });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_kind === 'code'
+        && JSON.stringify(out.stale_paths) === JSON.stringify(['newcode.js']),
+        '#651 (4): a receipt at an older sha must refuse chains_stale with culprit hints, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (5) headSha 'unknown' → chains_stale (generic — diagnostics degrade), NEVER a pass.
+  //     Negative control on the release.js chainReceiptGreenness leniency ('unknown' passes there).
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: 'unknown', workTreeHash: 'clean', chains: greenChains651() });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_stale'
+        && out.stale_paths === undefined && out.stale_kind === undefined,
+        '#651 (5): a headSha:"unknown" receipt must refuse chains_stale (never pass), got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (6) WAIVED chain (accepted_red) → chains_waived, naming the waived chain. A waiver is
+  //     legal at adaptive finalize but a release tag demands an UNWAIVED four-chain receipt.
+  { const grepo = mkReleaseRepo();
+    try {
+      const chains = greenChains651();
+      chains[1] = { name: 'codex', exitCode: 1, accepted_red: true, accepted_red_issue: '234' };
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'chains_waived' && /codex/.test(JSON.stringify(out.waivedChains)),
+        '#651 (6): a waived (accepted_red) chain must refuse chains_waived naming the chain, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (7) UNWAIVED red chain → chains_red; precedence over a waived sibling (red > waived).
+  { const grepo = mkReleaseRepo();
+    try {
+      const chains = greenChains651();
+      chains[1] = { name: 'codex', exitCode: 1, accepted_red: false };
+      chains[2] = { name: 'gitlab', exitCode: 1, accepted_red: true, accepted_red_issue: '234' };
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_red',
+        '#651 (7): an unwaived red chain must refuse chains_red (precedence over chains_waived), got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (8) EMPTY chains[] → chains_empty (zero chains verified is never green).
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'clean', chains: [] });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_empty',
+        '#651 (8): an empty chains[] receipt must refuse chains_empty, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (9) EXPLICIT --candidate: a receipt at commit C passes against --candidate C even after
+  //     HEAD advanced (the tag names C, not HEAD) — and the same receipt refuses against HEAD.
+  { const grepo = mkReleaseRepo();
+    try {
+      const c1 = headOf(grepo);
+      writeRootReceipt(grepo, { headSha: c1, workTreeHash: 'clean', chains: greenChains651() });
+      fs.writeFileSync(path.join(grepo, 'later.js'), 'module.exports = 652;\n');
+      spawnSync('git', ['-C', grepo, 'add', 'later.js'], { encoding: 'utf8' });
+      spawnSync('git', ['-C', grepo, 'commit', '-m', 'later work'], { encoding: 'utf8' });
+      const rPass = runNode(planValidatorScript, ['--release-check', '--json', '--candidate', c1], grepo);
+      const outPass = JSON.parse(rPass.stdout);
+      assert(rPass.status === 0 && outPass.result === 'pass' && outPass.candidate === c1,
+        '#651 (9a): a receipt at commit C must pass against --candidate C, got status ' + rPass.status + ' ' + rPass.stdout);
+      const rStale = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(rStale.status === 1 && JSON.parse(rStale.stdout).reason === 'chains_stale',
+        '#651 (9b): the same receipt must refuse chains_stale against the advanced HEAD, got status ' + rStale.status + ' ' + rStale.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #651 (10) DIRTY-STAMPED receipt (workTreeHash != 'clean') → chains_stale: the chains
+  //     validated HEAD + uncommitted edits, NOT the candidate commit's tree.
+  { const grepo = mkReleaseRepo();
+    try {
+      writeRootReceipt(grepo, { headSha: headOf(grepo), workTreeHash: 'a'.repeat(64), chains: greenChains651() });
+      const r = runNode(planValidatorScript, ['--release-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
+        '#651 (10): a dirty-stamped receipt must refuse chains_stale even at the candidate sha, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
   // --- #424 (3, finalize sweep) UNATTRIBUTED_CHANGE: a branch change owned by NO complete node and
   //     outside the allowband must surface as unattributed_change.
   { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
