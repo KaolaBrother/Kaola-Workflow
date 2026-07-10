@@ -321,13 +321,21 @@ try {
       function configWithFeatureLine(line) {
         return configText.replace('multi_agent = true', 'multi_agent = true\n' + line);
       }
+      const roleSafeV2Inline = 'multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }';
+      const roleSafeV2Table = '[features.multi_agent_v2]\nenabled = true\ntool_namespace = "agents"\nhide_spawn_agent_metadata = false\nnon_code_mode_only = true';
       function assertDispatchModeForConfig(body, expectedMode, label, checkDoctor) {
         fs.writeFileSync(projectConfigPath, body);
         const result = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           encoding: 'utf8'
         });
-        assert.strictEqual(result.status, 0, label + ': preflight must pass: ' + result.stderr + result.stdout);
+        const expectedRoleReady = expectedMode === 'v2-task-name'
+          ? /tool_namespace\s*=\s*["']agents["']/.test(body)
+            && /hide_spawn_agent_metadata\s*=\s*false/.test(body)
+            && !/non_code_mode_only\s*=\s*false/.test(body)
+          : null;
+        assert.strictEqual(result.status === 0, expectedRoleReady !== false,
+          label + ': preflight role-transport result: ' + result.stderr + result.stdout);
         const json = JSON.parse(result.stdout);
         assert.strictEqual(json.dispatch_mode, expectedMode, label + ': dispatch_mode');
         assert.strictEqual(json.multi_agent_v2_enabled, expectedMode === 'v2-task-name', label + ': multi_agent_v2_enabled');
@@ -337,6 +345,12 @@ try {
         assert.strictEqual(json.codex_v2_direct_transport_ready,
           expectedMode === 'v2-task-name' ? true : null,
           label + ': codex_v2_direct_transport_ready');
+        assert.strictEqual(json.codex_v2_role_transport_ready, expectedRoleReady,
+          label + ': codex_v2_role_transport_ready');
+        if (expectedRoleReady === false) {
+          assert.strictEqual(json.status, 'codex_v2_role_transport_unsafe',
+            label + ': role-aware V2 must fail with typed schema refusal');
+        }
         if (checkDoctor) {
           const doctorResult = spawnSync(process.execPath, [codexPreflightPath, '--doctor', '--project-root', cproj, '--home', chome, '--json'], {
             cwd: path.join(root, 'plugins', 'kaola-workflow'),
@@ -349,7 +363,32 @@ try {
           assert.strictEqual(projectScope.codex_v2_transport_mode,
             expectedMode === 'v2-task-name' ? 'direct-only' : 'not_applicable',
             label + ': doctor codex_v2_transport_mode');
+          assert.strictEqual(projectScope.codex_v2_role_transport_ready, expectedRoleReady,
+            label + ': doctor codex_v2_role_transport_ready');
         }
+      }
+
+      function assertUnsafeV2RoleTransportForConfig(body, label) {
+        fs.writeFileSync(projectConfigPath, body);
+        const result = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          encoding: 'utf8'
+        });
+        assert.notStrictEqual(result.status, 0, label + ': reserved/hidden role transport must fail');
+        const json = JSON.parse(result.stdout);
+        assert.strictEqual(json.status, 'codex_v2_role_transport_unsafe', label + ': typed role refusal');
+        assert.strictEqual(json.codex_v2_direct_transport_ready, true, label + ': direct transport itself remains ready');
+        assert.strictEqual(json.codex_v2_role_transport_ready, false, label + ': role transport readiness');
+        assert(/tool_namespace = "agents"/.test(json.repair), label + ': repair names the proven namespace');
+
+        const installResult = spawnSync(process.execPath, [codexInstallerPath, cproj], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          env: { ...process.env, HOME: chome },
+          encoding: 'utf8'
+        });
+        assert.notStrictEqual(installResult.status, 0, label + ': installer must refuse before writes');
+        assert(/codex_v2_role_transport_unsafe/.test(installResult.stderr),
+          label + ': installer prints typed role refusal: ' + installResult.stderr);
       }
 
       function assertUnsafeV2TransportForConfig(body, label, expectedMode = 'nested-allowed') {
@@ -399,7 +438,9 @@ try {
       assertDispatchModeForConfig(configText, 'v1-thread-id', '#584 no multi_agent_v2 key', false);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 boolean true', true);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 boolean false', false);
-      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }'), 'v2-task-name', '#584 inline object direct-only true', true);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }'), 'v2-task-name', '#650 inline role transport ready', true);
+      assertUnsafeV2RoleTransportForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }'), '#650 reserved collaboration schema with visible metadata');
+      assertUnsafeV2RoleTransportForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = true, non_code_mode_only = true }'), '#650 hidden role metadata');
       assertUnsafeV2TransportForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), '#584 inline object nested transport');
       assertUnsafeV2TransportForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, non_code_mode_only = "maybe" }'), '#584 inline object ambiguous transport', 'unknown');
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 inline object enabled false', false);
@@ -451,10 +492,10 @@ try {
       assertDispatchPostureForConfig(
         'model_reasoning_effort = "ultra"\n\n' + configText.replace('multi_agent = true', 'multi_agent = false'),
         'none', '#598 effort=ultra but features disabled -> none (features gate outranks effort)');
-      assertDispatchPostureForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'explicitRequestOnly',
+      assertDispatchPostureForConfig(configWithFeatureLine(roleSafeV2Inline), 'explicitRequestOnly',
         '#598 multi_agent_v2=true, no effort -> explicitRequestOnly');
       assertDispatchPostureForConfig(
-        'model_reasoning_effort = "ultra"\n\n' + configWithFeatureLine('multi_agent_v2 = true').replace('multi_agent = true', 'multi_agent = false'),
+        'model_reasoning_effort = "ultra"\n\n' + configWithFeatureLine(roleSafeV2Inline).replace('multi_agent = true', 'multi_agent = false'),
         'proactive', '#598 multi_agent=false + multi_agent_v2=true + effort=ultra -> proactive (either feature gates)');
       assertDispatchPostureForConfig(configText.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
         'explicitRequestOnly', '#598 effort AFTER the first [table] is not a valid TOML root key -> ignored');
@@ -483,7 +524,7 @@ try {
         max_wait_timeout_ms: null,
         default_wait_timeout_ms: null,
       }, '#611 v2 not enabled -> not_applicable, all null');
-      assertMultiAgentV2BoundsForConfig(configWithFeatureLine('multi_agent_v2 = true'), {
+      assertMultiAgentV2BoundsForConfig(configWithFeatureLine(roleSafeV2Inline), {
         max_concurrent_threads_per_session: 4,
         max_concurrent_threads_per_session_source: 'observed_default',
         effective_subagent_width: 3,
@@ -492,7 +533,7 @@ try {
         default_wait_timeout_ms: null,
       }, '#611 v2 enabled, no bounds configured -> observed default 4 / width 3');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 6 }'),
+        configWithFeatureLine('multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true, max_concurrent_threads_per_session = 6 }'),
         {
           max_concurrent_threads_per_session: 6,
           max_concurrent_threads_per_session_source: 'config',
@@ -502,7 +543,7 @@ try {
           default_wait_timeout_ms: null,
         }, '#611 v2 enabled via inline object, threads configured -> config source, width = threads-1');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000'),
+        configWithFeatureLine(roleSafeV2Table + '\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000'),
         {
           max_concurrent_threads_per_session: 2,
           max_concurrent_threads_per_session_source: 'config',
@@ -512,7 +553,7 @@ try {
           default_wait_timeout_ms: 60000,
         }, '#611 v2 enabled via dotted table form, all four numeric fields configured');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99'),
+        configWithFeatureLine(roleSafeV2Table + '\n\n[mcp_servers."srv"]\nmax_concurrent_threads_per_session = 99'),
         {
           max_concurrent_threads_per_session: 4,
           max_concurrent_threads_per_session_source: 'observed_default',
@@ -522,7 +563,7 @@ try {
           default_wait_timeout_ms: null,
         }, '#647 quoted unrelated table after dotted v2 table must not over-collect bounds');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n["features.multi_agent_v2"]\nmax_concurrent_threads_per_session = 99'),
+        configWithFeatureLine(roleSafeV2Table + '\n\n["features.multi_agent_v2"]\nmax_concurrent_threads_per_session = 99'),
         {
           max_concurrent_threads_per_session: 4,
           max_concurrent_threads_per_session_source: 'observed_default',
@@ -532,7 +573,7 @@ try {
           default_wait_timeout_ms: null,
         }, '#647 basic quoted literal dotted table must not over-collect bounds');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[\'features.multi_agent_v2\']\nmax_concurrent_threads_per_session = 99'),
+        configWithFeatureLine(roleSafeV2Table + '\n\n[\'features.multi_agent_v2\']\nmax_concurrent_threads_per_session = 99'),
         {
           max_concurrent_threads_per_session: 4,
           max_concurrent_threads_per_session_source: 'observed_default',
@@ -562,7 +603,7 @@ try {
           default_wait_timeout_ms: null,
         }, '#647 R2 quoted-segment array-of-table v2 table must not enable v2 or collect bounds');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[features.multi_agent_v2]]\nmax_concurrent_threads_per_session = 99'),
+        configWithFeatureLine(roleSafeV2Table + '\n\n[[features.multi_agent_v2]]\nmax_concurrent_threads_per_session = 99'),
         {
           max_concurrent_threads_per_session: 4,
           max_concurrent_threads_per_session_source: 'observed_default',
@@ -582,7 +623,7 @@ try {
           default_wait_timeout_ms: null,
         }, '#611 enabled=false wins over a configured threads value -> not_applicable');
       assertMultiAgentV2BoundsForConfig(
-        configWithFeatureLine('multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 0 }'),
+        configWithFeatureLine('multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true, max_concurrent_threads_per_session = 0 }'),
         {
           max_concurrent_threads_per_session: 4,
           max_concurrent_threads_per_session_source: 'observed_default',
@@ -644,6 +685,7 @@ try {
         // update) — the report must now print the concrete width + every configured bound.
         const beforeV2 = fs.readFileSync(postureConfigPath, 'utf8');
         fs.writeFileSync(postureConfigPath, beforeV2 + '\n[features.multi_agent_v2]\nenabled = true\n'
+          + 'tool_namespace = "agents"\nhide_spawn_agent_metadata = false\nnon_code_mode_only = true\n'
           + 'max_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\n'
           + 'default_wait_timeout_ms = 60000\n');
         const v2Install = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
@@ -735,8 +777,55 @@ try {
           '#v2-transport ' + f.label + ': readiness, got ' + JSON.stringify(result));
       }
     }
+    const roleTransportFixtures = [
+      {
+        label: 'proven inline agents namespace keeps role metadata visible',
+        cfg: '[features]\nmulti_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }\n',
+        namespace: 'agents', metadataVisible: true, ready: true,
+      },
+      {
+        label: 'reserved collaboration plus visible metadata reproduces HTTP 400 schema mismatch',
+        cfg: '[features]\nmulti_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }\n',
+        namespace: 'collaboration', metadataVisible: true, ready: false,
+      },
+      {
+        label: 'runtime defaults match reserved schema but hide Kaola role selection',
+        cfg: '[features]\nmulti_agent_v2 = true\n',
+        namespace: 'collaboration', metadataVisible: false, ready: false,
+      },
+      {
+        label: 'custom namespace with hidden metadata still cannot select a Kaola role',
+        cfg: '[features.multi_agent_v2]\nenabled = true\ntool_namespace = "agents"\nhide_spawn_agent_metadata = true\nnon_code_mode_only = true\n',
+        namespace: 'agents', metadataVisible: false, ready: false,
+      },
+      {
+        label: 'dotted agents namespace keeps role metadata visible',
+        cfg: '[features.multi_agent_v2]\nenabled = true\ntool_namespace = "agents"\nhide_spawn_agent_metadata = false\nnon_code_mode_only = true\n',
+        namespace: 'agents', metadataVisible: true, ready: true,
+      },
+      {
+        label: 'malformed namespace fails closed',
+        cfg: '[features]\nmulti_agent_v2 = { enabled = true, tool_namespace = agents, hide_spawn_agent_metadata = false, non_code_mode_only = true }\n',
+        namespace: null, metadataVisible: true, ready: false,
+      },
+    ];
+    for (const mod of [preflightMod, installerMod]) {
+      for (const f of roleTransportFixtures) {
+        const result = mod.detectCodexDispatchMode(f.cfg);
+        assert.strictEqual(result.codex_v2_tool_namespace, f.namespace,
+          '#650 ' + f.label + ': namespace, got ' + JSON.stringify(result));
+        assert.strictEqual(result.codex_v2_role_metadata_visible, f.metadataVisible,
+          '#650 ' + f.label + ': metadata visibility, got ' + JSON.stringify(result));
+        assert.strictEqual(result.codex_v2_role_transport_ready, f.ready,
+          '#650 ' + f.label + ': role transport readiness, got ' + JSON.stringify(result));
+      }
+    }
     assert.strictEqual(installerMod.CODEX_V2_DIRECT_TRANSPORT_NOTE, preflightMod.CODEX_V2_DIRECT_TRANSPORT_NOTE,
       '#v2-transport: installer and preflight repair notes must match verbatim');
+    assert.strictEqual(installerMod.CODEX_V2_ROLE_TRANSPORT_NOTE, preflightMod.CODEX_V2_ROLE_TRANSPORT_NOTE,
+      '#650: installer and preflight role-transport repair notes must match verbatim');
+    assert.strictEqual(installerMod.CODEX_V2_ROLE_TOOL_NAMESPACE, 'agents',
+      '#650: the live-proven role-aware namespace must remain agents');
 
     // The installer and preflight must ship the identical version-guard note (semantic
     // lock-step check, distinct from the whole-file byte-identity the sync validator enforces).

@@ -879,6 +879,23 @@ function parseTomlBoolean(value) {
   return null;
 }
 
+function parseTomlString(value) {
+  const trimmed = String(value || '').trim();
+  if (trimmed.length < 2) return null;
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1);
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return typeof parsed === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function splitInlineTomlFields(body) {
   const fields = [];
   let start = 0;
@@ -906,7 +923,13 @@ function splitInlineTomlFields(body) {
 function parseMultiAgentV2Value(value) {
   const trimmed = String(value || '').trim();
   const bool = parseTomlBoolean(trimmed);
-  if (bool !== null) return { valid: true, enabled: bool, non_code_mode_only: null };
+  if (bool !== null) return {
+    valid: true,
+    enabled: bool,
+    non_code_mode_only: null,
+    hide_spawn_agent_metadata: null,
+    tool_namespace: null,
+  };
 
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
     return { valid: false, enabled: false, non_code_mode_only: null };
@@ -917,6 +940,12 @@ function parseMultiAgentV2Value(value) {
   let transportFound = false;
   let transportAmbiguous = false;
   let nonCodeModeOnly = null;
+  let metadataFound = false;
+  let metadataAmbiguous = false;
+  let hideSpawnAgentMetadata = null;
+  let namespaceFound = false;
+  let namespaceAmbiguous = false;
+  let toolNamespace = null;
   for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
     const enabledMatch = field.match(/^enabled\s*=\s*(.+)$/);
     if (enabledMatch) {
@@ -937,11 +966,44 @@ function parseMultiAgentV2Value(value) {
       transportFound = true;
       if (fieldBool === null) transportAmbiguous = true;
       else nonCodeModeOnly = fieldBool;
+      continue;
+    }
+    const metadataMatch = field.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
+    if (metadataMatch) {
+      if (metadataFound) {
+        metadataAmbiguous = true;
+        continue;
+      }
+      const fieldBool = parseTomlBoolean(metadataMatch[1]);
+      metadataFound = true;
+      if (fieldBool === null) metadataAmbiguous = true;
+      else hideSpawnAgentMetadata = fieldBool;
+      continue;
+    }
+    const namespaceMatch = field.match(/^tool_namespace\s*=\s*(.+)$/);
+    if (namespaceMatch) {
+      if (namespaceFound) {
+        namespaceAmbiguous = true;
+        continue;
+      }
+      const fieldString = parseTomlString(namespaceMatch[1]);
+      namespaceFound = true;
+      if (fieldString === null) namespaceAmbiguous = true;
+      else toolNamespace = fieldString;
     }
   }
 
   return enabledFound
-    ? { valid: true, enabled, non_code_mode_only: nonCodeModeOnly, transport_ambiguous: transportAmbiguous }
+    ? {
+      valid: true,
+      enabled,
+      non_code_mode_only: nonCodeModeOnly,
+      transport_ambiguous: transportAmbiguous,
+      hide_spawn_agent_metadata: hideSpawnAgentMetadata,
+      metadata_ambiguous: metadataAmbiguous,
+      tool_namespace: toolNamespace,
+      namespace_ambiguous: namespaceAmbiguous,
+    }
     : { valid: false, enabled: false, non_code_mode_only: null };
 }
 
@@ -954,6 +1016,12 @@ function detectCodexDispatchMode(configContent) {
   let transportSeen = false;
   let transportAmbiguous = false;
   let nonCodeModeOnly = null;
+  let metadataSeen = false;
+  let metadataAmbiguous = false;
+  let hideSpawnAgentMetadata = null;
+  let namespaceSeen = false;
+  let namespaceAmbiguous = false;
+  let toolNamespace = null;
 
   function recordTransport(value) {
     if (value === null || value === undefined) return;
@@ -976,6 +1044,32 @@ function detectCodexDispatchMode(configContent) {
     enabled = parsed.enabled;
     recordTransport(parsed.non_code_mode_only);
     if (parsed.transport_ambiguous) transportAmbiguous = true;
+    recordMetadata(parsed.hide_spawn_agent_metadata);
+    if (parsed.metadata_ambiguous) metadataAmbiguous = true;
+    recordNamespace(parsed.tool_namespace);
+    if (parsed.namespace_ambiguous) namespaceAmbiguous = true;
+  }
+
+  function recordMetadata(value) {
+    if (value === null || value === undefined) return;
+    if (metadataSeen || typeof value !== 'boolean') {
+      metadataAmbiguous = true;
+      hideSpawnAgentMetadata = null;
+      return;
+    }
+    metadataSeen = true;
+    hideSpawnAgentMetadata = value;
+  }
+
+  function recordNamespace(value) {
+    if (value === null || value === undefined) return;
+    if (namespaceSeen || typeof value !== 'string' || value.length === 0) {
+      namespaceAmbiguous = true;
+      toolNamespace = null;
+      return;
+    }
+    namespaceSeen = true;
+    toolNamespace = value;
   }
 
   for (const rawLine of lines) {
@@ -998,6 +1092,8 @@ function detectCodexDispatchMode(configContent) {
           valid: parseTomlBoolean(enabledMatch[1]) !== null,
           enabled: parseTomlBoolean(enabledMatch[1]) === true,
           non_code_mode_only: null,
+          hide_spawn_agent_metadata: null,
+          tool_namespace: null,
         });
       }
       const transportMatch = line.match(/^non_code_mode_only\s*=\s*(.+)$/);
@@ -1005,6 +1101,18 @@ function detectCodexDispatchMode(configContent) {
         const transportValue = parseTomlBoolean(transportMatch[1]);
         if (transportValue === null) transportAmbiguous = true;
         else recordTransport(transportValue);
+      }
+      const metadataMatch = line.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
+      if (metadataMatch) {
+        const metadataValue = parseTomlBoolean(metadataMatch[1]);
+        if (metadataValue === null) metadataAmbiguous = true;
+        else recordMetadata(metadataValue);
+      }
+      const namespaceMatch = line.match(/^tool_namespace\s*=\s*(.+)$/);
+      if (namespaceMatch) {
+        const namespaceValue = parseTomlString(namespaceMatch[1]);
+        if (namespaceValue === null) namespaceAmbiguous = true;
+        else recordNamespace(namespaceValue);
       }
     }
   }
@@ -1015,19 +1123,41 @@ function detectCodexDispatchMode(configContent) {
     : (transportAmbiguous
       ? 'unknown'
       : (nonCodeModeOnly === false ? 'nested-allowed' : 'direct-only'));
+  const directTransportReady = enabled ? transportMode === 'direct-only' : null;
+  const effectiveNamespace = !enabled
+    ? null
+    : (namespaceAmbiguous ? null : (toolNamespace || 'collaboration'));
+  const roleMetadataVisible = !enabled
+    ? null
+    : (metadataAmbiguous ? null : hideSpawnAgentMetadata === false);
+  const roleTransportReady = enabled
+    ? directTransportReady === true
+      && effectiveNamespace === CODEX_V2_ROLE_TOOL_NAMESPACE
+      && roleMetadataVisible === true
+    : null;
+  let transportWarning = null;
+  if (enabled && directTransportReady !== true) {
+    transportWarning = CODEX_V2_DIRECT_TRANSPORT_NOTE;
+  } else if (enabled && roleTransportReady !== true) {
+    transportWarning = CODEX_V2_ROLE_TRANSPORT_NOTE;
+  }
   return {
     dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
     multi_agent_v2_enabled: enabled,
     codex_v2_transport_mode: transportMode,
-    codex_v2_direct_transport_ready: enabled ? transportMode === 'direct-only' : null,
-    codex_v2_transport_warning: enabled && transportMode !== 'direct-only'
-      ? CODEX_V2_DIRECT_TRANSPORT_NOTE
-      : null,
+    codex_v2_direct_transport_ready: directTransportReady,
+    codex_v2_tool_namespace: effectiveNamespace,
+    codex_v2_role_metadata_visible: roleMetadataVisible,
+    codex_v2_role_transport_ready: roleTransportReady,
+    codex_v2_transport_warning: transportWarning,
   };
 }
 
 const CODEX_V2_TRANSPORT_UNSAFE_STATUS = 'codex_v2_encrypted_transport_unsafe';
 const CODEX_V2_DIRECT_TRANSPORT_NOTE = 'Codex MultiAgentV2 encrypted task messages require direct-only collaboration tools. Set non_code_mode_only = true in the enabled [features] multi_agent_v2 inline object or [features.multi_agent_v2] table (or omit that field to use the Codex 0.144.1 direct-only default), then start a fresh Codex session; never dispatch spawn_agent, send_message, or followup_task through functions.exec or Code Mode.';
+const CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS = 'codex_v2_role_transport_unsafe';
+const CODEX_V2_ROLE_TOOL_NAMESPACE = 'agents';
+const CODEX_V2_ROLE_TRANSPORT_NOTE = 'Kaola-Workflow role-aware MultiAgentV2 on Codex 0.144.1 requires tool_namespace = "agents", hide_spawn_agent_metadata = false, and non_code_mode_only = true. The default collaboration.spawn_agent name is server-reserved: exposing agent_type/model/reasoning fields there fails the first request with HTTP 400, while hiding them removes Kaola role selection. Apply the settings in the enabled [features] multi_agent_v2 object or [features.multi_agent_v2] table, then start a fresh Codex session and call the direct agents namespace, never functions.exec or Code Mode.';
 
 // `[features] multi_agent = <bool>` — the base (v1) tool-exposure flag, distinct from
 // multi_agent_v2 (already parsed by detectCodexDispatchMode above). Same strict
@@ -1251,13 +1381,17 @@ function main() {
   const templateRoles = sourceCheck.roles;
   const templateEntries = sourceCheck.entries;
 
-  // MultiAgentV2 encrypts message arguments before direct tool execution. Code Mode nested-tool
-  // calls bypass that Responses encryption boundary, so a config that exposes collaboration tools
-  // there is an execution blocker rather than a warning. Refuse before writing profiles/config.
+  // MultiAgentV2 encrypts message arguments before direct tool execution, and the model reserves
+  // collaboration.spawn_agent to its hidden-metadata schema. Kaola needs visible agent_type role
+  // selection, so require the proven direct `agents` namespace before writing profiles/config.
   const preInstallConfigContent = fs.existsSync(targetConfig) ? read(targetConfig) : '';
   const preInstallDispatchMode = detectCodexDispatchMode(preInstallConfigContent);
-  if (preInstallDispatchMode.codex_v2_direct_transport_ready === false) {
-    process.stderr.write(`${CODEX_V2_TRANSPORT_UNSAFE_STATUS}: ${CODEX_V2_DIRECT_TRANSPORT_NOTE}\n`);
+  if (preInstallDispatchMode.codex_v2_role_transport_ready === false) {
+    const directUnsafe = preInstallDispatchMode.codex_v2_direct_transport_ready === false;
+    process.stderr.write(
+      `${directUnsafe ? CODEX_V2_TRANSPORT_UNSAFE_STATUS : CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS}: `
+      + `${directUnsafe ? CODEX_V2_DIRECT_TRANSPORT_NOTE : CODEX_V2_ROLE_TRANSPORT_NOTE}\n`
+    );
     process.exit(1);
   }
 
@@ -1343,6 +1477,13 @@ function main() {
   // changes the exit code). Read back the same post-install config.toml content.
   const v2DispatchMode = detectCodexDispatchMode(postInstallConfigContent);
   console.log(`Kaola-Workflow Codex multi_agent_v2 transport: ${v2DispatchMode.codex_v2_transport_mode}`);
+  if (v2DispatchMode.multi_agent_v2_enabled) {
+    console.log(
+      `Kaola-Workflow Codex multi_agent_v2 role transport: namespace=${v2DispatchMode.codex_v2_tool_namespace || 'unknown'} `
+      + `metadata=${v2DispatchMode.codex_v2_role_metadata_visible === true ? 'visible' : 'hidden-or-unknown'} `
+      + `ready=${v2DispatchMode.codex_v2_role_transport_ready === true}`
+    );
+  }
   const v2Bounds = deriveMultiAgentV2Bounds(postInstallConfigContent, v2DispatchMode.multi_agent_v2_enabled);
   if (v2Bounds.max_concurrent_threads_per_session !== null) {
     console.log(
@@ -1398,6 +1539,9 @@ module.exports = {
   detectCodexDispatchMode,
   CODEX_V2_TRANSPORT_UNSAFE_STATUS,
   CODEX_V2_DIRECT_TRANSPORT_NOTE,
+  CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS,
+  CODEX_V2_ROLE_TOOL_NAMESPACE,
+  CODEX_V2_ROLE_TRANSPORT_NOTE,
   deriveDispatchPosture,
   parseFeaturesMultiAgentEnabled,
   parseTopLevelModelReasoningEffort,

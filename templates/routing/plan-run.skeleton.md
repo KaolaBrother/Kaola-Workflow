@@ -97,14 +97,14 @@ separate transport failure handled only by the durable-result contract below: ve
 cache evidence may continue as `returned_partial`; missing or invalid cache evidence cannot.
 
 Codex collaboration transport is a hard pre-dispatch gate. In v2 task-name mode, invoke every
-collaboration operation with a direct collaboration tool, never through `functions.exec` or Code Mode.
-If preflight reports `codex_v2_encrypted_transport_unsafe`, or the runtime exposes collaboration only
-through that nested adapter, refuse before spawning. Do not retry an encrypted-output decode failure
-and do not fall back to a default role: the same nested plaintext task will be misclassified as an
-encrypted task again.
+collaboration operation through the direct `agents` namespace reported by preflight. Never use the
+server-reserved `collaboration` namespace and never dispatch through `functions.exec` or Code Mode. If preflight reports
+`codex_v2_encrypted_transport_unsafe` or `codex_v2_role_transport_unsafe`, refuse before spawning.
+Do not retry an encrypted-output decode or reserved-schema failure and do not fall back to a default
+role: the same transport/schema mismatch is deterministic.
 
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
-passes, call `spawn_agent` with `task_name: dispatch.codex_task_name`, `agent_type:
+passes, call the direct `agents.spawn_agent` tool with `task_name: dispatch.codex_task_name`, `agent_type:
 dispatch.agent_type`, and `fork_turns: "none"` on EVERY role dispatch — the dispatch card
 is self-contained by contract, so no role spawn ever forks the parent's history. Omit both `model`
 and `reasoning_effort`; the named standalone profile owns the pair. For v1 fallback

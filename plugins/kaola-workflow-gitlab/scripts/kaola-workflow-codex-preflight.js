@@ -213,6 +213,23 @@ function parseTomlBoolean(value) {
   return null;
 }
 
+function parseTomlString(value) {
+  const trimmed = String(value || '').trim();
+  if (trimmed.length < 2) return null;
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1);
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return typeof parsed === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function splitInlineTomlFields(body) {
   const fields = [];
   let start = 0;
@@ -240,7 +257,13 @@ function splitInlineTomlFields(body) {
 function parseMultiAgentV2Value(value) {
   const trimmed = String(value || '').trim();
   const bool = parseTomlBoolean(trimmed);
-  if (bool !== null) return { valid: true, enabled: bool, non_code_mode_only: null };
+  if (bool !== null) return {
+    valid: true,
+    enabled: bool,
+    non_code_mode_only: null,
+    hide_spawn_agent_metadata: null,
+    tool_namespace: null,
+  };
 
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
     return { valid: false, enabled: false, non_code_mode_only: null };
@@ -251,6 +274,12 @@ function parseMultiAgentV2Value(value) {
   let transportFound = false;
   let transportAmbiguous = false;
   let nonCodeModeOnly = null;
+  let metadataFound = false;
+  let metadataAmbiguous = false;
+  let hideSpawnAgentMetadata = null;
+  let namespaceFound = false;
+  let namespaceAmbiguous = false;
+  let toolNamespace = null;
   for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
     const enabledMatch = field.match(/^enabled\s*=\s*(.+)$/);
     if (enabledMatch) {
@@ -271,11 +300,44 @@ function parseMultiAgentV2Value(value) {
       transportFound = true;
       if (fieldBool === null) transportAmbiguous = true;
       else nonCodeModeOnly = fieldBool;
+      continue;
+    }
+    const metadataMatch = field.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
+    if (metadataMatch) {
+      if (metadataFound) {
+        metadataAmbiguous = true;
+        continue;
+      }
+      const fieldBool = parseTomlBoolean(metadataMatch[1]);
+      metadataFound = true;
+      if (fieldBool === null) metadataAmbiguous = true;
+      else hideSpawnAgentMetadata = fieldBool;
+      continue;
+    }
+    const namespaceMatch = field.match(/^tool_namespace\s*=\s*(.+)$/);
+    if (namespaceMatch) {
+      if (namespaceFound) {
+        namespaceAmbiguous = true;
+        continue;
+      }
+      const fieldString = parseTomlString(namespaceMatch[1]);
+      namespaceFound = true;
+      if (fieldString === null) namespaceAmbiguous = true;
+      else toolNamespace = fieldString;
     }
   }
 
   return enabledFound
-    ? { valid: true, enabled, non_code_mode_only: nonCodeModeOnly, transport_ambiguous: transportAmbiguous }
+    ? {
+      valid: true,
+      enabled,
+      non_code_mode_only: nonCodeModeOnly,
+      transport_ambiguous: transportAmbiguous,
+      hide_spawn_agent_metadata: hideSpawnAgentMetadata,
+      metadata_ambiguous: metadataAmbiguous,
+      tool_namespace: toolNamespace,
+      namespace_ambiguous: namespaceAmbiguous,
+    }
     : { valid: false, enabled: false, non_code_mode_only: null };
 }
 
@@ -288,6 +350,12 @@ function detectCodexDispatchMode(configContent) {
   let transportSeen = false;
   let transportAmbiguous = false;
   let nonCodeModeOnly = null;
+  let metadataSeen = false;
+  let metadataAmbiguous = false;
+  let hideSpawnAgentMetadata = null;
+  let namespaceSeen = false;
+  let namespaceAmbiguous = false;
+  let toolNamespace = null;
 
   function recordTransport(value) {
     if (value === null || value === undefined) return;
@@ -310,6 +378,32 @@ function detectCodexDispatchMode(configContent) {
     enabled = parsed.enabled;
     recordTransport(parsed.non_code_mode_only);
     if (parsed.transport_ambiguous) transportAmbiguous = true;
+    recordMetadata(parsed.hide_spawn_agent_metadata);
+    if (parsed.metadata_ambiguous) metadataAmbiguous = true;
+    recordNamespace(parsed.tool_namespace);
+    if (parsed.namespace_ambiguous) namespaceAmbiguous = true;
+  }
+
+  function recordMetadata(value) {
+    if (value === null || value === undefined) return;
+    if (metadataSeen || typeof value !== 'boolean') {
+      metadataAmbiguous = true;
+      hideSpawnAgentMetadata = null;
+      return;
+    }
+    metadataSeen = true;
+    hideSpawnAgentMetadata = value;
+  }
+
+  function recordNamespace(value) {
+    if (value === null || value === undefined) return;
+    if (namespaceSeen || typeof value !== 'string' || value.length === 0) {
+      namespaceAmbiguous = true;
+      toolNamespace = null;
+      return;
+    }
+    namespaceSeen = true;
+    toolNamespace = value;
   }
 
   for (const rawLine of lines) {
@@ -332,6 +426,8 @@ function detectCodexDispatchMode(configContent) {
           valid: parseTomlBoolean(enabledMatch[1]) !== null,
           enabled: parseTomlBoolean(enabledMatch[1]) === true,
           non_code_mode_only: null,
+          hide_spawn_agent_metadata: null,
+          tool_namespace: null,
         });
       }
       const transportMatch = line.match(/^non_code_mode_only\s*=\s*(.+)$/);
@@ -339,6 +435,18 @@ function detectCodexDispatchMode(configContent) {
         const transportValue = parseTomlBoolean(transportMatch[1]);
         if (transportValue === null) transportAmbiguous = true;
         else recordTransport(transportValue);
+      }
+      const metadataMatch = line.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
+      if (metadataMatch) {
+        const metadataValue = parseTomlBoolean(metadataMatch[1]);
+        if (metadataValue === null) metadataAmbiguous = true;
+        else recordMetadata(metadataValue);
+      }
+      const namespaceMatch = line.match(/^tool_namespace\s*=\s*(.+)$/);
+      if (namespaceMatch) {
+        const namespaceValue = parseTomlString(namespaceMatch[1]);
+        if (namespaceValue === null) namespaceAmbiguous = true;
+        else recordNamespace(namespaceValue);
       }
     }
   }
@@ -349,19 +457,41 @@ function detectCodexDispatchMode(configContent) {
     : (transportAmbiguous
       ? 'unknown'
       : (nonCodeModeOnly === false ? 'nested-allowed' : 'direct-only'));
+  const directTransportReady = enabled ? transportMode === 'direct-only' : null;
+  const effectiveNamespace = !enabled
+    ? null
+    : (namespaceAmbiguous ? null : (toolNamespace || 'collaboration'));
+  const roleMetadataVisible = !enabled
+    ? null
+    : (metadataAmbiguous ? null : hideSpawnAgentMetadata === false);
+  const roleTransportReady = enabled
+    ? directTransportReady === true
+      && effectiveNamespace === CODEX_V2_ROLE_TOOL_NAMESPACE
+      && roleMetadataVisible === true
+    : null;
+  let transportWarning = null;
+  if (enabled && directTransportReady !== true) {
+    transportWarning = CODEX_V2_DIRECT_TRANSPORT_NOTE;
+  } else if (enabled && roleTransportReady !== true) {
+    transportWarning = CODEX_V2_ROLE_TRANSPORT_NOTE;
+  }
   return {
     dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
     multi_agent_v2_enabled: enabled,
     codex_v2_transport_mode: transportMode,
-    codex_v2_direct_transport_ready: enabled ? transportMode === 'direct-only' : null,
-    codex_v2_transport_warning: enabled && transportMode !== 'direct-only'
-      ? CODEX_V2_DIRECT_TRANSPORT_NOTE
-      : null,
+    codex_v2_direct_transport_ready: directTransportReady,
+    codex_v2_tool_namespace: effectiveNamespace,
+    codex_v2_role_metadata_visible: roleMetadataVisible,
+    codex_v2_role_transport_ready: roleTransportReady,
+    codex_v2_transport_warning: transportWarning,
   };
 }
 
 const CODEX_V2_TRANSPORT_UNSAFE_STATUS = 'codex_v2_encrypted_transport_unsafe';
 const CODEX_V2_DIRECT_TRANSPORT_NOTE = 'Codex MultiAgentV2 encrypted task messages require direct-only collaboration tools. Set non_code_mode_only = true in the enabled [features] multi_agent_v2 inline object or [features.multi_agent_v2] table (or omit that field to use the Codex 0.144.1 direct-only default), then start a fresh Codex session; never dispatch spawn_agent, send_message, or followup_task through functions.exec or Code Mode.';
+const CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS = 'codex_v2_role_transport_unsafe';
+const CODEX_V2_ROLE_TOOL_NAMESPACE = 'agents';
+const CODEX_V2_ROLE_TRANSPORT_NOTE = 'Kaola-Workflow role-aware MultiAgentV2 on Codex 0.144.1 requires tool_namespace = "agents", hide_spawn_agent_metadata = false, and non_code_mode_only = true. The default collaboration.spawn_agent name is server-reserved: exposing agent_type/model/reasoning fields there fails the first request with HTTP 400, while hiding them removes Kaola role selection. Apply the settings in the enabled [features] multi_agent_v2 object or [features.multi_agent_v2] table, then start a fresh Codex session and call the direct agents namespace, never functions.exec or Code Mode.';
 
 // ---------------------------------------------------------------------------
 // #598: MultiAgentMode dispatch-POSTURE derivation. This is DIFFERENT from
@@ -963,6 +1093,9 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     multi_agent_v2_enabled: dispatchMode.multi_agent_v2_enabled,
     codex_v2_transport_mode: dispatchMode.codex_v2_transport_mode,
     codex_v2_direct_transport_ready: dispatchMode.codex_v2_direct_transport_ready,
+    codex_v2_tool_namespace: dispatchMode.codex_v2_tool_namespace,
+    codex_v2_role_metadata_visible: dispatchMode.codex_v2_role_metadata_visible,
+    codex_v2_role_transport_ready: dispatchMode.codex_v2_role_transport_ready,
     codex_v2_transport_warning: dispatchMode.codex_v2_transport_warning,
     dispatch_posture: posture.dispatch_posture,
     model_reasoning_effort: posture.model_reasoning_effort,
@@ -1014,19 +1147,25 @@ function codexV2TransportEnvelope(scope) {
   return {
     codex_v2_transport_mode: scope.codex_v2_transport_mode,
     codex_v2_direct_transport_ready: scope.codex_v2_direct_transport_ready,
+    codex_v2_tool_namespace: scope.codex_v2_tool_namespace,
+    codex_v2_role_metadata_visible: scope.codex_v2_role_metadata_visible,
+    codex_v2_role_transport_ready: scope.codex_v2_role_transport_ready,
     codex_v2_transport_warning: scope.codex_v2_transport_warning,
   };
 }
 
 function unsafeCodexV2Transport(scope, scopeName, codexDir) {
+  const directUnsafe = scope.codex_v2_direct_transport_ready === false;
   return {
     exitCode: 7,
     result: {
-      status: CODEX_V2_TRANSPORT_UNSAFE_STATUS,
+      status: directUnsafe
+        ? CODEX_V2_TRANSPORT_UNSAFE_STATUS
+        : CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS,
       scope: scopeName,
       stale: true,
       safe_autofix: false,
-      repair: CODEX_V2_DIRECT_TRANSPORT_NOTE,
+      repair: directUnsafe ? CODEX_V2_DIRECT_TRANSPORT_NOTE : CODEX_V2_ROLE_TRANSPORT_NOTE,
       extra_unmanaged: scope.extraUnmanaged,
       dispatch_mode: scope.dispatch_mode,
       multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
@@ -1109,7 +1248,7 @@ function runPreflight(opts) {
   // project-scope inspection + autofix path UNCHANGED (back-compat + fail-closed preserved).
   const globalCodexDir = path.join(homeDir, '.codex');
   const globalScope = inspectScope({ codexDir: globalCodexDir, templateRoles, templateEntries });
-  if (globalScope.codex_v2_direct_transport_ready === false) {
+  if (globalScope.codex_v2_role_transport_ready === false) {
     return unsafeCodexV2Transport(globalScope, 'global', globalCodexDir);
   }
   if (scopeIsFresh(globalScope)) {
@@ -1140,7 +1279,7 @@ function runPreflight(opts) {
 
   // --- Inspect the project scope (template roles only; plan roles handled below) ---
   const scope = inspectScope({ codexDir, templateRoles, templateEntries });
-  if (scope.codex_v2_direct_transport_ready === false) {
+  if (scope.codex_v2_role_transport_ready === false) {
     return unsafeCodexV2Transport(scope, 'project', codexDir);
   }
 
@@ -1424,7 +1563,7 @@ function runPreflight(opts) {
 
   // --- Re-verify after autofix: re-run ALL checks (#332). ---
   const after = inspectScope({ codexDir, templateRoles, templateEntries });
-  if (after.codex_v2_direct_transport_ready === false) {
+  if (after.codex_v2_role_transport_ready === false) {
     return unsafeCodexV2Transport(after, 'project', codexDir);
   }
   const { missingRoles: afterMissingPlan } = checkProfiles(agentsDir, planRoles);
@@ -1505,7 +1644,7 @@ function scopeIsStale(s) {
     s.staleRolesInBlock.length > 0 ||
     s.conflictingRolesOutside.length > 0 ||
     s.manifest === 'unsupported' ||
-    s.codex_v2_direct_transport_ready === false
+    s.codex_v2_role_transport_ready === false
   );
 }
 
@@ -1546,8 +1685,10 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     max_wait_timeout_ms: scope.max_wait_timeout_ms,
     default_wait_timeout_ms: scope.default_wait_timeout_ms,
     read_only: !!readOnly,
-    repair: scope.codex_v2_direct_transport_ready === false
-      ? CODEX_V2_DIRECT_TRANSPORT_NOTE
+    repair: scope.codex_v2_role_transport_ready === false
+      ? (scope.codex_v2_direct_transport_ready === false
+        ? CODEX_V2_DIRECT_TRANSPORT_NOTE
+        : CODEX_V2_ROLE_TRANSPORT_NOTE)
       : repair,
   };
 }
@@ -1643,6 +1784,9 @@ function runDoctor(opts) {
       multi_agent_v2_enabled: false,
       codex_v2_transport_mode: 'n/a',
       codex_v2_direct_transport_ready: null,
+      codex_v2_tool_namespace: 'n/a',
+      codex_v2_role_metadata_visible: null,
+      codex_v2_role_transport_ready: null,
       codex_v2_transport_warning: null,
       dispatch_posture: 'n/a',
       model_reasoning_effort: null,
@@ -1688,7 +1832,7 @@ if (require.main === module) {
     } else {
       for (const s of (result.scopes || [])) {
         const stale = (s.scope !== 'plugin_cache')
-          ? (s.exists && (s.malformed.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest === 'unsupported' || s.codex_v2_direct_transport_ready === false))
+          ? (s.exists && (s.malformed.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest === 'unsupported' || s.codex_v2_role_transport_ready === false))
           : (s.malformed.length > 0);
         const state = !s.exists ? 'absent' : (stale ? 'stale' : 'ok');
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
@@ -1768,6 +1912,9 @@ module.exports = {
   codexV2TransportEnvelope,
   CODEX_V2_TRANSPORT_UNSAFE_STATUS,
   CODEX_V2_DIRECT_TRANSPORT_NOTE,
+  CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS,
+  CODEX_V2_ROLE_TOOL_NAMESPACE,
+  CODEX_V2_ROLE_TRANSPORT_NOTE,
   deriveDispatchPosture,
   parseFeaturesMultiAgentEnabled,
   parseTopLevelModelReasoningEffort,

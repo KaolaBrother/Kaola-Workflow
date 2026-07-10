@@ -204,11 +204,12 @@ for (const ed of codexEditions) {
       `T5b: ${f} must fail closed on a plan/profile tier conflict`);
     assert(content.includes('codex_profile_runtime_mismatch'),
       `T5b: ${f} must fail closed when child JSONL disproves the profile pair`);
-    assert(content.includes('direct collaboration tool')
-      && content.includes('never through `functions.exec` or Code Mode'),
-      `T5b: ${f} must require direct-only Codex collaboration transport`);
-    assert(content.includes('codex_v2_encrypted_transport_unsafe'),
-      `T5b: ${f} must fail closed when only nested Codex collaboration is available`);
+    assert(content.includes('direct `agents` namespace')
+      && content.includes('never dispatch through `functions.exec` or Code Mode'),
+      `T5b: ${f} must require role-safe direct Codex collaboration transport`);
+    assert(content.includes('codex_v2_encrypted_transport_unsafe')
+      && content.includes('codex_v2_role_transport_unsafe'),
+      `T5b: ${f} must fail closed on nested or reserved-schema Codex collaboration`);
     assert(!content.includes('`sonnet`/absent') && !content.includes('sonnet`/absent') && !content.includes('sonnet/absent'),
       `T5b: ${f} must not describe sonnet as an inherited role_default tier`);
   }
@@ -220,11 +221,12 @@ for (const ed of codexEditions) {
   ];
   for (const f of nextSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(content.includes('direct collaboration tool')
-      && content.includes('never through `functions.exec` or Code Mode'),
-      `T5b: ${f} must require direct-only issue-scout dispatch`);
-    assert(content.includes('codex_v2_encrypted_transport_unsafe'),
-      `T5b: ${f} must fail closed instead of retrying nested issue-scout dispatch`);
+    assert(content.includes('direct `agents.spawn_agent` tool')
+      && content.includes('never dispatch through `functions.exec` or Code Mode'),
+      `T5b: ${f} must require role-safe direct issue-scout dispatch`);
+    assert(content.includes('codex_v2_encrypted_transport_unsafe')
+      && content.includes('codex_v2_role_transport_unsafe'),
+      `T5b: ${f} must fail closed instead of retrying nested or reserved-schema issue-scout dispatch`);
   }
 
   // Current-runtime adapter: pin both static pair classes and the role-owned dispatch mode.
@@ -801,9 +803,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'profiles pin `gpt-5.6-sol` at `xhigh`', surfaces: prSkill },
     { token: 'Codex 0.144 durable-result override', surfaces: prSkill },
     { token: 'transport_error: encrypted_return', surfaces: prSkill },
-    { token: 'direct collaboration tool', surfaces: prSkill },
-    { token: 'never through `functions.exec` or Code Mode', surfaces: prSkill },
+    { token: 'direct `agents` namespace', surfaces: prSkill },
+    { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: prSkill },
     { token: 'codex_v2_encrypted_transport_unsafe', surfaces: prSkill },
+    { token: 'codex_v2_role_transport_unsafe', surfaces: prSkill },
     // T14 — plan-run commands × 3 (claude-live)
     { token: "spawn each node's role agent as a NAMED teammate", surfaces: prCmd },
     { token: 'send EXACTLY ONE request for the deliverable, then wait', surfaces: prCmd },
@@ -826,9 +829,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'auto-bundle', surfaces: NX6 },
     // T13-half — next skills × 3 (codex-live)
     { token: '--codex-dispatch-mode', surfaces: nxSkill },
-    { token: 'direct collaboration tool', surfaces: nxSkill },
-    { token: 'never through `functions.exec` or Code Mode', surfaces: nxSkill },
+    { token: 'direct `agents.spawn_agent` tool', surfaces: nxSkill },
+    { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: nxSkill },
     { token: 'codex_v2_encrypted_transport_unsafe', surfaces: nxSkill },
+    { token: 'codex_v2_role_transport_unsafe', surfaces: nxSkill },
     // router prose — next commands × 3 (claude-live)
     { token: 'thin router', surfaces: nxCmd },
     { token: 'active folders', surfaces: nxCmd },

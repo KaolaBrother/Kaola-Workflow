@@ -547,14 +547,16 @@ The audit must keep these facts separate:
 
 - `codex features list` should report `multi_agent` and `multi_agent_v2` as
   enabled for V2 task-name dispatch.
-- The active Codex config may express V2 as `multi_agent_v2 = true`,
-  `multi_agent_v2 = { enabled = true, ... }`, or
-  `[features.multi_agent_v2]` with `enabled = true`.
-- On Codex 0.144.1, V2 collaboration must remain direct-only: omit
-  `non_code_mode_only` (the runtime default is `true`) or set it explicitly to
-  `true`. Setting it to `false` exposes collaboration through the nested Code
-  Mode adapter, which cannot supply the Responses-encrypted task argument that
-  MultiAgentV2 expects.
+- Codex itself accepts `multi_agent_v2 = true`, an inline object, or a dotted
+  table. Kaola's role-aware gate requires the inline/dotted form because the
+  namespace and metadata settings must be explicit.
+- On Codex 0.144.1, Kaola's role-aware V2 tools must use
+  `tool_namespace = "agents"`, `hide_spawn_agent_metadata = false`, and
+  `non_code_mode_only = true`. The default `collaboration.spawn_agent` name is
+  server-reserved for the hidden-metadata schema: adding `agent_type`/model
+  fields there fails the first request with HTTP 400, while hiding those fields
+  removes Kaola role selection. Setting `non_code_mode_only = false` separately
+  exposes the encrypted task through the incompatible nested Code Mode adapter.
 - `[notice].suppress_unstable_features_warning = true` only suppresses the
   under-development warning; it is not evidence that V2 is enabled.
 - `[agents].max_threads` and `[agents].max_depth`, when present, must be high
@@ -574,16 +576,18 @@ suppress_unstable_features_warning = true
 
 [features]
 multi_agent = true
-multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }
+multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }
 ```
 
 After changing this setting, start a fresh Codex session so the tool surface is
 rebuilt. The preflight and doctor report `codex_v2_transport_mode`,
-`codex_v2_direct_transport_ready`, and `codex_v2_transport_warning`; an enabled
-V2 config that permits nested collaboration refuses with
-`codex_v2_encrypted_transport_unsafe` instead of attempting a spawn. Routing
-skills likewise call collaboration tools directly, never through
-`functions.exec` or Code Mode.
+`codex_v2_direct_transport_ready`, `codex_v2_tool_namespace`,
+`codex_v2_role_metadata_visible`, `codex_v2_role_transport_ready`, and
+`codex_v2_transport_warning`. Nested collaboration refuses with
+`codex_v2_encrypted_transport_unsafe`; a reserved/hidden role schema refuses
+with `codex_v2_role_transport_unsafe`. Routing skills call the direct `agents`
+namespace, never the reserved `collaboration` name, `functions.exec`, or Code
+Mode.
 
 If the audit finds a missing required setting and the user has not authorized
 config changes, stop with the minimal diff and reason. Do not claim Codex is
@@ -1276,12 +1280,12 @@ under it. Dirty worktrees are skipped unless `--archive`, `--export`, or
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `6.21.4`
-- Claude Code command install, GitLab edition: `6.21.4`
-- Claude Code command install, Gitea edition: `6.21.4`
-- Codex `kaola-workflow` plugin manifest: `4.21.4`
-- Codex `kaola-workflow-gitlab` plugin manifest: `4.21.4`
-- Codex `kaola-workflow-gitea` plugin manifest: `4.21.4`
+- Claude Code command install, GitHub edition: `6.21.5`
+- Claude Code command install, GitLab edition: `6.21.5`
+- Claude Code command install, Gitea edition: `6.21.5`
+- Codex `kaola-workflow` plugin manifest: `4.21.5`
+- Codex `kaola-workflow-gitlab` plugin manifest: `4.21.5`
+- Codex `kaola-workflow-gitea` plugin manifest: `4.21.5`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that

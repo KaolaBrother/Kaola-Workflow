@@ -1,5 +1,11 @@
 # Changelog
 
+## [6.21.5] - 2026-07-10
+
+### Fixed
+
+- **Repaired the Codex 0.144.1 MultiAgentV2 reserved-tool schema regression introduced by v6.21.4 — #650.** Role-aware dispatch now uses the proven direct `agents` namespace with visible `agent_type` metadata and encrypted task messages; the server-reserved `collaboration.spawn_agent` name is no longer used with Kaola's extended role/model schema. Preflight and the profile installer parse inline and dotted `tool_namespace`/`hide_spawn_agent_metadata` settings, refuse nested transport as `codex_v2_encrypted_transport_unsafe`, refuse reserved or hidden role schemas as `codex_v2_role_transport_unsafe`, and report namespace/metadata/readiness in doctor output. Generated issue-scout and plan-run routing, workflow-init guidance, and all three Codex editions carry the same contract. Live Codex A/B validation reproduced the HTTP 400 under the old configuration and proved an encrypted `issue-scout` child completes under `tool_namespace = "agents"`.
+
 ## [6.21.4] - 2026-07-10
 
 ### Fixed

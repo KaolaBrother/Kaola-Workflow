@@ -124,9 +124,11 @@ const REQUIRED_BLOCKS = [
       '--verify --json',
       'delegation_outcome: returned_partial',
       'transport_error: encrypted_return',
-      'direct collaboration tool',
-      'never through `functions.exec` or Code Mode',
+      'direct `agents` namespace',
+      'never dispatch through `functions.exec` or Code Mode',
       'codex_v2_encrypted_transport_unsafe',
+      'codex_v2_role_transport_unsafe',
+      'agents.spawn_agent',
     ],
   },
   {
@@ -260,9 +262,11 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'skill',
     content_tokens: [
       '--codex-dispatch-mode',
-      'direct collaboration tool',
-      'never through `functions.exec` or Code Mode',
+      'direct `agents.spawn_agent` tool',
+      'never dispatch through `functions.exec` or Code Mode',
       'codex_v2_encrypted_transport_unsafe',
+      'codex_v2_role_transport_unsafe',
+      'agents.spawn_agent',
     ],
   },
   {

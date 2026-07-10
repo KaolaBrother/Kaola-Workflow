@@ -3619,6 +3619,8 @@ function testGitlabPreflight266() {
         function configWithFeatureLine(line) {
           return origConfig.replace('multi_agent = true', 'multi_agent = true\n' + line);
         }
+        const roleSafeV2Inline = 'multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }';
+        const roleSafeV2Table = '[features.multi_agent_v2]\nenabled = true\ntool_namespace = "agents"\nhide_spawn_agent_metadata = false\nnon_code_mode_only = true';
         function assertDispatchModeForConfig(body, expectedMode, label, checkDoctor) {
           fs.writeFileSync(configPath, body);
           const result = spawnSync(process.execPath,
@@ -3642,24 +3644,24 @@ function testGitlabPreflight266() {
           }
         }
         assertDispatchModeForConfig(origConfig, 'v1-thread-id', '#584 gl no multi_agent_v2 key', false);
-        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 gl boolean true', true);
+        assertDispatchModeForConfig(configWithFeatureLine(roleSafeV2Inline), 'v2-task-name', '#650 gl role-safe inline', true);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 gl boolean false', false);
-        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = true }'), 'v2-task-name', '#584 gl inline object direct-only true', true);
+        assertDispatchModeForConfig(configWithFeatureLine(roleSafeV2Inline), 'v2-task-name', '#650 gl inline role transport ready', true);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 gl inline object enabled false', false);
-        assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 gl table enabled true', true);
+        assertDispatchModeForConfig(configWithFeatureLine(roleSafeV2Table), 'v2-task-name', '#650 gl table role transport ready', true);
         assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 gl table enabled false', false);
         assertDispatchModeForConfig(configWithFeatureLine('["features.multi_agent_v2"]\nenabled = true'), 'v1-thread-id', '#647 gl basic quoted literal dotted table must not enable v2', false);
         assertDispatchModeForConfig(configWithFeatureLine('[\'features.multi_agent_v2\']\nenabled = true'), 'v1-thread-id', '#647 gl literal quoted dotted table must not enable v2', false);
         assertDispatchModeForConfig(configWithFeatureLine('[[features.multi_agent_v2]]\nenabled = true'), 'v1-thread-id', '#647 R2 gl array-of-table dotted v2 table must not enable v2', false);
         assertDispatchModeForConfig(configWithFeatureLine('[[features."multi_agent_v2"]]\nenabled = true'), 'v1-thread-id', '#647 R2 gl quoted-segment array-of-table v2 table must not enable v2', false);
         assertDispatchModeForConfig(
-          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[projects."/tmp/kaola-project"]\nenabled = true\n\n[plugins."sample@test"]\nenabled = true'),
+          configWithFeatureLine(roleSafeV2Table + '\n\n[projects."/tmp/kaola-project"]\nenabled = true\n\n[plugins."sample@test"]\nenabled = true'),
           'v2-task-name', '#647 gl quoted project/plugin tables after dotted v2 table reset parser state', true);
         assertDispatchModeForConfig(
-          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[plugins.\'sample@test\'.mcp_servers]]\nenabled = true'),
+          configWithFeatureLine(roleSafeV2Table + '\n\n[[plugins.\'sample@test\'.mcp_servers]]\nenabled = true'),
           'v2-task-name', '#647 gl array-of-table literal quoted segment after dotted v2 table resets parser state', false);
         assertDispatchModeForConfig(
-          configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\n\n[[features.multi_agent_v2]]\nenabled = false'),
+          configWithFeatureLine(roleSafeV2Table + '\n\n[[features.multi_agent_v2]]\nenabled = false'),
           'v2-task-name', '#647 R2 gl exact array-of-table after dotted v2 table resets parser state', false);
         assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 gl warning suppression only', false);
         assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 gl top-level key ignored', false);
@@ -3688,7 +3690,7 @@ function testGitlabPreflight266() {
           '#598 gl effort=ultra with multi_agent=true -> proactive');
         assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
           '#598 gl effort=xhigh (below ultra) stays explicitRequestOnly');
-        assertDispatchPostureForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'explicitRequestOnly',
+        assertDispatchPostureForConfig(configWithFeatureLine(roleSafeV2Inline), 'explicitRequestOnly',
           '#598 gl multi_agent_v2=true, no effort -> explicitRequestOnly');
         assertDispatchPostureForConfig(
           origConfig.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
