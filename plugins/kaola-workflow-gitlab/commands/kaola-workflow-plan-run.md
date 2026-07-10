@@ -14,8 +14,8 @@ Finalization. Stop and surface on any consent-halt or typed refusal.
 Run subcommands with `--summary` for one-line output. For an opening call (`open-next` /
 `open-ready` / `close-and-open-next`), the summary line already carries the dispatch
 essentials: `summary: ok | opened=<node-id> role=<role> task=<codex_task_name>
-mode=<codex_dispatch_mode> effort=<effort|inherit>` (one `opened=` segment per member on a
-batch open; `effort=inherit` when no explicit tier was set; the leg path is NOT in the
+mode=<codex_dispatch_mode> effort=<medium|xhigh|unresolved>` (one `opened=` segment per member on a
+batch open; `effort=unresolved` is a typed `codex_tier_unresolved` refusal, never inheritance; the leg path is NOT in the
 summary line). The full envelope — every field, including `dispatch.leg_path` and the
 complete `dispatch:{...}` object — needs `--json` without `--summary`, or the cached
 `.cache/<op>-envelope.json`. Drill into the full envelope on `result: refuse` (includes
@@ -144,7 +144,8 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" open-next \
 
 Under `--summary` (the canonical invocation above), the printed line is `summary: ok |
 opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode>
-effort=<effort|inherit>` or `summary: ok | allDone: true` — read the dispatch card straight
+effort=<medium|xhigh|unresolved>` or `summary: ok | allDone: true` — refuse an unresolved tier;
+otherwise read the dispatch card straight
 off the `opened=` segment. The full envelope needs `--json` without `--summary` (or the
 cached `.cache/open-next-envelope.json`): `{opened:{id,role,model,declared_write_set}, nonce,
 evidence_file, required_tokens, dispatch:{...}}` or `{allDone:true}`; the `dispatch`
@@ -178,11 +179,12 @@ first (the summary line's `opened=` segment, or `.cache/<op>-envelope.json`).
 Immediately before every spawn, announce the dispatch:
 
 ```text
-→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})
+→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})
 ```
 
 `{task_name}` is `dispatch.codex_task_name` on Codex, the agent name/description on Claude, the
-child task label on opencode.
+child task label on opencode. `{effort}` is the dispatch-card effort on Codex and `n/a` on a
+runtime without an effort surface; it never means parent/session inheritance.
 
 <!-- PIN: teammate-mode -->
 #### Teammate-Mode Dispatch
@@ -237,7 +239,7 @@ descriptive). Pass `dispatch.nonce` (evidence-binding token). Instruct the role 
   `verdict: pass|fail` + `findings_blocking: N`. Run `--forbidden-only` for forge-touching
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.
 - For read-only fan-out (`quorum`/`tally-fn`/`validateNodeOutput`): dispatch concurrently,
-  record evidence parent-side, `close-node` per member.
+  persist and verify evidence by the runtime contract below, `close-node` per member.
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap. The rolling top-up re-run of
   `open-ready` (admitting a NEW member as a slot frees) drains a wider READ fan-out only; a WRITE
   frontier wider than `FANOUT_CAP` does NOT top-up into a live lane group (group membership /
@@ -320,8 +322,11 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
-**Evidence-persistence contract per role-kind.** There is ONE contract, derived from each role's
-tool manifest — no hand-list, no per-agent guesswork:
+**Evidence-persistence contract per runtime and role-kind.** The authoritative inter-node handoff is
+always the full nonce-bound `.cache/<node-id>.md` artifact. A self-writing role returns only a compact
+summary after persisting it. On runtimes that enforce a read-only role tool manifest, the role instead
+returns the full body as transport for orchestrator persistence; after that write, the cache artifact is
+again authoritative. The mechanism is derived from each role's tool manifest — no hand-list, no per-agent guesswork:
 - Any node role WITHOUT `Write` in its tool manifest CANNOT self-write `.cache` evidence — it
   RETURNS its deliverable for orchestrator persistence via `record-evidence --stdin` (below).
   `record-evidence` re-injects this node's `evidence-binding:` header, so persisting evidence
@@ -334,6 +339,7 @@ tool manifest — no hand-list, no per-agent guesswork:
   roster (EXAMPLES only): `implementer`, `tdd-guide`, `metric-optimizer`, `build-error-resolver`,
   `doc-updater`, `synthesizer`.
 
+
 <!-- CARD: metric-optimizer -->
 A `metric-optimizer` node's dispatch card carries `dispatch.optimize` (the frozen
 `optimize(<node-id>)` metric contract) and may override `dispatch.wait_budget_minutes` from
@@ -342,18 +348,21 @@ the contract's `budget_wallclock_minutes`. Full ratchet protocol:
 accept-or-reject loop, the `metric: <number>` output contract, scoped-revert safety, stop
 conditions, and the five evidence tokens).
 
-On every return, before evidence/close bookkeeping, announce the outcome:
+On every return, before evidence/close bookkeeping, announce the compact outcome:
 
 ```text
 ← {node_id} · {role} returned: {verdict or one-line outcome}
 ```
 
-Record durable evidence after the role returns:
+For a returned full body that still needs parent-side persistence, record it with stdin:
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" record-evidence \
   --project {project} --node-id {node-id} --stdin --json
 ```
+
+For a self-written artifact, never overwrite it with the compact summary; use `record-evidence
+--verify` as shown above.
 
 ### 4. Close and advance
 

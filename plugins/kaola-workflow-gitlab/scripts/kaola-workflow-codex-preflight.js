@@ -7,8 +7,8 @@
 // Hard-gates Codex agent-profile freshness BEFORE any subagent-invoked compliance
 // is claimed. Verifies:
 //   (a) .codex/agents/kaola-workflow/<role>.toml exists for every REQUIRED role
-//       AND is schema-valid (top-level non-empty `name` matching the role, an OPTIONAL
-//       model_reasoning_effort, non-empty `description`, valid `nickname_candidates`,
+//       AND is schema-valid (top-level non-empty `name` matching the role, the governed
+//       standalone Sol/medium or Sol/xhigh profile pin, non-empty `description`, valid `nickname_candidates`,
 //       and a non-blank developer_instructions block) - codex >=0.138 silently ignores
 //       a profile without a non-empty `name`.
 //   (b) .codex/config.toml contains the managed block with an [agents.{role}] entry
@@ -65,6 +65,23 @@ const RETIRED_PROFILE_FILES = [
   'adversarial-verifier-max.toml',
 ];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
+const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
+  'code-explorer', 'knowledge-lookup', 'tdd-guide', 'implementer',
+  'doc-updater', 'issue-scout', 'contractor', 'metric-optimizer',
+]);
+const CODEX_PINNED_REASONING_ROLES = Object.freeze([
+  'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',
+  'security-reviewer', 'adversarial-verifier', 'workflow-planner', 'synthesizer',
+]);
+// Workflow-planner and contractor are dispatched outside the adaptive Node Ledger. Their
+// workflow/plan/finalization artifacts are the authoritative durable result, with an additional
+// cache mirror only when a caller supplies a seeded evidence file. All other profiles are DAG node
+// roles and must self-write the exact seeded cache artifact before returning a compact summary.
+const CODEX_ORCHESTRATION_ROLES = Object.freeze(['contractor', 'workflow-planner']);
+const CODEX_STANDARD_MODEL = 'gpt-5.6-sol';
+const CODEX_STANDARD_EFFORT = 'medium';
+const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
+const CODEX_REASONING_EFFORT = 'xhigh';
 const MANIFEST_SCHEMA_VERSION = 1;
 
 function escapeRegExp(value) {
@@ -584,12 +601,33 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
+  const modelMatch = top.match(/^model\s*=\s*"([^"]*)"\s*$/m);
   const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  // #451/#581: model_reasoning_effort is OPTIONAL - base profiles OMIT it so dispatch can supply
-  // per-spawn `reasoning_effort` from the node descriptor. A pinned value (user override) must still
-  // be legal; an absent one is fine.
   if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
     reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
+  }
+  const pinnedStandard = CODEX_PINNED_STANDARD_ROLES.includes(role);
+  const pinnedReasoning = CODEX_PINNED_REASONING_ROLES.includes(role);
+  if (!pinnedStandard && !pinnedReasoning) {
+    reasons.push(`role "${role}" has no Codex profile-tier policy`);
+  } else if (pinnedStandard) {
+    if (!modelMatch) reasons.push(`missing top-level 'model' pin (expected ${CODEX_STANDARD_MODEL})`);
+    else if (modelMatch[1] !== CODEX_STANDARD_MODEL) {
+      reasons.push(`top-level 'model' is "${modelMatch[1]}" but pinned standard roles require "${CODEX_STANDARD_MODEL}"`);
+    }
+    if (!effortMatch) reasons.push(`missing top-level 'model_reasoning_effort' pin (expected ${CODEX_STANDARD_EFFORT})`);
+    else if (effortMatch[1] !== CODEX_STANDARD_EFFORT) {
+      reasons.push(`model_reasoning_effort is "${effortMatch[1]}" but pinned standard roles require "${CODEX_STANDARD_EFFORT}"`);
+    }
+  } else {
+    if (!modelMatch) reasons.push(`missing top-level 'model' pin (expected ${CODEX_REASONING_MODEL})`);
+    else if (modelMatch[1] !== CODEX_REASONING_MODEL) {
+      reasons.push(`top-level 'model' is "${modelMatch[1]}" but pinned reasoning roles require "${CODEX_REASONING_MODEL}"`);
+    }
+    if (!effortMatch) reasons.push(`missing top-level 'model_reasoning_effort' pin (expected ${CODEX_REASONING_EFFORT})`);
+    else if (effortMatch[1] !== CODEX_REASONING_EFFORT) {
+      reasons.push(`model_reasoning_effort is "${effortMatch[1]}" but pinned reasoning roles require "${CODEX_REASONING_EFFORT}"`);
+    }
   }
 
   const instrMatch = text.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""/m);
@@ -597,6 +635,25 @@ function validateProfileText(text, role, expectedMeta = null) {
     reasons.push("missing top-level 'developer_instructions' triple-quoted block");
   } else if (instrMatch[1].trim() === '') {
     reasons.push("'developer_instructions' body is blank");
+  } else {
+    if (!instrMatch[1].includes('FULL')) {
+      reasons.push("developer_instructions missing FULL durable-result contract");
+    }
+    if (!instrMatch[1].includes('compact orchestrator summary')) {
+      reasons.push("developer_instructions missing compact orchestrator summary contract");
+    }
+    if (CODEX_ORCHESTRATION_ROLES.includes(role)) {
+      if (!instrMatch[1].includes('durable full result')) {
+        reasons.push("orchestration-role developer_instructions missing canonical durable full result contract");
+      }
+    } else {
+      if (!instrMatch[1].includes('dispatch.evidence_file')) {
+        reasons.push("node-role developer_instructions missing durable dispatch.evidence_file contract");
+      }
+      if (!instrMatch[1].includes('evidence-binding')) {
+        reasons.push("node-role developer_instructions missing evidence-binding preservation contract");
+      }
+    }
   }
 
   return reasons;
@@ -1571,6 +1628,13 @@ module.exports = {
   RETIRED_PROFILE_FILES,
   MANIFEST_BASENAME,
   EFFORT_VALUES,
+  CODEX_PINNED_STANDARD_ROLES,
+  CODEX_PINNED_REASONING_ROLES,
+  CODEX_ORCHESTRATION_ROLES,
+  CODEX_STANDARD_MODEL,
+  CODEX_STANDARD_EFFORT,
+  CODEX_REASONING_MODEL,
+  CODEX_REASONING_EFFORT,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
   deriveDispatchPosture,

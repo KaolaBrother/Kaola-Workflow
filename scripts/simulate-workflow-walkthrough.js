@@ -1904,7 +1904,7 @@ function testAdaptiveValidatorGovernance() {
 
     // #610 LEGACY-ALIAS FIXTURE: an archived plan with legacy {opus,sonnet} cells resumes green with
     // UNCHANGED bytes / plan_hash, computeNextAction accepts it (point-of-use tier wall), and its dispatch
-    // efforts are byte-identical to the neutral tokens (opus≡reasoning≡xhigh, sonnet≡standard≡high) — zero
+    // efforts are byte-identical to the neutral tokens (opus≡reasoning≡xhigh, sonnet≡standard≡medium) — zero
     // behavior change across the rename.
     {
       const pv = require('./kaola-workflow-plan-validator');
@@ -1934,8 +1934,9 @@ function testAdaptiveValidatorGovernance() {
         && schema.dispatchEffort('opus').codex_reasoning_effort === 'xhigh',
         '#610: legacy opus dispatches with the SAME xhigh effort as neutral reasoning');
       assert(schema.dispatchEffort('sonnet').codex_reasoning_effort === schema.dispatchEffort('standard').codex_reasoning_effort
-        && schema.dispatchEffort('sonnet').codex_reasoning_effort === 'high',
-        '#610: legacy sonnet dispatches with the SAME high effort as neutral standard');
+        && schema.dispatchEffort('sonnet').codex_reasoning_effort === 'medium'
+        && schema.dispatchEffort('sonnet').codex_model === 'gpt-5.6-sol',
+        '#610: legacy sonnet dispatches with the SAME Sol/medium pair as neutral standard');
 
       // #611 AC2/AC5: the Codex join protocol's tier→wait-budget derivation and the typed
       // delegation-outcome evidence contract. Budgets: reasoning=40m, standard=20m, untiered=role-default
@@ -16382,7 +16383,7 @@ function testSummaryDispatchSegments602() {
     spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
   };
 
-  // (a) open-next --summary — single opened node; model: sonnet -> effort=high.
+  // (a) open-next --summary — single opened node; model: sonnet -> profile-pinned effort=medium.
   {
     const grepo = adaptiveTmp('summary-602-open-next');
     initGitRepoWithBareRemote(grepo);
@@ -16407,8 +16408,8 @@ function testSummaryDispatchSegments602() {
       const line = r.stdout.trim();
       assert(/^summary: ok/.test(line), '#602 (a): summary must start with "summary: ok", got: ' + JSON.stringify(line));
       assert(SUMMARY_SEG.test(line), '#602 (a): summary must carry a dispatch segment opened=/role=/task=/mode=/effort=, got: ' + JSON.stringify(line));
-      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v1-thread-id effort=high/.test(line),
-        '#602 (a): summary segment must reflect the dispatch card (n1/tdd-guide/high), got: ' + JSON.stringify(line));
+      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v1-thread-id effort=medium/.test(line),
+        '#602 (a): summary segment must reflect the dispatch card (n1/tdd-guide/medium), got: ' + JSON.stringify(line));
     } finally {
       fs.rmSync(grepo, { recursive: true, force: true });
       try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}

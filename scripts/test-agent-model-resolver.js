@@ -7,6 +7,41 @@ const os = require('os');
 const path = require('path');
 
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
+const codexResolver = require('../plugins/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js');
+const schema = require('./kaola-workflow-adaptive-schema.js');
+
+assert.strictEqual(resolver.isCodexPluginScriptDir(), false, 'root resolver is not inside a Codex plugin');
+assert.strictEqual(codexResolver.isCodexPluginScriptDir(), true, 'plugin resolver detects .codex-plugin in source/cache shape');
+const stableHookHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-stable-resolver-'));
+try {
+  const stableScripts = path.join(stableHookHome, '.codex', 'kaola-workflow', 'scripts');
+  fs.mkdirSync(stableScripts, { recursive: true });
+  assert.strictEqual(resolver.isCodexPluginScriptDir(stableScripts), true,
+    'stable ~/.codex/kaola-workflow/scripts resolver uses Codex static defaults');
+} finally {
+  fs.rmSync(stableHookHome, { recursive: true, force: true });
+}
+
+// Every installed Kaola role has a static reasoning/standard fallback. A blank plan cell resolves
+// through this map before dispatch; no role default may degrade to a null Codex pair.
+assert.deepStrictEqual(
+  [...schema.CODEX_PINNED_STANDARD_ROLES, ...schema.CODEX_PINNED_REASONING_ROLES].sort(),
+  Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
+  'Codex profile classes must cover exactly the resolver role registry'
+);
+for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
+  assert.ok(model === 'opus' || model === 'sonnet', `${role} must default to reasoning or standard`);
+  const pinned = schema.CODEX_PINNED_STANDARD_ROLES.includes(role);
+  const reasoning = schema.CODEX_PINNED_REASONING_ROLES.includes(role);
+  assert.ok(pinned !== reasoning, `${role} must belong to exactly one Codex profile class`);
+  assert.strictEqual(model, pinned ? 'sonnet' : 'opus', `${role} static tier must match its Codex profile class`);
+  const dispatch = schema.dispatchEffort(model);
+  assert.ok(dispatch.codex_model, `${role} must resolve a non-null Codex model`);
+  assert.ok(dispatch.codex_reasoning_effort, `${role} must resolve a non-null Codex reasoning effort`);
+  assert.strictEqual(dispatch.codex_model, 'gpt-5.6-sol', `${role} must use the Sol model`);
+  assert.strictEqual(dispatch.codex_reasoning_effort, pinned ? 'medium' : 'xhigh',
+    `${role} effort must match its profile class`);
+}
 
 function writeAgent(dir, name, model) {
   fs.mkdirSync(dir, { recursive: true });
@@ -56,7 +91,7 @@ try {
 // NEW CASE 1: manifest hit wins over inherit frontmatter
 const tmpManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-manifest-'));
 try {
-  writeManifest(tmpManifest, { 'code-architect': 'sonnet', 'security-reviewer': 'opus' });
+  writeManifest(tmpManifest, { 'code-architect': 'sonnet', 'security-reviewer': 'opus', 'code-explorer': 'opus' });
   writeAgent(tmpManifest, 'code-architect', 'inherit');
   // manifest says sonnet; frontmatter says inherit — manifest must win
   assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest }), 'sonnet');
@@ -64,6 +99,10 @@ try {
   // NEW CASE 2: higher-profile security-reviewer via manifest
   writeAgent(tmpManifest, 'security-reviewer', 'inherit');
   assert.strictEqual(resolver.resolveAgentModel('security-reviewer', { agentDir: tmpManifest }), 'opus');
+
+  // Current Codex mode ignores a co-installed Claude manifest and returns the static profile class.
+  assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest, staticDefaults: true }), 'opus');
+  assert.strictEqual(resolver.resolveAgentModel('code-explorer', { agentDir: tmpManifest, staticDefaults: true }), 'sonnet');
 } finally {
   fs.rmSync(tmpManifest, { recursive: true, force: true });
 }
@@ -128,7 +167,7 @@ try {
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'sonnet').ok, false, 'legacy sonnet violates the floor');
   // A non-floor role is NEVER constrained by the floor.
   assert.strictEqual(resolver.enforceReasoningFloor('code-reviewer', 'sonnet').ok, true, 'non-floor role unaffected');
-  assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpFloorOk, enforceFloor: true }), 'sonnet',
+  assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpFloorOk, enforceFloor: true }), 'opus',
     'enforceFloor leaves non-floor roles alone');
 } finally {
   fs.rmSync(tmpFloorOk, { recursive: true, force: true });

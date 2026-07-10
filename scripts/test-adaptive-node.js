@@ -39,6 +39,7 @@ const {
   resolveCodexDispatchMode,
   deriveGuards,
   runVerifyEvidence,
+  seedEvidenceFile,
   // #434: repair primitives
   runRevertOverflow,
   runRepairNode,
@@ -365,6 +366,12 @@ function makeState(opts) {
   const r2 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceWithBoth);
   assert(r2.ok === true, 'T6b: tdd-guide with both RED+GREEN → ok');
 
+  // Seed-only scaffolding names both tokens in comments and leaves both values empty.
+  const hollowSeed = 'evidence-binding: impl-core abc123\n<!-- RED: paste RED here -->\nRED: \n<!-- GREEN: paste GREEN here -->\nGREEN: \n';
+  const rHollow = checkEvidenceShape('tdd-guide', 'impl-core', hollowSeed);
+  assert(rHollow.ok === false && rHollow.missingTokenClass === 'RED',
+    'T6b-seed: tdd-guide hollow seed cannot satisfy evidence verification');
+
   // n/a skip reason
   const evidenceNa = 'n/a: no new code paths added, only documentation changes';
   const r3 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceNa);
@@ -402,10 +409,35 @@ function makeState(opts) {
   const r5 = checkEvidenceShape('implementer', 'impl-other', evidenceSmoke);
   assert(r5.ok === true, 'T7e: implementer with non_tdd_reason + smoke-integration → ok');
 
+  // Seed-only scaffolding carries empty keys plus a comment naming every change-type alternative.
+  const hollowSeed = 'evidence-binding: impl-other abc123\n<!-- non_tdd_reason: paste non_tdd_reason here -->\nnon_tdd_reason: \n<!-- regression-green|build-green|smoke-integration -->\nregression-green: \n';
+  const rHollow = checkEvidenceShape('implementer', 'impl-other', hollowSeed);
+  assert(rHollow.ok === false && rHollow.missingTokenClass === 'non_tdd_reason',
+    'T7e-seed: implementer hollow seed cannot satisfy evidence verification');
+
   // n/a skip
   const evidenceNa = 'n/a: no functional change';
   const r6 = checkEvidenceShape('implementer', 'impl-other', evidenceNa);
   assert(r6.ok === true, 'T7f: implementer with n/a → ok');
+}
+
+// ---------------------------------------------------------------------------
+// T7g: a current nonce-bound generic role must satisfy its full registry row.
+// Compact/free-form prose cannot replace the seeded body; legacy calls without a nonce retain the
+// absent-key exemption for old in-flight artifacts.
+// ---------------------------------------------------------------------------
+{
+  const compact = 'evidence-binding: explore abc123def456\nexplore code-explorer: done; evidence=.cache/explore.md\n';
+  const strict = checkEvidenceShape('code-explorer', 'explore', compact,
+    { expectedNonce: 'abc123def456', expectedNodeId: 'explore' });
+  assert(strict.ok === false && strict.missingTokenClass === 'findings',
+    'T7g: nonce-bound generic evidence refuses a compact body with no findings token');
+  assert(checkEvidenceShape('code-explorer', 'explore', compact).ok === true,
+    'T7g: a legacy/offline generic call without expectedNonce keeps the absent-key exemption');
+  const complete = 'evidence-binding: explore abc123def456\nfindings: mapped affected files\n';
+  assert(checkEvidenceShape('code-explorer', 'explore', complete,
+    { expectedNonce: 'abc123def456', expectedNodeId: 'explore' }).ok === true,
+  'T7g: nonce-bound generic evidence passes with its non-empty registry token');
 }
 
 // ---------------------------------------------------------------------------
@@ -3712,7 +3744,7 @@ function rtHarness(initialFiles, opts) {
   assert(open.nonce === readNonce('/p/workflow-plan.md', 'impl-core', h.readFile), 'S-RT1: returned nonce EQUALS the on-disk readNonce value (open prefix == close prefix)');
 
   // Build evidence carrying EXACTLY the returned binding header.
-  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED then GREEN\n3 assertions';
+  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n3 assertions';
   h.files['/p/.cache/impl-core.md'] = evidence;
   // next-action for the close-side fused advance (impl-core complete → impl-other ready).
   const hClose = h; // reuse files
@@ -3844,7 +3876,7 @@ function rtHarness(initialFiles, opts) {
   // (1) open n1.
   const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
   assert(open.result === 'ok' && open.nonce && open.nonce.length === 12, 'S-RT7: open-next opens n1 with a real nonce');
-  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED then GREEN\n3 assertions';
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n3 assertions';
 
   // (2) close n1 → fused advance opens n2 (impl-other). next-action now surfaces impl-other.
   const closeShell = (scriptPath, args) => {
@@ -3898,7 +3930,7 @@ function rtHarness(initialFiles, opts) {
   }, {
     nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' } },
   });
-  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED then GREEN\n';
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\n';
   const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(close.result === 'ok' && close.closed === 'impl-core', 'S-RT8: close ok');
   const setAfter = readRunningSet(RS, h.cacheExists, h.readFile);
@@ -4389,7 +4421,7 @@ function rtHarness(initialFiles, opts) {
 
   // close-and-open-next on the linear chain: close impl-core, open review (a PENDING next).
   {
-    const files = { [RS_PLAN_PATH]: planContent, '/p/.cache/impl-core.md': 'RED then GREEN\nthe test ran' };
+    const files = { [RS_PLAN_PATH]: planContent, '/p/.cache/impl-core.md': 'RED: failing assertion before implementation\nGREEN: assertion passes after implementation\nthe test ran' };
     let pc = files[RS_PLAN_PATH];
     const r = runCloseAndOpenNext({
       planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core',
@@ -4523,25 +4555,25 @@ function rtHarness(initialFiles, opts) {
 //   - missing header (under expectedNonce) → shape failure naming evidence-binding.
 // ---------------------------------------------------------------------------
 {
-  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED then GREEN\nthe test ran for real';
+  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED: failing assertion before implementation\nGREEN: assertion passes after implementation\nthe test ran for real';
   // 3-arg call (no opts) — binding NOT checked (backward-compat).
-  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED\nGREEN').ok === true, 'S392: 3-arg call ignores binding (byte-identical), passes on RED+GREEN');
-  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED\nGREEN', {}).ok === true, 'S392: empty opts (no expectedNonce) skips binding');
+  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass').ok === true, 'S392: 3-arg call ignores binding and passes non-empty RED/GREEN');
+  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass', {}).ok === true, 'S392: empty opts (no expectedNonce) skips binding');
 
   // Correct nonce + node → passes (still must satisfy the role shape).
   const ok = checkEvidenceShape('tdd-guide', 'impl-x', goodTdd, { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(ok.ok === true, 'S392: correct evidence-binding header + RED/GREEN → ok, got ' + JSON.stringify(ok));
 
   // Copied from another node → evidence_unbound.
-  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED\nGREEN', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(copiedNode.ok === false && copiedNode.evidenceUnbound === true && copiedNode.missingTokenClass === 'evidence_unbound', 'S392: wrong node id → evidence_unbound, got ' + JSON.stringify(copiedNode));
 
   // Stale / replayed nonce (e.g. "this was copied from another node") → evidence_stale.
-  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED\nGREEN', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(stale.ok === false && stale.evidenceStale === true && stale.missingTokenClass === 'evidence_stale', 'S392: wrong nonce → evidence_stale, got ' + JSON.stringify(stale));
 
   // Missing header under expectedNonce → shape failure naming evidence-binding.
-  const noHeader = checkEvidenceShape('tdd-guide', 'impl-x', 'RED\nGREEN', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  const noHeader = checkEvidenceShape('tdd-guide', 'impl-x', 'RED: fail\nGREEN: pass', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
   assert(noHeader.ok === false && noHeader.missingTokenClass === 'evidence-binding', 'S392: missing header under expectedNonce → evidence-binding shape failure, got ' + JSON.stringify(noHeader));
 }
 
@@ -5063,6 +5095,60 @@ function rtHarness(initialFiles, opts) {
   assert(rVA.nodeId === nodeIdVA, 'D444-VERIFY-ACCEPT: result.nodeId matches');
   assert(rVA.role === 'tdd-guide', 'D444-VERIFY-ACCEPT: result.role is tdd-guide');
   try { fs.rmSync(tmpVA, { recursive: true, force: true }); } catch (_) {}
+}
+
+// D444-VERIFY-SEED-ONLY: an untouched seeded file must never unlock encrypted-return recovery.
+{
+  const tmpSeedOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-seed-only-'));
+  const cacheDir = path.join(tmpSeedOnly, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(tmpSeedOnly, 'workflow-plan.md');
+  fs.writeFileSync(planPath, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| seed-only | tdd-guide | — | scripts/foo.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| seed-only | in_progress |',
+  ].join('\n'));
+  fs.writeFileSync(path.join(cacheDir, 'barrier-base-seed-only'), 'abcdef123456extra');
+  seedEvidenceFile(planPath, 'seed-only', 'abcdef123456', 'tdd-guide', false);
+  const verified = runVerifyEvidence({
+    planPath, project: 'issue-444', nodeId: 'seed-only',
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(verified.result === 'refuse' && verified.reason === 'evidence_shape_failed',
+    'D444-VERIFY-SEED-ONLY: untouched seed refuses verification, got ' + JSON.stringify(verified));
+  try { fs.rmSync(tmpSeedOnly, { recursive: true, force: true }); } catch (_) {}
+}
+
+// D444-VERIFY-SEED-ONLY-GENERIC: the same wall applies to a generic registry-driven role, not only
+// the dedicated tdd-guide/implementer branches.
+{
+  const tmpSeedOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-seed-only-generic-'));
+  const cacheDir = path.join(tmpSeedOnly, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(tmpSeedOnly, 'workflow-plan.md');
+  fs.writeFileSync(planPath, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| seed-generic | code-explorer | — | — | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| seed-generic | in_progress |',
+  ].join('\n'));
+  fs.writeFileSync(path.join(cacheDir, 'barrier-base-seed-generic'), 'abcdef123456extra');
+  seedEvidenceFile(planPath, 'seed-generic', 'abcdef123456', 'code-explorer', false);
+  const verified = runVerifyEvidence({
+    planPath, project: 'issue-444', nodeId: 'seed-generic',
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(verified.result === 'refuse' && verified.reason === 'evidence_shape_failed'
+    && verified.missingTokenClass === 'findings',
+  'D444-VERIFY-SEED-ONLY-GENERIC: untouched generic seed refuses verification, got ' + JSON.stringify(verified));
+  try { fs.rmSync(tmpSeedOnly, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -7157,6 +7243,15 @@ function rtHarness(initialFiles, opts) {
   // post-dominance requirement without gating probe's early readiness) -> finalize.
   // -------------------------------------------------------------------------
   {
+    function write622LegEvidence(legPath, cacheDir, id) {
+      const legCacheDir = path.join(legPath, 'kaola-workflow', 'test-project', '.cache');
+      fs.mkdirSync(legCacheDir, { recursive: true });
+      let nonce = '';
+      try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
+      fs.writeFileSync(path.join(legCacheDir, id + '.md'),
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: test_' + id + ' failed before implementation\nGREEN: test_' + id + ' passes after implementation\n');
+    }
+
     function make622Repo() {
       const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd622-mixed-'));
       const project = 'test-project';
@@ -7206,8 +7301,8 @@ function rtHarness(initialFiles, opts) {
     const legB = open1.laneGroup.legs.B.legPath;
     fs.writeFileSync(path.join(legA, 'ax622.js'), '// A in-lane\n');
     fs.writeFileSync(path.join(legB, 'by622.js'), '// B in-lane\n');
-    writeEvidence(cacheDir, 'A');
-    writeEvidence(cacheDir, 'B');
+    write622LegEvidence(legA, cacheDir, 'A');
+    write622LegEvidence(legB, cacheDir, 'B');
 
     // Close A (non-last member) — defers to the group; A's ledger flips to complete, so `probe`
     // (depends on A) becomes ready WHILE B (the group's last member) is still live.
@@ -7221,6 +7316,11 @@ function rtHarness(initialFiles, opts) {
     const open2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
     assert(open2.result === 'ok' && open2.kind === 'read' && Array.isArray(open2.opened) && open2.opened.length === 1 && open2.opened[0].id === 'probe',
       '#622-MIXED: probe co-opens alongside the LIVE leg-contained write group B (not blocked by write_node_exclusive), got ' + JSON.stringify(open2));
+    const expectedAPath = path.join(legA, 'kaola-workflow', 'test-project', '.cache', 'A.md');
+    const upstreamA = open2.opened[0].dispatch && open2.opened[0].dispatch.upstream_evidence
+      && open2.opened[0].dispatch.upstream_evidence.find(e => e.node_id === 'A');
+    assert(upstreamA && upstreamA.path === expectedAPath && fs.readFileSync(upstreamA.path, 'utf8').includes('GREEN:'),
+      '#622-MIXED: dependent read points to A\'s full live leg evidence before group merge, got ' + JSON.stringify(upstreamA));
     assert(ledgerStatus(planPath, 'probe') === 'in_progress', '#622-MIXED: probe ledger flipped in_progress');
     const rsAfterProbeOpen = readRS(cacheDir);
     assert(rsAfterProbeOpen.lane_group && rsAfterProbeOpen.lane_group.group_id === open1.laneGroup.group_id,
@@ -7244,7 +7344,7 @@ function rtHarness(initialFiles, opts) {
 
     // Close probe (the live read drains) — then the retried B close must succeed cleanly.
     const probeNonce = (() => { try { return fs.readFileSync(path.join(cacheDir, 'barrier-base-probe'), 'utf8').trim().slice(0, 12); } catch (_) { return ''; } })();
-    fs.writeFileSync(path.join(cacheDir, 'probe.md'), 'evidence-binding: probe ' + probeNonce + '\nno findings\n');
+    fs.writeFileSync(path.join(cacheDir, 'probe.md'), 'evidence-binding: probe ' + probeNonce + '\nfindings: consumed A live-leg evidence\n');
     const rProbe = runNode(repoRoot, ['close-node', '--project', 'test-project', '--node-id', 'probe', '--json'], DEFAULT);
     assert(rProbe.result === 'ok', '#622-MIXED: probe closes ok once done, got ' + JSON.stringify(rProbe));
     assert(ledgerStatus(planPath, 'probe') === 'complete', '#622-MIXED: probe ledger complete');
@@ -7290,6 +7390,29 @@ function rtHarness(initialFiles, opts) {
     selfWriteEvidenceInLeg(legB, cacheDir, 'B');
     fs.writeFileSync(path.join(legA, 'ax.js'), '// A in-lane\n');
     fs.writeFileSync(path.join(legB, 'by.js'), '// B in-lane\n');
+
+    // A declared leg never falls back to the parent artifact. Even a valid parent decoy must not
+    // hide a missing leg file from --verify.
+    const legBFile = path.join(legB, 'kaola-workflow', 'test-project', '.cache', 'B.md');
+    const parentBFile = path.join(cacheDir, 'B.md');
+    const legBContent = fs.readFileSync(legBFile, 'utf8');
+    const parentBContent = fs.readFileSync(parentBFile, 'utf8');
+    fs.unlinkSync(legBFile);
+    fs.writeFileSync(parentBFile, legBContent);
+    const missingLeg = runNode(repoRoot, ['record-evidence', '--project', 'test-project', '--node-id', 'B', '--verify', '--json'], DEFAULT);
+    assert(missingLeg.result === 'refuse' && missingLeg.reason === 'evidence_absent'
+      && missingLeg.evidence_source === 'leg',
+    '#633: a missing declared leg artifact refuses instead of falling back to valid parent evidence, got ' + JSON.stringify(missingLeg));
+    fs.writeFileSync(parentBFile, parentBContent);
+    fs.writeFileSync(legBFile, legBContent);
+
+    // The mandatory pre-close verification must resolve the same leg copy as close-node. The parent
+    // copies remain hollow tracked stubs and would fail under the strict seed-only wall above.
+    const vA = runNode(repoRoot, ['record-evidence', '--project', 'test-project', '--node-id', 'A', '--verify', '--json'], DEFAULT);
+    const vB = runNode(repoRoot, ['record-evidence', '--project', 'test-project', '--node-id', 'B', '--verify', '--json'], DEFAULT);
+    assert(vA.result === 'ok' && vA.evidence_source === 'leg'
+      && vB.result === 'ok' && vB.evidence_source === 'leg',
+    '#633: record-evidence --verify prefers each member leg copy, got A=' + JSON.stringify(vA) + ' B=' + JSON.stringify(vB));
 
     // The parent's `.cache/A.md` / `.cache/B.md` are NEVER written by this test — they stay whatever
     // open-ready's #633 fix left them (the TRACKED stub, untouched). The evidence-shape check for BOTH
@@ -8356,12 +8479,17 @@ function rtHarness(initialFiles, opts) {
   };
   const dOpus = buildDispatch(opusNode, opusCtx);
   assert(dOpus.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: opus agent_type equals base role');
+  assert(dOpus.codex_model === 'gpt-5.6-sol', 'D451-DISPATCH-EFFORT: opus codex_model is gpt-5.6-sol');
+  assert(dOpus.codex_model_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_model_source is planner_model');
   assert(dOpus.codex_reasoning_effort === 'xhigh', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort is xhigh');
   assert(dOpus.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort_source is planner_model');
+  assert(dOpus.codex_profile_mode === 'pinned' && dOpus.codex_profile_tier === 'reasoning'
+    && dOpus.codex_profile_compatible === true,
+    'D451-DISPATCH-EFFORT: reasoning reviewer uses the standalone pinned profile pair');
   assert(dOpus.codex_task_name === 'n1_planner_code_reviewer', 'D451-DISPATCH-EFFORT: opus dispatch carries task-name identity for per-spawn calls');
 
-  // Case 2: sonnet model → high effort
-  const sonnetNode = { id: 'n2-impl', role: 'code-reviewer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
+  // Case 2: sonnet model → profile-pinned Sol/medium
+  const sonnetNode = { id: 'n2-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
   const sonnetCtx = {
     nonce: 'def456abc123',
     evidence_file: '.cache/n2-impl.md',
@@ -8370,11 +8498,22 @@ function rtHarness(initialFiles, opts) {
     forge_rider: null,
   };
   const dSonnet = buildDispatch(sonnetNode, sonnetCtx);
-  assert(dSonnet.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: sonnet agent_type equals base role');
-  assert(dSonnet.codex_reasoning_effort === 'high', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort is high');
+  assert(dSonnet.agent_type === 'implementer', 'D451-DISPATCH-EFFORT: sonnet agent_type equals base role');
+  assert(dSonnet.codex_model === 'gpt-5.6-sol', 'D451-DISPATCH-EFFORT: sonnet codex_model is gpt-5.6-sol');
+  assert(dSonnet.codex_model_source === 'planner_model', 'D451-DISPATCH-EFFORT: sonnet codex_model_source is planner_model');
+  assert(dSonnet.codex_reasoning_effort === 'medium', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort is medium');
   assert(dSonnet.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort_source is planner_model');
+  assert(dSonnet.codex_profile_mode === 'pinned' && dSonnet.codex_profile_tier === 'standard'
+    && dSonnet.codex_profile_compatible === true,
+    'D451-DISPATCH-EFFORT: standard implementer uses the pinned role profile');
 
-  // Case 3: null model → role_default
+  // Case 2b: a plan tier that conflicts with the role profile is surfaced fail-closed on the card.
+  const dMismatch = buildDispatch({ ...sonnetNode, role: 'code-reviewer' }, sonnetCtx);
+  assert(dMismatch.codex_profile_mode === 'pinned' && dMismatch.codex_profile_tier === 'reasoning'
+    && dMismatch.codex_profile_compatible === false,
+    'D451-DISPATCH-EFFORT: standard reviewer conflicts with its pinned reasoning profile');
+
+  // Case 3: null helper input → unresolved role_default sentinel (plan-run refuses before spawn)
   const nullModelNode = { id: 'n3-review', role: 'code-reviewer', model: null, declared_write_set: '—' };
   const nullCtx = {
     nonce: 'xyz789',
@@ -8385,8 +8524,13 @@ function rtHarness(initialFiles, opts) {
   };
   const dNull = buildDispatch(nullModelNode, nullCtx);
   assert(dNull.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: null-model agent_type equals base role');
+  assert(dNull.codex_model === null, 'D451-DISPATCH-EFFORT: null-model codex_model is null');
+  assert(dNull.codex_model_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_model_source is role_default');
   assert(dNull.codex_reasoning_effort === null, 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort is null');
   assert(dNull.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort_source is role_default');
+  assert(dNull.codex_profile_mode === 'pinned' && dNull.codex_profile_tier === 'reasoning'
+    && dNull.codex_profile_compatible === false,
+    'D451-DISPATCH-EFFORT: unresolved direct helper input is not profile-compatible');
 
   // #382-opencode: the opencode effort twin (dispatchEffortOpencode). No provider in ctx →
   // role_default (the agent's configured variant wins), so the cases above all carry null.
@@ -8449,7 +8593,7 @@ function rtHarness(initialFiles, opts) {
 // ---------------------------------------------------------------------------
 // TIER-RENAME (#610) + ENVELOPE-DISPLAY (#609): buildDispatch carries a runtime-native
 // model_display alongside the raw tier, NEUTRAL tokens dispatch identically to their legacy
-// aliases (back-compat), and an untiered node's dispatch card is byte-identical (no display key).
+// aliases (back-compat), and an untiered node omits the display while carrying null Codex overrides.
 // ---------------------------------------------------------------------------
 {
   const ctx = { nonce: 'n', evidence_file: '.cache/x.md', required_tokens: ['evidence-binding'], working_dir: '/w', forge_rider: null };
@@ -8457,35 +8601,42 @@ function rtHarness(initialFiles, opts) {
 
   // NEUTRAL reasoning tier: same effort as legacy opus + a native display object.
   const dR = mk('reasoning');
+  assert(dR.codex_model === 'gpt-5.6-sol', 'TIER-RENAME: reasoning → gpt-5.6-sol model');
   assert(dR.codex_reasoning_effort === 'xhigh', 'TIER-RENAME: reasoning → xhigh effort');
   assert(dR.model === 'reasoning', 'TIER-RENAME: raw tier stays in the dispatch card');
   assert(dR.model_display && dR.model_display.claude === 'opus'
-    && dR.model_display.codex === 'xhigh reasoning effort'
+    && dR.model_display.codex === 'gpt-5.6-sol (xhigh reasoning effort)'
     && dR.model_display.opencode === 'top effort variant',
     'ENVELOPE-DISPLAY: reasoning model_display is runtime-native, got ' + JSON.stringify(dR.model_display));
 
   // NEUTRAL standard tier: same effort as legacy sonnet + a native display object.
   const dS = mk('standard');
-  assert(dS.codex_reasoning_effort === 'high', 'TIER-RENAME: standard → high effort');
+  assert(dS.codex_model === 'gpt-5.6-sol', 'TIER-RENAME: standard → gpt-5.6-sol model');
+  assert(dS.codex_reasoning_effort === 'medium', 'TIER-RENAME: standard → medium effort');
   assert(dS.model_display && dS.model_display.claude === 'sonnet'
-    && dS.model_display.codex === 'high reasoning effort'
+    && dS.model_display.codex === 'gpt-5.6-sol (medium reasoning effort)'
     && dS.model_display.opencode === 'second effort variant',
     'ENVELOPE-DISPLAY: standard model_display is runtime-native, got ' + JSON.stringify(dS.model_display));
+  assert(dR.codex_profile_compatible === true && dS.codex_profile_compatible === false,
+    'CODEX-PROFILE: code-reviewer accepts reasoning and refuses a standard tier mismatch');
 
   // BACK-COMPAT: a legacy opus/sonnet cell (frozen plan) dispatches with the SAME effort AND the
   // SAME display as its neutral token — a resumed legacy plan is behavior-identical.
   const dLegacyOpus = mk('opus'), dLegacySonnet = mk('sonnet');
-  assert(dLegacyOpus.codex_reasoning_effort === dR.codex_reasoning_effort,
-    'BACK-COMPAT: legacy opus effort == reasoning effort');
+  assert(dLegacyOpus.codex_model === dR.codex_model
+    && dLegacyOpus.codex_reasoning_effort === dR.codex_reasoning_effort,
+    'BACK-COMPAT: legacy opus model+effort == reasoning model+effort');
   assert(JSON.stringify(dLegacyOpus.model_display) === JSON.stringify(dR.model_display),
     'BACK-COMPAT: legacy opus display == reasoning display');
-  assert(dLegacySonnet.codex_reasoning_effort === dS.codex_reasoning_effort
+  assert(dLegacySonnet.codex_model === dS.codex_model
+    && dLegacySonnet.codex_reasoning_effort === dS.codex_reasoning_effort
     && JSON.stringify(dLegacySonnet.model_display) === JSON.stringify(dS.model_display),
     'BACK-COMPAT: legacy sonnet effort+display == standard');
 
-  // UNTIERED (no tier): NO model_display key — the untiered dispatch card stays byte-identical to pre-#610.
+  // UNTIERED (no tier): NO model_display key; both Codex overrides remain unresolved null sentinels.
   const dNone = mk(null);
   assert(!('model_display' in dNone), 'ENVELOPE-DISPLAY: untiered node carries no model_display key');
+  assert(dNone.codex_model === null, 'TIER-RENAME: untiered node keeps the unresolved role_default model sentinel');
   assert(dNone.codex_reasoning_effort === null, 'TIER-RENAME: untiered node still role_default effort');
 }
 
@@ -10621,7 +10772,7 @@ function rtHarness(initialFiles, opts) {
   assert(checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: completed\nRED: fail\nGREEN: pass').ok === true,
     'T611-AC5: delegation_outcome: completed passes');
   // an interrupted-path token passes when the role tokens are present.
-  assert(checkEvidenceShape('implementer', 'n2', 'delegation_outcome: returned_partial\nnon_tdd_reason: x\nregression-green').ok === true,
+  assert(checkEvidenceShape('implementer', 'n2', 'delegation_outcome: returned_partial\nnon_tdd_reason: x\nregression-green: pass').ok === true,
     'T611-AC5: an interrupted-path token (returned_partial) passes with the role tokens present');
   // an unknown token is a typed refusal, independent of role (checked before the role branches).
   const bad = checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: exploded\nRED\nGREEN');
@@ -11591,7 +11742,7 @@ function rtHarness(initialFiles, opts) {
         const legacy = 'evidence-binding: design d0d0d0d0d0d0\nsome free-form producer notes\n';
         assert(checkEvidenceShape('code-architect', 'design', legacy, {}).ok === true,
           'V6-backcompat: a producer evidence with the content KEYS absent falls back to non-empty (in-flight exempt)');
-        // tdd-guide branch is UNTOUCHED: RED/GREEN presence still governs (empty RED: does not false-satisfy).
+        // tdd-guide branch uses its stricter non-empty RED:/GREEN: shape.
         assert(checkEvidenceShape('tdd-guide', 'n', 'evidence-binding: n x\nsome notes\n', {}).ok === false,
           'V6: tdd-guide branch untouched (missing RED token still refuses)');
       }

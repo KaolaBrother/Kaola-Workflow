@@ -984,7 +984,7 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'Every spawn parameter com
 // #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
 // inline-fallback format, verbatim.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
-assertIncludes('commands/kaola-workflow-plan-run.md', '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})');
+assertIncludes('commands/kaola-workflow-plan-run.md', '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
 assertIncludes('commands/kaola-workflow-plan-run.md', '← {node_id} · {role} returned: {verdict or one-line outcome}');
 assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline (…reason token…)');
 
@@ -1031,7 +1031,7 @@ const planRunSurfaces611ForkTurns = [
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
 ];
 for (const file of planRunSurfaces611ForkTurns) {
-  assertIncludes(file, 'on EVERY dispatch, tiered or not');
+  assertIncludes(file, 'on EVERY role dispatch');
   assertIncludes(file, 'the unconditional mandate applies identically to this dispatch mode');
   assertNotIncludes(file, 'not a valid path for tiered nodes');
 }

@@ -21,17 +21,16 @@ Each node is one row of the `## Nodes` table:
 - **role** must be in the installed library (the nine canonical roles + any
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
   an unknown role.
-- **model** (optional) — the planner-assigned tier token from the closed set `{reasoning|standard}` — the
-  two portable rank tokens translated to a per-spawn reasoning effort at dispatch (on Codex the
-  reasoning tier -> `xhigh`, the standard tier -> `high` on the configured model); the legacy `opus`/`sonnet`
-  aliases remain accepted (mapping to `reasoning`/`standard` respectively) — new plans should author the
-  neutral tokens. Assign the reasoning tier
-  to reasoning-bound nodes (architecture/design that constrains downstream work, adversarial gates on
-  high-risk changes, security review, root-cause of non-obvious bugs); the standard tier to carry-out nodes
-  (implementation against a spec, mechanical ports, docs, sweeps, evidence). When unsure, prefer
-  the standard tier and strengthen the gate to the reasoning tier. The plan tier beats the install profile. An out-of-vocab
-  cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a model; absent/`—`
-  falls back to the role-static effort (on Codex, the parent session's reasoning effort — base profiles omit a pinned `model_reasoning_effort` and inherit the session).
+- **model** (optional) — the role's static Codex tier from `{reasoning|standard}`. On the current
+  runtime, the standard tier -> `gpt-5.6-sol` at `medium` through profile pins on `code-explorer`,
+  `knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, and
+  `metric-optimizer`; the reasoning tier -> `gpt-5.6-sol` at `xhigh` through standalone pins on every
+  other Kaola role. Every role profile pins both fields. Codex 0.144 reloads named profiles after transient overrides, so do not use the
+  cell to change a role's static class: a conflict refuses as `codex_profile_tier_mismatch`. The legacy
+  `opus`/`sonnet` aliases remain accepted as `reasoning`/`standard`; new plans author neutral tokens.
+  An out-of-vocab cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a
+  model; absent/`—` resolves through the same role-static tier, and an unresolved card refuses as
+  `codex_tier_unresolved`.
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
   instances of one role over pairwise-disjoint declared write sets — author N as wide as the
   subtasks are genuinely independent; `FANOUT_CAP` caps only *runtime concurrency*, not authored

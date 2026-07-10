@@ -7,8 +7,8 @@
 Run subcommands with `--summary` for one-line output. For an opening call (`open-next` /
 `open-ready` / `close-and-open-next`), the summary line already carries the dispatch
 essentials: `summary: ok | opened=<node-id> role=<role> task=<codex_task_name>
-mode=<codex_dispatch_mode> effort=<effort|inherit>` (one `opened=` segment per member on a
-batch open; `effort=inherit` when no explicit tier was set; the leg path is NOT in the
+mode=<codex_dispatch_mode> effort=<medium|xhigh|unresolved>` (one `opened=` segment per member on a
+batch open; `effort=unresolved` is a typed `codex_tier_unresolved` refusal, never inheritance; the leg path is NOT in the
 summary line). The full envelope — every field, including `dispatch.leg_path` and the
 complete `dispatch:{...}` object — needs `--json` without `--summary`, or the cached
 `.cache/<op>-envelope.json`. Drill into the full envelope on `result: refuse` (includes
@@ -73,28 +73,38 @@ and must run from the main root, above.)
 ## Dispatch
 
 <!-- PIN: codex-dispatch -->
-Reasoning effort and identity: the xhigh effort-variant profiles are retired — always
-delegate to the base `dispatch.agent_type` profile (= the node's role). The descriptor maps the explicit
-planner tier RANK tokens (cross-edition ranks, not runtime model names) to per-spawn effort on this Codex runtime: `model: reasoning` -> `xhigh`, `model: standard` -> `high` (the legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically); only an
-absent/blank model tier leaves `dispatch.codex_reasoning_effort` null and inherits the base
-profile/session default. Never append a max-effort profile suffix and never emit a variant-missing
-note.
+Model, reasoning effort, and identity: always delegate to the base `dispatch.agent_type` profile (= the
+node's role). Current Codex compatibility is profile-static because Codex 0.144 reloads a named role
+profile after transient spawn overrides. The selected carry-out roles (`code-explorer`,
+`knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, and
+`metric-optimizer`) carry standalone profile pins for `gpt-5.6-sol` at `medium`; every other Kaola
+role's standalone profiles pin `gpt-5.6-sol` at `xhigh`. No role inherits its model or
+effort from the parent. The descriptor's `dispatch.codex_profile_mode` is therefore `pinned`, and its
+non-null `dispatch.codex_model` + `dispatch.codex_reasoning_effort` fields are the pair that must be
+observed, not spawn arguments to pass. If either field remains null, refuse with
+`codex_tier_unresolved`. If `dispatch.codex_profile_compatible` is not true (for example, a plan puts
+`reasoning` on a standard-profile role or `standard` on a reasoning-profile role), refuse with
+`codex_profile_tier_mismatch`; current Codex cannot honor that per-node tier change reliably.
 
-For any non-null `dispatch.codex_reasoning_effort`, require a fresh child-session effort proof
-for that exact requested effort before dispatch. The proof must inspect the spawned child's session
-JSONL `turn_context.effort`; config text, `codex features list`, spawn arguments, and parent-side
-descriptors are not proof. This applies to both V2 and V1 tiered Codex dispatch. If proof is absent,
-stale, or failing, refuse before dispatch with `codex_effort_override_unavailable`.
+Before the first real node for each profile tier used by the run, require a fresh child-session
+model-and-effort proof from that tier. Spawn the probe by role identity only, then inspect the spawned
+child's session JSONL `turn_context.model` and `turn_context.effort`; config text, `codex features
+list`, spawn arguments, and parent-side descriptors are not proof. A `standard` profile probe must
+record `gpt-5.6-sol` + `medium`; a `reasoning` profile probe must record `gpt-5.6-sol` + `xhigh`. If either value is
+absent, stale, or mismatched, refuse with `codex_profile_runtime_mismatch`. A parent-side encrypted
+output/decryption failure does not erase valid JSONL profile evidence. For real node work it is a
+separate transport failure handled only by the durable-result contract below: verified child-written
+cache evidence may continue as `returned_partial`; missing or invalid cache evidence cannot.
 
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
 passes, call `spawn_agent` with `task_name: dispatch.codex_task_name`, `agent_type:
-dispatch.agent_type`, and `fork_turns: "none"` on EVERY dispatch, tiered or not — the dispatch card
-is self-contained by contract, so no role spawn ever forks the parent's history. When
-`dispatch.codex_reasoning_effort` is non-null, also pass
-`reasoning_effort: dispatch.codex_reasoning_effort`. For v1 fallback (`"v1-thread-id"`), omit `task_name`, keep
+dispatch.agent_type`, and `fork_turns: "none"` on EVERY role dispatch — the dispatch card
+is self-contained by contract, so no role spawn ever forks the parent's history. Omit both `model`
+and `reasoning_effort`; the named standalone profile owns the pair. For v1 fallback
+(`"v1-thread-id"`), omit `task_name`, keep
 `agent_type: dispatch.agent_type` and `fork_turns: "none"` — the unconditional mandate applies
-identically to this dispatch mode — and prefix the prompt with
-`Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`. Pass
+identically to this dispatch mode — again omit `model` and `reasoning_effort`, and prefix the prompt with
+`Node: <id> | Role: <role> | Expected model: <dispatch.codex_model> | Expected effort: <dispatch.codex_reasoning_effort> | Profile mode: <dispatch.codex_profile_mode>`. Pass
 `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation.
 
 ## Codex Join Protocol
@@ -221,7 +231,8 @@ node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" open-next \
 
 Under `--summary` (the canonical invocation above), the printed line is `summary: ok |
 opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode>
-effort=<effort|inherit>` or `summary: ok | allDone: true` — read the dispatch card straight
+effort=<medium|xhigh|unresolved>` or `summary: ok | allDone: true` — refuse an unresolved tier;
+otherwise read the dispatch card straight
 off the `opened=` segment. The full envelope needs `--json` without `--summary` (or the
 cached `.cache/open-next-envelope.json`): `{opened:{id,role,model,declared_write_set}, nonce,
 <!-- SPLICE:pr-open-next-tail -->
@@ -259,11 +270,12 @@ first (the summary line's `opened=` segment, or `.cache/<op>-envelope.json`).
 Immediately before every spawn, announce the dispatch:
 
 ```text
-→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})
+→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})
 ```
 
 `{task_name}` is `dispatch.codex_task_name` on Codex, the agent name/description on Claude, the
-child task label on opencode.
+child task label on opencode. `{effort}` is the dispatch-card effort on Codex and `n/a` on a
+runtime without an effort surface; it never means parent/session inheritance.
 
 <!-- REGION:command -->
 <!-- PIN: teammate-mode -->
@@ -319,7 +331,7 @@ the transport, never the contract.
   `verdict: pass|fail` + `findings_blocking: N`. Run `--forbidden-only` for forge-touching
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.
 - For read-only fan-out (`quorum`/`tally-fn`/`validateNodeOutput`): dispatch concurrently,
-  record evidence parent-side, `close-node` per member.
+  persist and verify evidence by the runtime contract below, `close-node` per member.
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap. The rolling top-up re-run of
   `open-ready` (admitting a NEW member as a slot frees) drains a wider READ fan-out only; a WRITE
   frontier wider than `FANOUT_CAP` does NOT top-up into a live lane group (group membership /
@@ -402,8 +414,11 @@ write-speculation safety, discard, and telemetry mechanics live in the card abov
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
-**Evidence-persistence contract per role-kind.** There is ONE contract, derived from each role's
-tool manifest — no hand-list, no per-agent guesswork:
+**Evidence-persistence contract per runtime and role-kind.** The authoritative inter-node handoff is
+always the full nonce-bound `.cache/<node-id>.md` artifact. A self-writing role returns only a compact
+summary after persisting it. On runtimes that enforce a read-only role tool manifest, the role instead
+returns the full body as transport for orchestrator persistence; after that write, the cache artifact is
+again authoritative. The mechanism is derived from each role's tool manifest — no hand-list, no per-agent guesswork:
 - Any node role WITHOUT `Write` in its tool manifest CANNOT self-write `.cache` evidence — it
   RETURNS its deliverable for orchestrator persistence via `record-evidence --stdin` (below).
   `record-evidence` re-injects this node's `evidence-binding:` header, so persisting evidence
@@ -416,6 +431,32 @@ tool manifest — no hand-list, no per-agent guesswork:
   roster (EXAMPLES only): `implementer`, `tdd-guide`, `metric-optimizer`, `build-error-resolver`,
   `doc-updater`, `synthesizer`.
 
+<!-- REGION:skill -->
+**Codex 0.144 durable-result override.** Every Codex node-role profile, including a logically read-only
+research/review role, MUST write its FULL structured deliverable directly to the exact
+`dispatch.evidence_file` before sending its final message. For a read-only role this one seeded
+workflow-cache file is the sole write exception; repository/product files remain forbidden. Read the
+existing `evidence-binding: <node-id> <nonce>` header, preserve it byte-for-byte, and append/replace
+only the body below it. The cache body must include every required token, verdict/finding row, source,
+and upstream-read attestation. The final message to the main orchestrator is deliberately compact:
+`<node-id> <role>: <verdict|outcome>; evidence=<dispatch.evidence_file>` — never retransmit the full
+deliverable as the only durable copy.
+
+After the child stops, validate the on-disk artifact before closing or opening a dependent node:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
+  --project {project} --node-id {node-id} --verify --json
+```
+
+Only `result: ok` makes that artifact eligible for `dispatch.upstream_evidence`. If the parent-side
+summary is disconnected or cannot be decrypted but the child is terminal and this verification is
+green, read the compact outcome/verdict from the cache, record
+`delegation_outcome: returned_partial` plus `transport_error: encrypted_return`, and continue from the
+durable artifact. If verification is absent or red, leave the node open and route repair; a seed-only
+file never counts as completed work.
+<!-- /REGION -->
+
 <!-- CARD: metric-optimizer -->
 A `metric-optimizer` node's dispatch card carries `dispatch.optimize` (the frozen
 `optimize(<node-id>)` metric contract) and may override `dispatch.wait_budget_minutes` from
@@ -424,18 +465,21 @@ the contract's `budget_wallclock_minutes`. Full ratchet protocol:
 accept-or-reject loop, the `metric: <number>` output contract, scoped-revert safety, stop
 conditions, and the five evidence tokens).
 
-On every return, before evidence/close bookkeeping, announce the outcome:
+On every return, before evidence/close bookkeeping, announce the compact outcome:
 
 ```text
 ← {node_id} · {role} returned: {verdict or one-line outcome}
 ```
 
-Record durable evidence after the role returns:
+For a returned full body that still needs parent-side persistence, record it with stdin:
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
   --project {project} --node-id {node-id} --stdin --json
 ```
+
+For a self-written artifact, never overwrite it with the compact summary; use `record-evidence
+--verify` as shown above.
 
 ### 4. Close and advance
 

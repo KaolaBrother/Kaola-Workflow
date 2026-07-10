@@ -745,41 +745,30 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-planner-spawn');
 // #359: producer-attested evidence-token vocabulary in the forge agent profiles.
 assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
-assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'literal tokens RED');
+assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'non-empty column-0 `RED:`');
 assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
 // #634: producer-attested evidence-token vocabulary in the metric-optimizer forge agent profile.
 assertIncludes(pluginRoot + '/agents/metric-optimizer.toml', 'iterations_used');
 
-// Per-role evidence-contract needle mirror — the forge .toml side of the future-agent wall
-// (validate-vendored-agents.js). The KIND is DERIVED from each role's canonical tool manifest
-// (agents/<role>.md front-matter: a Write/Edit tool => write-kind, else read-kind), never a
-// hand-list. A write-kind profile SELF-WRITES its seeded .cache evidence; a read-kind profile
-// (producers AND gate roles) RETURNS its deliverable for orchestrator persistence. The
-// orchestration roles (contractor / workflow-planner) are not node-role evidence producers and
-// are skipped.
+// Codex 0.144 durable-result wall. Every DAG node profile writes its complete result directly to
+// the exact seeded cache path, including roles that are logically read-only. Workflow-planner and
+// contractor run outside the Node Ledger, so their canonical workflow artifacts are the durable
+// full result (and they mirror into a seeded cache when supplied). Every parent-facing return is compact.
 {
   const orchestrationRoles = new Set(['contractor', 'workflow-planner']);
-  const nodeRoleTomls = agentFiles
+  const roleTomls = agentFiles
     .map(file => path.basename(file, '.toml'))
-    .filter(role => !orchestrationRoles.has(role))
     .sort();
-  for (const role of nodeRoleTomls) {
-    const md = read('agents/' + role + '.md');
-    const fmEnd = md.indexOf('\n---\n', 4);
-    const fm = fmEnd > 0 ? md.slice(0, fmEnd) : '';
-    const tm = /^tools:\s*(.+)$/m.exec(fm);
-    // Fail-closed: a canonical agents/<role>.md without a tools: manifest inherits ALL tools
-    // (de-facto write-capable) — refuse typed instead of defaulting to the weaker read-kind needle.
-    assert(tm, 'agent_contract_manifest_missing: agents/' + role + '.md declares no tools: ' +
-      'front-matter line — the .toml mirror kind cannot be derived; declare the tool manifest');
-    const writeKind = /\b(Write|Edit)\b/.test(tm[1]);
+  for (const role of roleTomls) {
     const tomlText = read(pluginRoot + '/agents/' + role + '.toml');
-    if (writeKind) {
-      assert(tomlText.includes('SELF-WRITE') && tomlText.includes('evidence-binding'),
-        'Gitea agents/' + role + '.toml must carry the write-role SELF-WRITE + evidence-binding evidence contract');
+    assert(/FULL/i.test(tomlText) && /compact orchestrator summary/i.test(tomlText),
+      'Gitea agents/' + role + '.toml must carry the full-result + compact-summary contract');
+    if (orchestrationRoles.has(role)) {
+      assert(/durable full result/i.test(tomlText),
+        'Gitea agents/' + role + '.toml must name its canonical durable full result');
     } else {
-      assert(/RETURN/i.test(tomlText) && /orchestrator persists/i.test(tomlText),
-        'Gitea agents/' + role + '.toml must carry the read-role RETURN + orchestrator-persists evidence contract');
+      assert(tomlText.includes('dispatch.evidence_file') && tomlText.includes('evidence-binding'),
+        'Gitea agents/' + role + '.toml must carry the seeded full-cache binding contract');
     }
   }
 }
@@ -824,7 +813,7 @@ for (const planRunSurface of [
   // #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
   // inline-fallback format, verbatim.
   assertIncludes(planRunSurface, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
-  assertIncludes(planRunSurface, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})');
+  assertIncludes(planRunSurface, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})');
   assertIncludes(planRunSurface, '← {node_id} · {role} returned: {verdict or one-line outcome}');
   assertIncludes(planRunSurface, '→ running {node_id} · {role} inline (…reason token…)');
 
@@ -857,7 +846,7 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'Writer kill
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', "spawn each node's role agent as a NAMED teammate");
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'send EXACTLY ONE request for the deliverable, then wait');
 // #611: fork_turns:"none" unconditional mandate — Codex-dispatch block, SKILL surface only.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'on EVERY dispatch, tiered or not');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'on EVERY role dispatch');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'the unconditional mandate applies identically to this dispatch mode');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'not a valid path for tiered nodes');
 
@@ -866,15 +855,26 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'not 
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispatch Mode Detection');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
-// #610: the primary mapping is neutral-token-first; the legacy `opus`/`sonnet` aliases must still
-// be documented resolving to the same efforts (alias-aware, not just neutral-token-aware).
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`model: standard` -> `high`');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically');
+// Current Codex adapter: selected roles pin Sol/medium; all others pin Sol/xhigh.
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fresh child-session effort proof');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_effort_override_unavailable');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'profile pins for `gpt-5.6-sol` at `medium`');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'profiles pin `gpt-5.6-sol` at `xhigh`');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Codex 0.144 durable-result override');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'dispatch.codex_profile_mode');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Omit both `model`');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model: dispatch.codex_model');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_tier_mismatch');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_runtime_mismatch');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model-and-effort proof');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'reasoning tier -> `gpt-5.6-sol` at `xhigh`');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'standard tier -> `gpt-5.6-sol` at `medium`');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'standalone Sol/medium carry-out profiles');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'standalone Sol/xhigh profiles');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'no role inherits the parent model or effort');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'codex_profile_tier_mismatch');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the Gitea edition surfaces (port validator, plan-run command, planner TOML).
@@ -913,13 +913,50 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', '--forbidden
 // issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
 // installer copy (require.main guard means require() never runs main()) and assert its
 // source-tree validator passes for the Gitea plugin tree — every agents/*.toml has a
-// matching non-empty top-level `name`, a description, valid nickname_candidates, an optional
-// model_reasoning_effort, a non-blank developer_instructions, every config_file resolves, and every toml is referenced by
+// matching non-empty top-level `name`, a description, valid nickname_candidates, its governed
+// standalone Sol/medium or Sol/xhigh pin, a non-blank developer_instructions, every config_file resolves, and every toml is referenced by
 // exactly one [agents.*] entry (catches the issue-scout class of omission forever).
 const giteaInstaller = require('./install-codex-agent-profiles.js');
 const giteaProfiles = giteaInstaller.validateSourceProfiles(path.join(root, pluginRoot));
 assert(giteaProfiles.ok,
   'Gitea source agent profiles fail schema validation:\n  - ' + giteaProfiles.errors.join('\n  - '));
+for (const role of giteaProfiles.roles) {
+  assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'FULL');
+  assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'compact orchestrator summary');
+  if (giteaInstaller.CODEX_ORCHESTRATION_ROLES.includes(role)) {
+    assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'durable full result');
+  } else {
+    assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'dispatch.evidence_file');
+    assertIncludes(pluginRoot + '/agents/' + role + '.toml', 'evidence-binding');
+  }
+}
+const giteaSchema = require('./kaola-workflow-adaptive-schema.js');
+const giteaPreflight = require('./kaola-workflow-codex-preflight.js');
+const sortGiteaPolicy = values => [...values].sort();
+assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_STANDARD_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_STANDARD_ROLES)),
+  'Gitea installer pinned-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_REASONING_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_REASONING_ROLES)),
+  'Gitea installer reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_STANDARD_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_STANDARD_ROLES)),
+  'Gitea preflight pinned-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_REASONING_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_REASONING_ROLES)),
+  'Gitea preflight reasoning-role policy must match adaptive schema');
+assert(giteaInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
+    && giteaInstaller.CODEX_STANDARD_EFFORT === 'medium'
+    && giteaPreflight.CODEX_STANDARD_MODEL === giteaInstaller.CODEX_STANDARD_MODEL
+    && giteaPreflight.CODEX_STANDARD_EFFORT === giteaInstaller.CODEX_STANDARD_EFFORT,
+  'Gitea installer/preflight standard profile pair must be gpt-5.6-sol/medium');
+assert(giteaInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
+    && giteaInstaller.CODEX_REASONING_EFFORT === 'xhigh'
+    && giteaPreflight.CODEX_REASONING_MODEL === giteaInstaller.CODEX_REASONING_MODEL
+    && giteaPreflight.CODEX_REASONING_EFFORT === giteaInstaller.CODEX_REASONING_EFFORT,
+  'Gitea installer/preflight reasoning profile pair must be gpt-5.6-sol/xhigh');
+assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', '.codex-plugin');
+assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'isCodexPluginScriptDir');
 
 // issue #332: edition byte-parity guard (the #291/#254 "edition port missed" class).
 // The agent role profiles + config/agents.toml are forge-neutral and MUST stay

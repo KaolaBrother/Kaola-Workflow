@@ -180,6 +180,14 @@ The **Model** column is the `common` profile. The **default** install profile is
 `security-reviewer`, `issue-scout`) install on **Opus** unless you pass
 `--profile=common`.
 
+On the current Codex runtime, role profiles own the pair. Eight carry-out roles (`code-explorer`,
+`knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, and
+`metric-optimizer`) pin `gpt-5.6-sol` at `medium`. The remaining planning, architecture, repair,
+review, security, adversarial, workflow-planning, and synthesis roles use standalone profiles that
+pin `gpt-5.6-sol` at `xhigh`. No Kaola role inherits its pair from the parent. The legacy
+`opus`/`sonnet` plan aliases remain accepted as `reasoning`/`standard`, but a node tier must match its
+role's static profile class; a mismatch is refused before spawn.
+
 `adversarial-verifier` is locally authored for the [adaptive workflow](#adaptive-workflow-the-default-path)
 (issue #227) rather than derived from ECC — a dedicated refute-by-default skeptic that
 reuses no vendored profile. It is read-only (touches zero repository files), is exercised
@@ -522,6 +530,11 @@ node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-
 
 Restart Codex to pick up the updated plugin files.
 
+For the standalone-profile release, both refresh steps above are required: the plugin upgrade
+replaces the cached source profiles, and the profile installer copies all 16 role TOMLs into the
+active global/project scope. A plugin-only upgrade leaves stale generated profiles in place; the
+doctor reports the mismatch instead of treating the install as current.
+
 #### Config audit for effort-safe subagents
 
 The profile installer refreshes Kaola-owned profiles, hooks, manifests, and the
@@ -543,9 +556,9 @@ The audit must keep these facts separate:
   enough for Kaola fan-out and root-to-subagent dispatch.
 - The installed plugin cache, generated role profiles, and global hooks must be
   fresh relative to the plugin source Codex is actually loading.
-- Runtime effort integrity still requires a child-session proof: verify the
-  spawned child session JSONL records `turn_context.effort` as `high` and
-  `xhigh` before trusting tiered fallback behavior.
+- Runtime profile integrity still requires child-session proof: verify the
+  spawned child session JSONL records `gpt-5.6-sol` with `turn_context.effort`
+  `medium` for a standard profile and `xhigh` for a reasoning profile.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -671,27 +684,43 @@ When the role profiles are absent the workflow auto-detects this, keeps the
 `local-fallback-tool-unavailable`. The current Codex session performs the work
 locally under `local-authorized` only when you explicitly disable delegation.
 
-Codex profiles intentionally do not pin model names, so model upgrades can flow
-through the user's active Codex configuration. Standalone role TOMLs include the
-same `description` and `nickname_candidates` metadata as the managed
-`config.toml` block, but the base role profiles omit `model_reasoning_effort`.
+Codex 0.144 reloads a named role profile after transient spawn overrides, so Kaola
+does not rely on per-spawn `model` or `reasoning_effort`. Standalone role TOMLs
+include the same `description` and `nickname_candidates` metadata as the managed
+`config.toml` block. The eight carry-out profiles additionally pin
+`model = "gpt-5.6-sol"` and `model_reasoning_effort = "medium"`; every other
+profile pins the same model with `model_reasoning_effort = "xhigh"`. The retired
+`<role>-max` effort-variant profiles are not used.
 
-The adaptive planner's per-node `model` tier drives any per-spawn effort override.
-When a node's resolved `model` is `opus`, the dispatch descriptor carries
-`codex_reasoning_effort: "xhigh"`; when it is `sonnet`, it carries
-`codex_reasoning_effort: "high"`. Plan-run passes that value directly as
-per-spawn `reasoning_effort`; only absent/blank model tiers omit the override and
-use the base profile/session default. The retired `<role>-max` xhigh
-effort-variant profiles are not used.
+The adaptive planner still writes portable `reasoning`/`standard` tier tokens, but
+on Codex it must use the role's static class. Dispatch cards expose
+`codex_profile_mode: "pinned"`, the expected model/effort pair, and a
+compatibility boolean. A conflicting plan tier refuses as
+`codex_profile_tier_mismatch`; a child-session JSONL pair that does not match the
+standalone profile expectation refuses as `codex_profile_runtime_mismatch`.
+
+Every Codex DAG node role writes its full nonce-bound deliverable directly to the seeded
+`dispatch.evidence_file` under `kaola-workflow/{project}/.cache/` before returning. Its final message
+is only a compact `<node-id> <role>: <outcome>; evidence=<path>` summary for the main orchestrator.
+Dependent nodes consume the full cache artifact through `dispatch.upstream_evidence`; plan-run runs
+`record-evidence --verify` before closing the producer, and a seed-only or malformed artifact cannot
+advance the DAG. If the parent summary transport disconnects, a terminal child plus a green verified
+cache artifact may continue as `returned_partial`; without that artifact the node stays open.
+
+`workflow-planner` and `contractor` run outside the Node Ledger. Their complete workflow-state,
+plan, phase, and finalization artifacts are the authoritative durable full result; they return a
+compact summary to the orchestrator and also mirror the full packet into `dispatch.evidence_file`
+when their dispatch supplies a seeded cache file.
 
 Codex preflight and doctor output report the dispatch identity mode. The stable
 default is `v1-thread-id`, where wait/close rows may still show runtime thread IDs
 and the prompt/evidence carry the node mapping. When the operator explicitly enables
 Codex v2 multi-agent support, the descriptor reports `v2-task-name` and plan-run
 passes `task_name: dispatch.codex_task_name`, a sanitized value derived from the
-workflow node id and role. Tiered Codex nodes require a dispatch path proven to honor
-the requested effort; v2 uses `fork_turns: "none"` with the direct effort override,
-and unproven v1 tiered dispatch fails closed.
+workflow node id and role. Both modes use `fork_turns: "none"` and omit transient
+model/effort overrides. Before real role work, plan-run proves the applicable
+profile mode from the spawned child's JSONL `turn_context.model` and
+`turn_context.effort`; a parent-side descriptor or spawn argument is not proof.
 
 ## Usage
 
@@ -1233,12 +1262,12 @@ under it. Dirty worktrees are skipped unless `--archive`, `--export`, or
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `6.21.2`
-- Claude Code command install, GitLab edition: `6.21.2`
-- Claude Code command install, Gitea edition: `6.21.2`
-- Codex `kaola-workflow` plugin manifest: `4.21.2`
-- Codex `kaola-workflow-gitlab` plugin manifest: `4.21.2`
-- Codex `kaola-workflow-gitea` plugin manifest: `4.21.2`
+- Claude Code command install, GitHub edition: `6.21.3`
+- Claude Code command install, GitLab edition: `6.21.3`
+- Claude Code command install, Gitea edition: `6.21.3`
+- Codex `kaola-workflow` plugin manifest: `4.21.3`
+- Codex `kaola-workflow-gitlab` plugin manifest: `4.21.3`
+- Codex `kaola-workflow-gitea` plugin manifest: `4.21.3`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that

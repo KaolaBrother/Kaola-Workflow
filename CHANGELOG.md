@@ -1,5 +1,11 @@
 # Changelog
 
+## [6.21.3] - 2026-07-10
+
+### Changed
+
+- **Codex subagent tiers now adapt to the current named-profile load order with static Sol profiles.** Codex 0.144 reloads a named role profile after applying transient spawn overrides, so Kaola no longer passes per-spawn `model`/`reasoning_effort`. Eight carry-out roles (`code-explorer`, `knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, `metric-optimizer`) pin `gpt-5.6-sol` at `medium`; planning, architecture, repair, review/security/adversarial, workflow-planning, and synthesis roles use standalone profiles pinned to `gpt-5.6-sol` at `xhigh`. Dispatch cards expose the expected pair plus `codex_profile_mode`, `codex_profile_tier`, and `codex_profile_compatible`; a plan/profile conflict refuses as `codex_profile_tier_mismatch`, a null pair as `codex_tier_unresolved`, and child JSONL that disproves the standalone-profile pair as `codex_profile_runtime_mismatch`. Installer and doctor validation enforce the exact two-tier pin policy across all three Codex plugin trees. Every DAG node role now writes its full nonce-bound deliverable directly to `dispatch.evidence_file`, returns only a compact orchestrator summary, and must pass `record-evidence --verify` before the cache artifact can feed a downstream node; a disconnected encrypted summary can continue only when the child is terminal and that durable artifact is valid. The out-of-ledger `workflow-planner` and `contractor` roles keep their complete workflow/plan/phase/finalization artifacts as the authoritative durable result and mirror into a seeded cache when supplied.
+
 ## [6.21.2] - 2026-07-09
 
 ### Fixed

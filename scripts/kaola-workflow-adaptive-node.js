@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -1072,8 +1072,10 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     if (!content) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: ['RED', 'GREEN'] };
     }
-    const hasRed   = /\bRED\b/.test(content);
-    const hasGreen = /\bGREEN\b/.test(content);
+    // The open-time seed contains empty RED:/GREEN: keys and comments naming both tokens. Require a
+    // non-empty column-0 value so a seed-only file can never satisfy --verify or close.
+    const hasRed   = /^RED:[ \t]*(\S.*)$/m.test(content);
+    const hasGreen = /^GREEN:[ \t]*(\S.*)$/m.test(content);
     if (!hasRed) {
       return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: ['RED', 'GREEN'] };
     }
@@ -1087,8 +1089,10 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     if (!content) {
       return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
     }
-    const hasReason = /non_tdd_reason/.test(content);
-    const hasChangeType = /regression-green|build-green|smoke-integration/.test(content);
+    // The open-time seed contains empty keys and a comment listing the alternation. Require actual
+    // non-empty column-0 values so encrypted-return recovery cannot accept untouched scaffolding.
+    const hasReason = /^non_tdd_reason:[ \t]*(\S.*)$/m.test(content);
+    const hasChangeType = /^(?:regression-green|build-green|smoke-integration):[ \t]*(\S.*)$/m.test(content);
     if (!hasReason) {
       return { ok: false, kind: 'shape', missingTokenClass: 'non_tdd_reason', reason: 'implementer ' + nodeId + ' evidence missing non_tdd_reason', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
     }
@@ -1098,8 +1102,7 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     return { ok: true };
   }
 
-  // metric-optimizer: the measured metric claim IS the node's entire deliverable, so a bare
-  // token-name presence check (as tdd-guide/implementer use) is not enough — the open-time
+// metric-optimizer: the measured metric claim IS the node's entire deliverable — the open-time
   // seeded stub already carries every D6 token KEY with an EMPTY value, so a name-only probe
   // would close a node COMPLETE on a hollow stub with zero ratchet log. Enforce that each of the
   // four non-binding D6 tokens is present AND carries a non-empty value (evidence-binding is
@@ -1121,14 +1124,13 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     return { ok: true };
   }
 
-  // Other roles: file present and non-empty, PLUS — registry-driven — each content-bearing token whose
-  // column-0 `<token>:` KEY is PRESENT must carry a non-empty value (a single token) or ANY one alternative
-  // (an alternation). This makes a producer role's seeded-but-EMPTY content token (e.g. a truncated
-  // code-architect's `files_to_create:` / `build_sequence:`) REFUSE at close, while a role with no registry
-  // row / no such keys present keeps the bare non-empty fallback. DD-5 back-compat: enforcing ONLY on a
-  // PRESENT key exempts an old in-flight node (which has no such keys). The tdd-guide/implementer/
-  // metric-optimizer/main-session-gate branches above are UNTOUCHED (they key off bare-name presence, so an
-  // empty key must not false-satisfy them — hence they never reach here).
+  // Other roles: file present and non-empty, PLUS registry-driven content tokens. A normally opened node
+  // has expectedNonce, so EVERY token class in its seed contract must carry a non-empty value (or ANY one
+  // alternative for an alternation). This prevents replacing the seeded body with free-form prose or the
+  // compact parent summary and then passing encrypted-return recovery. DD-5 back-compat remains only for
+  // legacy/offline callers without an expected nonce: there, a key absent from an old in-flight artifact is
+  // exempt, but a present seeded key must still be non-empty. The tdd-guide/implementer/metric-optimizer/
+  // main-session-gate branches above use their own strict shapes and never reach here.
   if (!content.trim()) {
     return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: role + ' ' + nodeId + ' evidence missing or empty', expected: ['non-empty evidence file'] };
   }
@@ -1143,11 +1145,12 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
       for (const tokenClass of row) {
         if (tokenClass === 'evidence-binding') continue;
         const alts = tokenClass.split('|');
-        // Enforce only when at least one alternative's KEY is present (present-key ⇒ non-empty; DD-5).
-        if (!alts.some(keyPresent)) continue;
+        // Current nonce-bound opens enforce the whole registry row. Only a legacy/offline call with no
+        // expected nonce keeps the DD-5 absent-key exemption for an old in-flight artifact.
+        if (!opts.expectedNonce && !alts.some(keyPresent)) continue;
         if (!alts.some(valuePresent)) {
           return { ok: false, kind: 'shape', missingTokenClass: tokenClass,
-            reason: role + ' ' + nodeId + ' evidence has an empty ' + tokenClass + ' token (a seeded content-bearing key with no value)',
+            reason: role + ' ' + nodeId + ' evidence is missing a non-empty ' + tokenClass + ' token required by this seeded contract',
             expected: row.filter(t => t !== 'evidence-binding') };
         }
       }
@@ -1308,6 +1311,10 @@ function buildDispatch(nodeInfo, context) {
     codex_dispatch_mode: codexDispatchMode,
     codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model),
+    // Current-Codex adapter: the named role profile, not a transient spawn override, owns the
+    // effective pair. A planner tier that conflicts with the role's static profile class is surfaced
+    // on the card and plan-run refuses it before spawn (`codex_profile_tier_mismatch`).
+    ...codexProfilePolicy(nodeInfo.role, nodeInfo.model),
     // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
     // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
     // present on EVERY dispatch card so no timeout is left to model improvisation.
@@ -1320,7 +1327,8 @@ function buildDispatch(nodeInfo, context) {
   // #609/#610: the runtime-native display for the node's model, so a dispatch-card echo reads natively on
   // every runtime (claude alias / codex effort phrase / opencode variant phrase) instead of a Claude noun.
   // Conditionally attached (like goal_line/leg_path): null only when nodeInfo.model resolves to no tier (a
-  // model-less role / a genuinely untiered direct call) ⇒ that descriptor stays byte-identical to pre-#610.
+  // model-less role / a genuinely untiered direct call) ⇒ no model_display key is added; the Codex
+  // override fields still state the intentional null/unresolved posture explicitly.
   const nodeModelDisplay = modelDisplay(nodeInfo.model);
   if (nodeModelDisplay) d.model_display = nodeModelDisplay;
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
@@ -1407,7 +1415,8 @@ function frontierNode(n) {
 // dispatchSummarySegments(result) (#602) — the machine-parsable dispatch segments for the --summary
 // line. One segment per opened node:
 //   opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode> effort=<E>
-// where E is codex_reasoning_effort, or the literal "inherit" when it is null (no planner tier). Handles
+// where E is codex_reasoning_effort, or the literal "unresolved" when it is null. A real role dispatch
+// must refuse that sentinel as codex_tier_unresolved; it never means parent/session inheritance. Handles
 // BOTH envelope shapes: the single-open object (result.opened.dispatch — open-next / close-and-open-next
 // fused advance) and the batch array (result.opened[].dispatch — open-ready). Leg paths are deliberately
 // omitted (legs stay in the full cached envelope). Returns [] when there is no opened dispatch
@@ -1422,7 +1431,7 @@ function dispatchSummarySegments(result) {
     const d = m && m.dispatch;
     if (!d || d.node_id == null) continue;
     const effort = (d.codex_reasoning_effort != null && String(d.codex_reasoning_effort).trim() !== '')
-      ? d.codex_reasoning_effort : 'inherit';
+      ? d.codex_reasoning_effort : 'unresolved';
     segs.push('opened=' + d.node_id + ' role=' + d.role + ' task=' + d.codex_task_name
       + ' mode=' + d.codex_dispatch_mode + ' effort=' + effort);
   }
@@ -1450,19 +1459,22 @@ function qualifiedEvidenceFile(project, nodeId) {
 }
 
 // ---------------------------------------------------------------------------
-// deriveDispatchChannel(planContent, node, project) — the durable node channel fields threaded onto a
+// deriveDispatchChannel(planContent, node, project, options) — the durable node channel fields threaded onto a
 // dispatch card. Returns { goal_line?, upstream_evidence? }:
 //   goal_line       the node's `## Node Briefs` entry (its intent/approach/constraints), verbatim; absent
 //                   when the plan has no brief for this node (byte-identical to a briefless plan).
-//   upstream_evidence  for each of the node's depends_on ids, { node_id, role, path } where path is the
-//                   PROJECT-QUALIFIED (barrier-exempt) evidence file — NEVER a nonce (anti-fabrication:
-//                   the read-proof nonce lives only on line 1 of the upstream file). Absent for a root
-//                   node (empty deps) ⇒ no field attached.
+//   upstream_evidence  for each of the node's depends_on ids, { node_id, role, path }. The normal path is
+//                   PROJECT-QUALIFIED. While an upstream isolated-leg member is complete-but-unmerged,
+//                   options.planPath + options.runningSet route to that member's absolute leg artifact;
+//                   the merge fence keeps the leg alive until the dependent read drains. NEVER a nonce
+//                   (anti-fabrication: the read-proof nonce lives only on line 1 of the upstream file).
+//                   Absent for a root node (empty deps) ⇒ no field attached.
 // Deps are re-looked-up from the frozen plan (parseNodesFromContent) so the channel never relies on the
 // scheduler carrying deps forward. Fail-soft: any parse miss yields an empty channel (byte-identical).
 // ---------------------------------------------------------------------------
-function deriveDispatchChannel(planContent, node, project) {
+function deriveDispatchChannel(planContent, node, project, options) {
   const out = {};
+  options = options || {};
   if (!node || !node.id) return out;
   // goal_line — the node's brief.
   try {
@@ -1481,7 +1493,13 @@ function deriveDispatchChannel(planContent, node, project) {
       const byId = new Map(nodes.map(x => [x.id, x]));
       const ue = deps.map(upId => {
         const up = byId.get(upId);
-        return { node_id: upId, role: up ? up.role : null, path: qualifiedEvidenceFile(project, upId) };
+        let evidencePath = qualifiedEvidenceFile(project, upId);
+        if (options.planPath && options.runningSet) {
+          const resolved = resolveEvidenceCachePath(
+            options.planPath, upId, null, null, options.runningSet);
+          if (resolved.evidenceSource === 'leg') evidencePath = resolved.cachePath;
+        }
+        return { node_id: upId, role: up ? up.role : null, path: evidencePath };
       });
       if (ue.length) out.upstream_evidence = ue;
     }
@@ -1567,6 +1585,30 @@ function readUpstreamEvidenceNonce(planPath, upId, readFile) {
 }
 
 // ---------------------------------------------------------------------------
+// resolveEvidenceCachePath — one read-side resolver shared by --verify, close-node, and downstream
+// dispatch. A declared live isolated-lane member ALWAYS resolves to its leg path; a missing leg file is
+// evidence_absent and never falls back to a possibly-valid parent seed/decoy. Every other shape reads
+// the parent cache. The parent plan/barrier remains authoritative for the nonce.
+function resolveEvidenceCachePath(planPath, nodeId, cacheExists, readFile, runningSet) {
+  const parentCachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  const running = runningSet === undefined
+    ? readRunningSet(runningSetPath, cacheExists, readFile)
+    : runningSet;
+  const laneGroup = (running && running.lane_group) ? running.lane_group : null;
+  const legEntry = (laneGroup && Array.isArray(laneGroup.members)
+    && laneGroup.members.includes(nodeId) && laneGroup.legs)
+    ? laneGroup.legs[nodeId] : null;
+  const legCachePath = (legEntry && legEntry.legPath)
+    ? path.join(legMirrorPath(legEntry.legPath, path.dirname(planPath)), '.cache', nodeId + '.md')
+    : null;
+  const routedToLeg = !!legCachePath;
+  return {
+    cachePath: routedToLeg ? legCachePath : parentCachePath,
+    evidenceSource: routedToLeg ? 'leg' : 'parent',
+  };
+}
+
 // runVerifyEvidence(opts) (#444 / D-444-01 §4) — READ-ONLY mode of record-evidence.
 // Verifies an on-disk .cache/<node-id>.md WITHOUT stdin transit.
 // Reuses checkEvidenceShape (the same checker the close path uses) so --verify
@@ -1581,7 +1623,8 @@ function readUpstreamEvidenceNonce(planPath, upId, readFile) {
 // ---------------------------------------------------------------------------
 function runVerifyEvidence(opts) {
   const { planPath, project, nodeId, readFile, cacheExists } = opts;
-  const cachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+  const resolvedEvidence = resolveEvidenceCachePath(planPath, nodeId, cacheExists, readFile);
+  const cachePath = resolvedEvidence.cachePath;
   const evidence_file = '.cache/' + nodeId + '.md';
 
   // Resolve role from the plan's ## Nodes table (mirrors close-and-open-next L1341-1343).
@@ -1596,7 +1639,8 @@ function runVerifyEvidence(opts) {
 
   // Evidence-absent check.
   if (!cacheExists(cachePath)) {
-    return { result: 'refuse', reason: 'evidence_absent', nodeId, role, evidence_file };
+    return { result: 'refuse', reason: 'evidence_absent', nodeId, role, evidence_file,
+      evidence_source: resolvedEvidence.evidenceSource };
   }
 
   // Read evidence and nonce.
@@ -1610,7 +1654,8 @@ function runVerifyEvidence(opts) {
   const shapeCheck = checkEvidenceShape(role, nodeId, content, { expectedNonce, expectedNodeId: nodeId, ledgerNodes: verifyNodes });
 
   if (shapeCheck.ok) {
-    return { result: 'ok', nodeId, role, evidence_file };
+    return { result: 'ok', nodeId, role, evidence_file,
+      evidence_source: resolvedEvidence.evidenceSource };
   }
 
   // Map to typed reason — mirrors close-and-open-next / runCloseNode L1368-1370.
@@ -1625,6 +1670,7 @@ function runVerifyEvidence(opts) {
     role,
     missingTokenClass: shapeCheck.missingTokenClass || null,
     evidence_file,
+    evidence_source: resolvedEvidence.evidenceSource,
     expected: shapeCheck.expected || [],
     detail: shapeCheck.reason || 'shape invalid',
   };
@@ -5217,7 +5263,7 @@ function runOpenReady(opts) {
           ...optimizeDispatchCtx(planContent, n.role, n.id),
           // The durable node channel — per-member (each co-opened member gets its OWN brief + upstream
           // list). {} for a briefless/root member ⇒ byte-identical dispatch card.
-          ...deriveDispatchChannel(planContent, n, project),
+          ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet }),
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
@@ -5397,13 +5443,8 @@ function runCloseNode(opts) {
   // for a leg member under this read preference — stays clean through to the last-member octopus merge.
   const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
   const lg = (running0 && running0.lane_group) ? running0.lane_group : null;
-  const legEntryForEvidence = (lg && Array.isArray(lg.members) && lg.members.includes(nodeId) && lg.legs)
-    ? lg.legs[nodeId] : null;
-  const parentCachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
-  const legCachePath = (legEntryForEvidence && legEntryForEvidence.legPath)
-    ? path.join(legMirrorPath(legEntryForEvidence.legPath, path.dirname(planPath)), '.cache', nodeId + '.md')
-    : null;
-  const cachePath = (legCachePath && cacheExists && cacheExists(legCachePath)) ? legCachePath : parentCachePath;
+  const cachePath = resolveEvidenceCachePath(
+    planPath, nodeId, cacheExists, readFile, running0).cachePath;
 
   let evidenceContent = null;
   const evidencePresent = cacheExists ? cacheExists(cachePath) : (() => {

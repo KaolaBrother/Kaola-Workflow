@@ -42,7 +42,8 @@ const LEDGER_STATUSES = Object.freeze(['pending', 'in_progress', 'complete', 'n/
 // #382/#610: the closed vocabulary for the optional per-node `model` column in `## Nodes`. Two
 // runtime-NEUTRAL reasoning-weight tier tokens (no haiku) — no edition consumes them as literal model
 // names at dispatch: Claude maps `reasoning`→Opus / `standard`→Sonnet on the Agent(model=…) param;
-// Codex maps them to per-spawn reasoning-effort; opencode to a provider effort variant. `—`/absent ⇒
+// Codex maps them to the standalone profile model + reasoning-effort pair expected in child JSONL;
+// opencode maps them to a provider effort variant. `—`/absent ⇒
 // today's role-static resolution. New plans author these neutral tokens. Defined here (the ×4
 // byte-identical drift anchor) so the validator, the executor, and every edition share one list.
 const NODE_MODEL_TIERS = Object.freeze(['reasoning', 'standard']);
@@ -51,7 +52,7 @@ const NODE_MODEL_TIERS = Object.freeze(['reasoning', 'standard']);
 // `sonnet` cell validates at parse (no rewrite, plan_hash unchanged, resume unaffected) by normalizing
 // to the neutral token here. New plans author `reasoning`/`standard` directly. normalizeTier() is the
 // single alias-resolution seam every tier consumer (TIER_RANK lookup, dispatchEffort, mapTier,
-// dispatchEffortOpencode, dispatchModelClaude, the reasoning-floor check) routes through, so a token is
+// dispatchEffortOpencode, dispatchModelClaude, dispatchModelCodex, the reasoning-floor check) routes through, so a token is
 // interpreted identically everywhere. A neutral token passes through; a legacy alias resolves; an
 // out-of-vocab token (e.g. `haiku`) or an absent/blank cell → null (the model_invalid / role-static
 // signal — callers guard on `if (node.model)` before treating null as "invalid").
@@ -74,26 +75,92 @@ function dispatchModelClaude(tier) {
   return t ? TIER_MODEL_CLAUDE[t] : null;
 }
 
+// Codex's runtime model mapping for the same neutral tier vocabulary. Both tiers use the Sol model;
+// standalone reasoning profiles pin xhigh while standalone standard profiles pin medium. Legacy
+// aliases normalize first. A non-dispatchable node or unresolved
+// helper input returns null sentinels; the plan-run contract must never spawn that state.
+const TIER_MODEL_CODEX = Object.freeze({ reasoning: 'gpt-5.6-sol', standard: 'gpt-5.6-sol' });
+function dispatchModelCodex(tier) {
+  const t = normalizeTier(tier);
+  return t ? TIER_MODEL_CODEX[t] : null;
+}
+
+// Current-Codex role profile policy. Codex 0.144 applies transient spawn overrides before loading a
+// named role profile, so the profile can erase the requested pair. The durable adapter is static:
+// carry-out roles pin Sol/medium in their TOMLs; decision/gate roles pin Sol/xhigh. The plan's
+// effective tier must match the role's standalone profile class, otherwise
+// plan-run refuses before spawn instead of pretending a per-node override can win.
+const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
+  'code-explorer',
+  'knowledge-lookup',
+  'tdd-guide',
+  'implementer',
+  'doc-updater',
+  'issue-scout',
+  'contractor',
+  'metric-optimizer',
+]);
+const CODEX_PINNED_REASONING_ROLES = Object.freeze([
+  'planner',
+  'code-architect',
+  'build-error-resolver',
+  'code-reviewer',
+  'security-reviewer',
+  'adversarial-verifier',
+  'workflow-planner',
+  'synthesizer',
+]);
+function codexProfilePolicy(role, model) {
+  const name = String(role == null ? '' : role).trim();
+  const pinnedStandard = CODEX_PINNED_STANDARD_ROLES.indexOf(name) !== -1;
+  const pinnedReasoning = CODEX_PINNED_REASONING_ROLES.indexOf(name) !== -1;
+  const mode = (pinnedStandard || pinnedReasoning) ? 'pinned' : null;
+  const tier = pinnedStandard ? 'standard' : (pinnedReasoning ? 'reasoning' : null);
+  const actualTier = normalizeTier(model);
+  return {
+    codex_profile_mode: mode,
+    codex_profile_tier: tier,
+    codex_profile_compatible: mode !== null && actualTier === tier,
+  };
+}
+
 // #405 (#382 deferred half): the node-dispatchable roles for which a `model: opus` tier earns a
 // dedicated Codex `<role>-max` xhigh effort-variant profile. Derived from the #382 planner rubric
 // (agents/workflow-planner.md: assign opus when output quality is bounded by *reasoning depth* —
 // architecture/design, adversarial gates, security review, root-cause of non-obvious bugs) ∩ the
-// Codex per-node reasoning effort (#451/#582, supersedes #405): base role profiles OMIT
-// `model_reasoning_effort`, and explicit planner tiers travel as per-spawn `reasoning_effort`
-// overrides. The planner's per-node tier maps to a portable dispatch signal here — `reasoning` asks
-// for `xhigh`, `standard` asks for `high`, and only absent/blank model tiers inherit the standing
-// session effort. #610: normalizeTier() first, so a frozen-plan legacy `opus`/`sonnet` cell resolves to
-// the SAME effort as before (opus→xhigh, sonnet→high) — byte-identical dispatch across the rename. No
-// `<role>-max` variant profiles exist anymore (the matrix was retired); `agent_type` is always the base role.
+// Codex per-node reasoning effort (#451/#582, supersedes #405): every base role profile pins its
+// standalone model and effort. The planner's effective tier maps to the pair plan-run must observe
+// in the child session: `reasoning` expects profile-pinned gpt-5.6-sol/xhigh; `standard` expects
+// profile-pinned gpt-5.6-sol/medium. Plan-run deliberately omits
+// transient model/effort spawn overrides on Codex 0.144 and relies on codexProfilePolicy() instead.
+// An absent/blank helper input returns null role-default sentinels for upstream resolution; reaching
+// spawn still null is a typed `codex_tier_unresolved` refusal, never a third subagent tier. #610:
+// normalizeTier() first, so a frozen-plan legacy `opus`/`sonnet` cell resolves to the SAME pair as its
+// neutral tier. No `<role>-max` variant profiles exist; `agent_type` is always the base role.
 function dispatchEffort(model) {
   const tier = normalizeTier(model);
   if (tier === 'reasoning') {
-    return { codex_reasoning_effort: 'xhigh', codex_reasoning_effort_source: 'planner_model' };
+    return {
+      codex_model: dispatchModelCodex(tier),
+      codex_model_source: 'planner_model',
+      codex_reasoning_effort: 'xhigh',
+      codex_reasoning_effort_source: 'planner_model',
+    };
   }
   if (tier === 'standard') {
-    return { codex_reasoning_effort: 'high', codex_reasoning_effort_source: 'planner_model' };
+    return {
+      codex_model: dispatchModelCodex(tier),
+      codex_model_source: 'planner_model',
+      codex_reasoning_effort: 'medium',
+      codex_reasoning_effort_source: 'planner_model',
+    };
   }
-  return { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
+  return {
+    codex_model: null,
+    codex_model_source: 'role_default',
+    codex_reasoning_effort: null,
+    codex_reasoning_effort_source: 'role_default',
+  };
 }
 
 // The Codex join protocol's per-node WAIT BUDGET (minutes) — the floor a `running` delegated agent is
@@ -237,7 +304,7 @@ function dispatchEffortOpencode(model, providerId, env) {
 // of surfacing a Claude noun ("sonnet") on Codex/opencode. ADDITIVE — the raw tier stays in the
 // payload; consumers attach this alongside it. Each runtime reads its own key:
 //   claude   — the Agent(model=…) alias (dispatchModelClaude: reasoning→"opus" / standard→"sonnet"),
-//   codex    — "<effort> reasoning effort" (dispatchEffort: reasoning→"xhigh …" / standard→"high …"),
+//   codex    — "<model> (<effort> reasoning effort)" (the pair expected from the standalone profile),
 //   opencode — "<rank> effort variant" (TIER_RANK: reasoning→"top …" / standard→"second …",
 //              provider-agnostic — the Level-1 rank of the opencode mapping, always available).
 // A legacy alias normalizes first (a frozen-plan `opus` cell displays identically to `reasoning`).
@@ -247,7 +314,7 @@ function modelDisplay(tier) {
   if (!t) return null;
   return {
     claude:   TIER_MODEL_CLAUDE[t],
-    codex:    dispatchEffort(t).codex_reasoning_effort + ' reasoning effort',
+    codex:    dispatchModelCodex(t) + ' (' + dispatchEffort(t).codex_reasoning_effort + ' reasoning effort)',
     opencode: TIER_RANK[t] + ' effort variant',
   };
 }
@@ -1148,6 +1215,11 @@ module.exports = {
   normalizeTier,
   TIER_MODEL_CLAUDE,
   dispatchModelClaude,
+  TIER_MODEL_CODEX,
+  dispatchModelCodex,
+  CODEX_PINNED_STANDARD_ROLES,
+  CODEX_PINNED_REASONING_ROLES,
+  codexProfilePolicy,
   modelDisplay,
   TIER_RANK,
   CONTRACT_EFFORT_TABLE,

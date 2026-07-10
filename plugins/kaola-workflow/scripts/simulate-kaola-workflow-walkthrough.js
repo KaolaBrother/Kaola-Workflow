@@ -1401,10 +1401,24 @@ function testInstallSchemaPruneManifest332() {
     // #451: 14 base role profiles (the <role>-max effort variants are retired).
     assert(tomls.length === 16, '#463 AC: fresh install must place exactly 16 *.toml (14 base + synthesizer + metric-optimizer; <role>-max retired), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
+    const profilePolicy = require(installProfilesScript);
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
-      const m = fs.readFileSync(path.join(agentsDir, f), 'utf8').match(NAME_RE);
+      const body = fs.readFileSync(path.join(agentsDir, f), 'utf8');
+      const m = body.match(NAME_RE);
       assert(m && m[1] === role, '#332 AC3: ' + f + ' must have name = "' + role + '"');
+      const pinned = profilePolicy.CODEX_PINNED_STANDARD_ROLES.includes(role);
+      const reasoning = profilePolicy.CODEX_PINNED_REASONING_ROLES.includes(role);
+      assert(pinned !== reasoning, '#332 AC3: ' + role + ' must belong to exactly one profile class');
+      if (pinned) {
+        assert(/^model = "gpt-5\.6-sol"$/m.test(body)
+          && /^model_reasoning_effort = "medium"$/m.test(body),
+        '#332 AC3: ' + role + ' must pin gpt-5.6-sol/medium');
+      } else {
+        assert(/^model = "gpt-5\.6-sol"$/m.test(body)
+          && /^model_reasoning_effort = "xhigh"$/m.test(body),
+          '#332 AC3: ' + role + ' must pin gpt-5.6-sol/xhigh');
+      }
     }
     const manifestPath = path.join(agentsDir, manifestBase);
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');

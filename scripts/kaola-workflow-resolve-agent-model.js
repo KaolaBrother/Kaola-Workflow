@@ -9,14 +9,18 @@ const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
   'knowledge-lookup': 'sonnet',
   planner: 'opus',
-  'code-architect': 'sonnet',
+  // Codex 0.144 reloads named role profiles after applying transient spawn overrides. Keep
+  // decision/gate roles on the reasoning tier so their standalone Codex profiles pin
+  // gpt-5.6-sol/xhigh; only the explicitly pinned carry-out roles below resolve to the standard
+  // tier (their standalone profiles pin gpt-5.6-sol/medium).
+  'code-architect': 'opus',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',
-  'build-error-resolver': 'sonnet',
-  'code-reviewer': 'sonnet',
-  'security-reviewer': 'sonnet',
+  'build-error-resolver': 'opus',
+  'code-reviewer': 'opus',
+  'security-reviewer': 'opus',
   'doc-updater': 'sonnet',
-  'adversarial-verifier': 'sonnet',
+  'adversarial-verifier': 'opus',
   'issue-scout': 'sonnet',
   contractor: 'sonnet',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
@@ -77,6 +81,14 @@ function defaultAgentDir() {
   return process.env.KAOLA_AGENT_DIR || path.join(homeDir(), '.claude', 'agents');
 }
 
+function isCodexPluginScriptDir(scriptDir = __dirname) {
+  const root = path.resolve(scriptDir, '..');
+  const pluginBundle = fs.existsSync(path.join(root, '.codex-plugin', 'plugin.json'));
+  const stableHookHome = path.basename(root) === 'kaola-workflow'
+    && path.basename(path.dirname(root)) === '.codex';
+  return pluginBundle || stableHookHome;
+}
+
 function extractFrontmatterModel(content) {
   const match = String(content || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return '';
@@ -93,7 +105,15 @@ function modelFromFile(agentName, agentDir) {
   }
 }
 
-function resolveAgentModelRaw(name, dir) {
+function resolveAgentModelRaw(name, dir, options = {}) {
+  // Current Codex named profiles are role-static. Ignore a co-installed Claude model manifest when
+  // the Codex edition asks for static defaults; otherwise a Claude `higher`/`common` choice could
+  // silently flip the Codex profile class before dispatch.
+  if (options.staticDefaults && DEFAULT_AGENT_MODELS[name]) {
+    const v = DEFAULT_AGENT_MODELS[name];
+    return v.toLowerCase() === 'inherit' ? '' : v;
+  }
+
   // 1. manifest: .kaola-agent-models.json in agentDir — written at install time
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.kaola-agent-models.json'), 'utf8'));
@@ -119,7 +139,9 @@ function resolveAgentModel(agentName, options = {}) {
   const name = String(agentName || '').trim();
   if (!name) return '';
   const dir = options.agentDir || defaultAgentDir();
-  const model = resolveAgentModelRaw(name, dir);
+  const staticDefaults = options.staticDefaults === true
+    || (options.staticDefaults !== false && isCodexPluginScriptDir());
+  const model = resolveAgentModelRaw(name, dir, { ...options, staticDefaults });
   // #463 Slice 1 (AC14): opt-in reasoning-class floor enforcement. A floor-role resolution that LOWERS
   // the floor is a typed refusal (thrown), surfaced fail-closed to the caller — never silently honored.
   if (options.enforceFloor) {
@@ -221,5 +243,6 @@ module.exports = {
   enforceReasoningFloor,
   extractFrontmatterModel,
   formatAgentArgument,
+  isCodexPluginScriptDir,
   resolveAgentModel
 };

@@ -127,13 +127,14 @@ here for the full contract.
       commit failure here refuses the open (`stub_commit_failed`). This precedes, and is unrelated
       to, the per-node barrier commit order described above (it is a scheduler-owned commit at
       OPEN time, never part of a node's own barrier/ledger/pointer sequence).
-    - **Leg-preferred evidence read at close (issue #633).** A write-role lane-group member
+    - **Leg-authoritative evidence read at close and downstream dispatch (issue #633).** A write-role lane-group member
       self-writes its REAL evidence INSIDE its own leg (the absolute `dispatch.leg_path` its
-      working_dir names), never synced back to the parent. `close-node`'s evidence read resolves the
-      node's current `lane_group` membership first and prefers a live member's own leg copy of
-      `.cache/{node-id}.md` (via `legMirrorPath`) when present, falling back to the parent's copy
-      otherwise — byte-identical for every non-lane-group case (a legless write, a read node, or a
-      harness that seeds evidence parent-side by convention). See `docs/decisions/D-622-01.md`.
+      working_dir names), never synced back to the parent before group merge. `close-node`,
+      `record-evidence --verify`, and a dependent read's `dispatch.upstream_evidence` resolve current
+      `lane_group` membership first and use the member's own leg copy of `.cache/{node-id}.md` via
+      `legMirrorPath`. A declared leg whose artifact is missing refuses `evidence_absent`; it never
+      falls back to the parent's tracked seed or a parent decoy. Every non-lane-group case (a legless
+      write or a read node) continues to use the parent copy. See `docs/decisions/D-622-01.md`.
   - `active-batch.json` — retired parallel-batch manifest (`state: 'opening'|'open'|'sealed'|'joined'`).
     No live component writes this file anymore — its sole writer, `kaola-workflow-parallel-batch.js`,
     was retired (D-586-01) once the per-node running-set scheduler fully absorbed its

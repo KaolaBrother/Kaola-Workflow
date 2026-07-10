@@ -280,7 +280,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   // runtime-native rendering so the narrative echo reads natively even for a role-static default.
   assert(result.first_node.model === 'sonnet', 'T1: first_node.model is the role-static resolved alias');
   assert(result.first_node.model_display && result.first_node.model_display.claude === 'sonnet'
-    && result.first_node.model_display.codex === 'high reasoning effort'
+    && result.first_node.model_display.codex === 'gpt-5.6-sol (medium reasoning effort)'
     && result.first_node.model_display.opencode === 'second effort variant',
     'T1: role-static first_node carries a runtime-native model_display, got ' + JSON.stringify(result.first_node.model_display));
 }
@@ -340,7 +340,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   assert(rNeutral.first_node.model === 'reasoning', 'T1-DISPLAY: raw neutral tier stays in first_node.model');
   assert(rNeutral.first_node.model_display
     && rNeutral.first_node.model_display.claude === 'opus'
-    && rNeutral.first_node.model_display.codex === 'xhigh reasoning effort'
+    && rNeutral.first_node.model_display.codex === 'gpt-5.6-sol (xhigh reasoning effort)'
     && rNeutral.first_node.model_display.opencode === 'top effort variant',
     'T1-DISPLAY: reasoning first_node carries a runtime-native model_display, got ' + JSON.stringify(rNeutral.first_node.model_display));
 
@@ -349,7 +349,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
   assert(rLegacy.first_node.model === 'sonnet', 'T1-DISPLAY: legacy cell preserved verbatim in first_node.model');
   assert(rLegacy.first_node.model_display
     && rLegacy.first_node.model_display.claude === 'sonnet'
-    && rLegacy.first_node.model_display.codex === 'high reasoning effort'
+    && rLegacy.first_node.model_display.codex === 'gpt-5.6-sol (medium reasoning effort)'
     && rLegacy.first_node.model_display.opencode === 'second effort variant',
     'T1-DISPLAY: legacy sonnet cell displays as the standard tier, got ' + JSON.stringify(rLegacy.first_node.model_display));
 }

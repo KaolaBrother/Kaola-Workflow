@@ -175,11 +175,11 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T5b: Codex tiered-effort dispatch prose must stay effective across the 3
+// T5b: Codex tiered-model-and-effort dispatch prose must stay effective across the 3
 // Codex SKILL plan-run surfaces (Codex-runtime-only; the Claude commands never
-// carry this dispatch mode). A tiered node needs a real per-spawn effort
-// override; v2 uses fork_turns:"none", and unproven v1 refuses instead of
-// silently inheriting.
+// carry this dispatch mode). Current Codex role profiles own the pair: pinned
+// carry-out roles run standalone Sol/medium profiles and every other role runs standalone Sol/xhigh.
+// Both v2 and v1 omit transient overrides and require child-session proof.
 // ---------------------------------------------------------------------------
 {
   const planRunSurfaces = [
@@ -191,27 +191,33 @@ for (const ed of codexEditions) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
     assert(content.includes('fork_turns: "none"'),
       `T5b: ${f} must require fork_turns:"none" for tiered Codex v2 dispatch`);
-    assert(content.includes('reasoning_effort: dispatch.codex_reasoning_effort'),
-      `T5b: ${f} must pass the descriptor effort directly`);
-    assert(content.includes('fresh child-session effort proof'),
-      `T5b: ${f} must require fresh child-session effort proof for tiered Codex dispatch`);
-    assert(content.includes('codex_effort_override_unavailable'),
-      `T5b: ${f} must fail closed when v1 cannot prove effort override`);
+    assert(content.includes('Omit both `model`') && content.includes('and `reasoning_effort`'),
+      `T5b: ${f} must omit transient model/effort overrides`);
+    assert(!content.includes('model: dispatch.codex_model')
+      && !content.includes('reasoning_effort: dispatch.codex_reasoning_effort'),
+      `T5b: ${f} must not pass the descriptor pair as transient overrides`);
+    assert(content.includes('codex_tier_unresolved'),
+      `T5b: ${f} must refuse rather than spawn an untiered Codex role`);
+    assert(content.includes('fresh child-session') && content.includes('model-and-effort proof'),
+      `T5b: ${f} must require fresh child-session model-and-effort proof`);
+    assert(content.includes('codex_profile_tier_mismatch'),
+      `T5b: ${f} must fail closed on a plan/profile tier conflict`);
+    assert(content.includes('codex_profile_runtime_mismatch'),
+      `T5b: ${f} must fail closed when child JSONL disproves the profile pair`);
     assert(!content.includes('`sonnet`/absent') && !content.includes('sonnet`/absent') && !content.includes('sonnet/absent'),
       `T5b: ${f} must not describe sonnet as an inherited role_default tier`);
   }
 
-  // #610: the plan model-column vocabulary is now the neutral `{reasoning,standard}` tokens with
-  // legacy `opus`/`sonnet` aliases accepted — the pin is now neutral-token-and-alias-aware: the
-  // primary mapping must use the neutral tokens, AND the legacy alias mapping must still be
-  // documented explicitly (a frozen pre-#610 plan's `sonnet` cell dispatches identically).
+  // Current-runtime adapter: pin both static pair classes and the role-owned dispatch mode.
   const codexSkillSurfaces = planRunSurfaces.filter(f => f.includes('/skills/'));
   for (const f of codexSkillSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(content.includes('`model: standard` -> `high`'),
-      `T5b: ${f} must explicitly document the neutral standard -> high mapping`);
-    assert(content.includes('legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically'),
-      `T5b: ${f} must explicitly document the legacy opus/sonnet alias mapping resolving identically`);
+    assert(content.includes('profile pins for `gpt-5.6-sol` at `medium`'),
+      `T5b: ${f} must document the pinned standard pair`);
+    assert(content.includes('profiles pin `gpt-5.6-sol` at `xhigh`'),
+      `T5b: ${f} must document the pinned reasoning pair`);
+    assert(content.includes('dispatch.codex_profile_mode'),
+      `T5b: ${f} must route by the descriptor profile mode`);
   }
 }
 
@@ -409,7 +415,7 @@ for (const ed of codexEditions) {
       `T12: ${f} must document the no-improvise prohibition (#602)`);
     assert(content.includes('plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.'),
       `T12: ${f} must carry the run-start announcement format (#604)`);
-    assert(content.includes('→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})'),
+    assert(content.includes('→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model}, effort {effort})'),
       `T12: ${f} must carry the pre-spawn announcement format (#604)`);
     assert(content.includes('← {node_id} · {role} returned: {verdict or one-line outcome}'),
       `T12: ${f} must carry the on-return announcement format (#604)`);
@@ -768,10 +774,14 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: '{node-id} → complete; opened: {next-id|—}', surfaces: PR6 },
     // T5b — plan-run skills × 3 (codex-live)
     { token: 'fork_turns: "none"', surfaces: prSkill },
-    { token: 'reasoning_effort: dispatch.codex_reasoning_effort', surfaces: prSkill },
-    { token: 'fresh child-session effort proof', surfaces: prSkill },
-    { token: 'codex_effort_override_unavailable', surfaces: prSkill },
-    { token: '`model: standard` -> `high`', surfaces: prSkill },
+    { token: 'dispatch.codex_profile_mode', surfaces: prSkill },
+    { token: 'codex_tier_unresolved', surfaces: prSkill },
+    { token: 'codex_profile_tier_mismatch', surfaces: prSkill },
+    { token: 'codex_profile_runtime_mismatch', surfaces: prSkill },
+    { token: 'profile pins for `gpt-5.6-sol` at `medium`', surfaces: prSkill },
+    { token: 'profiles pin `gpt-5.6-sol` at `xhigh`', surfaces: prSkill },
+    { token: 'Codex 0.144 durable-result override', surfaces: prSkill },
+    { token: 'transport_error: encrypted_return', surfaces: prSkill },
     // T14 — plan-run commands × 3 (claude-live)
     { token: "spawn each node's role agent as a NAMED teammate", surfaces: prCmd },
     { token: 'send EXACTLY ONE request for the deliverable, then wait', surfaces: prCmd },
