@@ -411,6 +411,20 @@ function makeState(opts) {
   assert(rHollow.ok === false && rHollow.missingTokenClass === 'RED',
     'T6b-seed: tdd-guide hollow seed cannot satisfy evidence verification');
 
+  // Bare colon-less RED/GREEN token-name-only lines (#652 Gap 1): the matcher's column-0 regex
+  // requires `<TOKEN>:` PLUS a non-empty value — a body carrying the BARE token name with no colon
+  // at all must still refuse. Guards against a future weakening that accepts a bare token while
+  // still refusing an empty `TOKEN: ` value (the T6b-seed case above) — the "partial-weakening hole".
+  const bareRed = 'RED\nGREEN: test passed\n';
+  const rBareRed = checkEvidenceShape('tdd-guide', 'impl-core', bareRed);
+  assert(rBareRed.ok === false && rBareRed.missingTokenClass === 'RED',
+    'T6b-bare: tdd-guide with bare colon-less RED (no colon) → refused, missingTokenClass RED');
+
+  const bareGreen = 'RED: test failed\nGREEN\n';
+  const rBareGreen = checkEvidenceShape('tdd-guide', 'impl-core', bareGreen);
+  assert(rBareGreen.ok === false && rBareGreen.missingTokenClass === 'GREEN',
+    'T6b-bare2: tdd-guide with bare colon-less GREEN (no colon) → refused, missingTokenClass GREEN');
+
   // n/a skip reason
   const evidenceNa = 'n/a: no new code paths added, only documentation changes';
   const r3 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceNa);
@@ -453,6 +467,15 @@ function makeState(opts) {
   const rHollow = checkEvidenceShape('implementer', 'impl-other', hollowSeed);
   assert(rHollow.ok === false && rHollow.missingTokenClass === 'non_tdd_reason',
     'T7e-seed: implementer hollow seed cannot satisfy evidence verification');
+
+  // Bare colon-less change-type token (#652 Gap 1): the alternation regex requires `<token>:` PLUS
+  // a non-empty value — a body carrying the BARE token name (e.g. "build-green") with no colon at
+  // all must still refuse. Guards against a future weakening that accepts a bare token while still
+  // refusing an empty `<token>: ` value (the T7e-seed case above) — the "partial-weakening hole".
+  const bareChangeType = 'non_tdd_reason: config-only\nbuild-green\n';
+  const rBareChangeType = checkEvidenceShape('implementer', 'impl-other', bareChangeType);
+  assert(rBareChangeType.ok === false && rBareChangeType.missingTokenClass === 'change-type',
+    'T7e-bare: implementer with bare colon-less change-type token (no colon) → refused, missingTokenClass change-type');
 
   // n/a skip
   const evidenceNa = 'n/a: no functional change';
@@ -6171,6 +6194,15 @@ function rtHarness(initialFiles, opts) {
   function gitOut(cwd, args) {
     try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim(); } catch (_) { return ''; }
   }
+  // #652 (Gap 2): mirrors production isBarrierInvisible's project-scoped kaola-workflow/{project}/**
+  // band — a diff-tree merge-diff equality filter must ignore ONLY the active project's own workflow
+  // state tree as churn, not the whole kaola-workflow/ prefix. A stray write leaked into ANOTHER
+  // project's tree (kaola-workflow/other-project/**) is barrier-invisible at the leg level
+  // (isWorkflowArtifactPath exempts the whole prefix) but must still surface in the diff-tree
+  // equality check below — SYNTH-CROSS-PROJECT-LEAK pins this.
+  function isProjectWorkflowChurn(s, project) {
+    return s === 'kaola-workflow/' + project || s.startsWith('kaola-workflow/' + project + '/');
+  }
   const legRefName = id => 'refs/kaola-workflow/leg-base/test-project/' + id;
   const planP = repoRoot => path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md');
   function refResolves(repoRoot, id) { return gitOut(repoRoot, ['rev-parse', '--verify', '--quiet', legRefName(id) + '^{commit}']); }
@@ -6375,7 +6407,7 @@ function rtHarness(initialFiles, opts) {
     assert(parents.length >= 3, 'SYNTH-DISJOINT: M is the octopus merge (≥3 parents = feature + legA + legB), got ' + parents.length);
     assert(gitOut(repoRoot, ['rev-parse', M + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', M + ':by.js']) !== '', 'SYNTH-DISJOINT: M contains BOTH legs\' files');
     const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
-      .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
+      .map(s => s.trim()).filter(s => s && !isProjectWorkflowChurn(s, 'test-project')).sort();
     assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js']), 'SYNTH-DISJOINT: diff base→M == union(declared), got ' + JSON.stringify(mDiff));
     const timings = fs.existsSync(path.join(cacheDir, 'node-timings.jsonl')) ? fs.readFileSync(path.join(cacheDir, 'node-timings.jsonl'), 'utf8') : '';
     assert(/level_merged/.test(timings), 'SYNTH-DISJOINT: a level_merged telemetry event was recorded');
@@ -6383,6 +6415,42 @@ function rtHarness(initialFiles, opts) {
     // leg_opened → leg_committed → level_merged). The live AC18 probe caught its absence; this pins it.
     assert((timings.match(/leg_committed/g) || []).length === 2, 'SYNTH-DISJOINT: leg_committed emitted once per leg (AC17), got ' + (timings.match(/leg_committed/g) || []).length);
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, 'SYNTH-DISJOINT: legs torn down after the merge');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // SYNTH-CROSS-PROJECT-LEAK (#652 Gap 2): a stray write under a DIFFERENT project's
+  // kaola-workflow/ tree (kaola-workflow/other-project/**) — barrier-invisible at the leg-barrier
+  // level (isWorkflowArtifactPath exempts the whole kaola-workflow/ prefix, not just the active
+  // project's own band) — is committed via the leg's `git add -A` and lands in the merge commit M
+  // like any other churn. The diff-tree equality check's own churn filter must NOT swallow it: only
+  // the ACTIVE project's (test-project) own kaola-workflow/ tree is legitimate churn to ignore, not
+  // the whole kaola-workflow/ prefix. A leak into ANOTHER project's tree must still surface in mDiff.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
+    const base = rs.lane_group.legs.A.baseline;
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B leg work\n');
+    // Synthetic cross-project leak, written into leg A's tree (picked up by the leg's `git add -A`
+    // like any other stray write; the leg-barrier does not flag it — kaola-workflow/** is exempt).
+    fs.mkdirSync(path.join(legA, 'kaola-workflow', 'other-project'), { recursive: true });
+    fs.writeFileSync(path.join(legA, 'kaola-workflow', 'other-project', 'leaked.md'), '// cross-project leak\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'SYNTH-CROSS-PROJECT-LEAK: A deferred, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true, 'SYNTH-CROSS-PROJECT-LEAK: B group_passed + synthesized, got ' + JSON.stringify(rB));
+    const M = rB.mergeCommit;
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
+      .map(s => s.trim()).filter(s => s && !isProjectWorkflowChurn(s, 'test-project')).sort();
+    // The project-scoped churn filter must NOT swallow the other-project leak — it stays visible in
+    // mDiff, so an equality check against the declared set correctly flags it instead of going quiet.
+    assert(mDiff.includes('kaola-workflow/other-project/leaked.md'),
+      'SYNTH-CROSS-PROJECT-LEAK: the cross-project leak survives the churn filter and surfaces in mDiff, got ' + JSON.stringify(mDiff));
+    // The active project's OWN kaola-workflow tree is still correctly filtered as legitimate churn.
+    assert(!mDiff.some(s => s.startsWith('kaola-workflow/test-project/')),
+      'SYNTH-CROSS-PROJECT-LEAK: the active project\'s own kaola-workflow tree stays filtered as churn, got ' + JSON.stringify(mDiff));
     cleanup(repoRoot);
   }
 
@@ -6859,7 +6927,7 @@ function rtHarness(initialFiles, opts) {
         '#500-POSITIVE-E2E: M contains BOTH scripts/aa.js and scripts/bb.js');
       // diff base→M == exactly the two declared files.
       const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
-        .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
+        .map(s => s.trim()).filter(s => s && !isProjectWorkflowChurn(s, 'test-project')).sort();
       assert(JSON.stringify(mDiff) === JSON.stringify(['scripts/aa.js', 'scripts/bb.js']),
         '#500-POSITIVE-E2E: diff base→M == union declared {scripts/aa.js, scripts/bb.js}, got ' + JSON.stringify(mDiff));
       // Legs torn down.
@@ -6967,7 +7035,7 @@ function rtHarness(initialFiles, opts) {
     const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
     assert(parents.length === 4, '#588-3LEG: octopus merge has EXACTLY 4 parents (feature + 3 legs), got ' + parents.length);
     const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
-      .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
+      .map(s => s.trim()).filter(s => s && !isProjectWorkflowChurn(s, 'test-project')).sort();
     assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js', 'cz.js']), '#588-3LEG: diff base→M == union(declared) {ax,by,cz}, got ' + JSON.stringify(mDiff));
     for (const id of ['A', 'B', 'C']) assert(gitOut(repoRoot, ['rev-parse', M + ':' + setOf[id]]) !== '', '#588-3LEG: M contains ' + setOf[id]);
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete' && ledgerStatus(planPath, 'C') === 'complete', '#588-3LEG: all 3 members complete');
@@ -7040,7 +7108,7 @@ function rtHarness(initialFiles, opts) {
     const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
     assert(parents.length === 5, '#588-WIDE-DRAIN: octopus has EXACTLY 5 parents (feature + 4 legs), got ' + parents.length);
     const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n')
-      .map(s => s.trim()).filter(s => s && !s.startsWith('kaola-workflow/')).sort();
+      .map(s => s.trim()).filter(s => s && !isProjectWorkflowChurn(s, 'test-project')).sort();
     assert(JSON.stringify(mDiff) === JSON.stringify(openedIds.map(id => setOf[id]).sort()), '#588-WIDE-DRAIN: diff base→M == union of the 4 opened declared sets, got ' + JSON.stringify(mDiff));
     for (const id of openedIds) assert(ledgerStatus(planPath, id) === 'complete', '#588-WIDE-DRAIN: ' + id + ' complete');
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, '#588-WIDE-DRAIN: legs torn down after the width-4 merge');

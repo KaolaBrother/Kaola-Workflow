@@ -96,6 +96,9 @@ const OPERATOR_HINT_REGISTRY = {
     }
     return 'One or more chains are RED with no waiver. Fix the failing chain or waive it explicitly (--accept-known-red <name>:<open-issue>).';
   },
+  // #651: release-only strictness — a waiver (accepted_red) is legal at adaptive finalize but a
+  // release tag demands an UNWAIVED all-green receipt, so ANY waived chain is a typed refusal here.
+  chains_waived: (ctx) => `Chain(s) waived (accepted_red) in the receipt${ctx && Array.isArray(ctx.waivedChains) && ctx.waivedChains.length ? ': ' + ctx.waivedChains.join(', ') : ''}. A waiver is legal at adaptive finalize but a release tag requires an UNWAIVED all-green four-chain receipt — fix the waived chain and regenerate the receipt with kaola-workflow-run-chains.js at the release-candidate commit.`,
   // #475: consumer (non-npm) finalize gate — the agent's recorded validation IS the gate (no chain receipt).
   final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification (#44): record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
   final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
@@ -2403,6 +2406,90 @@ function attachChainsStaleDiagnostics(payload, root, project, receipt) {
   const diag = computeChainsStaleDiagnostics(root, project, receipt);
   return diag ? Object.assign(payload, diag) : payload;
 }
+// #651: the PRE-TAG RELEASE GATE — a CHECK-ONLY, plan-independent twin of the --finalize-check
+// chain-receipt arm, pinned STRICTLY to the release-candidate commit. Reads only the receipt +
+// local git (self-owned: no CI/CD, no forge calls); mutates nothing. Deltas vs --finalize-check:
+//   • NO plan path — at release time the run is archived, so the receipt default is the git
+//     top-level's .cache/chain-receipt.json (run-chains' bare-cwd stamp / release.js's read path),
+//     overridable via --receipt.
+//   • STRICT headSha EQUALITY against the candidate (default HEAD; --candidate <sha-ish> for an
+//     explicit commit). The #547 codeTreeHash content-address relaxation is deliberately NOT used —
+//     a release tag names an exact commit, so only that commit's receipt counts.
+//   • headSha 'unknown'/missing is a REFUSAL, never a pass (kaola-workflow-release.js's own
+//     chainReceiptGreenness treats headSha === 'unknown' as green; this gate must not copy that
+//     leniency — an unbound receipt proves nothing about the candidate).
+//   • a DIRTY-stamped receipt (workTreeHash != 'clean') refuses: the chains validated the commit
+//     PLUS uncommitted edits, not the tree the tag would name.
+//   • ANY waived chain (accepted_red) refuses chains_waived — a waiver is legal at adaptive
+//     finalize, never for a release tag (release demands an UNWAIVED all-green receipt).
+// Typed precedence family (structural `reason`, never string-matched):
+//   chains_unverified > chains_stale > chains_empty > chains_red > chains_waived.
+// The sha-mismatch arm attaches the hint-only culprit diagnostics (stale_paths/stale_kind) and
+// degrades to the generic refusal on uncertainty, exactly like the finalize gate.
+function releaseCheck(args) {
+  const json = args.includes('--json');
+  const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+  const refuse = (payload, text) => {
+    process.stdout.write((json ? JSON.stringify(payload) : 'typed refusal: ' + text) + '\n');
+    process.exitCode = 1;
+  };
+  let root = process.cwd();
+  try { root = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) {}
+  const receiptPath = flagVal('--receipt') || path.join(root, '.cache', 'chain-receipt.json');
+  let receiptRaw = null;
+  try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
+  if (receiptRaw == null) {
+    refuse({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['no chain receipt at ' + receiptPath + ' — run kaola-workflow-run-chains.js at the release-candidate commit so the tag names a verified tree'] }, 'chains_unverified (no ' + receiptPath + ')');
+    return;
+  }
+  let receipt = null;
+  try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
+  if (!receipt || typeof receipt !== 'object') {
+    refuse({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }, 'chains_unverified (unparseable receipt)');
+    return;
+  }
+  // Candidate = the exact commit the tag would name. rev-parse ^{commit} normalizes a ref/short sha
+  // to the full sha; an unresolvable candidate fails CLOSED into the stale arm ('(unresolved)').
+  const candidateArg = flagVal('--candidate') || 'HEAD';
+  let candidate = '';
+  try { candidate = execFileSync('git', ['-C', root, 'rev-parse', '--verify', candidateArg + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { candidate = ''; }
+  const stamped = String(receipt.headSha || '').trim();
+  if (!stamped || stamped === 'unknown') {
+    const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (stamped || '(missing)') + '" is not bound to a commit — a release tag names an exact commit; regenerate the receipt with kaola-workflow-run-chains.js at the release-candidate commit'] }, root, null, receipt);
+    refuse(out, 'chains_stale (receipt headSha ' + (stamped || 'missing') + ')');
+    return;
+  }
+  if (!candidate || stamped !== candidate) {
+    const out = attachChainsStaleDiagnostics({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + stamped + '" != release candidate "' + (candidate || '(unresolved)') + '" — regenerate the receipt at the candidate commit (strict sha equality; the finalize-time codeTreeHash relaxation does not apply to a release tag)'] }, root, null, receipt);
+    refuse(out, 'chains_stale (' + stamped + ' != ' + (candidate || 'unresolved') + ')');
+    return;
+  }
+  if (receipt.workTreeHash !== 'clean') {
+    refuse({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt was stamped over a DIRTY worktree (workTreeHash "' + (receipt.workTreeHash || '(missing)') + '" != "clean") — the chains validated the commit plus uncommitted edits, not the tree the tag would name; commit everything and regenerate the receipt'] }, 'chains_stale (dirty-stamped receipt)');
+    return;
+  }
+  const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
+  if (chains.length === 0) {
+    refuse({ result: 'refuse', reason: 'chains_empty', operator_hint: getOperatorHint('chains_empty'), errors: ['chain receipt at ' + receiptPath + ' has an empty chains[] array — zero chains were verified; regenerate the receipt with kaola-workflow-run-chains.js over a resolved chain set'] }, 'chains_empty (empty chains[] at ' + receiptPath + ')');
+    return;
+  }
+  const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
+  if (redChains.length) {
+    const names = redChains.map(c => c.name || '(unnamed)').join(', ');
+    const timedOutChains = redChains.filter(c => c && c.timed_out === true).map(c => c.name || '(unnamed)');
+    refuse({ result: 'refuse', reason: 'chains_red', operator_hint: getOperatorHint('chains_red', { timedOutChains }), redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, timed_out: c.timed_out === true })), errors: ['chain(s) RED with no waiver: ' + names + ' — a release candidate must be all-green; fix the chain and regenerate the receipt'] }, 'chains_red (' + names + ')');
+    return;
+  }
+  const waivedChains = chains.filter(c => c && c.accepted_red === true);
+  if (waivedChains.length) {
+    const names = waivedChains.map(c => c.name || '(unnamed)');
+    refuse({ result: 'refuse', reason: 'chains_waived', operator_hint: getOperatorHint('chains_waived', { waivedChains: names }), waivedChains: waivedChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red_issue: c.accepted_red_issue || null })), errors: ['chain(s) waived (accepted_red): ' + names.join(', ') + ' — a waiver is legal at adaptive finalize but a release tag requires an UNWAIVED all-green receipt; fix the waived chain and regenerate the receipt at the candidate commit'] }, 'chains_waived (' + names.join(', ') + ')');
+    return;
+  }
+  process.stdout.write((json
+    ? JSON.stringify({ result: 'pass', mode: 'release-check', candidate, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: false })) })
+    : 'release ok (' + chains.length + ' chains green, unwaived, at ' + candidate + ')') + '\n');
+}
 // #239 (v3.21.0): a per-node baseline must SURVIVE `git gc` between node-start and the barrier (an
 // explicit `gc --prune=now`, or default gc on a >2-week-paused resume — the exact resume case this
 // targets). A bare `write-tree` object is unreachable and therefore prunable, which bricked the node.
@@ -2447,6 +2534,12 @@ function printHelp() {
     '                 > final_validation_failed). Then (B) attribution sweep — every `git diff <base>...HEAD` change must be in\n' +
     '                 the .md allowband OR a `complete` node\'s declared write set, else unattributed_change.\n' +
     '                 [--base REF (default main)] [--receipt PATH (self-host)] [--head SHA (self-host)]\n' +
+    '  --release-check  the PRE-TAG RELEASE gate (check-only, PLAN-INDEPENDENT — no plan path; self-owned: reads only the\n' +
+    '                 receipt + local git, no CI/CD or forge calls). Refuses unless <git-toplevel>/.cache/chain-receipt.json\n' +
+    '                 is a clean-stamped, all-green, UNWAIVED receipt whose headSha EQUALS the release-candidate commit\n' +
+    '                 (STRICT sha pin — no codeTreeHash relaxation; headSha "unknown"/missing refuses). Typed precedence:\n' +
+    '                 chains_unverified > chains_stale (with stale_paths/stale_kind culprit hints) > chains_empty >\n' +
+    '                 chains_red > chains_waived. [--candidate SHA (default HEAD)] [--receipt PATH] [--json]\n' +
     '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
     '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
@@ -2468,6 +2561,9 @@ function printHelp() {
 function main() {
   const args = process.argv.slice(2);
   if (!args.length || args[0] === '--help' || args[0] === '-h') { printHelp(); return; }
+  // #651: --release-check is PLAN-INDEPENDENT (at release time the run is archived — there is no
+  // active workflow-plan.md), so intercept BEFORE the plan read; no plan path is required.
+  if (args.includes('--release-check')) { releaseCheck(args); return; }
   const planPath = args[0];
   const json = args.includes('--json');
   const root = findRepoRoot(path.dirname(path.resolve(planPath)));
