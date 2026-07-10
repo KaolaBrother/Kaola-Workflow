@@ -189,7 +189,7 @@ and archive the workflow folder.
 | n3-review | complete |
 | n4-docs | complete |
 | n5-adversarial | complete |
-| n6-finalize | in_progress |
+| n6-finalize | complete |
 ## Required Agent Compliance
 
 | Requirement | Status | Evidence | Skip Reason |
@@ -199,3 +199,4 @@ and archive the workflow folder.
 | code-reviewer | subagent-invoked | evidence-binding: n3-review 0c046b9156ca | |
 | doc-updater (n4-docs) | subagent-invoked | evidence-binding: n4-docs a180e722a236 | |
 | adversarial-verifier (n5-adversarial) | subagent-invoked | evidence-binding: n5-adversarial b3fa5f4ba4ab | |
+| finalize (n6-finalize) | main-session-direct | evidence-binding: n6-finalize f074eece54ee | |

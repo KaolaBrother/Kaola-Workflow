@@ -34,9 +34,9 @@
     {
       "id": "n6-finalize",
       "role": "finalize",
-      "status": "in_progress",
-      "ledger_status": "in_progress"
+      "status": "completed",
+      "ledger_status": "complete"
     }
   ],
-  "last_synced_from_ledger": "2026-07-10T13:50:26.240Z"
+  "last_synced_from_ledger": "2026-07-10T14:04:16.254Z"
 }

@@ -16,13 +16,20 @@ original refutation findings R1/R2 independently re-attacked and confirmed resol
    in-run adversarial repair loop recorded) and the #652 entry (Fixed — bare-token negative
    controls + merge-diff band narrowing, test-only). Last test-consumed prose edit before the
    receipt stamp (stamp-last discipline).
-2. Feature commit on workflow/bundle-651-652 (worktree): pending below.
+2. Feature commit on workflow/bundle-651-652 (worktree): 7942335e, 37 files +1265/−81 (both
+   implementation lanes, the R1+R2 repair window, the docs ripple, CHANGELOG, workflow state).
 3. Serial four-chain receipt via kaola-workflow-run-chains.js --project bundle-651-652, stamped
-   LAST at the feature commit: pending below.
+   LAST at the feature commit: DONE below.
 4. Finalize gate + push + sink-merge from main root + bundle closure (#651 + #652 closed with
    CLOSED-state verification, roadmap sources removed, ROADMAP regenerated, folder archived):
-   pending below.
+   recorded in the closure receipt / sink output.
 
 ## Validation
 
-(chain results appended after the run)
+`KAOLA_RUN_CHAINS_CONCURRENCY=serial node scripts/kaola-workflow-run-chains.js --project
+bundle-651-652 --json` → `{"result":"pass","failed":[]}`, exit 0. Receipt:
+headSha 7942335ea9edf9f616e224b7b7476f33bed6271e (== HEAD, the feature commit),
+workTreeHash "clean", chains claude/codex/gitlab/gitea all exitCode 0, all accepted_red false —
+UNWAIVED four-chain green receipt at the finalize candidate, stamped after the last test-consumed
+prose edit (CHANGELOG). Stamp-last discipline held: no code or test-consumed prose changed after
+the stamp.
