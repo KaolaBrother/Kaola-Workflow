@@ -77,7 +77,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync: execFixtureFileSync } = require('child_process');
-const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
+const planValidator = require('./kaola-workflow-plan-validator');
+const { ROLE_TOKEN_REGISTRY } = planValidator;
+const { computeNextAction } = require('./kaola-workflow-next-action');
 
 let passed = 0;
 let failed = 0;
@@ -176,6 +178,36 @@ function makePlan(ledgerRows, extraNodes) {
     ...ledgerRows,
     '',
   ].join('\n') + '\n';
+}
+
+function makeWaitPlan(ledgerRows, nodes) {
+  return [
+    '# Workflow Plan — wait-budget-test', '', '## Meta', 'labels: area:scripts', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...nodes, '', '## Node Ledger', '', '| id | status | notes |', '| --- | --- | --- |',
+    ...ledgerRows, '',
+  ].join('\n') + '\n';
+}
+
+function authoredNext(content) {
+  const out = computeNextAction(content, { resolveModel: role => ({
+    'code-reviewer': 'opus', 'adversarial-verifier': 'opus', 'tdd-guide': 'sonnet', implementer: 'sonnet',
+  })[role] || 'sonnet' });
+  return { exitCode: out.result === 'refuse' ? 1 : 0, ...out };
+}
+
+function legacyFreezeUnknownWait(cell, role = 'implementer', model = 'standard', metaExtra = []) {
+  const content = [
+    '# Legacy frozen plan', '', '## Meta', 'labels: enhancement', ...metaExtra, '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    `| work | ${role} | — | ${role === 'code-reviewer' ? '—' : 'src/x.js'} | 1 | sequence | ${model} | ${cell} |`,
+    '| done | finalize | work | — | 1 | sequence | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |', '| work | pending |', '| done | pending |', '',
+  ].join('\n');
+  return '<!-- plan_hash: ' + planValidator.computePlanHash(content) + ' -->\n' + content;
 }
 
 function makeState(opts) {
@@ -4815,6 +4847,111 @@ function rtHarness(initialFiles, opts) {
 // ---------------------------------------------------------------------------
 // D444-DISPATCH-PARITY: buildDispatch is exported and produces the required dispatch shape
 // ---------------------------------------------------------------------------
+
+// #655 reviewer repair: authored plans must carry the validated override through
+// next-action and the real lifecycle entry points (never direct builder injection).
+{
+  for (const [cell, reason] of [['1', 'wait_budget_below_floor'], ['721', 'wait_budget_above_cap']]) {
+    const frozen = legacyFreezeUnknownWait(cell);
+    assert(planValidator.revalidateForResume(frozen).ok === true, '#655-COMPAT: old frozen ' + cell + ' is hash/structure-resumable');
+    const out = authoredNext(frozen);
+    assert(out.result === 'refuse' && out.reason === reason, '#655-COMPAT: point-of-use refuses old frozen ' + cell + ' as ' + reason);
+  }
+  const valid = legacyFreezeUnknownWait('180');
+  assert(authoredNext(valid).nextNode.wait_budget_minutes === 180, '#655-COMPAT: semantically valid old frozen value passes current wall');
+  assert(planValidator.revalidateForResume(valid.replace('| 180 |', '| 181 |')).reasonCode === 'plan_hash_mismatch', '#655-COMPAT: hash tamper refuses');
+  assert(authoredNext(legacyFreezeUnknownWait('20', 'code-reviewer', '—')).reason === 'wait_budget_below_floor', '#655-COMPAT: omitted-model role floor applies at point of use');
+  const nondelegable = legacyFreezeUnknownWait('40', 'finalize', 'reasoning').replace('| done | finalize | work | — | 1 | sequence | — | — |\n', '');
+  assert(authoredNext(nondelegable).reason === 'wait_budget_nondelegable', '#655-COMPAT: nondelegable override refuses at point of use');
+  const optMeta = ['optimize(work):', '  metric_command: node bench.js', '  metric_paths: bench.js', '  direction: min',
+    '  budget_iterations: 2', '  budget_wallclock_minutes: 60', '  regression_gate: npm test', '  metric_repeats: 1', '  min_delta: 0', '  patience: 1'];
+  assert(authoredNext(legacyFreezeUnknownWait('60', 'metric-optimizer', 'standard', optMeta)).reason === 'wait_budget_conflict', '#655-COMPAT: optimizer dual budget refuses at point of use');
+}
+
+{
+  const serialPlan = makeWaitPlan([
+    '| impl | pending | |', '| done | pending | |',
+  ], [
+    '| impl | implementer | — | src/x.js | 1 | sequence | standard | 180 |',
+    '| done | finalize | impl | — | 1 | sequence | — | — |',
+  ]);
+  const projected = authoredNext(serialPlan);
+  assert(projected.nextNode.wait_budget_minutes === 180, '#655-R1: authored nextNode retains override');
+  assert(projected.readySet[0].wait_budget_minutes === 180, '#655-R1: authored readySet retains override');
+  assert(projected.readyPending[0].wait_budget_minutes === 180, '#655-R1: authored readyPending retains override');
+  const activeProjection = authoredNext(serialPlan.replace('| impl | pending |', '| impl | in_progress |'));
+  assert(activeProjection.active[0].wait_budget_minutes === 180, '#655-R1: authored active descriptor retains override');
+
+  const h = rtHarness({ '/p/workflow-plan.md': serialPlan, '/p/workflow-state.md': makeState() }, { nextAction: projected });
+  const opened = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+    shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  assert(opened.opened.dispatch.wait_budget_minutes === 180 && opened.opened.dispatch.wait_budget_source === 'planner_override',
+    '#655-R1: serial open-next dispatches authored override/source');
+}
+
+{
+  const speculativePlan = makeWaitPlan([
+    '| gate | in_progress | |', '| probe | pending | |', '| done | pending | |',
+  ], [
+    '| gate | code-reviewer | — | — | 1 | sequence | reasoning | — |',
+    '| probe | code-explorer | gate | — | 1 | sequence | standard | 200 |',
+    '| done | finalize | probe | — | 1 | sequence | — | — |',
+  ]).replace('labels: area:scripts', 'labels: area:scripts\nspeculative_open_policy: auto');
+  const projected = authoredNext(speculativePlan);
+  assert(projected.speculativePending[0].wait_budget_minutes === 200, '#655-R1: authored speculative descriptor retains override');
+}
+
+{
+  const fanoutPlan = makeWaitPlan([
+    '| read-a | pending | |', '| read-b | pending | |', '| done | pending | |',
+  ], [
+    '| read-a | code-explorer | — | — | 1 | fanout(reads) | standard | 180 |',
+    '| read-b | knowledge-lookup | — | — | 1 | fanout(reads) | standard | 240 |',
+    '| done | finalize | read-a,read-b | — | 1 | sequence | — | — |',
+  ]);
+  const h = rtHarness({ '/p/workflow-plan.md': fanoutPlan, '/p/workflow-state.md': makeState() }, { nextAction: authoredNext(fanoutPlan) });
+  const opened = runOpenReady({ planPath: '/p/workflow-plan.md', project: 'p', max: null, fanoutCapReadonly: 8,
+    shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  const cards = Object.fromEntries(opened.opened.map(x => [x.id, x.dispatch]));
+  assert(cards['read-a'].wait_budget_minutes === 180 && cards['read-b'].wait_budget_minutes === 240,
+    '#655-R1: authored read fanout dispatches exact overrides');
+  const durable = JSON.parse(h.files['/p/.cache/' + RUNNING_SET_NAME]);
+  assert(durable.nodes.every(n => n.wait_budget_source === 'planner_override')
+    && durable.nodes.find(n => n.id === 'read-a').wait_budget_minutes === 180
+    && durable.nodes.find(n => n.id === 'read-b').wait_budget_minutes === 240,
+    '#655-R1: running-set persists exact authored values/source');
+
+  // Simulate a crash while opening: read-a flipped, read-b did not. Reconcile must
+  // retain the survivor's exact durable value/source.
+  h.files['/p/workflow-plan.md'] = h.files['/p/workflow-plan.md'].replace('| read-b | in_progress |', '| read-b | pending |');
+  h.files['/p/.cache/' + RUNNING_SET_NAME] = JSON.stringify({ ...durable, state: 'opening', nodes: durable.nodes.map(n => ({ ...n, opening: true })) });
+  const rec = runReconcileRunningSet({ planPath: '/p/workflow-plan.md', project: 'p', shell: h.shell,
+    readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  const after = JSON.parse(h.files['/p/.cache/' + RUNNING_SET_NAME]);
+  assert(rec.result === 'ok' && after.nodes.length === 1 && after.nodes[0].id === 'read-a'
+    && after.nodes[0].wait_budget_minutes === 180 && after.nodes[0].wait_budget_source === 'planner_override',
+    '#655-R1: crash reconcile retains exact override/source on survivor');
+}
+
+{
+  const fusedPlan = makeWaitPlan([
+    '| first | in_progress | |', '| second | pending | |', '| done | pending | |',
+  ], [
+    '| first | tdd-guide | — | src/a.js | 1 | sequence | standard | 180 |',
+    '| second | implementer | first | src/b.js | 1 | sequence | standard | 300 |',
+    '| done | finalize | second | — | 1 | sequence | — | — |',
+  ]);
+  const h = rtHarness({ '/p/workflow-plan.md': fusedPlan, '/p/workflow-state.md': makeState(),
+    '/p/.cache/barrier-base-first': 'deadbeeffirstcafef00d1234\n',
+    '/p/.cache/first.md': 'evidence-binding: first deadbeeffirs\nRED: red\nGREEN: green\n' });
+  const shell = (scriptPath, args) => path.basename(scriptPath) === 'kaola-workflow-next-action.js'
+    ? authoredNext(h.files['/p/workflow-plan.md']) : h.shell(scriptPath, args);
+  const fused = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'first',
+    shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(fused.result === 'ok' && fused.opened.dispatch.wait_budget_minutes === 300
+    && fused.opened.dispatch.wait_budget_source === 'planner_override', '#655-R1: fused authored advance keeps override/source');
+}
+
 {
   assert(typeof buildDispatch === 'function', 'D444-DISPATCH-PARITY: buildDispatch exported as function');
 
@@ -4850,6 +4987,33 @@ function rtHarness(initialFiles, opts) {
   const dV2 = buildDispatch(nodeInfo, Object.assign({}, context, { codex_dispatch_mode: 'v2-task-name' }));
   assert(dV2.codex_dispatch_mode === 'v2-task-name', 'D444-DISPATCH-PARITY: context can select v2 task-name mode');
   assert(dV2.codex_task_name === 'n1_impl_tdd_guide', 'D444-DISPATCH-PARITY: v2 dispatch still carries stable task name');
+
+  const overridden = buildDispatch({ ...nodeInfo, wait_budget_minutes: 180 }, context);
+  assert(overridden.wait_budget_minutes === 180, '#655: validated planner override reaches the single dispatch builder');
+  assert(overridden.wait_budget_source === 'planner_override', '#655: planner override carries an explicit source');
+  const legacy = buildDispatch(nodeInfo, context);
+  assert(legacy.wait_budget_minutes === d.wait_budget_minutes && legacy.wait_budget_source === d.wait_budget_source,
+    '#655: absent override preserves the legacy dispatch budget/source');
+  for (const [value, reason] of [[1, 'wait_budget_below_floor'], [721, 'wait_budget_above_cap']]) {
+    let caught = null;
+    try { buildDispatch({ ...nodeInfo, wait_budget_minutes: value }, context); } catch (err) { caught = err; }
+    assert(caught && caught.reason === reason, '#655 compatibility wall: direct adaptive dispatch fails closed for ' + value + ' with ' + reason);
+  }
+  const builderFloorCases = [
+    ['code-reviewer', null, 20, false], ['code-reviewer', null, 39, false], ['code-reviewer', null, 40, true],
+    ['implementer', null, 19, false], ['implementer', null, 20, true],
+    ['code-reviewer', 'opus', 39, false], ['code-reviewer', 'opus', 40, true],
+    ['implementer', 'sonnet', 19, false], ['implementer', 'sonnet', 20, true],
+    ['code-reviewer', 'reasoning', 39, false], ['code-reviewer', 'reasoning', 40, true],
+    ['implementer', 'standard', 19, false], ['implementer', 'standard', 20, true],
+  ];
+  for (const [role, model, value, shouldPass] of builderFloorCases) {
+    let card = null, caught = null;
+    try { card = buildDispatch({ id: 'floor-' + role, role, model, declared_write_set: '—', wait_budget_minutes: value }, context); } catch (err) { caught = err; }
+    assert(shouldPass ? (card && card.wait_budget_minutes === value && card.wait_budget_source === 'planner_override')
+      : (caught && caught.reason === 'wait_budget_below_floor'),
+    '#655-R6 direct builder floor: role=' + role + ' model=' + model + ' value=' + value + ' pass=' + shouldPass);
+  }
 }
 
 // #634 (metric-optimizer): buildDispatch threads the optimize contract + wait-budget override onto a
@@ -5415,6 +5579,8 @@ function rtHarness(initialFiles, opts) {
     //   empty ⇒ the plan bytes are IDENTICAL to the original A,B-only fixture (all existing tests unaffected).
     const extra = Array.isArray(opts.extraMembers) ? opts.extraMembers : [];
     const extraIds = extra.map(m => m.id);
+    const waitBudgets = opts.waitBudgets || null;
+    const waitTail = id => waitBudgets ? ' standard | ' + waitBudgets[id] + ' |' : '';
     const reviewRow = extra.length
       ? '| review   | code-reviewer | ' + ['A', 'B'].concat(extraIds).join(',') + ' | — | 1 | sequence |'
       : '| review   | code-reviewer | A,B   | —     | 1 | sequence |';
@@ -5430,12 +5596,16 @@ function rtHarness(initialFiles, opts) {
       ...(opts.writeOverlapPolicy ? ['write_overlap_policy: ' + opts.writeOverlapPolicy] : []),
       '',
       '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |',
-      '| --- | --- | --- | --- | --- | --- |',
+      waitBudgets
+        ? '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |'
+        : '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      waitBudgets
+        ? '| --- | --- | --- | --- | --- | --- | --- | --- |'
+        : '| --- | --- | --- | --- | --- | --- |',
       '| seed     | code-explorer | —     | —     | 1 | sequence |',
-      '| A        | tdd-guide     | seed  | ' + aSet + ' | 1 | sequence |',
-      '| B        | tdd-guide     | seed  | ' + bSet + ' | 1 | sequence |',
-      ...extra.map(m => '| ' + m.id + ' | ' + (m.role || 'tdd-guide') + ' | seed | ' + (m.set || '—') + ' | 1 | sequence |'),
+      '| A        | tdd-guide     | seed  | ' + aSet + ' | 1 | sequence |' + waitTail('A'),
+      '| B        | tdd-guide     | seed  | ' + bSet + ' | 1 | sequence |' + waitTail('B'),
+      ...extra.map(m => '| ' + m.id + ' | ' + (m.role || 'tdd-guide') + ' | seed | ' + (m.set || '—') + ' | 1 | sequence |' + waitTail(m.id)),
       reviewRow,
       '| finalize | finalize      | review| —     | 1 | sequence |', '',
       '## Node Ledger', '',
@@ -5528,6 +5698,49 @@ function rtHarness(initialFiles, opts) {
     assert(!r.laneGroup, 'D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: NO laneGroup on overlap, got ' + JSON.stringify(r.laneGroup));
     const rs = readRS(cacheDir);
     assert(!rs || !rs.lane_group, 'D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: running-set has no lane_group');
+    cleanup(repoRoot);
+  }
+
+  // Exact read-top-up image from the adversarial probe: stable r2 plus newly
+  // opening r3, both ledger-in-progress at cap 2.
+  {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-655-read-topup-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| r2 | code-explorer | — | — | 1 | fanout(reads) | standard | 240 |',
+      '| r3 | code-explorer | — | — | 1 | fanout(reads) | standard | 300 |',
+      '| finalize | finalize | r2,r3 | — | 1 | sequence | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| r2 | in_progress |', '| r3 | in_progress |', '| finalize | pending |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    execFileSync('git', ['-C', repoRoot, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'kw@test']);
+    execFileSync('git', ['-C', repoRoot, 'config', 'user.name', 'kw']);
+    execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({
+      state: 'opening', max_concurrent: 2,
+      nodes: [
+        { id: 'r2', role: 'code-explorer', kind: 'read', model: 'standard', wait_budget_minutes: 240, wait_budget_source: 'planner_override', baseline: 'recorded' },
+        { id: 'r3', role: 'code-explorer', kind: 'read', model: 'standard', wait_budget_minutes: 300, wait_budget_source: 'planner_override', baseline: 'recorded', opening: true },
+      ],
+    }, null, 2));
+    execFileSync('git', ['-C', repoRoot, 'add', '-A']);
+    execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], ON);
+    const rs = readRS(cacheDir);
+    assert(rec.result === 'ok' && rs.nodes.map(n => n.id).join(',') === 'r2,r3', '#655-MIXED-READ: exact stable r2 + opening r3 retained');
+    assert(rs.nodes[0].wait_budget_minutes === 240 && rs.nodes[1].wait_budget_minutes === 300
+      && rs.nodes.every(n => n.wait_budget_source === 'planner_override'), '#655-MIXED-READ: exact read budgets/source retained');
+    const again = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], ON);
+    const orient = runNode(repoRoot, ['orient', '--project', 'test-project', '--json'], ON);
+    assert(again.reconciled === false && again.reason === 'not_opening' && orient.result === 'ok', '#655-MIXED-READ: repeat reconcile idempotent and orient healthy');
     cleanup(repoRoot);
   }
 
@@ -6998,6 +7211,33 @@ function rtHarness(initialFiles, opts) {
   // (makeLaneRepo now takes extraMembers) + runNode/readRS/ledgerStatus/worktreePaths/branchExists/gitOut.
   // =========================================================================
 
+  // #655 adversarial mixed top-up crash: A is an already-stable member and B is
+  // the newly appended opening member. Both ledger rows flipped and cap=2, so
+  // reconcile must retain both without double-counting A against B's admission.
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo({ waitBudgets: { A: 240, B: 300 } });
+    const opened = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--max', '2', '--json'], LEG_ON);
+    assert(opened.result === 'ok' && opened.opened.length === 2, '#655-MIXED-CRASH: initial real-git open admits two');
+    const rs0 = readRS(cacheDir);
+    rs0.state = 'opening';
+    rs0.max_concurrent = 2;
+    rs0.nodes = rs0.nodes.map(n => n.id === 'B' ? { ...n, opening: true } : (() => { const c = { ...n }; delete c.opening; return c; })());
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs0, null, 2));
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    const rs1 = readRS(cacheDir);
+    assert(rec.result === 'ok' && rs1.nodes.map(n => n.id).sort().join(',') === 'A,B', '#655-MIXED-CRASH: stable+opening survivors both retained at cap2, got ' + JSON.stringify(rs1.nodes));
+    const memberA = rs1.nodes.find(n => n.id === 'A');
+    const memberB = rs1.nodes.find(n => n.id === 'B');
+    assert(memberA && memberB && memberA.wait_budget_minutes === 240 && memberA.wait_budget_source === 'planner_override'
+      && memberB.wait_budget_minutes === 300 && memberB.wait_budget_source === 'planner_override',
+      '#655-MIXED-CRASH: exact values/source survive mixed reconcile');
+    const again = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    assert(again.result === 'ok' && again.reconciled === false && again.reason === 'not_opening', '#655-MIXED-CRASH: repeated reconcile is idempotent');
+    const orient = runNode(repoRoot, ['orient', '--project', 'test-project', '--json'], LEG_ON);
+    assert(orient.result === 'ok' && orient.reason !== 'orphan_multi_in_progress', '#655-MIXED-CRASH: orient recovers without orphan wedge, got ' + JSON.stringify(orient));
+    cleanup(repoRoot);
+  }
+
   // -------------------------------------------------------------------------
   // #588-3LEG-OCTOPUS-END-TO-END (case a): a 3-leg DISJOINT write co-open → provision 3 legs → per-leg
   //   barriers (A,B deferred; C last) → octopus merge (feature + 3 legs = EXACTLY 4 parents) → commit-union
@@ -7050,7 +7290,8 @@ function rtHarness(initialFiles, opts) {
   //   (rolls all 4 forward — ceiling==width admits the full set — and preserves max_concurrent==4).
   // -------------------------------------------------------------------------
   {
-    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }] });
+    const waitBudgets = { A: 180, B: 181, C: 182, D: 183, E: 184 };
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }], waitBudgets });
     const allIds = ['A', 'B', 'C', 'D', 'E'];
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok', '#588-WIDE-CAP: open-ready ok, got ' + JSON.stringify(r));
@@ -7060,6 +7301,12 @@ function rtHarness(initialFiles, opts) {
     assert(pendingId && ledgerStatus(planPath, pendingId) === 'pending', '#588-WIDE-CAP: the 5th (' + pendingId + ') stays pending (queued past the cap)');
     for (const id of openedIds) assert(ledgerStatus(planPath, id) === 'in_progress', '#588-WIDE-CAP: opened ' + id + ' in_progress');
     const rs = readRS(cacheDir);
+    for (const id of openedIds) {
+      const card = r.opened.find(n => n.id === id).dispatch;
+      const member = rs.nodes.find(n => n.id === id);
+      assert(card.wait_budget_minutes === waitBudgets[id] && card.wait_budget_source === 'planner_override', '#655-R1: write-leg dispatch ' + id + ' keeps authored override/source');
+      assert(member.wait_budget_minutes === waitBudgets[id] && member.wait_budget_source === 'planner_override', '#655-R1: write-leg durable member ' + id + ' keeps authored override/source');
+    }
     assert(rs.max_concurrent === 4, '#588-WIDE-CAP: running-set max_concurrent == write cap (4), got ' + rs.max_concurrent);
     assert(rs.lane_group && Object.keys(rs.lane_group.legs).sort().join(',') === openedIds.slice().sort().join(','), '#588-WIDE-CAP: legs manifest covers EXACTLY the 4 opened, got ' + JSON.stringify(Object.keys(rs.lane_group.legs)));
     assert(!rs.lane_group.legs[pendingId], '#588-WIDE-CAP: no leg manifest entry for the queued 5th');
@@ -7075,6 +7322,7 @@ function rtHarness(initialFiles, opts) {
     assert(rs1.state === 'open', '#588-WIDE-CAP: reconcile promotes to open');
     assert(rs1.max_concurrent === 4, '#588-WIDE-CAP: max_concurrent==4 survives reconcile at width 4, got ' + rs1.max_concurrent);
     assert(rs1.nodes.length === 4, '#588-WIDE-CAP: reconcile rolls ALL 4 forward (ceiling==width==4), got ' + rs1.nodes.length);
+    assert(rs1.nodes.every(n => n.wait_budget_minutes === waitBudgets[n.id] && n.wait_budget_source === 'planner_override'), '#655-R1: write-leg crash reconcile retains exact authored values/source');
     assert(rs1.lane_group && Object.keys(rs1.lane_group.legs).length === 4, '#588-WIDE-CAP: all 4 legs retained through reconcile, got ' + JSON.stringify(rs1.lane_group && Object.keys(rs1.lane_group.legs)));
     cleanup(repoRoot);
   }
@@ -7087,7 +7335,8 @@ function rtHarness(initialFiles, opts) {
   {
     const setOf = { A: 'ax.js', B: 'by.js', C: 'cz.js', D: 'dz.js', E: 'ez.js' };
     const allIds = ['A', 'B', 'C', 'D', 'E'];
-    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }] });
+    const waitBudgets = { A: 180, B: 181, C: 182, D: 183, E: 184 };
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }], waitBudgets });
     const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r.result === 'ok' && r.opened.length === 4, '#588-WIDE-DRAIN: co-open 4, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
     const openedIds = r.opened.map(n => n.id);
@@ -7115,6 +7364,7 @@ function rtHarness(initialFiles, opts) {
     const r2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
     assert(r2.result === 'ok', '#588-WIDE-DRAIN: drain open-ready ok, got ' + JSON.stringify(r2));
     assert(Array.isArray(r2.opened) && r2.opened.length === 1 && r2.opened[0].id === pendingId, '#588-WIDE-DRAIN: the queued 5th (' + pendingId + ') drains, got ' + JSON.stringify(r2.opened && r2.opened.map(n => n.id)));
+    assert(r2.opened[0].dispatch.wait_budget_minutes === waitBudgets[pendingId] && r2.opened[0].dispatch.wait_budget_source === 'planner_override', '#655-R1: queued write top-up/drain keeps authored override/source');
     assert(!r2.laneGroup, '#588-WIDE-DRAIN: single remaining write opens serially (no lane group)');
     const rs2 = readRS(cacheDir);
     assert(!rs2.lane_group, '#588-WIDE-DRAIN: running-set has no lane_group for the serial drain');

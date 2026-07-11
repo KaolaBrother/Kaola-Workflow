@@ -40,6 +40,10 @@ timeout/nudge/reclaim decision is never left to model improvisation:
 - **Wait budget.** Every dispatch card carries `dispatch.wait_budget_minutes` (tier-derived —
   `reasoning`→40, `standard`→20, role-default→20 — always a concrete number, never absent). **A
   `running` agent is never interrupted before its wait budget elapses.**
+- **Evidence-grounded override.** An optional frozen node override may only extend the effective
+  tier floor through 720 minutes. Author it only from concrete issue, command, benchmark, or
+  preflight duration evidence, and record the evidence plus expected runtime in the node brief;
+  task difficulty alone and an attempt to mask a wedge are not evidence.
 - **Escalation ladder, not impatience-kill.** Only after the wait budget expires: (1) demand the
   bounded deliverable now (`followup_task` / an equivalent nudge); (2) after a grace window with no
   response, interrupt (recoverable, not a kill) and ask once more for partial evidence; (3) reclaim
@@ -68,6 +72,13 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
 - **Single-scenario dev loop (#357).** `node scripts/simulate-workflow-walkthrough.js --list` prints the scenario registry (one name per line; ordering-coupled head scenarios carry a `[shared-tmp group]` marker and always run as one unit); `--only <name|prefix>` runs just the matching scenario(s) in seconds — use it to reproduce a single failure instead of re-running the full suite (the full-run sentinel prints only on full runs). The harness is fail-closed and isolated: a missing gh-shim file throws instead of falling through to the real `gh`, `runNode` children get a 120s timeout, a scrubbed `KAOLA_*` env, and global-git-config isolation (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), and the gitlab/gitea edition runner-of-runners print a delimited `CHILD FAILURE` block (last-30-line stdout/stderr tails) when a child test file fails.
 - A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
 - **Edition behavioral coverage (issue #342).** A green forge chain certifies *structure* (registries, forbidden tokens, file existence) — it is **insufficient evidence of forge behavioral parity** unless an edition-level test exercises the feature. A cross-edition feature that adds or changes behavior in a HAND-PORTED edition script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`) MUST add behavioral scenarios to that edition's walkthrough (`simulate-{gitlab,gitea}-workflow-walkthrough.js`) driving the real edition CLI, mirroring the root coverage modulo forge nouns. Byte-synced scripts (the codex mirrors under `plugins/kaola-workflow/scripts/`, enforced by `validate-script-sync.js`) inherit root behavioral coverage and need no duplicate scenarios. A throwaway `$TMPDIR` smoke proves a repair but is not coverage — commit the scenarios (the #328 CR1/CR2 lesson: the gitlab/gitea bundle-finalization half shipped under four green chains because the chains certified structure only).
+
+- **Lifecycle and boundary coverage for frozen dispatch fields.** A field added to `## Nodes` must
+  be tested through the real validator and every descriptor/opener that consumes it, durable
+  running-set persistence, rolling top-up, and crash reconciliation. Pin exact lower/upper bounds,
+  typed refusals, omitted/default resolution, and a legacy-absence control whose descriptor and
+  dispatch object remain byte-compatible. Direct builder injection is a unit control, not a
+  substitute for an authored-plan lifecycle test.
 
 - **Generated forge aggregator ports — `sync:editions` (issue #365).** The four forge **aggregator** ports (`kaola-{gitlab,gitea}-workflow-{adaptive-node,next-action,commit-node,adaptive-handoff}.js`) are **generated from canonical**, NOT hand-ported: edit the canonical `scripts/kaola-workflow-*.js`, then run `npm run sync:editions` (which also cp's `COMMON_SCRIPTS`→codex and the byte-identical groups across editions). Each generated port carries an `// @generated from scripts/<base>` header — never hand-edit one. `scripts/edition-sync.js --check` (wired into the gitlab + gitea chains) recomputes each port from canonical via the declared rename map and fails the chain on any byte mismatch, so drift in a generated port (the #347 producer-not-ported class) is caught at commit time. These four inherit root behavioral coverage like the codex byte-mirrors; the **data-layer** forge ports (`claim`/`sink-merge`/`sink-pr`/`repair-state`/`active-folders`/`classifier`/`roadmap`/`plan-validator`) stay hand-ported and still require the #342 behavioral scenarios above.
 

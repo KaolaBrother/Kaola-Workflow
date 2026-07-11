@@ -1095,6 +1095,12 @@ for (const file of claudeJoinProtocolSurfaces611) {
   assertIncludes(file, 'writerHalt');
   assertIncludes(file, 'delegation_outcome');
 }
+for (const file of [...codexJoinProtocolSurfaces611, ...claudeJoinProtocolSurfaces611]) {
+  assertIncludes(file, 'dispatch card\'s frozen `wait_budget_minutes` value and source are authoritative');
+  assertIncludes(file, '`planner_override` may extend but never shorten');
+  assertIncludes(file, 'must not interrupt or re-nudge before that floor expires');
+  assertIncludes(file, 'complete governed deliverable');
+}
 
 // #400: registry-driven route-reachability contract for the Claude command surface. Every
 // route/command target a claim/startup/resume receipt emits MUST resolve to an installed command

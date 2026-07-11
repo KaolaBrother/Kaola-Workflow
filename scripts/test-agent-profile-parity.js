@@ -56,6 +56,10 @@ const FEATURE_TOKENS = [
   // agents/metric-optimizer.md's ratchet-protocol reject step, so this enforces its three .toml
   // twins carry it (md↔toml parity coverage for the new bounded metric-ratchet role).
   'git reset --hard',
+  'wait_budget_minutes',
+  'planner_override',
+  'difficulty alone is not evidence',
+  'never inflate a budget to hide a wedged agent',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
@@ -90,6 +94,15 @@ for (const md of mdFiles) {
         '#422.2: token "' + token + '" is in agents/' + md + ' but MISSING from ' + tp +
         ' (md↔toml feature drift — mirror the feature paragraph token into the .toml twin)');
     });
+  }
+}
+
+for (const file of ['agents/workflow-planner.md', ...TOML_TREES.map(t => t + '/workflow-planner.toml')]) {
+  const content = read(file) || '';
+  for (const token of ['wait_budget_minutes', 'planner_override', 'through 720 minutes',
+    'nondelegable', 'optimizer conflict', 'difficulty alone is not evidence',
+    'never inflate a budget to hide a wedged agent']) {
+    assert(content.includes(token), `${file} must carry planner wait-budget contract token ${JSON.stringify(token)}`);
   }
 }
 

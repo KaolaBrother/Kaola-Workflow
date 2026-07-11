@@ -38,6 +38,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process'); // #231: ONLY the --barrier-check / --gate-verify CLI handlers shell out to git; the core functions stay IO-free.
 const classifier = require('./kaola-gitlab-workflow-classifier');
 const schema = require('./kaola-workflow-adaptive-schema');
+const { resolveAgentModel } = require('./kaola-workflow-resolve-agent-model');
 // #274: byte-identity / sync-group write-set gap check. Root-only module (no plugin
 // copy) — resolves in the Claude scripts/ tree; throws+caught (null) in the forge/codex
 // edition trees, where the gap check below becomes a graceful no-op (zero false positives).
@@ -620,6 +621,13 @@ function parseNodes(content) {
       // #382: optional per-node model tier ({opus|sonnet}). Hash-covered (lives in ## Nodes).
       // Absent column / '—' => '' => today's role-static resolution (back-compat; old plans hash-stable).
       model: (() => { const v = get('model'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
+      // #655: optional frozen no-interrupt-floor override. Preserve the raw cell for
+      // precise freeze refusals; consumers use only the validated numeric field.
+      waitBudgetRaw: (() => { const v = get('wait_budget_minutes'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      wait_budget_minutes: (() => {
+        const v = get('wait_budget_minutes');
+        return (v && v !== '—' && v !== '-' && /^(0|[1-9][0-9]*)$/.test(v)) ? Number(v) : null;
+      })(),
       // #641 (D-641-01): the observation-scope annotation ({scratch}). Hash-covered (lives in ## Nodes).
       // Absent column / '—' => '' => today's behavior (back-compat; old plans hash-stable). `scratch`
       // declares an adversarial-verifier READ gate whose verdict is rendered from .cache evidence + scratch
@@ -628,6 +636,36 @@ function parseNodes(content) {
     });
   }
   return nodes;
+}
+
+// Validate and resolve the optional wait-budget override on an already parsed,
+// validator-shaped node. Shared by freeze validation and next-action's upgrade
+// compatibility wall; no caller reparses Markdown.
+function validateWaitBudgetNode(node, opts) {
+  opts = opts || {};
+  const raw = String(node && node.waitBudgetRaw || '');
+  if (!raw) return { ok: true, wait_budget_minutes: null, wait_budget_source: null };
+  const refuse = (reason, detail) => ({ ok: false, result: 'refuse', reason, errors: [detail] });
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+    return refuse('wait_budget_noninteger', `node ${node.id} wait_budget_minutes must be a strict base-10 integer (got "${raw}")`);
+  }
+  if (node.role === MAIN_SESSION_GATE || node.role === TERMINAL_ROLE) {
+    return refuse('wait_budget_nondelegable', `node ${node.id} role ${node.role} is not delegated and cannot declare wait_budget_minutes`);
+  }
+  const resolveModel = opts.resolveModel || (role => resolveAgentModel(role));
+  const value = Number(raw);
+  const floor = schema.waitBudgetFloor(node.model || resolveModel(node.role));
+  if (value < floor) {
+    return refuse('wait_budget_below_floor', `node ${node.id} wait_budget_minutes ${value} is below resolved tier floor ${floor}`);
+  }
+  if (value > schema.WAIT_BUDGET_MINUTES_CAP) {
+    return refuse('wait_budget_above_cap', `node ${node.id} wait_budget_minutes ${value} exceeds cap ${schema.WAIT_BUDGET_MINUTES_CAP}`);
+  }
+  const optimize = opts.optimizeContracts && opts.optimizeContracts.get(node.id);
+  if (node.role === 'metric-optimizer' && optimize && optimize.budget_wallclock_minutes !== null) {
+    return refuse('wait_budget_conflict', `node ${node.id} declares both wait_budget_minutes and optimize(${node.id}).budget_wallclock_minutes`);
+  }
+  return { ok: true, wait_budget_minutes: value, wait_budget_source: 'planner_override', floor };
 }
 // Section slicing is delegated to classifier.sectionBody (fence-aware) so the validator,
 // the plan_hash, and the executor's classifier.readPlanNodes share ONE reader and cannot
@@ -1400,6 +1438,7 @@ function readStoredHash(content) {
 // opts: { root, fanoutCap }
 function validatePlan(content, opts) {
   opts = opts || {};
+  const resolveModel = opts.resolveModel || (role => resolveAgentModel(role));
   const nodes = parseNodes(content);
   // audit B1: read labels ONLY from the hash-covered `## Meta` section. parseLabels used to
   // scan the whole document, so a decoy `labels:` line placed OUTSIDE `## Meta` (which the
@@ -1461,6 +1500,13 @@ function validatePlan(content, opts) {
   // #634: the metric-optimizer optimize(<id>) Meta contracts (Map<nodeId,contract>), parsed once for the
   // OPT-1..OPT-4/OPT-6 field rules below and the OPT-5 gate rule in the gates block. plan_hash-covered.
   const optimizeContracts = parseOptimizeContracts(content);
+
+  // #655: validate the optional general override once on the validator-shaped node.
+  // Direct typed returns keep callers from classifying these stable refusal families by text.
+  for (const n of nodes) {
+    const check = validateWaitBudgetNode(n, { resolveModel, optimizeContracts });
+    if (!check.ok) return { result: 'refuse', reason: check.reason, operator_hint: getOperatorHint(check.reason), errors: check.errors, planHash: computePlanHash(content) };
+  }
 
   // #388 (FREEZE-ONLY): duplicate node ids + sanitize-collisions freeze in-grammar today (nodeCount
   // counts both; barrierCheck's nodes.find judges the 2nd against the 1st's write set; parseLedger is
@@ -3644,6 +3690,7 @@ module.exports = {
   parseNodeBriefs,
   nodeBriefsPresent,
   parseNodes,
+  validateWaitBudgetNode,
   parseLabels,
   parseGoal,
   parseLedger,

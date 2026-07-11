@@ -122,6 +122,15 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   `model` cell outside `{reasoning, standard}` (or the legacy `opus`/`sonnet` aliases) is a freeze
   refusal (`model_invalid`); a `main-session-gate` must NOT carry a model (it is never dispatched as
   a subagent). Absent/`—` falls back to the role-static model (back-compat).
+- **Wait-budget assignment — optionally fill `wait_budget_minutes`, and record its source.** The
+  column is hash-covered when present. Use the role/tier default unless concrete duration evidence
+  from prior runs, an external wall-clock bound, or a governed task constraint justifies a whole
+  number of minutes. The tier floor applies through 720 minutes. Record an extension as
+  `planner_override`; it may extend the floor but never shorten it. Refuse a nondelegable task rather
+  than inventing a delegation budget, and refuse an optimizer conflict rather than competing with
+  the specialized `optimize_budget`. State the concrete-duration evidence in the node brief:
+  difficulty alone is not evidence; never inflate a budget to hide a wedged agent. Wedging is handled
+  by the executor's escalation contract after the genuine floor.
 - **Gates are walls the validator finds in the graph, not flags:** `code-reviewer` must
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a

@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
-const { parseNodes, parseLedger, parseSpeculativePolicy, uniqueSink, hasUnresolvableEntry } = require('./kaola-gitlab-workflow-plan-validator');
+const { parseNodes, parseLedger, parseSpeculativePolicy, parseOptimizeContracts, validateWaitBudgetNode, uniqueSink, hasUnresolvableEntry } = require('./kaola-gitlab-workflow-plan-validator');
 const { parseWriteSetCell, isProtected } = require('./kaola-gitlab-workflow-classifier');
 const { LEDGER_STATUSES, NODE_MODEL_TIERS, normalizeTier, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
 const { enforceReasoningFloor } = require('./kaola-workflow-resolve-agent-model');
@@ -84,6 +84,15 @@ function computeNextAction(content, opts) {
     }
   }
 
+  // Upgrade compatibility wall: a pre-feature validator could freeze an unknown
+  // hash-covered column. Re-apply current semantics before projecting/dispatching
+  // any parsed override, without tightening the legacy resume hash/structure gate.
+  const optimizeContracts = parseOptimizeContracts(content);
+  for (const node of nodes) {
+    const check = validateWaitBudgetNode(node, { resolveModel, optimizeContracts });
+    if (!check.ok) return { result: 'refuse', reason: check.reason, errors: check.errors };
+  }
+
   // Helper: effective status for a node id.
   const st = id => ledger.get(id) || 'pending';
 
@@ -96,6 +105,16 @@ function computeNextAction(content, opts) {
   // repair reset. Cycle-guarded (visited set); plans are DAGs but next-action may run on
   // a mid-repair plan, so fail-safe rather than recurse.
   const byId = new Map(nodes.map(n => [n.id, n]));
+  const descriptor = node => ({
+    id: node.id,
+    role: node.role,
+    dependsOn: node.dependsOn,
+    model: node.model || resolveModel(node.role),
+    declared_write_set: node.writeSetRaw,
+    shape: node.shape.kind,
+    // Optional and conditional: legacy/no-override descriptor bytes stay unchanged.
+    ...(Number.isInteger(node.wait_budget_minutes) ? { wait_budget_minutes: node.wait_budget_minutes } : {}),
+  });
   const allAncestorsTerminal = startId => {
     const start = byId.get(startId);
     const stack = start ? start.dependsOn.slice() : [];
@@ -119,14 +138,7 @@ function computeNextAction(content, opts) {
       // #308: ALL transitive ancestors must be terminal (n/a satisfies readiness).
       return allAncestorsTerminal(node.id);
     })
-    .map(node => ({
-      id: node.id,
-      role: node.role,
-      dependsOn: node.dependsOn,
-      model: node.model || resolveModel(node.role),
-      declared_write_set: node.writeSetRaw,
-      shape: node.shape.kind,
-    }));
+    .map(descriptor);
 
   // 4b. #463 Slice 1 (AC14): ENFORCE the reasoning-class floor on the dispatchable frontier — the
   // production model-resolution seam. A ready node whose role is a REASONING_FLOOR_ROLES (e.g.
@@ -191,14 +203,7 @@ function computeNextAction(content, opts) {
     .sort((a, b) => (b.longestPathToSink - a.longestPathToSink) || (docIndex.get(a.id) - docIndex.get(b.id)));
   const active = nodes
     .filter(node => st(node.id) === 'in_progress')
-    .map(node => ({
-      id: node.id,
-      role: node.role,
-      dependsOn: node.dependsOn,
-      model: node.model || resolveModel(node.role),
-      declared_write_set: node.writeSetRaw,
-      shape: node.shape.kind,
-    }));
+    .map(descriptor);
 
   // #439 (D-419 Part 4) + #596: SPECULATIVE eligibility, read OR write (additive; mechanical, never
   // authored). A node is speculative-eligible iff (a) its OWN status is still pending, (b) it is NOT
@@ -250,12 +255,7 @@ function computeNextAction(content, opts) {
         return !!gate && gateRoleSet.has(gate.role) && st(gate.id) === 'in_progress';  // ...an OPEN gate
       })
       .map(node => ({
-        id: node.id,
-        role: node.role,
-        dependsOn: node.dependsOn,
-        model: node.model || resolveModel(node.role),
-        declared_write_set: node.writeSetRaw,
-        shape: node.shape.kind,
+        ...descriptor(node),
         speculativeGate: node.dependsOn.filter(d => !TERMINAL.has(st(d)))[0],
         longestPathToSink: longestPathToSink(node.id),
       }))

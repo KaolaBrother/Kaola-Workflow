@@ -169,11 +169,17 @@ function dispatchEffort(model) {
 // nodes get the larger budget (deeper work runs longer), standard the smaller; an absent/blank/out-of-vocab
 // tier resolves to a CONCRETE role-default (never null) so every dispatch card carries a number — the
 // non-interrupt rule always has a floor. Values sit ABOVE the observed 10–30-minute runtime of substantive
-// role nodes so the budget replaces the improvised 2–7-minute impatience ceiling. Planner override rides the
-// tier: the planner sets a node's model tier, which sets its budget (no separate per-node plan column —
-// the node grammar carries no per-node extras field, and the tier default is the reuse-before-adding choice).
+// role nodes so the budget replaces the improvised 2–7-minute impatience ceiling. A validated optional
+// per-node planner override may extend (never shorten) this tier-derived floor through the canonical cap.
 const WAIT_BUDGET_MINUTES = Object.freeze({ reasoning: 40, standard: 20 });
 const WAIT_BUDGET_MINUTES_DEFAULT = 20; // no tier resolves → concrete role-default (never null)
+const WAIT_BUDGET_MINUTES_CAP = 720;
+function waitBudgetFloor(model) {
+  const tier = normalizeTier(model);
+  return tier === 'reasoning' ? WAIT_BUDGET_MINUTES.reasoning
+    : tier === 'standard' ? WAIT_BUDGET_MINUTES.standard
+      : WAIT_BUDGET_MINUTES_DEFAULT;
+}
 function waitBudgetMinutes(model) {
   const tier = normalizeTier(model);
   if (tier === 'reasoning') {
@@ -1244,6 +1250,8 @@ module.exports = {
   dispatchEffort,
   WAIT_BUDGET_MINUTES,
   WAIT_BUDGET_MINUTES_DEFAULT,
+  WAIT_BUDGET_MINUTES_CAP,
+  waitBudgetFloor,
   waitBudgetMinutes,
   effortForProvider,
   mapTier,

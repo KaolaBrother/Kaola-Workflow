@@ -867,6 +867,15 @@ assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'NEVER i
 // #611: the command surface's runtime-appropriate equivalent uses SendMessage vocabulary and the
 // "Writer kill-safety" heading instead of the Codex A-F lettering.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
+for (const planRunSurface of [pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/commands/kaola-workflow-plan-run.md']) {
+  assertIncludes(planRunSurface, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
+  assertIncludes(planRunSurface, '`planner_override` may extend but never shorten');
+  assertIncludes(planRunSurface, 'must not interrupt or re-nudge before that floor expires');
+  assertIncludes(planRunSurface, 'complete governed deliverable');
+}
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'planner_override');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'difficulty alone is not evidence');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a budget to hide a wedged agent');
 
 // #606: teammate-mode dispatch subsection — Claude-runtime block, command surface only.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', "spawn each node's role agent as a NAMED teammate");

@@ -916,6 +916,17 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'dispatch.wait_budget_minu
 assertIncludes('commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'writerHalt');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'delegation_outcome');
+for (const file of [`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'commands/kaola-workflow-plan-run.md']) {
+  assertIncludes(file, "dispatch card's frozen `wait_budget_minutes` value and source are authoritative");
+  assertIncludes(file, '`planner_override` may extend but never shorten');
+  assertIncludes(file, 'must not interrupt or re-nudge before that floor expires');
+  assertIncludes(file, 'complete governed deliverable');
+}
+for (const file of ['agents/workflow-planner.md', `${pluginRoot}/agents/workflow-planner.toml`]) {
+  assertIncludes(file, 'planner_override');
+  assertIncludes(file, 'difficulty alone is not evidence');
+  assertIncludes(file, 'never inflate a budget to hide a wedged agent');
+}
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).

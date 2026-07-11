@@ -24,10 +24,29 @@ Every dispatch card carries `wait_budget_minutes`, resolved from the node's effo
 | `standard` (legacy `sonnet`) | 20 | `planner_model` |
 | absent/blank/unrecognized | 20 | `role_default` — always a concrete number, never null |
 
+The frozen `## Nodes` table may add an optional `wait_budget_minutes` column. A blank cell, `-`,
+`—`, or an absent column keeps the tier-derived value and source above byte-for-byte. A positive
+override is authoritative on the dispatch card with `wait_budget_source: planner_override`; it may
+extend, but never shorten, the effective role/model tier floor (20 minutes for standard, 40 for
+reasoning) and is capped at 720 minutes.
+
+Use an override only when concrete duration evidence — an issue requirement, command timing,
+benchmark, or preflight result — supports the expected runtime. Put that evidence and expected
+duration in the node brief. Difficulty alone is not duration evidence, and a larger value must not
+be used to disguise a wedged agent. `finalize` and `main-session-gate` are nondelegable and cannot
+declare an override. A `metric-optimizer` may use this general floor or its specialized
+`optimize(<id>).budget_wallclock_minutes`, but declaring both is an ambiguous contract and is
+refused.
+
 **Rule: a `running` agent is never interrupted before its wait budget expires.** This replaces an
 improvised patience ceiling (single-digit minutes) that sat below the natural runtime of a
 substantive role node — the budget is derived from the plan, not guessed, and every dispatch card
 carries one.
+
+The value is only a no-interrupt/no-re-nudge floor for the join loop. It is not a subprocess
+timeout, a success verdict, or permission to accept partial or missing evidence. Once it expires,
+the existing bounded escalation ladder in §3 still applies, and completion still requires the
+role's governed deliverable and evidence contract.
 
 ---
 

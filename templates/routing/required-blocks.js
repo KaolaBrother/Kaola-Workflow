@@ -32,6 +32,20 @@
 const REQUIRED_BLOCKS = [
   // ==== plan-run (basename kaola-workflow-plan-run on both surface types) ====
   {
+    block_id: 'pr-planner-wait-budget',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: planner-wait-budget -->',
+      "dispatch card's frozen `wait_budget_minutes` value and source are authoritative",
+      '`planner_override` may extend but never shorten',
+      'must not interrupt or re-nudge before that floor expires',
+      'complete governed deliverable',
+      '`optimize_budget`',
+    ],
+  },
+  {
     block_id: 'pr-frontier-unit',
     topic: 'plan-run',
     runtime_tag: 'both',

@@ -2242,6 +2242,50 @@ function testAdaptiveValidatorGovernance() {
       assert(pv.validatePlan(frozenDup).result === 'refuse',
         '#388: the same dup-id content must REFUSE at --freeze, got: ' + JSON.stringify(pv.validatePlan(frozenDup).result));
     }
+
+    // #655: optional, header-indexed frozen wait-budget grammar. This suite's `tmp`
+    // is a real temporary directory, matching freeze-time filesystem behavior.
+    const waitPlan = (cell, role = 'implementer', model = 'standard') => [
+      '# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |',
+      `| impl | ${role} | — | ${role === 'code-reviewer' ? '—' : 'src/x.js'} | 1 | sequence | ${model} | ${cell} |`,
+      '| review | code-reviewer | impl | — | 1 | sequence | reasoning | — |',
+      '| done | finalize | review | — | 1 | sequence | — | — |', ''
+    ].join('\n');
+    const waitValidator = require('./kaola-workflow-plan-validator');
+    for (const empty of ['', '-', '—']) {
+      const parsed = waitValidator.parseNodes(waitPlan(empty));
+      assert(parsed[0].wait_budget_minutes === null, '#655 blank/dash means no override: ' + JSON.stringify(empty));
+      assert(waitValidator.validatePlan(waitPlan(empty), { root: tmp }).result === 'in-grammar', '#655 blank/dash remains legacy-compatible');
+    }
+    for (const [cell, model] of [['20', 'standard'], ['40', 'reasoning'], ['720', 'standard'], ['180', 'standard']]) {
+      const plan = waitPlan(cell, 'implementer', model);
+      const parsed = waitValidator.parseNodes(plan)[0];
+      const out = waitValidator.validatePlan(plan, { root: tmp });
+      assert(parsed.wait_budget_minutes === Number(cell) && out.result === 'in-grammar', '#655 valid wait budget ' + cell + ': ' + JSON.stringify(out));
+      if (cell === '180') assert(out.planHash !== waitValidator.computePlanHash(plan.replace('180', '181')), '#655 plan hash covers wait-budget cell');
+    }
+    for (const [cell, reason] of [['20.5', 'wait_budget_noninteger'], ['19', 'wait_budget_below_floor'], ['721', 'wait_budget_above_cap']]) {
+      const out = waitValidator.validatePlan(waitPlan(cell), { root: tmp });
+      assert(out.result === 'refuse' && out.reason === reason, '#655 typed refusal ' + reason + ': ' + JSON.stringify(out));
+    }
+    for (const role of ['finalize', 'main-session-gate']) {
+      const out = waitValidator.validatePlan(waitPlan('40', role, 'reasoning').replace('| done | finalize | review | — | 1 | sequence | — | — |\n', ''), { root: tmp });
+      assert(out.result === 'refuse' && out.reason === 'wait_budget_nondelegable', '#655 nondelegable typed refusal: ' + JSON.stringify(out));
+    }
+    const roleModel = role => role === 'code-reviewer' ? 'opus' : 'sonnet';
+    let resolved = waitValidator.validatePlan(waitPlan('20', 'code-reviewer', '—'), { root: tmp, resolveModel: roleModel });
+    assert(resolved.result === 'refuse' && resolved.reason === 'wait_budget_below_floor',
+      '#655-R2: omitted-model reasoning role cannot shorten resolved 40m floor: ' + JSON.stringify(resolved));
+    resolved = waitValidator.validatePlan(waitPlan('40', 'code-reviewer', '—'), { root: tmp, resolveModel: roleModel });
+    assert(resolved.result === 'in-grammar', '#655-R2: omitted-model reasoning role accepts exact 40m floor: ' + JSON.stringify(resolved));
+    resolved = waitValidator.validatePlan(waitPlan('20', 'implementer', '—'), { root: tmp, resolveModel: roleModel });
+    assert(resolved.result === 'in-grammar', '#655-R2: omitted-model standard role accepts exact 20m floor: ' + JSON.stringify(resolved));
+    for (const [alias, floor] of [['opus', '40'], ['sonnet', '20']]) {
+      resolved = waitValidator.validatePlan(waitPlan(floor, 'implementer', alias), { root: tmp, resolveModel: roleModel });
+      assert(resolved.result === 'in-grammar', '#655-R2: legacy alias ' + alias + ' accepts exact floor: ' + JSON.stringify(resolved));
+    }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
@@ -2259,8 +2303,8 @@ function testMetricOptimizerContract() {
     fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: enhancement']
       .concat(metaExtra || [])
       .concat(['', '## Nodes', '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape |',
-        '|---|---|---|---|---|---|'])
+        '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
+        '|---|---|---|---|---|---|---|---|'])
       .concat(nodesRows).concat(['']).join('\n'));
     return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
   }
@@ -2305,6 +2349,14 @@ function testMetricOptimizerContract() {
     // zero gate-plumbing (metric-optimizer ∈ IMPLEMENT_ROLES ⇒ producesCode ⇒ G1/G3 fire for free).
     let v = optPlan(optBlock('opt'), validNodes);
     assert(v.result === 'in-grammar', 'AC1: a well-formed optimize plan must freeze in-grammar, got: ' + JSON.stringify(v));
+    v = optPlan(optBlock('opt'), [
+      '| explore | code-explorer | — | — | 1 | sequence | — | — |',
+      '| opt | metric-optimizer | explore | src/hot.js | 1 | sequence | standard | 60 |',
+      '| review | code-reviewer | opt | — | 1 | sequence | reasoning | — |',
+      '| adv | adversarial-verifier | review | — | 1 | sequence | reasoning | — |',
+      '| done | finalize | adv | — | 1 | sequence | — | — |',
+    ]);
+    assert(v.result === 'refuse' && v.reason === 'wait_budget_conflict', '#655: optimizer dual budget must refuse wait_budget_conflict, got: ' + JSON.stringify(v));
     // G1 inheritance proof: drop the code-reviewer (keep adv so OPT-5 is satisfied) → refuse G1.
     v = optPlan(optBlock('opt'), [
       '| explore | code-explorer | — | — | 1 | sequence |',

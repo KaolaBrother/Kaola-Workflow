@@ -1314,6 +1314,24 @@ function buildDispatch(nodeInfo, context) {
     // runtime). null/absent provider → role_default (the agent's configured variant wins).
     ...dispatchEffortOpencode(nodeInfo.model, ctx.opencode_provider),
   };
+  if (Number.isInteger(nodeInfo.wait_budget_minutes)) {
+    const { validateWaitBudgetNode } = require('./kaola-workflow-plan-validator');
+    const optimizeContracts = new Map();
+    if (ctx.optimize != null || Number.isFinite(ctx.budget_wallclock_minutes)) {
+      optimizeContracts.set(nodeInfo.id, { budget_wallclock_minutes: Number.isFinite(ctx.budget_wallclock_minutes) ? ctx.budget_wallclock_minutes : null });
+    }
+    const check = validateWaitBudgetNode(
+      { ...nodeInfo, waitBudgetRaw: String(nodeInfo.wait_budget_minutes) },
+      { optimizeContracts }
+    );
+    if (!check.ok) {
+      const err = new Error(check.errors[0]);
+      err.reason = check.reason;
+      throw err;
+    }
+    d.wait_budget_minutes = nodeInfo.wait_budget_minutes;
+    d.wait_budget_source = 'planner_override';
+  }
   // #609/#610: the runtime-native display for the node's model, so a dispatch-card echo reads natively on
   // every runtime (claude alias / codex effort phrase / opencode variant phrase) instead of a Claude noun.
   // Conditionally attached (like goal_line/leg_path): null only when nodeInfo.model resolves to no tier (a
@@ -5002,6 +5020,12 @@ function runOpenReady(opts) {
     // so running-set.json carries it — a reconcile-running-set roll-forward / crash re-dispatch keeps
     // the planner's tier instead of losing it. null when next-action returned no model.
     model: n.model || null,
+    // #655: persist the frozen planner override on the durable member so rolling
+    // top-up and crash reconciliation re-dispatch the exact value and source.
+    ...(Number.isInteger(n.wait_budget_minutes) ? {
+      wait_budget_minutes: n.wait_budget_minutes,
+      wait_budget_source: 'planner_override',
+    } : {}),
     baseline: 'recorded',
     opening: true,
     // #437 (D-419 P2 §1.1): stamp each lane-group member with its group_id so close-node knows it is
@@ -5212,10 +5236,15 @@ function runOpenReady(opts) {
   // opened node's dispatch card so an `observes: scratch` gate carries the pinned observation contract.
   // The running-set entry does NOT carry it; read it from the frozen plan once. Fail-soft to an empty map.
   let observesById = new Map();
+  let waitBudgetById = new Map();
   try {
     const { parseNodes } = require('./kaola-workflow-plan-validator');
-    if (typeof parseNodes === 'function') observesById = new Map(parseNodes(planContent).map(pn => [pn.id, pn.observes]));
-  } catch (_) { observesById = new Map(); }
+    if (typeof parseNodes === 'function') {
+      const parsedNodes = parseNodes(planContent);
+      observesById = new Map(parsedNodes.map(pn => [pn.id, pn.observes]));
+      waitBudgetById = new Map(parsedNodes.map(pn => [pn.id, pn.wait_budget_minutes]));
+    }
+  } catch (_) { observesById = new Map(); waitBudgetById = new Map(); }
 
   return {
     result: 'ok',
@@ -5242,7 +5271,7 @@ function runOpenReady(opts) {
       // buildDispatch omits the keys ⇒ byte-identical to pre-#591 (mirrors the conditional laneGroup attach).
       const legInfo = (legs && legs[n.id]) ? legs[n.id] : null;
       const dispatch = buildDispatch(
-        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set, observes: observesById.get(n.id) || '' },
+        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set, observes: observesById.get(n.id) || '', wait_budget_minutes: waitBudgetById.get(n.id) },
         {
           nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null,
           leg_path: legInfo ? legInfo.legPath : null, leg_branch: legInfo ? legInfo.legBranch : null,
@@ -5992,7 +6021,11 @@ function runReconcileRunningSet(opts) {
     return { result: 'ok', reconciled: false, reason: 'not_opening', state: running.state, taskTransitions: [] };
   }
 
-  const target = wholeOpening ? (running.nodes || []) : openingNodes;
+  // In a rolling top-up crash, state:'opening' covers the transaction but only
+  // members carrying opening:true are admission candidates. Stable members are
+  // counted once below and survive independently. Legacy all-opening manifests
+  // still target every member because every member carries the marker.
+  const target = openingNodes.length ? openingNodes : (wholeOpening ? (running.nodes || []) : []);
   const keptAll = [];
   const dropped = [];
   // #596 (D-596-01): ids demoted by the crashed-speculative-WRITE gate-check override BELOW — their
@@ -6058,6 +6091,18 @@ function runReconcileRunningSet(opts) {
   // Nodes in keptAll that exceed the budget are also dropped (capped out).
   const cappedOut = keptAll.slice(budget);
 
+  // A genuine cap rollback may already have flipped its ledger row. Reset it
+  // explicitly so the durable set and ledger cannot diverge into an orphan.
+  if (cappedOut.length) {
+    let planContentForCapReset = readFile(planPath);
+    let changedAny = false;
+    for (const id of cappedOut) {
+      const reset = spliceLedgerNode(planContentForCapReset, id, 'pending', { allowFrom: ['in_progress'] });
+      if (reset.changed) { planContentForCapReset = reset.content; changedAny = true; }
+    }
+    if (changedAny) writeFile(planPath, planContentForCapReset);
+  }
+
   // Codex join protocol — WRITER KILL-SAFETY reconciliation. Every WRITER member LEAVING the live set on
   // this reconcile (rolled back / capped out / stale) is a potentially-interrupted in-place writer whose
   // worktree may hold PARTIAL edits — this run's stray-write hazard, turned into a scripted, fail-closed
@@ -6120,7 +6165,7 @@ function runReconcileRunningSet(opts) {
   // or capped-out opening member (D-419-01).
   const cappedOutSet = new Set(cappedOut);
   const survivors = (running.nodes || [])
-    .filter(n => ((!wholeOpening && !n.opening) || kept.includes(n.id)) && !closedSet.has(n.id) && !staleSet.has(n.id) && !cappedOutSet.has(n.id))
+    .filter(n => ((!n.opening) || kept.includes(n.id)) && !closedSet.has(n.id) && !staleSet.has(n.id) && !cappedOutSet.has(n.id))
     .map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; });
 
   // #437 (D-419 P2 §10 crash-safety): handle a crashed lane group open/close. The group is consistent
@@ -6199,6 +6244,7 @@ function runReconcileRunningSet(opts) {
     reconciled: true,
     rolledForward: kept,
     rolledBack: dropped,
+    cappedOut,
     // #384: members dropped because their ledger row was already terminal (close-crash recovery).
     closedDropped: closed,
     // #293/S-fix: members dropped because they were stale non-opening pending (or otherwise not-in-flight)

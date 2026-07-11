@@ -22,13 +22,15 @@ here for the full contract.
 - Adaptive-path projects (`workflow_path: adaptive`, issue #227) use
   `workflow-plan.md` instead of the full Phase 1-5 set — the frozen DAG is the
   spine. It contains a `## Meta` block (frozen issue `labels:`), a machine-readable
-  `## Nodes` table (`| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |`;
+  `## Nodes` table (`| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | wait_budget_minutes |`;
   `shape` ∈ `sequence` / `fanout(<group>)` / `loop(<cap>)` / `select(<group>)` (issue #263 Classify-And-Act);
   `selector_source` names the read-only classifier node whose `.cache` evidence determines which
   `select` arm executes — absent or `—` for non-arm nodes (backward-compatible: missing column treated as non-arm);
   a single unique `finalize` sink; `cardinality` is a reserved/advisory column — parsed but not
   validated or used by the grammar or gates, though its text still feeds `plan_hash`
-  as part of `## Nodes`, so keep it present and stable), a `## Node Ledger` (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
+  as part of `## Nodes`, so keep it present and stable; `wait_budget_minutes` is optional, with an
+  absent/blank/dash cell preserving the tier-derived dispatch default and a validated integer cell
+  freezing an extension of that floor), a `## Node Ledger` (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
   and a script-computed `plan_hash` (an HTML comment `<!-- plan_hash: <sha256> -->`)
   that **lives inside `workflow-plan.md`** — never in `workflow-state.md`, because
   repair-state runs precisely when `workflow-state.md` is missing. The validator/claim
@@ -64,6 +66,14 @@ here for the full contract.
     synthesizer reconcile), so a multi-node write running set is the normal case rather than the
     exception; `KAOLA_PARALLEL_WRITES=0` forces a single-node serial running set. See the
     **`lane_group` extension** below.
+
+    A member with a frozen override also carries `wait_budget_minutes` and
+    `wait_budget_source: 'planner_override'`. These fields are copied into the durable manifest
+    before dispatch and preserved by initial open, rolling top-up, survivor rewrites, and
+    `reconcile-running-set`, so crash re-dispatch uses the same frozen value. Reconciliation counts
+    stable members once, admits only eligible `opening:true` members up to `max_concurrent`, resets
+    capped-out ledger rows to `pending`, and retains the same override metadata on every survivor.
+    The running-set member ids and `in_progress` ledger rows must remain consistent after repair.
 
     **`kind: 'gate'` member (issue #607).** `open-next` and the `close-and-open-next` fused
     advance record an opened `main-session-gate` into `running-set.json` as a minimal entry
@@ -104,7 +114,8 @@ here for the full contract.
       closes.
     - **Outside `plan_hash`.** `lane_group` is a runtime scheduler artifact, not plan structure.
       It is written into `running-set.json` (a non-hashed `.cache/` artifact), not into
-      `workflow-plan.md`. The `plan_hash` covers only `## Meta` and `## Nodes` — `lane_group`
+      `workflow-plan.md`. The `plan_hash` covers only `## Meta` and the complete `## Nodes` section,
+      including an optional `wait_budget_minutes` header and its cells — `lane_group`
       changes never invalidate the frozen plan hash.
     - **Two-phase crash-safety.** The group open follows the same crash-safe two-phase pattern as
       the single-node open: `running-set.json` is first written with `state:'opening'` AND `lane_group`
