@@ -93,6 +93,76 @@ function assert(condition, message) {
   }
 }
 
+// #658: explicit cardinality-1 adversarial fan-outs use their frozen node ids as the
+// authoritative receipt identities.  Membership is scoped to (fanout label, origin),
+// never to a role-prefix glob shared by the whole project.
+{
+  const verdictPlan = makePlan([
+    '| impl | complete | |', '| review | complete | |',
+    '| skeptic-a | complete | |', '| skeptic-b | complete | |',
+    '| other-skeptic | complete | |', '| finalize | complete | |',
+  ], [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| skeptic-a | adversarial-verifier | review | — | 1 | fanout(red-team) |',
+    '| skeptic-b | adversarial-verifier | review | — | 1 | fanout(red-team) |',
+    '| other-skeptic | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| finalize | finalize | skeptic-a, skeptic-b, other-skeptic | — | 1 | sequence |',
+  ]);
+  const fresh = {
+    'barrier-base-skeptic-a': 'aaaaaaaaaaaa9999\n',
+    'barrier-base-skeptic-b': 'bbbbbbbbbbbb9999\n',
+    'barrier-base-other-skeptic': 'cccccccccccc9999\n',
+    'skeptic-a.md': 'evidence-binding: skeptic-a aaaaaaaaaaaa\nverdict: pass\n',
+    'skeptic-b.md': 'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: pass\n',
+    'other-skeptic.md': 'evidence-binding: other-skeptic cccccccccccc\nverdict: fail\nfindings_blocking: 1\n',
+    'adversarial-verifier-bridge.md': 'verdict: fail\nfindings_blocking: 1\n',
+  };
+  const check = files => planValidator.verifyVerdictBlock(verdictPlan, {
+    nodeId: 'skeptic-a', readCache: f => Object.prototype.hasOwnProperty.call(files, f) ? files[f] : null,
+    globCache: prefix => Object.keys(files).filter(f => f.startsWith(prefix) && f.endsWith('.md')),
+  });
+  let r = check(fresh);
+  assert(r.ok === true && JSON.stringify(r.members) === JSON.stringify(['skeptic-a', 'skeptic-b']),
+    '#658 exact group: independent same-label/different-origin receipt and legacy bridge never enter tally, got ' + JSON.stringify(r));
+
+  const missing = Object.assign({}, fresh); delete missing['skeptic-b.md'];
+  r = check(missing);
+  assert(r.ok === false && /missing|absent/.test(r.reason), '#658 missing canonical member refuses structurally, got ' + JSON.stringify(r));
+
+  const foreign = Object.assign({}, fresh, { 'skeptic-b.md': 'evidence-binding: foreign bbbbbbbbbbbb\nverdict: pass\n' });
+  r = check(foreign);
+  assert(r.ok === false && /foreign|binding/.test(r.reason), '#658 foreign member binding refuses structurally, got ' + JSON.stringify(r));
+
+  const duplicate = Object.assign({}, fresh, { 'skeptic-b.md': 'evidence-binding: skeptic-a bbbbbbbbbbbb\nverdict: pass\n' });
+  r = check(duplicate);
+  assert(r.ok === false && /duplicate|binding/.test(r.reason), '#658 duplicate member injection refuses structurally, got ' + JSON.stringify(r));
+
+  const stale = Object.assign({}, fresh, { 'skeptic-b.md': 'evidence-binding: skeptic-b stale0000000\nverdict: pass\n' });
+  r = check(stale);
+  assert(r.ok === false && /stale|binding/.test(r.reason), '#658 stale member nonce refuses structurally, got ' + JSON.stringify(r));
+
+  const tied = Object.assign({}, fresh, { 'skeptic-a.md': 'evidence-binding: skeptic-a aaaaaaaaaaaa\nverdict: fail\nfindings_blocking: 1\n' });
+  r = check(tied);
+  assert(r.ok === false && /1\/2/.test(r.reason), '#658 one-pass/one-fail tie remains refuted, got ' + JSON.stringify(r));
+
+  const singletonPlan = verdictPlan.replace('| skeptic-b | adversarial-verifier | review | — | 1 | fanout(red-team) |', '| skeptic-b | adversarial-verifier | impl | — | 1 | fanout(red-team) |');
+  r = planValidator.verifyVerdictBlock(singletonPlan, { nodeId: 'skeptic-a', readCache: f => fresh[f] || null, globCache: () => [] });
+  assert(r.ok === true && JSON.stringify(r.members) === JSON.stringify(['skeptic-a']),
+    '#658 cardinality-1 singleton control preserves precise group identity, got ' + JSON.stringify(r));
+
+  const legacyPlan = makePlan(['| impl | complete | |', '| av | complete | |', '| finalize | complete | |'], [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| av | adversarial-verifier | impl | — | 3 | fanout(legacy) |',
+    '| finalize | finalize | av | — | 1 | sequence |',
+  ]);
+  r = planValidator.verifyVerdictBlock(legacyPlan, { nodeId: 'av',
+    readCache: f => ({ 'adversarial-verifier-0.md': 'verdict: pass\n', 'adversarial-verifier-1.md': 'verdict: pass\n' })[f] || null,
+    globCache: p => p === 'adversarial-verifier-' ? ['adversarial-verifier-0.md', 'adversarial-verifier-1.md'] : [],
+  });
+  assert(r.ok === true, '#658 archived cardinality>1 role-prefix receipts remain read-only compatible, got ' + JSON.stringify(r));
+}
+
 // #649: write populated fixture evidence to the same authoritative cache path the runtime resolves.
 // A live isolated write member owns its leg-local copy; every other node owns the parent cache copy.
 // Token lines are generated from the production registry so future evidence-contract tightening cannot
@@ -2519,6 +2589,36 @@ function makeState(opts) {
     '#349 fanout: per-instance adversarial-verifier-*.md siblings purged, got ' + JSON.stringify(removed));
   assert(!removed.includes('unrelated.md'),
     '#349 fanout: unrelated .cache files left untouched, got ' + JSON.stringify(removed));
+}
+
+// #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).
+// #658: repair reset treats an explicit skeptic group as one collective gate and
+// removes only that group's node-id receipts (not a same-role independent group).
+{
+  const planNodes = [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| av-a | adversarial-verifier | review | — | 1 | fanout(red-team) |',
+    '| av-b | adversarial-verifier | review | — | 1 | fanout(red-team) |',
+    '| foreign-av | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| finalize | finalize | av-a, av-b, foreign-av | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| impl | complete | |', '| review | complete | |', '| av-a | complete | |',
+    '| av-b | complete | |', '| foreign-av | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const present = new Set(['av-a.md', 'av-b.md', 'foreign-av.md']);
+  const removed = [];
+  const r = runReopenNode({ planPath: '/fake/kaola-workflow/p/workflow-plan.md', project: 'p', nodeId: 'review',
+    shell: sp => path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 },
+    readFile: f => f.endsWith('workflow-plan.md') ? planContent : (() => { throw new Error('ENOENT'); })(),
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: f => present.has(path.basename(f)), unlink: f => removed.push(path.basename(f)), readdir: () => [...present],
+  });
+  assert(r.result === 'ok' && r.gatesReset.includes('av-a') && r.gatesReset.includes('av-b'),
+    '#658 reopen resets the exact collective explicit skeptic group, got ' + JSON.stringify(r));
+  assert(removed.includes('av-a.md') && removed.includes('av-b.md') && !removed.includes('foreign-av.md'),
+    '#658 reopen cleanup is exact-group only, got ' + JSON.stringify(removed));
 }
 
 // #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).

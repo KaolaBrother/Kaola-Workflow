@@ -651,6 +651,19 @@ withForge({
   assert.strictEqual(folders[0].issue_iid, 10);
 });
 
+{
+  const real = '- Write Set: plugins/kaola-workflow-gitea/scripts/real.js';
+  const cases = [['```md', '```', false], ['~~~~markdown', '~~~~', false], ['`````md', '`````', true]];
+  for (const [open, close, hasShorterDelimiter] of cases) {
+    const inner = hasShorterDelimiter ? (open[0] === '`' ? '```' : '~~~') : 'fenced content';
+    const body = classifier.sectionBody(['# Summary', open, '## Scope', '- Write Set: fake.js', inner, close, '## Scope', '~~~text', '## Review', '~~~', real, '## Review'].join('\n'), 'Scope');
+    assert(body.includes(real), 'Gitea fence-aware section identity must select the real Scope for ' + open);
+    assert(!body.includes('fake.js'), 'Gitea fence-aware section identity must skip fenced decoy for ' + open);
+  }
+  assert.strictEqual(classifier.sectionBody('# Summary\n## Scope\na\n## Scope\nb', 'Scope'), '');
+  assert.strictEqual(classifier.sectionBody('# Summary\n```md\n## Scope\na', 'Scope'), '');
+}
+
 // probeIssueState: null issueNumber -> { state: 'open', reason: 'offline-or-null' }
 {
   const result = active.probeIssueState(null);
@@ -869,7 +882,7 @@ withForge({
   fs.writeFileSync(path.join(dir, 'fast-summary.md'),
     '# Fast Summary: fast-fence-pre-project\n\n## Status\n```sh\nIN_PROGRESS\n## Scope\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
   const result = classifier.classifyIssue(35, root);
-  assert.strictEqual(result.verdict, 'red');
+  assert.strictEqual(result.verdict, 'green');
 });
 
 withForge({

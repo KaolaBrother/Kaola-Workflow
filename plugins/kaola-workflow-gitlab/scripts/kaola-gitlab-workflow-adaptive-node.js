@@ -3384,7 +3384,19 @@ function runReopenNode(opts) {
   };
   const desc = descendantsOf(nodeId);
   const gatesReset = nodes
-    .filter(n => desc.has(n.id) && GATE_ROLES.has(n.role) && postDominates(n.id))
+    .filter(n => {
+      if (!desc.has(n.id) || !GATE_ROLES.has(n.role)) return false;
+      if (postDominates(n.id)) return true;
+      // An explicit skeptic group is an AND-joined collective gate. No individual
+      // member post-dominates the producer in the simple path graph, but the frozen
+      // group does; reset the exact group when its common origin is downstream.
+      if (n.role === 'adversarial-verifier' && n.shape && n.shape.kind === 'fanout' && String(n.cardinality) === '1') {
+        const { resolveAdversarialFanoutGroup } = require('./kaola-gitlab-workflow-plan-validator');
+        const group = resolveAdversarialFanoutGroup(nodes, n);
+        return group && group.members.length > 0 && group.members.every(id => desc.has(id));
+      }
+      return false;
+    })
     .map(n => n.id);
 
   // (3b) #343 fail-closed orphan guard: the ONLY in_progress rows tolerated at reopen time
@@ -3446,23 +3458,35 @@ function runReopenNode(opts) {
   const cacheDir = path.dirname(cacheBaseFile(nodeId));
   const gateById = new Map(nodes.map(n => [n.id, n]));
   const evidenceRemoved = [];
-  let fanoutSiblingsPurged = false;
-  for (const gid of gatesReset) {
-    const ev = path.join(cacheDir, gid + '.md');
-    if ((cacheExists ? cacheExists(ev) : false) && typeof unlink === 'function') {
+  const { resolveAdversarialFanoutGroup } = require('./kaola-gitlab-workflow-plan-validator');
+  const removedNames = new Set();
+  const removeEvidenceName = (name, knownPresent) => {
+    if (removedNames.has(name)) return;
+    const ev = path.join(cacheDir, name);
+    if ((knownPresent || (cacheExists ? cacheExists(ev) : false)) && typeof unlink === 'function') {
       unlink(ev);
-      evidenceRemoved.push(gid + '.md');
+      evidenceRemoved.push(name);
+      removedNames.add(name);
     }
+  };
+  for (const gid of gatesReset) {
+    removeEvidenceName(gid + '.md');
     const g = gateById.get(gid);
-    if (g && g.role === 'adversarial-verifier' && g.shape && g.shape.kind === 'fanout'
-        && !fanoutSiblingsPurged && typeof readdir === 'function') {
-      for (const name of readdir(cacheDir)) {
-        if (typeof name === 'string' && /^adversarial-verifier-.*\.md$/.test(name) && typeof unlink === 'function') {
-          unlink(path.join(cacheDir, name));
-          evidenceRemoved.push(name);
+    if (g && g.role === 'adversarial-verifier' && g.shape && g.shape.kind === 'fanout') {
+      const group = resolveAdversarialFanoutGroup(nodes, g);
+      if (group && group.mode === 'canonical-node-id') {
+        for (const memberId of group.members) removeEvidenceName(memberId + '.md');
+      } else if (typeof readdir === 'function') {
+        // Archived role-prefix receipts carry no group label. They are attributable
+        // only when the frozen plan contains exactly one legacy adversarial fan-out.
+        const legacyGroups = nodes.filter(n => n.role === 'adversarial-verifier'
+          && n.shape && n.shape.kind === 'fanout' && String(n.cardinality) !== '1');
+        if (legacyGroups.length === 1) {
+          for (const name of readdir(cacheDir)) {
+            if (typeof name === 'string' && /^adversarial-verifier-.*\.md$/.test(name)) removeEvidenceName(name, true);
+          }
         }
       }
-      fanoutSiblingsPurged = true;
     }
   }
 

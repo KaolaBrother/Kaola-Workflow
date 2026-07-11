@@ -45,14 +45,21 @@ const planValidatorScript = path.join(__dirname, 'kaola-gitlab-workflow-plan-val
 
 function withForge(stubs, fn) {
   const originals = {};
-  for (const key of Object.keys(stubs)) {
+  const effectiveStubs = { ...stubs };
+  if (Object.prototype.hasOwnProperty.call(stubs, 'viewIssue') &&
+      !Object.prototype.hasOwnProperty.call(stubs, 'listIssueNotes')) {
+    effectiveStubs.listIssueNotes = function unexpectedListIssueNotes() {
+      throw new Error('unexpected forge call: missing fixture dependency listIssueNotes');
+    };
+  }
+  for (const key of Object.keys(effectiveStubs)) {
     originals[key] = forge[key];
-    forge[key] = stubs[key];
+    forge[key] = effectiveStubs[key];
   }
   try {
     return fn();
   } finally {
-    for (const key of Object.keys(stubs)) forge[key] = originals[key];
+    for (const key of Object.keys(effectiveStubs)) forge[key] = originals[key];
   }
 }
 
@@ -624,6 +631,7 @@ testGitLabRoadmapFilenameAuthorityMissingIssueField();
 testGitLabRoadmapFilenameAuthorityMismatch();
 
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: issueIid === 11 ? 'closed' : 'open', labels: [] };
   }
@@ -635,6 +643,61 @@ withForge({
   assert.deepStrictEqual(folders.map(folder => folder.project), ['open-project']);
   assert.strictEqual(folders[0].issue_iid, 10);
 });
+
+{
+  const real = '- Write Set: plugins/kaola-workflow-gitlab/scripts/real.js';
+  const cases = [
+    ['```md', '```', false],
+    ['~~~~markdown', '~~~~', false],
+    ['`````md', '`````', true],
+  ];
+  for (const [open, close, hasShorterDelimiter] of cases) {
+    const inner = hasShorterDelimiter ? (open[0] === '`' ? '```' : '~~~') : 'fenced content';
+    const body = classifier.sectionBody(['# Summary', open, '## Scope', '- Write Set: fake.js', inner, close, '## Scope', '~~~text', '## Review', '~~~', real, '## Review'].join('\n'), 'Scope');
+    assert(body.includes(real), 'GitLab fence-aware section identity must select the real Scope for ' + open);
+    assert(!body.includes('fake.js'), 'GitLab fence-aware section identity must skip fenced decoy for ' + open);
+  }
+  assert.strictEqual(classifier.sectionBody('# Summary\n## Scope\na\n## Scope\nb', 'Scope'), '');
+  assert.strictEqual(classifier.sectionBody('# Summary\n```md\n## Scope\na', 'Scope'), '');
+}
+
+// Claim classification is a unit seam: an empty HOME and hostile glab shim must remain untouched.
+{
+  const home = tempRoot('kw-gl-hermetic-home-');
+  const bin = tempRoot('kw-gl-hermetic-bin-');
+  const called = path.join(home, 'unexpected-glab-call');
+  const shim = path.join(bin, 'glab');
+  fs.writeFileSync(shim, '#!/bin/sh\ntouch "' + called + '"\nexit 97\n');
+  fs.chmodSync(shim, 0o755);
+  const oldHome = process.env.HOME;
+  const oldPath = process.env.PATH;
+  process.env.HOME = home;
+  process.env.PATH = bin;
+  const issue = iid => ({ issue_iid: iid, number: iid, state: 'open', labels: [], body: 'no repository paths' });
+  try {
+    withForge({
+      viewIssue: issue,
+      discoverProject() { return { project_id: 1 }; },
+      listIssueNotes() { return []; },
+    }, () => assert.strictEqual(classifier.classifyIssue(640, tempRoot('kw-gl-hermetic-empty-')).verdict, 'green'));
+    withForge({
+      viewIssue: issue,
+      discoverProject() { return { project_id: 1 }; },
+      listIssueNotes() { return [{ body: '<!-- kw:claim project=owned -->' }]; },
+    }, () => assert.strictEqual(classifier.classifyIssue(641, tempRoot('kw-gl-hermetic-note-')).verdict, 'blocked'));
+    withForge({
+      viewIssue: issue,
+      discoverProject() { return { project_id: 1 }; },
+      listIssueNotes() { const e = new Error('fixture transient'); e.transient = true; throw e; },
+    }, () => assert.strictEqual(classifier.classifyIssue(642, tempRoot('kw-gl-hermetic-indeterminate-')).verdict, 'indeterminate'));
+    assert(!fs.existsSync(called), 'hermetic claim fixtures must not invoke the hostile glab shim');
+  } finally {
+    process.env.HOME = oldHome;
+    process.env.PATH = oldPath;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+}
 
 // --- Task 2: probeIssueState ---
 // Case 1: issueIid null → { state: 'open', reason: 'offline-or-null' }
@@ -679,6 +742,7 @@ withForge({
 
 // Case 3: forge.viewIssue returns { state: 'closed' } → { state: 'closed', reason: 'ok' }
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, state: 'closed' };
   }
@@ -697,6 +761,7 @@ withForge({ viewIssue() { return { state: 'unknown' }; } }, () => {
 });
 
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -713,6 +778,7 @@ withForge({
 });
 
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -733,6 +799,7 @@ withForge({
 // issue #207: a fast project's declared write set (fast-summary.md ## Scope) must
 // participate in overlap detection at parity with phase files.
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -754,6 +821,7 @@ withForge({
 // issue #207: a path only in the Implementation Evidence section (not ## Scope)
 // must NOT manufacture an overlap (guards the Scope-only read against over-RED).
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -776,6 +844,7 @@ withForge({
 // NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
 // fenced `# comment` must still be counted; a candidate overlapping it must RED.
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -798,6 +867,7 @@ withForge({
 // NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
 // fenced `## Some Heading` must still be counted; a candidate overlapping it must RED.
 withForge({
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
   }
@@ -840,7 +910,7 @@ withForge({
   fs.writeFileSync(path.join(dir, 'fast-summary.md'),
     '# Fast Summary: fast-fence-pre-project\n\n## Status\n```sh\nIN_PROGRESS\n## Scope\n- Write Set: plugins/kaola-workflow-gitlab/scripts/claimed.js\n- Acceptance: node x\n');
   const result = classifier.classifyIssue(35, root);
-  assert.strictEqual(result.verdict, 'red');
+  assert.strictEqual(result.verdict, 'green');
 });
 
 withForge({

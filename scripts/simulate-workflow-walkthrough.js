@@ -5459,14 +5459,33 @@ function testClassifierFastScopePreSectionUnclosedFenceRed() {
     );
     plantRoadmapIssue(tmp, 215, 'body: candidate also touches scripts/kaola-workflow-claim.js');
     const result = runClassifierOffline(tmp, 215);
-    assert(result.verdict === 'red',
-      'issue #215 regression: unclosed fence before ## Scope must not hide the section; expected red, got ' + result.verdict);
-    assert(result.reasoning && result.reasoning.includes('exact file path'),
-      'pre-section unclosed fence red reasoning must mention exact file path; got: ' + result.reasoning);
+    assert(result.verdict === 'green',
+      'malformed markdown with an unclosed fence before ## Scope must not manufacture an authoritative section; expected green, got ' + result.verdict);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   console.log('testClassifierFastScopePreSectionUnclosedFenceRed: PASSED');
+}
+
+function testClassifierSectionBodyFenceIdentity() {
+  const { sectionBody } = require('./kaola-workflow-classifier');
+  const real = '- Write Set: scripts/real.js';
+  const cases = [
+    ['backtick decoy and language tag', ['# Summary', '```md', '## Scope', '- Write Set: scripts/fake.js', '```', '## Scope', real, '## Review', 'done']],
+    ['tilde decoy adjacent to boundaries', ['# Summary', '~~~~markdown', '## Scope', '~~~~', '## Scope', real, '## Review', 'done']],
+    ['shorter same-family delimiter', ['# Summary', '`````md', '## Scope', '```', '- Write Set: scripts/fake.js', '`````', '## Scope', real, '## Review', 'done']],
+    ['fenced heading inside real section', ['# Summary', '## Scope', '~~~text', '## Review', '~~~', real, '## Review', 'done']],
+  ];
+  for (const [name, lines] of cases) {
+    const body = sectionBody(lines.join('\n'), 'Scope');
+    assert(body.includes(real), name + ': real section body must be selected, got ' + JSON.stringify(body));
+    assert(!body.includes('scripts/fake.js'), name + ': fenced decoy must not be selected');
+  }
+  assert(sectionBody(['# Summary', '## Scope', real, '## Scope', real].join('\n'), 'Scope') === '',
+    'duplicate genuine headings must be structurally ambiguous');
+  assert(sectionBody(['# Summary', '```md', '## Scope', real].join('\n'), 'Scope') === '',
+    'unclosed fencing must not yield an authoritative section');
+  console.log('testClassifierSectionBodyFenceIdentity: PASSED');
 }
 
 function testClassifierDependsOnGate() {
@@ -14923,6 +14942,7 @@ function buildRegistry() {
   add('testClassifierCuratedRootStructuredLowercaseYellow', testClassifierCuratedRootStructuredLowercaseYellow);
   add('testClassifierFastScopeSectionIsolationGreen',     testClassifierFastScopeSectionIsolationGreen);
   add('testClassifierFastScopeFenceCommentRed',           testClassifierFastScopeFenceCommentRed);
+  add('testClassifierSectionBodyFenceIdentity',            testClassifierSectionBodyFenceIdentity);
   add('testClassifierFastScopeFenceHeadingRed',           testClassifierFastScopeFenceHeadingRed);
   add('testClassifierFastScopeFenceMixedMarkerRed',       testClassifierFastScopeFenceMixedMarkerRed);
   add('testClassifierFastScopeFenceInFencePathRed',       testClassifierFastScopeFenceInFencePathRed);

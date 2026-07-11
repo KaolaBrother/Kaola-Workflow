@@ -637,6 +637,26 @@ function parseNodes(content) {
   return nodes;
 }
 
+// Resolve the receipt identity of one adversarial-verifier fan-out from the frozen
+// node table. New plans express each skeptic as a cardinality-1 node; their group is
+// the exact node-id set sharing both the fanout label and dependency origin. Archived
+// cardinality>1 plans keep their historical role-prefix receipt reader.
+function resolveAdversarialFanoutGroup(nodes, node) {
+  if (!node || node.role !== 'adversarial-verifier' || !node.shape || node.shape.kind !== 'fanout') return null;
+  if (String(node.cardinality) !== '1') {
+    return { mode: 'legacy-role-prefix', group: node.shape.group, origin: node.dependsOn.slice().sort(), members: [node.id] };
+  }
+  const originKey = n => (n.dependsOn || []).slice().sort().join('\u001f');
+  const ownOrigin = originKey(node);
+  const members = nodes.filter(n => n.role === 'adversarial-verifier'
+    && n.shape && n.shape.kind === 'fanout'
+    && n.shape.group === node.shape.group
+    && String(n.cardinality) === '1'
+    && originKey(n) === ownOrigin)
+    .map(n => n.id);
+  return { mode: 'canonical-node-id', group: node.shape.group, origin: node.dependsOn.slice().sort(), members };
+}
+
 // Validate and resolve the optional wait-budget override on an already parsed,
 // validator-shaped node. Shared by freeze validation and next-action's upgrade
 // compatibility wall; no caller reparses Markdown.
@@ -1116,10 +1136,39 @@ function verifyVerdictBlock(content, opts) {
       return { ok: true, nodeId: node.id, role, verdict: null, findings_blocking: null, found: false, exempt: 'investigation_adversarial_verifier' };
     }
     if (role === 'adversarial-verifier' && node.shape && node.shape.kind === 'fanout') {
-      const files = globCache('adversarial-verifier-');
+      const group = resolveAdversarialFanoutGroup(nodes, node);
+      const files = group.mode === 'canonical-node-id'
+        ? group.members.map(id => id + '.md')
+        : globCache('adversarial-verifier-');
       const verdicts = [];
-      for (const f of files) {
+      const seenBindings = new Set();
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
         const cacheText = readCache(f) || '';
+        if (group.mode === 'canonical-node-id') {
+          const memberId = group.members[i];
+          if (!cacheText) {
+            return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: false,
+              members: group.members, reason: `fanout member ${memberId} evidence absent at .cache/${f}` };
+          }
+          const binding = /^evidence-binding:[ \t]*(\S+)[ \t]+(\S+)[ \t]*$/m.exec(cacheText);
+          if (!binding || binding[1] !== memberId) {
+            const duplicate = binding && seenBindings.has(binding[1]);
+            return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: true,
+              members: group.members, reason: `fanout member ${memberId} has ${duplicate ? 'duplicate' : 'foreign or malformed'} evidence binding` };
+          }
+          if (seenBindings.has(binding[1])) {
+            return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: true,
+              members: group.members, reason: `fanout member ${memberId} has duplicate evidence binding` };
+          }
+          seenBindings.add(binding[1]);
+          const baseline = readCache('barrier-base-' + sanitizeNodeId(memberId));
+          const expectedNonce = baseline == null ? '' : String(baseline).trim().slice(0, 12);
+          if (!expectedNonce || binding[2] !== expectedNonce) {
+            return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: true,
+              members: group.members, reason: `fanout member ${memberId} has stale evidence binding` };
+          }
+        }
         const v = schema.parseNodeVerdict(cacheText);
         if (!v.found || v.verdict === null) { verdicts.push('fail'); continue; }
         // #279: an unresolved in-scope action:fix finding refutes the instance even on verdict:pass.
@@ -1128,7 +1177,7 @@ function verifyVerdictBlock(content, opts) {
       }
       if (!verdicts.length) {
         return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: false,
-          reason: 'fanout adversarial-verifier: no per-instance .cache/adversarial-verifier-*.md found' };
+          members: group.members, reason: 'fanout adversarial-verifier: no per-instance receipts found' };
       }
       const refutes = verdicts.filter(x => x === 'fail').length;
       // #589: break ties toward REFUTED (require a strict majority to PASS, not to refute). An
@@ -1138,8 +1187,8 @@ function verifyVerdictBlock(content, opts) {
       const majorityRefute = refutes * 2 >= verdicts.length;
       return majorityRefute
         ? { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: true,
-            reason: `fanout majority-refute: ${refutes}/${verdicts.length} skeptics refuted` }
-        : { ok: true, nodeId: node.id, role, verdict: 'pass', findings_blocking: null, found: true };
+            members: group.members, reason: `fanout majority-refute: ${refutes}/${verdicts.length} skeptics refuted` }
+        : { ok: true, nodeId: node.id, role, verdict: 'pass', findings_blocking: null, found: true, members: group.members };
     }
     const raw = readCache(node.id + '.md');
     if (raw == null) {
@@ -3689,6 +3738,7 @@ module.exports = {
   parseNodeBriefs,
   nodeBriefsPresent,
   parseNodes,
+  resolveAdversarialFanoutGroup,
   validateWaitBudgetNode,
   parseLabels,
   parseGoal,
