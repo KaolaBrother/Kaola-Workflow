@@ -7756,6 +7756,7 @@ function rtHarness(initialFiles, opts) {
 
   const removedBaselines = [];
   const shelled = [];
+  const reviewerEvidence = 'evidence-binding: review oldreview123\nverdict: fail\nfindings_blocking: 1\nupstream_read: impl implbase123\n';
 
   const result = runRepairNode({
     planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
@@ -7768,6 +7769,7 @@ function rtHarness(initialFiles, opts) {
     },
     readFile: (f) => {
       if (f.endsWith('workflow-plan.md')) return planContent;
+      if (f.endsWith('review.md')) return reviewerEvidence;
       // barrier-base-impl EXISTS (original baseline to keep)
       if (f.endsWith('barrier-base-impl')) return 'originalbasehash12\n';
       throw new Error('ENOENT ' + f);
@@ -7791,6 +7793,10 @@ function rtHarness(initialFiles, opts) {
   // Downstream baselines (review) must be deleted
   assert(removedBaselines.includes('barrier-base-review') || result.deletedDownstreamBaselines,
     '#434-b: downstream review baseline removed or tracked in deletedDownstreamBaselines');
+  assert(!removedBaselines.includes('review.md'),
+    '#434-b: downstream reviewer evidence is retained as the repair brief');
+  assert(reviewerEvidence.includes('verdict: fail') && reviewerEvidence.includes('findings_blocking: 1'),
+    '#434-b: retained reviewer evidence keeps its blocking body for the reopened writer');
   // commit-node must NOT be shelled (no re-snapshot)
   assert(!shelled.includes('kaola-workflow-commit-node.js'),
     '#434-b: commit-node NOT shelled for repair-node (original baseline reused, no re-snapshot)');
@@ -12094,6 +12100,55 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'ok' && r.closed === 'wa' && r.opened && r.opened.id === 'wb',
       'FUSED-GATE-CONTROL(' + order + '): no live gate ⇒ fused advance opens wb, got ' + JSON.stringify({ opened: r.opened && r.opened.id, reason: r.reason }));
     assert(wbLedger === 'in_progress', 'FUSED-GATE-CONTROL(' + order + '): wb ledger row flipped in_progress, got ' + JSON.stringify(wbLedger));
+  }
+}
+
+// #654: normal opens are nonce-aware. Use the real $TMPDIR filesystem because the
+// evidence helper intentionally performs direct fs writes outside the injected harness.
+{
+  const tmpRoot = process.env.TMPDIR || os.tmpdir();
+  const tmp = fs.mkdtempSync(path.join(tmpRoot, 'kw-evidence-rotation-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-654');
+    const cacheDir = path.join(projectDir, '.cache');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(planPath, makePlan([
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ], [
+      '| review | code-reviewer | — | — | 1 | sequence |',
+      '| finalize | finalize | review | — | 1 | sequence |',
+    ]));
+    const evidencePath = path.join(cacheDir, 'review.md');
+
+    const same = 'evidence-binding: review same12345678\nverdict: fail\nfindings_blocking: 2\nupstream_read: impl oldnonce\n';
+    fs.writeFileSync(evidencePath, same);
+    const sameResult = seedEvidenceFile(planPath, 'review', 'same12345678', 'code-reviewer', false);
+    assert(sameResult.nonce_rotated === false, '#654 same binding reports nonce_rotated:false');
+    assert(fs.readFileSync(evidencePath, 'utf8') === same, '#654 same node+nonce is preserved byte-for-byte');
+
+    const stale = 'evidence-binding: review stale1234567\nverdict: fail\nfindings_blocking: 9\nupstream_read: impl compromised\n';
+    fs.writeFileSync(evidencePath, stale);
+    const rotated = seedEvidenceFile(planPath, 'review', 'fresh1234567', 'code-reviewer', false);
+    const fresh = fs.readFileSync(evidencePath, 'utf8');
+    assert(rotated.nonce_rotated === true, '#654 same node+different non-empty nonce reports nonce_rotated:true');
+    assert(fresh.startsWith('evidence-binding: review fresh1234567\n'), '#654 rotated file receives the fresh binding on line 1');
+    assert(!fresh.includes('verdict: fail') && !fresh.includes('findings_blocking: 9') && !fresh.includes('upstream_read: impl compromised'),
+      '#654 rotated file contains none of the stale verdict/findings/upstream values');
+    assert(fresh.includes('verdict: ') && fresh.includes('findings_blocking: '), '#654 rotated file contains fresh role-token stubs');
+
+    for (const untouched of [
+      'not-an-evidence-binding\nverdict: fail\n',
+      'evidence-binding: other-node other123456\nverdict: fail\n',
+    ]) {
+      fs.writeFileSync(evidencePath, untouched);
+      const result = seedEvidenceFile(planPath, 'review', 'fresh1234567', 'code-reviewer', false);
+      assert(result.nonce_rotated === false, '#654 malformed/cross-node binding is not rotated');
+      assert(fs.readFileSync(evidencePath, 'utf8') === untouched, '#654 malformed/cross-node binding stays byte-for-byte for typed close refusal');
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 

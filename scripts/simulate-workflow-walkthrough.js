@@ -14760,6 +14760,78 @@ const SHARED_TMP_NAMES = [
 // sharedTmp:true entries are kept as individual names in the registry so
 // --list displays them, but the runner collapses the whole group when any
 // member is selected.
+// #654: real-filesystem repair lifecycle. Role evidence is authored only through the
+// record-evidence command; cache bindings/stubs are owned exclusively by open paths.
+function testGateEvidenceNonceRotation654() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'kw-654-walk-')));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-654-walk';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — issue #654', '', '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| writer | tdd-guide | — | lib/impl.js | 1 | sequence |',
+      '| reviewer | code-reviewer | writer | — | 1 | sequence |',
+      '| finalize | finalize | reviewer | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+    const freeze = runNode(planValidatorScript, [planPath, '--freeze'], tmp);
+    assert(freeze.status === 0, '#654 walkthrough plan freezes: ' + freeze.stderr + freeze.stdout);
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['commit', '-m', 'freeze repair fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+
+    const openWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+      cwd: tmp, encoding: 'utf8', input: 'RED: writer failed before implementation\nGREEN: writer passes after implementation\n',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
+    });
+    assert(rec.status === 0, '#654 writer evidence records: ' + rec.stderr + rec.stdout);
+    const closeWriter = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    assert(closeWriter.opened && closeWriter.opened.id === 'reviewer', '#654 reviewer opens after writer close');
+    const firstReviewerNonce = closeWriter.opened.nonce;
+    const blocking = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+      cwd: tmp, encoding: 'utf8', input: 'verdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=repair\n',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
+    });
+    assert(blocking.status === 0, '#654 blocking reviewer evidence records');
+    const repair = json(runNode(adaptiveNodeScript, ['repair-node', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    assert(repair.result === 'ok' && repair.gatesFolded.includes('reviewer'), '#654 repair folds reviewer');
+    const repairBrief = fs.readFileSync(path.join(projectDir, '.cache', 'reviewer.md'), 'utf8');
+    assert(repairBrief.includes('verdict: fail') && repairBrief.includes('findings_blocking: 1'), '#654 repair retains reviewer brief');
+
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
+    const repairedEvidence = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+      cwd: tmp, encoding: 'utf8', input: 'RED: repair regression reproduced\nGREEN: repair regression passes\n',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
+    });
+    assert(repairedEvidence.status === 0, '#654 repaired writer evidence records');
+    const repairedClose = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    assert(repairedClose.opened && repairedClose.opened.id === 'reviewer', '#654 reviewer reopens after repaired writer');
+    assert(repairedClose.opened.nonce !== firstReviewerNonce, '#654 reviewer reopens with a new nonce');
+    const reseeded = fs.readFileSync(path.join(projectDir, '.cache', 'reviewer.md'), 'utf8');
+    assert(reseeded.startsWith('evidence-binding: reviewer ' + repairedClose.opened.nonce + '\n'), '#654 reopened dispatch nonce equals written binding');
+    assert(!reseeded.includes('verdict: fail') && !reseeded.includes('findings_blocking: 1'), '#654 reopened reviewer has no stale blocking verdict');
+    const passing = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+      cwd: tmp, encoding: 'utf8', input: 'verdict: pass\nfindings_blocking: 0\n',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
+    });
+    assert(passing.status === 0, '#654 passing reviewer evidence records');
+    const reviewerClose = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
+    assert(reviewerClose.result === 'ok' && reviewerClose.closed === 'reviewer', '#654 successful reviewer close');
+    console.log('testGateEvidenceNonceRotation654: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -15025,6 +15097,7 @@ function buildRegistry() {
   add('testSummaryDispatchSegments602',                   testSummaryDispatchSegments602);
   add('testCodexDispatchModeThreading603',                testCodexDispatchModeThreading603);
   add('testRunProgressMirror605',                         testRunProgressMirror605);
+  add('testGateEvidenceNonceRotation654',                 testGateEvidenceNonceRotation654);
   return reg;
 }
 

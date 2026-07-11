@@ -634,52 +634,42 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
 
     const bindingLine = 'evidence-binding: ' + nodeId + ' ' + (nonce || '');
 
+    const freshSeed = () => {
+      let freshContent = bindingLine + '\n';
+      for (const tokenClass of stubTokens) {
+        const firstAlt = tokenClass.split('|')[0];
+        if (tokenClass.includes('|')) {
+          freshContent += '<!-- ' + tokenClass + ' -->\n';
+          freshContent += firstAlt + ': \n';
+        } else {
+          freshContent += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
+          freshContent += tokenClass + ': \n';
+        }
+      }
+      for (const upId of upstreamStubIds) {
+        freshContent += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
+        freshContent += 'upstream_read: ' + upId + '\n';
+      }
+      return freshContent;
+    };
+
     if (fs.existsSync(cachePath)) {
-      if (forceRotate) {
+      const existingContent = fs.readFileSync(cachePath, 'utf8');
+      const firstLine = existingContent.split(/\r?\n/, 1)[0];
+      const existingBinding = firstLine.match(/^evidence-binding:[ \t]*([^\s]+)[ \t]+([^\s]+)[ \t]*$/);
+      const nonceChangedForSameNode = !!(existingBinding && existingBinding[1] === nodeId && existingBinding[2] && existingBinding[2] !== nonce);
+      if (forceRotate || nonceChangedForSameNode) {
         // Nonce rotation (reopen-node): RE-SEED the ENTIRE file with fresh binding + role stubs.
         // Discarding the stale body is required so prior-attempt evidence (verdict: pass / GREEN /
         // findings_blocking: 0) cannot survive into the new open and defeat the #392 anti-replay guard.
-        let freshContent = bindingLine + '\n';
-        for (const tokenClass of stubTokens) {
-          const firstAlt = tokenClass.split('|')[0];
-          if (tokenClass.includes('|')) {
-            freshContent += '<!-- ' + tokenClass + ' -->\n';
-            freshContent += firstAlt + ': \n';
-          } else {
-            freshContent += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
-            freshContent += tokenClass + ': \n';
-          }
-        }
-        for (const upId of upstreamStubIds) {
-          freshContent += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
-          freshContent += 'upstream_read: ' + upId + '\n';
-        }
-        fs.writeFileSync(cachePath, freshContent, 'utf8');
+        fs.writeFileSync(cachePath, freshSeed(), 'utf8');
         return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: true };
       }
       // Idempotent: file already exists (crash-resume), do NOT overwrite.
       return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: false };
     }
 
-    // Build the seeded content.
-    let content = bindingLine + '\n';
-    for (const tokenClass of stubTokens) {
-      // Alternation class: the first alternative becomes the stub key; comment shows all.
-      const firstAlt = tokenClass.split('|')[0];
-      if (tokenClass.includes('|')) {
-        content += '<!-- ' + tokenClass + ' -->\n';
-        content += firstAlt + ': \n';
-      } else {
-        content += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
-        content += tokenClass + ': \n';
-      }
-    }
-    for (const upId of upstreamStubIds) {
-      content += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
-      content += 'upstream_read: ' + upId + '\n';
-    }
-
-    fs.writeFileSync(cachePath, content, 'utf8');
+    fs.writeFileSync(cachePath, freshSeed(), 'utf8');
     return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: false };
   } catch (_) {
     // Best-effort: a seed failure returns the metadata but does not fail the open.
@@ -6275,11 +6265,15 @@ function runSelfTest() {
     // Test 2: second call (crash-resume) does NOT overwrite the existing file.
     // Write custom content to simulate in-progress evidence.
     fs.writeFileSync(seededPath, 'evidence-binding: n1-impl abc123def456\nRED: some test output\nGREEN: tests pass\n', 'utf8');
-    const r2 = seedEvidenceFile(planPath, 'n1-impl', 'newNonce999', 'tdd-guide', false);
+    const r2 = seedEvidenceFile(planPath, 'n1-impl', 'abc123def456', 'tdd-guide', false);
     assert(r2.nonce_rotated === false, 'T2 crash-resume nonce_rotated false');
     const afterContent = fs.readFileSync(seededPath, 'utf8');
     assert(afterContent.includes('RED: some test output'), 'T2 existing evidence preserved');
-    assert(!afterContent.includes('newNonce999'), 'T2 new nonce NOT written on crash-resume');
+    assert(afterContent.includes('abc123def456'), 'T2 same nonce preserved on crash-resume');
+
+    const r2b = seedEvidenceFile(planPath, 'n1-impl', 'newNonce999', 'tdd-guide', false);
+    assert(r2b.nonce_rotated === true, 'T2b normal open rotates a stale same-node nonce');
+    assert(!fs.readFileSync(seededPath, 'utf8').includes('RED: some test output'), 'T2b stale body discarded');
 
     // Test 3: nonce rotation (reopen-node): REWRITE ENTIRE FILE (binding + fresh stubs).
     // forceRotate=true must discard the old evidence body so stale evidence cannot pass
