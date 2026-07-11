@@ -28,6 +28,9 @@ fs.writeFileSync(
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
+const kwHostileGlabShim = path.join(kwSandboxHome, 'unexpected-glab.js');
+fs.writeFileSync(kwHostileGlabShim, 'process.exit(97);\n');
+process.env.KAOLA_GLAB_MOCK_SCRIPT = kwHostileGlabShim;
 
 const forge = require('./kaola-gitlab-forge');
 const active = require('./kaola-gitlab-workflow-active-folders');
@@ -46,11 +49,14 @@ const planValidatorScript = path.join(__dirname, 'kaola-gitlab-workflow-plan-val
 function withForge(stubs, fn) {
   const originals = {};
   const effectiveStubs = { ...stubs };
-  if (Object.prototype.hasOwnProperty.call(stubs, 'viewIssue') &&
-      !Object.prototype.hasOwnProperty.call(stubs, 'listIssueNotes')) {
-    effectiveStubs.listIssueNotes = function unexpectedListIssueNotes() {
-      throw new Error('unexpected forge call: missing fixture dependency listIssueNotes');
-    };
+  if (Object.prototype.hasOwnProperty.call(stubs, 'viewIssue')) {
+    for (const dependency of ['discoverProject', 'listIssueNotes']) {
+      if (!Object.prototype.hasOwnProperty.call(stubs, dependency)) {
+        effectiveStubs[dependency] = function unexpectedClassifierForgeCall() {
+          throw new Error('unexpected forge call: missing fixture dependency ' + dependency);
+        };
+      }
+    }
   }
   for (const key of Object.keys(effectiveStubs)) {
     originals[key] = forge[key];
@@ -61,6 +67,15 @@ function withForge(stubs, fn) {
   } finally {
     for (const key of Object.keys(effectiveStubs)) forge[key] = originals[key];
   }
+}
+
+function withClassifierForge(stubs, fn) {
+  for (const dependency of ['viewIssue', 'discoverProject', 'listIssueNotes']) {
+    if (!Object.prototype.hasOwnProperty.call(stubs, dependency)) {
+      throw new Error('unexpected forge call: missing fixture dependency ' + dependency);
+    }
+  }
+  return withForge({ listIssues() { return []; }, ...stubs }, fn);
 }
 
 function tempRoot(name) {
@@ -465,6 +480,8 @@ function testWatchMrAbandonedClosureInvariantsClean() {
         assert.strictEqual(mrIid, 920);
         return { mr_iid: 920, state: 'closed' };
       },
+      discoverProject() { return { project_id: 1, path_with_namespace: 'group/project' }; },
+      listIssueNotes() { return []; },
       updateIssue() { return null; },
       createIssueNote() { return { id: 9003 }; }
     }, () => claim.watchMergeRequests(root, {}));
@@ -632,6 +649,7 @@ testGitLabRoadmapFilenameAuthorityMismatch();
 
 withForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: issueIid === 11 ? 'closed' : 'open', labels: [] };
   }
@@ -675,21 +693,33 @@ withForge({
   process.env.PATH = bin;
   const issue = iid => ({ issue_iid: iid, number: iid, state: 'open', labels: [], body: 'no repository paths' });
   try {
-    withForge({
+    withClassifierForge({
       viewIssue: issue,
       discoverProject() { return { project_id: 1 }; },
       listIssueNotes() { return []; },
     }, () => assert.strictEqual(classifier.classifyIssue(640, tempRoot('kw-gl-hermetic-empty-')).verdict, 'green'));
-    withForge({
+    withClassifierForge({
       viewIssue: issue,
       discoverProject() { return { project_id: 1 }; },
       listIssueNotes() { return [{ body: '<!-- kw:claim project=owned -->' }]; },
     }, () => assert.strictEqual(classifier.classifyIssue(641, tempRoot('kw-gl-hermetic-note-')).verdict, 'blocked'));
-    withForge({
+    withClassifierForge({
       viewIssue: issue,
       discoverProject() { return { project_id: 1 }; },
       listIssueNotes() { const e = new Error('fixture transient'); e.transient = true; throw e; },
     }, () => assert.strictEqual(classifier.classifyIssue(642, tempRoot('kw-gl-hermetic-indeterminate-')).verdict, 'indeterminate'));
+    const complete = {
+      viewIssue: issue,
+      discoverProject() { return { project_id: 1 }; },
+      listIssueNotes() { return []; },
+    };
+    for (const dependency of ['viewIssue', 'discoverProject', 'listIssueNotes']) {
+      const missing = { ...complete };
+      delete missing[dependency];
+      assert.throws(() => withClassifierForge(missing, () => {
+        throw new Error('fixture callback must not run');
+      }), new RegExp('missing fixture dependency ' + dependency), 'missing ' + dependency + ' must fail locally by dependency name');
+    }
     assert(!fs.existsSync(called), 'hermetic claim fixtures must not invoke the hostile glab shim');
   } finally {
     process.env.HOME = oldHome;
@@ -743,6 +773,7 @@ withForge({
 // Case 3: forge.viewIssue returns { state: 'closed' } → { state: 'closed', reason: 'ok' }
 withForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, state: 'closed' };
   }
@@ -760,8 +791,9 @@ withForge({ viewIssue() { return { state: 'unknown' }; } }, () => {
   assert.strictEqual(result.reason, 'glab issue state unverified', 'residual reason');
 });
 
-withForge({
+withClassifierForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -777,8 +809,9 @@ withForge({
   assert.strictEqual(result.verdict, 'blocked');
 });
 
-withForge({
+withClassifierForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -798,8 +831,9 @@ withForge({
 
 // issue #207: a fast project's declared write set (fast-summary.md ## Scope) must
 // participate in overlap detection at parity with phase files.
-withForge({
+withClassifierForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -820,8 +854,9 @@ withForge({
 
 // issue #207: a path only in the Implementation Evidence section (not ## Scope)
 // must NOT manufacture an overlap (guards the Scope-only read against over-RED).
-withForge({
+withClassifierForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -843,8 +878,9 @@ withForge({
 // issue #213: a `#`-prefixed line inside a fenced code block within ## Scope must
 // NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
 // fenced `# comment` must still be counted; a candidate overlapping it must RED.
-withForge({
+withClassifierForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return {
       issue_iid: issueIid,
@@ -866,8 +902,9 @@ withForge({
 // issue #215 Block 1: a `## Some Heading` line inside a fenced code block within ## Scope must
 // NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
 // fenced `## Some Heading` must still be counted; a candidate overlapping it must RED.
-withForge({
+withClassifierForge({
   listIssueNotes() { return []; },
+  discoverProject() { return { project_id: 1 }; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
   }
@@ -883,7 +920,9 @@ withForge({
 // issue #215 Block 2: a `~~~` mixed-marker fence nested inside a backtick fence within ## Scope
 // must NOT truncate the slice. A `- Write Set:` path BELOW the nested markers must still be
 // counted; a candidate overlapping it must RED.
-withForge({
+withClassifierForge({
+  discoverProject() { return { project_id: 1 }; },
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
   }
@@ -900,7 +939,9 @@ withForge({
 // prevent sectionBody from finding ## Scope. The buggy locator stayed inFence=true after
 // an unclosed fence in ## Status, skipped ## Scope, returned '' → no Write Set → green.
 // FAILING-FIRST against the buggy locator.
-withForge({
+withClassifierForge({
+  discoverProject() { return { project_id: 1 }; },
+  listIssueNotes() { return []; },
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
   }
@@ -2396,8 +2437,10 @@ function testInstallProfilesFeaturesTableHandling() {
 // testGitLabClassifierFailClosed: in-process classifyIssue with transient error → indeterminate
 // #507: new behavior — a plain Error (no status/signal/code) → classifyFetchError fallback 'killed'
 // → transient → retried 3x → verdict:indeterminate. Old behavior was target_unavailable.
-withForge({
-  viewIssue() { throw new Error('network error'); } // no status/signal → transient → indeterminate
+withClassifierForge({
+  viewIssue() { throw new Error('network error'); }, // no status/signal → transient → indeterminate
+  discoverProject() { return { project_id: 1 }; },
+  listIssueNotes() { return []; }
 }, () => {
   process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
   const root = tempRoot('kw-gl-t5-classify-fail-');
@@ -4728,7 +4771,11 @@ function testGitlabBoundary2FetchRetry507() {
     const root = tempRoot('kw-gl-b2a-root-');
     const tempHome = tempRoot('kw-gl-b2a-home-');
     try {
-      const result = withForge({ viewIssue: function() { callCount++; throw transientErr; } }, function() {
+      const result = withClassifierForge({
+        viewIssue: function() { callCount++; throw transientErr; },
+        discoverProject() { return { project_id: 1 }; },
+        listIssueNotes() { return []; },
+      }, function() {
         process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
         try {
           return classifier.classifyIssue(99, root);
@@ -4760,7 +4807,11 @@ function testGitlabBoundary2FetchRetry507() {
     cleanErr.stderr = 'GraphQL: Could not resolve to an Issue with the number of 99. (repository.issue)\n';
     const root = tempRoot('kw-gl-b2b-root-');
     try {
-      const result = withForge({ viewIssue: function() { callCount++; throw cleanErr; } }, function() {
+      const result = withClassifierForge({
+        viewIssue: function() { callCount++; throw cleanErr; },
+        discoverProject() { return { project_id: 1 }; },
+        listIssueNotes() { return []; },
+      }, function() {
         process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
         try {
           return classifier.classifyIssue(99, root);
@@ -4783,13 +4834,13 @@ function testGitlabBoundary2FetchRetry507() {
     let callCount = 0;
     const root = tempRoot('kw-gl-b2t-root-');
     try {
-      const result = withForge({ viewIssue: function() {
+      const result = withClassifierForge({ viewIssue: function() {
         callCount++;
         const e = new Error('glab exited 1');
         e.status = 1;
         e.stderr = 'error connecting to gitlab.com: net/http: TLS handshake timeout\n';
         throw e;
-      } }, function() {
+      }, discoverProject() { return { project_id: 1 }; }, listIssueNotes() { return []; } }, function() {
         process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
         try { return classifier.classifyIssue(99, root); }
         finally { delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS; }
@@ -4814,7 +4865,11 @@ function testGitlabBoundary2FetchRetry507() {
       // Stub viewIssue on the forge module — classifier.classifyIssue calls forge.viewIssue,
       // and claim.classifyIssue delegates to classifier.classifyIssue → routes through the
       // #495 forward-compat indeterminate handler in claimExplicitTarget.
-      const result = withForge({ viewIssue: function() { throw transientErr; } }, function() {
+      const result = withClassifierForge({
+        viewIssue: function() { throw transientErr; },
+        discoverProject() { return { project_id: 1 }; },
+        listIssueNotes() { return []; },
+      }, function() {
         process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
         try {
           return claim.claimExplicitTarget(root, { targetIssue: 99 });
@@ -4840,12 +4895,12 @@ function testGitlabBoundary2FetchRetry507() {
     const root = tempRoot('kw-gl-511-root-');
     try {
       fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
-      const result = withForge({ viewIssue: function() {
+      const result = withClassifierForge({ viewIssue: function() {
         const e = new Error('glab exited 1');
         e.status = 1; // clean non-zero
         e.stderr = 'GraphQL: Could not resolve to an Issue with the number of 99. (repository.issue)\n';
         throw e;
-      } }, function() {
+      }, discoverProject() { return { project_id: 1 }; }, listIssueNotes() { return []; } }, function() {
         process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
         try { return claim.claimExplicitTarget(root, { targetIssue: 99 }); }
         finally { delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS; }

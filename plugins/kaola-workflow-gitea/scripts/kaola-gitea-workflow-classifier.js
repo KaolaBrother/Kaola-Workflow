@@ -225,33 +225,41 @@ function extractCoarseAreas(text) {
 // heading (or EOF). Used to read only a fast-summary.md's `## Scope` block.
 // issue #213: h2-only so a `#`-prefixed line inside a fenced code block in the
 // section body does not truncate the slice.
-function sectionBody(content, heading) {
+function markdownFenceTransition(state, line) {
+  const marker = String(line || '').match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+  if (!marker) return state;
+  const run = marker[1];
+  if (!state.family) return { family: run[0], length: run.length };
+  if (run[0] === state.family && run.length >= state.length && /^\s*$/.test(marker[2])) return { family: '', length: 0 };
+  return state;
+}
+
+function sectionBodyState(content, heading) {
   const lines = String(content || '').split('\n');
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
-  let fenceFamily = '', fenceLength = 0;
+  let fence = { family: '', length: 0 };
   let found = 0, collecting = false, done = false;
   const out = [];
   for (const line of lines) {
-    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-    if (marker) {
-      const run = marker[1];
-      if (!fenceFamily) { fenceFamily = run[0]; fenceLength = run.length; }
-      else if (run[0] === fenceFamily && run.length >= fenceLength && /^\s*$/.test(marker[2])) {
-        fenceFamily = ''; fenceLength = 0;
-      }
-    }
-    if (!fenceFamily && headRe.test(line)) {
+    fence = markdownFenceTransition(fence, line);
+    if (!fence.family && headRe.test(line)) {
       found++;
-      if (found > 1) return '';
+      if (found > 1) return { status: 'ambiguous', body: '' };
       collecting = true;
       continue;
     }
-    if (collecting && !fenceFamily && /^##\s/.test(line)) { collecting = false; done = true; }
+    if (collecting && !fence.family && /^##\s/.test(line)) { collecting = false; done = true; }
     if (collecting) out.push(line);
   }
-  if (fenceFamily || found !== 1) return '';
-  return (done || collecting) ? out.join('\n') : '';
+  if (fence.family) return { status: 'ambiguous', body: '' };
+  if (found !== 1) return { status: 'absent', body: '' };
+  return { status: (done || collecting) ? 'present' : 'absent', body: out.join('\n') };
+}
+
+function sectionBody(content, heading) {
+  const section = sectionBodyState(content, heading);
+  return section.status === 'present' ? section.body : '';
 }
 
 function parseDependsOn(labels) {
@@ -781,6 +789,8 @@ module.exports = {
   extractCoarseAreas,
   extractFilePaths,
   parseWriteSetCell,
+  markdownFenceTransition,
+  sectionBodyState,
   sectionBody,
   areaForPath,
   SHARED_INFRA,

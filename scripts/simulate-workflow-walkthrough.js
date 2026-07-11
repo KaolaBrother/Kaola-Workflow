@@ -5488,6 +5488,110 @@ function testClassifierSectionBodyFenceIdentity() {
   console.log('testClassifierSectionBodyFenceIdentity: PASSED');
 }
 
+function testPlanConsumerFenceMatrix() {
+  const editions = [
+    ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-classifier.js'), path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js')],
+    ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-classifier.js'), path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-plan-validator.js')],
+    ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-classifier.js'), path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-plan-validator.js')],
+    ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-classifier.js'), path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-plan-validator.js')],
+  ];
+  const plan = [
+    '# Workflow Plan — fence matrix', '',
+    '`````markdown', '## Meta', 'labels: fake', '## Nodes', '| fake | row |',
+    '## Node Briefs', 'fake', '## Node Ledger', '| fake | complete |', '```', '`````',
+    '## Meta', 'labels: enhancement', '',
+    '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|', '| explore | code-explorer | — | — | 1 | sequence |',
+    '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |', '',
+    '## Node Briefs', '~~~text', '## Nodes', '~~~', '### impl', 'implement', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| explore | pending |', '| impl | pending |',
+    '| review | pending |', '| done | pending |', '',
+  ].join('\n');
+  const tmp = adaptiveTmp('plan-fence-matrix');
+  try {
+    const hashes = [];
+    for (const [name, classifierPath, validatorPath] of editions) {
+      const classifierEdition = require(classifierPath);
+      for (const heading of ['Meta', 'Nodes', 'Node Briefs', 'Node Ledger']) {
+        const body = classifierEdition.sectionBody(plan, heading);
+        assert(body && !body.includes('| fake |'), name + ' must select genuine ' + heading + ' section');
+      }
+      const planPath = path.join(tmp, name + '.md');
+      fs.writeFileSync(planPath, plan);
+      const freeze = runNode(validatorPath, [planPath, '--freeze', '--json'], tmp);
+      assert(freeze.status === 0, name + ' fenced plan must freeze, got ' + freeze.stderr + freeze.stdout);
+      const frozen = read(planPath);
+      const hm = /<!-- plan_hash: ([a-f0-9]+) -->/.exec(frozen);
+      assert(hm, name + ' freeze must stamp plan_hash');
+      hashes.push(hm[1]);
+      const resume = runNode(validatorPath, [planPath, '--resume-check', '--json'], tmp);
+      assert(resume.status === 0 && JSON.parse(resume.stdout).ok === true, name + ' fenced plan must resume');
+
+      const duplicatePath = path.join(tmp, name + '-duplicate.md');
+      fs.writeFileSync(duplicatePath, plan + '\n## Nodes\n| duplicate | table |\n');
+      const duplicate = runNode(validatorPath, [duplicatePath, '--json'], tmp);
+      assert(duplicate.status !== 0 && JSON.parse(duplicate.stdout).result === 'refuse', name + ' duplicate genuine Nodes must refuse');
+      const unclosedPath = path.join(tmp, name + '-unclosed.md');
+      fs.writeFileSync(unclosedPath, '# Plan\n```markdown\n## Meta\nlabels: fake\n' + plan);
+      const unclosed = runNode(validatorPath, [unclosedPath, '--json'], tmp);
+      assert(unclosed.status !== 0 && JSON.parse(unclosed.stdout).result === 'refuse', name + ' unclosed fence ambiguity must refuse');
+    }
+    assert(new Set(hashes).size === 1, 'all editions must hash the same genuine plan sections, got ' + hashes.join(','));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testPlanConsumerFenceMatrix: PASSED');
+}
+
+function testNodeBriefAuthoritativeSectionMatrix() {
+  const validators = [
+    ['root', require('./kaola-workflow-plan-validator'), path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js')],
+    ['codex', require('../plugins/kaola-workflow/scripts/kaola-workflow-plan-validator'), path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-plan-validator.js')],
+    ['gitlab', require('../plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator'), path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-plan-validator.js')],
+    ['gitea', require('../plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator'), path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-plan-validator.js')],
+  ];
+  const base = [
+    '# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| impl | tdd-guide | — | lib/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | pending |', '| review | pending |', '| done | pending |', '',
+  ].join('\n');
+  const decoyOnly = base.replace('## Meta', '`````markdown\n## Node Briefs\n### ghost\n```\n`````\n## Meta');
+  const validBriefs = base.replace('## Node Ledger', [
+    '## Node Briefs',
+    '`````javascript', '### ghost-backtick', '```', '`````info-is-not-a-closer', '`````',
+    '~~~~text', '### ghost-tilde', '~~~', '~~~~info-is-not-a-closer', '~~~~',
+    '### impl', 'real implementation brief', '', '## Node Ledger',
+  ].join('\n'));
+  const duplicate = validBriefs.replace('## Node Ledger', '## Node Briefs\n### impl\nduplicate genuine section\n## Node Ledger');
+  const unclosed = base.replace('## Node Ledger', '## Node Briefs\n`````markdown\n### ghost\n## Node Ledger');
+  const tmp = adaptiveTmp('brief-authoritative-matrix');
+  const hashes = [];
+  try { for (const [name, validator, validatorPath] of validators) {
+    const parsed = validator.parseNodeBriefs(validBriefs);
+    assert(parsed.length === 1 && parsed[0].nodeId === 'impl' && parsed[0].brief === 'real implementation brief',
+      name + ': Node Brief parser must keep longer/info-suffixed fences open and select only genuine impl, got ' + JSON.stringify(parsed));
+    assert(validator.nodeBriefsPresent(decoyOnly) === false, name + ': fenced-decoy-only Briefs must be absent');
+    assert(validator.computePlanHash(decoyOnly) === validator.computePlanHash(base), name + ': fenced-decoy-only and absent Briefs must hash identically');
+    hashes.push(validator.computePlanHash(validBriefs));
+    const planPath = path.join(tmp, name + '-briefs.md');
+    fs.writeFileSync(planPath, validBriefs);
+    const freeze = runNode(validatorPath, [planPath, '--freeze', '--json'], tmp);
+    assert(freeze.status === 0, name + ': authoritative Briefs plan must freeze, got ' + freeze.stdout + freeze.stderr);
+    const resume = runNode(validatorPath, [planPath, '--resume-check', '--json'], tmp);
+    assert(resume.status === 0 && JSON.parse(resume.stdout).ok === true, name + ': authoritative Briefs plan must resume');
+    let verdict = validator.validatePlan(duplicate);
+    assert(verdict.result === 'refuse' && verdict.reason === 'briefs_section_ambiguous', name + ': duplicate genuine Briefs must refuse structurally, got ' + JSON.stringify(verdict));
+    verdict = validator.validatePlan(unclosed);
+    assert(verdict.result === 'refuse' && verdict.reason === 'briefs_section_ambiguous', name + ': unclosed Briefs must refuse structurally, got ' + JSON.stringify(verdict));
+  }
+  assert(new Set(hashes).size === 1, 'all editions must hash authoritative Briefs identically, got ' + hashes.join(','));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testNodeBriefAuthoritativeSectionMatrix: PASSED');
+}
+
 function testClassifierDependsOnGate() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-depson-'));
   try {
@@ -12223,8 +12327,8 @@ function testAdaptiveVerdictCheck() {
     assert(r.ok === true && r.found === false,
       'verifyVerdictBlock: non-gate role self-skip -> ok:true/found:false, got ' + JSON.stringify(r));
 
-    // fanout adversarial-verifier: 1/3 refute -> pass (minority)
-    // globCache returns filenames like 'adversarial-verifier-sk1.md'; readCache is called with those names.
+    // fanout adversarial-verifier: 1/3 refute -> pass (minority). Explicit fan-out
+    // nodes consume only canonical node-id receipts bound to their current baseline nonce.
     // #509: these skeptics fan out from a CODE-PRODUCING impl (tdd-guide), so they POST-DOMINATE code
     // and ARE change-gate adversarial-verifiers — the majority-refute branch applies (the exemption is
     // for INVESTIGATION verifiers that post-dominate no code/sensitive node; tested separately above).
@@ -12236,24 +12340,22 @@ function testAdaptiveVerdictCheck() {
       '| done | finalize | sk1,sk2,sk3 | — | 1 | sequence |',
     ];
     const fanoutLedger = ['| impl | complete |', '| sk1 | complete |', '| sk2 | complete |', '| sk3 | complete |', '| done | complete |'];
-    const fanoutGlob = (prefix) => prefix === 'adversarial-verifier-'
-      ? ['adversarial-verifier-sk1.md', 'adversarial-verifier-sk2.md', 'adversarial-verifier-sk3.md']
-      : [];
+    const fanoutCache = verdicts => f => {
+      const base = { 'barrier-base-sk1': '111111111111aaaa\n', 'barrier-base-sk2': '222222222222aaaa\n', 'barrier-base-sk3': '333333333333aaaa\n' };
+      if (base[f]) return base[f];
+      const id = /^(sk[123])\.md$/.exec(f);
+      return id ? 'evidence-binding: ' + id[1] + ' ' + base['barrier-base-' + id[1]].trim().slice(0, 12) + '\nverdict: ' + verdicts[id[1]] + '\nfindings_blocking: ' + (verdicts[id[1]] === 'fail' ? '1' : '0') + '\n' : null;
+    };
     // 1/3 refute: sk1's file fails, sk2 and sk3 pass -> majority NOT refuted -> ok:true
     r = planValidator.verifyVerdictBlock(
       mkVerdictPlan(fanoutNodes, fanoutLedger),
       {
-        readCache: (f) => {
-          if (f === 'adversarial-verifier-sk1.md') return 'verdict: fail\nfindings_blocking: 1\n';
-          if (f === 'adversarial-verifier-sk2.md') return 'verdict: pass\nfindings_blocking: 0\n';
-          if (f === 'adversarial-verifier-sk3.md') return 'verdict: pass\nfindings_blocking: 0\n';
-          return null;
-        },
-        globCache: fanoutGlob,
+        readCache: fanoutCache({ sk1: 'fail', sk2: 'pass', sk3: 'pass' }),
+        globCache: () => [],
         nodeId: 'sk1',
       }
     );
-    // Per-node: sk1 is adversarial-verifier with fanout shape -> globCache used; 1/3 refute = minority -> pass
+    // Per-node: canonical group tally sees 1/3 refute = minority -> pass.
     assert(r.ok === true,
       'verifyVerdictBlock: fanout 1/3 refute is minority -> ok:true, got ' + JSON.stringify(r));
 
@@ -12261,13 +12363,8 @@ function testAdaptiveVerdictCheck() {
     r = planValidator.verifyVerdictBlock(
       mkVerdictPlan(fanoutNodes, fanoutLedger),
       {
-        readCache: (f) => {
-          if (f === 'adversarial-verifier-sk1.md') return 'verdict: fail\nfindings_blocking: 1\n';
-          if (f === 'adversarial-verifier-sk2.md') return 'verdict: fail\nfindings_blocking: 1\n';
-          if (f === 'adversarial-verifier-sk3.md') return 'verdict: pass\nfindings_blocking: 0\n';
-          return null;
-        },
-        globCache: fanoutGlob,
+        readCache: fanoutCache({ sk1: 'fail', sk2: 'fail', sk3: 'pass' }),
+        globCache: () => [],
         nodeId: 'sk1',
       }
     );
@@ -12285,18 +12382,11 @@ function testAdaptiveVerdictCheck() {
       '| done | finalize | sk1,sk2 | — | 1 | sequence |',
     ];
     const evenLedger = ['| impl | complete |', '| sk1 | complete |', '| sk2 | complete |', '| done | complete |'];
-    const evenGlob = (prefix) => prefix === 'adversarial-verifier-'
-      ? ['adversarial-verifier-sk1.md', 'adversarial-verifier-sk2.md']
-      : [];
     r = planValidator.verifyVerdictBlock(
       mkVerdictPlan(evenNodes, evenLedger),
       {
-        readCache: (f) => {
-          if (f === 'adversarial-verifier-sk1.md') return 'verdict: fail\nfindings_blocking: 1\n';
-          if (f === 'adversarial-verifier-sk2.md') return 'verdict: pass\nfindings_blocking: 0\n';
-          return null;
-        },
-        globCache: evenGlob,
+        readCache: fanoutCache({ sk1: 'fail', sk2: 'pass' }),
+        globCache: () => [],
         nodeId: 'sk1',
       }
     );
@@ -12307,17 +12397,26 @@ function testAdaptiveVerdictCheck() {
     r = planValidator.verifyVerdictBlock(
       mkVerdictPlan(evenNodes, evenLedger),
       {
-        readCache: (f) => {
-          if (f === 'adversarial-verifier-sk1.md') return 'verdict: pass\nfindings_blocking: 0\n';
-          if (f === 'adversarial-verifier-sk2.md') return 'verdict: pass\nfindings_blocking: 0\n';
-          return null;
-        },
-        globCache: evenGlob,
+        readCache: fanoutCache({ sk1: 'pass', sk2: 'pass' }),
+        globCache: () => [],
         nodeId: 'sk1',
       }
     );
     assert(r.ok === true,
       '#589 CONTROL: even fanout 0/2 refute (pass majority) must still pass, got ' + JSON.stringify(r));
+
+    const legacyNodes = [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| legacy-skeptics | adversarial-verifier | impl | — | 2 | fanout(legacy) |',
+      '| done | finalize | legacy-skeptics | — | 1 | sequence |',
+    ];
+    const legacyLedger = ['| impl | complete |', '| legacy-skeptics | complete |', '| done | complete |'];
+    r = planValidator.verifyVerdictBlock(mkVerdictPlan(legacyNodes, legacyLedger), {
+      nodeId: 'legacy-skeptics',
+      readCache: f => f.startsWith('adversarial-verifier-') ? 'verdict: pass\nfindings_blocking: 0\n' : null,
+      globCache: p => p === 'adversarial-verifier-' ? ['adversarial-verifier-0.md', 'adversarial-verifier-1.md'] : [],
+    });
+    assert(r.ok === true, 'narrow single-group archived role-prefix compatibility remains readable, got ' + JSON.stringify(r));
 
     // -------------------------------------------------------------------
     // (3) --verdict-check CLI via runNode on a temp .cache dir
@@ -14943,6 +15042,8 @@ function buildRegistry() {
   add('testClassifierFastScopeSectionIsolationGreen',     testClassifierFastScopeSectionIsolationGreen);
   add('testClassifierFastScopeFenceCommentRed',           testClassifierFastScopeFenceCommentRed);
   add('testClassifierSectionBodyFenceIdentity',            testClassifierSectionBodyFenceIdentity);
+  add('testPlanConsumerFenceMatrix',                        testPlanConsumerFenceMatrix);
+  add('testNodeBriefAuthoritativeSectionMatrix',            testNodeBriefAuthoritativeSectionMatrix);
   add('testClassifierFastScopeFenceHeadingRed',           testClassifierFastScopeFenceHeadingRed);
   add('testClassifierFastScopeFenceMixedMarkerRed',       testClassifierFastScopeFenceMixedMarkerRed);
   add('testClassifierFastScopeFenceInFencePathRed',       testClassifierFastScopeFenceInFencePathRed);

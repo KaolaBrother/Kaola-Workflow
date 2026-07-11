@@ -121,6 +121,7 @@ const OPERATOR_HINT_REGISTRY = {
   dangling_depends_on: (ctx) => `Node ${ctx.nodeId || '(unknown)'} depends_on a node that does not exist. Fix the depends_on reference and re-freeze.`,
   brief_unknown_node: (ctx) => `## Node Briefs names unknown node id "${ctx.nodeId || '(unknown)'}" — every brief's ### <node-id> header must match a node in the ## Nodes table. Fix the id (or add the node) and re-freeze.`,
   brief_duplicate_node: (ctx) => `## Node Briefs carries more than one ### block for node id "${ctx.nodeId || '(unknown)'}" — a node has exactly ONE brief (a duplicate would silently win/lose by parse order). Merge the blocks into one and re-freeze.`,
+  briefs_section_ambiguous: () => '## Node Briefs identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -645,7 +646,12 @@ function parseNodes(content) {
 function resolveAdversarialFanoutGroup(nodes, node) {
   if (!node || node.role !== 'adversarial-verifier' || !node.shape || node.shape.kind !== 'fanout') return null;
   if (String(node.cardinality) !== '1') {
-    return { mode: 'legacy-role-prefix', group: node.shape.group, origin: node.dependsOn.slice().sort(), members: [node.id] };
+    const originKey = n => (n.dependsOn || []).slice().sort().join('\u001f');
+    const legacyGroups = new Set(nodes.filter(n => n.role === 'adversarial-verifier'
+      && n.shape && n.shape.kind === 'fanout' && String(n.cardinality) !== '1')
+      .map(n => n.shape.group + '\u001e' + originKey(n)));
+    return { mode: legacyGroups.size === 1 ? 'legacy-role-prefix' : 'legacy-ambiguous',
+      group: node.shape.group, origin: node.dependsOn.slice().sort(), members: [node.id] };
   }
   const originKey = n => (n.dependsOn || []).slice().sort().join('\u001f');
   const ownOrigin = originKey(node);
@@ -1138,6 +1144,10 @@ function verifyVerdictBlock(content, opts) {
     }
     if (role === 'adversarial-verifier' && node.shape && node.shape.kind === 'fanout') {
       const group = resolveAdversarialFanoutGroup(nodes, node);
+      if (group.mode === 'legacy-ambiguous') {
+        return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: false,
+          members: group.members, reason: 'multiple legacy adversarial fanout groups make role-prefix receipts ambiguous' };
+      }
       const files = group.mode === 'canonical-node-id'
         ? group.members.map(id => id + '.md')
         : globCache('adversarial-verifier-');
@@ -1429,9 +1439,8 @@ function barrierCheck(content, actualPaths, opts) {
 // (a briefless plan hashes BYTE-IDENTICALLY to the pre-briefs formula → back-compat is absolute) and as
 // the parse guard. sectionBody returns '' for both an absent and an empty section, so presence must be
 // probed on the heading, not the body.
-function nodeBriefsPresent(content) {
-  return /^##\s+Node Briefs\s*$/m.test(String(content || ''));
-}
+function nodeBriefsSection(content) { return classifier.sectionBodyState(content, 'Node Briefs'); }
+function nodeBriefsPresent(content) { return nodeBriefsSection(content).status === 'present'; }
 // parseNodeBriefs: parse the `## Node Briefs` section into [{ nodeId, brief }]. The section body is
 // sliced via the fence-aware classifier.sectionBody (an h3 does NOT close the h2 section); the
 // `### <node-id>` headers are scanned fence-aware (mirroring sectionBody's fenceRe) so a fenced
@@ -1439,12 +1448,10 @@ function nodeBriefsPresent(content) {
 // blank lines trimmed with internal newlines preserved. Returns [] when the section is absent (the
 // deterministic-trim contract the hash byte-identity + the freeze wall both rely on). Pure (no fs).
 function parseNodeBriefs(content) {
-  if (!nodeBriefsPresent(content)) return [];
-  const body = classifier.sectionBody(content, 'Node Briefs');
-  if (!body) return [];
-  const fenceRe = /^(`{3,}|~{3,})/;
-  let inFence = false;
-  let fenceFamily = '';
+  const section = nodeBriefsSection(content);
+  if (section.status !== 'present' || !section.body) return [];
+  const body = section.body;
+  let fence = { family: '', length: 0 };
   const out = [];
   let cur = null;
   const flush = () => {
@@ -1456,13 +1463,8 @@ function parseNodeBriefs(content) {
     cur = null;
   };
   for (const line of body.split('\n')) {
-    const fm = line.trim().match(fenceRe);
-    if (fm) {
-      const fam = fm[1][0];
-      if (!inFence) { inFence = true; fenceFamily = fam; }
-      else if (fam === fenceFamily) { inFence = false; fenceFamily = ''; }
-    }
-    const hm = !inFence ? line.match(/^###\s+(\S+)\s*$/) : null;
+    fence = classifier.markdownFenceTransition(fence, line);
+    const hm = !fence.family ? line.match(/^###\s+(\S+)\s*$/) : null;
     if (hm) { flush(); cur = { nodeId: hm[1], lines: [] }; }
     else if (cur) { cur.lines.push(line); }
   }
@@ -1475,7 +1477,12 @@ function computePlanHash(content) {
   let body = norm('Meta') + '\n---NODES---\n' + norm(schema.NODES_HEADING);
   // The `## Node Briefs` section is hash-covered ONLY when present — a briefless plan produces a
   // byte-identical hash body, so every existing frozen/in-flight plan resume-checks unchanged.
-  if (nodeBriefsPresent(content)) body += '\n---BRIEFS---\n' + norm('Node Briefs');
+  const briefs = nodeBriefsSection(content);
+  if (briefs.status === 'present') {
+    body += '\n---BRIEFS---\n' + briefs.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  } else if (briefs.status === 'ambiguous') {
+    body += '\n---BRIEFS-AMBIGUOUS---';
+  }
   return crypto.createHash('sha256').update(body).digest('hex');
 }
 function readStoredHash(content) {
@@ -1488,6 +1495,10 @@ function readStoredHash(content) {
 function validatePlan(content, opts) {
   opts = opts || {};
   const resolveModel = opts.resolveModel || (role => resolveAgentModel(role));
+  const briefsSection = nodeBriefsSection(content);
+  if (briefsSection.status === 'ambiguous') {
+    return { result: 'refuse', reason: 'briefs_section_ambiguous', operator_hint: getOperatorHint('briefs_section_ambiguous'), errors: ['## Node Briefs section identity is ambiguous'], planHash: computePlanHash(content) };
+  }
   const nodes = parseNodes(content);
   // audit B1: read labels ONLY from the hash-covered `## Meta` section. parseLabels used to
   // scan the whole document, so a decoy `labels:` line placed OUTSIDE `## Meta` (which the

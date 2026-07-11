@@ -161,6 +161,33 @@ function assert(condition, message) {
     globCache: p => p === 'adversarial-verifier-' ? ['adversarial-verifier-0.md', 'adversarial-verifier-1.md'] : [],
   });
   assert(r.ok === true, '#658 archived cardinality>1 role-prefix receipts remain read-only compatible, got ' + JSON.stringify(r));
+
+  const ambiguousLegacyPlan = makePlan([
+    '| impl | complete | |', '| av-red | complete | |', '| av-blue | complete | |', '| finalize | complete | |',
+  ], [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| av-red | adversarial-verifier | impl | — | 3 | fanout(red) |',
+    '| av-blue | adversarial-verifier | impl | — | 3 | fanout(blue) |',
+    '| finalize | finalize | av-red, av-blue | — | 1 | sequence |',
+  ]);
+  const pooledLegacy = {
+    'adversarial-verifier-red-0.md': 'verdict: fail\nfindings_blocking: 1\n',
+    'adversarial-verifier-red-1.md': 'verdict: fail\nfindings_blocking: 1\n',
+    'adversarial-verifier-red-2.md': 'verdict: pass\nfindings_blocking: 0\n',
+    'adversarial-verifier-blue-0.md': 'verdict: pass\nfindings_blocking: 0\n',
+    'adversarial-verifier-blue-1.md': 'verdict: pass\nfindings_blocking: 0\n',
+    'adversarial-verifier-blue-2.md': 'verdict: pass\nfindings_blocking: 0\n',
+  };
+  const ambiguousOpts = {
+    readCache: f => pooledLegacy[f] || null,
+    globCache: p => p === 'adversarial-verifier-' ? Object.keys(pooledLegacy) : [],
+  };
+  r = planValidator.verifyVerdictBlock(ambiguousLegacyPlan, Object.assign({ nodeId: 'av-red' }, ambiguousOpts));
+  assert(r.ok === false && /legacy.*ambiguous|multiple legacy/i.test(r.reason || ''),
+    'R1 per-node legacy multi-group receipts must fail closed before global pooling, got ' + JSON.stringify(r));
+  r = planValidator.verifyVerdictBlock(ambiguousLegacyPlan, ambiguousOpts);
+  assert(r.ok === false && r.failures && r.failures.some(f => /legacy.*ambiguous|multiple legacy/i.test(f.reason || '')),
+    'R1 whole-plan legacy multi-group receipts must fail closed before global pooling, got ' + JSON.stringify(r));
 }
 
 // #649: write populated fixture evidence to the same authoritative cache path the runtime resolves.
@@ -5719,6 +5746,7 @@ function rtHarness(initialFiles, opts) {
     ].join('\n') + '\n';
     fs.writeFileSync(planPath, plan);
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'), 'verdict: pass\nfindings_blocking: 0\n');
     const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     g(['init']);
     g(['config', 'user.email', 'kw@test']);
@@ -5778,6 +5806,54 @@ function rtHarness(initialFiles, opts) {
   // bare env (co-open). SERIAL forces the single-write serial fallback.
   const SERIAL = { KAOLA_PARALLEL_WRITES: '0' };
   const DEFAULT = {}; // bare env ⇒ default-on co-open
+
+  // R4: real open-ready → dispatch evidence paths → close both skeptics → real whole-plan verdict.
+  // No role-prefix bridge is authored anywhere in this project.
+  {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-r4-skeptic-e2e-'));
+    const project = 'skeptic-e2e';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — skeptic-e2e', '', '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| skeptic-a | adversarial-verifier | review | — | 1 | fanout(red-team) |',
+      '| skeptic-b | adversarial-verifier | review | — | 1 | fanout(red-team) |',
+      '| finalize | finalize | skeptic-a, skeptic-b | — | 1 | sequence |', '',
+      '## Node Briefs', '', '### skeptic-a', 'verify', '', '### skeptic-b', 'verify', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| impl | complete |', '| review | complete |', '| skeptic-a | pending |',
+      '| skeptic-b | pending |', '| finalize | pending |', '',
+    ].join('\n');
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = args => execFileSync('git', ['-C', repoRoot, ...args], { stdio: 'ignore' });
+    try {
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, stdio: 'pipe' });
+      g(['add', '-A']); g(['commit', '-m', 'seed']);
+      const opened = runNode(repoRoot, ['open-ready', '--project', project, '--json'], DEFAULT);
+      assert(opened.result === 'ok' && opened.opened.length === 2, 'R4 real open-ready opens both explicit skeptics, got ' + JSON.stringify(opened));
+      for (const item of opened.opened) {
+        assert(item.dispatch && item.dispatch.evidence_file, 'R4 dispatch carries authoritative evidence_file for ' + item.id);
+        const evidencePath = path.join(repoRoot, item.dispatch.evidence_file);
+        fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+        fs.writeFileSync(evidencePath, 'evidence-binding: ' + item.id + ' ' + item.nonce + '\nverdict: pass\nfindings_blocking: 0\n');
+        const closed = runNode(repoRoot, ['close-node', '--project', project, '--node-id', item.id, '--json'], DEFAULT);
+        assert(closed.result === 'ok', 'R4 real close-node accepts dispatch.evidence_file-only receipt for ' + item.id + ', got ' + JSON.stringify(closed));
+      }
+      assert(!fs.readdirSync(cacheDir).some(f => /^adversarial-verifier-/.test(f)), 'R4 integration authors no role-prefix bridge');
+      fs.writeFileSync(path.join(cacheDir, 'review.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      const verdict = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--verdict-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim());
+      assert(verdict.ok === true || verdict.result === 'pass', 'R4 real whole-plan verdict-check passes canonical receipts, got ' + JSON.stringify(verdict));
+    } finally { cleanup(repoRoot); }
+  }
 
   // -------------------------------------------------------------------------
   // RETIRED for #498: D437-OPEN-READY-GROUP asserted ON-alone (KAOLA_LANE_CONTAINMENT only) FORMS a lane

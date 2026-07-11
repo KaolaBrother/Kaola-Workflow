@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Adaptive adversarial fan-out evidence now follows frozen node identity end to end — #658.** New fan-out groups seed, dispatch, verify, reset, and reopen only canonical `.cache/<node-id>.md` receipts derived from the exact shared fan-out label and dependency origin. Missing, foreign, duplicate, or stale bindings fail closed; independent groups cannot dilute one another; a one-pass/one-refutation tie remains blocking. Archived cardinality-greater-than-one role-prefix receipts remain readable only when exactly one legacy group is attributable, eliminating the manual bridge files required by earlier Finalization runs.
+
+- **GitLab claim-classification fixtures are hermetic by construction — #659.** Every unit fixture explicitly owns issue view, project discovery, and remote-note inputs, while a local unexpected-call sentinel names omitted dependencies before ambient CLI, HOME, authentication, network, or remote state can be reached. Controlled CLI shims remain available to separately named degradation/integration tests.
+
+- **Workflow section and Node Briefs identity is fence-aware across every edition — #660.** One family-, run-length-, and closer-suffix-aware Markdown scanner now governs Meta, Nodes, Node Ledger, Node Briefs, brief parsing, presence, validation, and hashing. Fenced decoys cannot become headings or briefs, shorter delimiters cannot close longer fences, duplicate/unclosed ambiguity refuses structurally, and a fenced Briefs decoy remains hash-equivalent to a genuinely briefless plan.
+
 ## [6.22.0] - 2026-07-10
 
 ### Added
