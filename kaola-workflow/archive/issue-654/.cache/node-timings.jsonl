@@ -1,0 +1,8 @@
+{"node":"n1-fix-gate-evidence-rotation","event":"opened","ts":"2026-07-11T12:10:06.306Z"}
+{"node":"n1-fix-gate-evidence-rotation","event":"closed","ts":"2026-07-11T12:29:26.611Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-11T12:29:26.987Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-11T12:38:47.815Z"}
+{"node":"n3-adversarial-lifecycle","event":"opened","ts":"2026-07-11T12:38:48.223Z"}
+{"node":"n3-adversarial-lifecycle","event":"closed","ts":"2026-07-11T12:49:27.246Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-11T12:49:27.641Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-11T12:49:54.607Z"}

@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "e786a140ad0518f3cbbf649801b1f75ebcf462d9d2f802ab35c0177b65261806",
+  "tasks": [
+    {
+      "id": "n1-fix-gate-evidence-rotation",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-adversarial-lifecycle",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-11T12:49:54.714Z"
+}

@@ -1,0 +1,8 @@
+{"timestamp":"2026-07-11T12:10:06.306Z","event":"open","nodeId":"n1-fix-gate-evidence-rotation","nonce":"5710e0d58838","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:29:26.612Z","event":"close","nodeId":"n1-fix-gate-evidence-rotation","nonce":"5710e0d58838","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:29:26.987Z","event":"open","nodeId":"n2-review","nonce":"0ca198bd6efb","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:38:47.816Z","event":"close","nodeId":"n2-review","nonce":"0ca198bd6efb","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:38:48.223Z","event":"open","nodeId":"n3-adversarial-lifecycle","nonce":"7c5b01a6cc59","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:49:27.247Z","event":"close","nodeId":"n3-adversarial-lifecycle","nonce":"7c5b01a6cc59","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:49:27.642Z","event":"open","nodeId":"n4-finalize","nonce":"5e7d422712f9","by":"adaptive-node"}
+{"timestamp":"2026-07-11T12:49:54.608Z","event":"close","nodeId":"n4-finalize","nonce":"5e7d422712f9","by":"adaptive-node"}

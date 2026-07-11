@@ -1,0 +1,29 @@
+{
+  "plan_hash": "e786a140ad0518f3cbbf649801b1f75ebcf462d9d2f802ab35c0177b65261806",
+  "updated_at": "2026-07-11T12:49:54.718Z",
+  "op": "close-and-open-next",
+  "node_ledger": [
+    {
+      "id": "n1-fix-gate-evidence-rotation",
+      "role": "tdd-guide",
+      "status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "complete"
+    },
+    {
+      "id": "n3-adversarial-lifecycle",
+      "role": "adversarial-verifier",
+      "status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "complete"
+    }
+  ],
+  "in_progress": [],
+  "all_done": true
+}
