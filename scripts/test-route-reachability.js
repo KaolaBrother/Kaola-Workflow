@@ -23,6 +23,41 @@ const exists = rel => fs.existsSync(path.join(REPO, rel));
 // must still match a needle written as one continuous string.
 const norm = s => String(s).replace(/\s+/g, ' ');
 
+// Control-plane literal validator. The mutation battery below requires this to bind its checks to
+// the agents.spawn_agent YAML object itself, not compliant prose elsewhere in the same document.
+function controlPlaneBlockValid(content, spec) {
+  const match = content.match(/```yaml\s*\nagents\.spawn_agent:\n([\s\S]*?)\n```/);
+  if (!match) return false;
+  const block = match[1];
+  const entries = block.split('\n').map(line => line.match(/^  ([a-z_]+): "([^"]*)"$/));
+  if (entries.some(entry => !entry)) return false;
+  const expectedKeys = ['task_name', 'agent_type', 'fork_turns', 'message'];
+  const keys = entries.map(entry => entry[1]);
+  if (keys.length !== expectedKeys.length || keys.some((key, i) => key !== expectedKeys[i])) return false;
+  const values = Object.fromEntries(entries.map(entry => [entry[1], entry[2]]));
+  const message = values.message;
+  return values.task_name === spec.taskName
+    && values.agent_type === spec.agentType
+    && values.fork_turns === 'none'
+    && message.startsWith('Repository root:')
+    && message.includes(spec.targetField)
+    && message.includes(spec.contractField)
+    && message.includes(spec.returnField)
+    && message.includes('Return only')
+    && !message.includes('inherit the full parent conversation');
+}
+
+function conflictingControlPlaneMutations(content) {
+  return [
+    ['duplicate task', content.replace('  agent_type:', '  task_name: "wrong_task"\n  agent_type:')],
+    ['duplicate role', content.replace('  fork_turns:', '  agent_type: "default"\n  fork_turns:')],
+    ['duplicate fork', content.replace('  message:', '  fork_turns: "all"\n  message:')],
+    ['duplicate message', content.replace(
+      /(agents\.spawn_agent:[\s\S]*?  message: "[^"]+")(\n```)/,
+      '$1\n  message: "inherit the full parent conversation"$2')]
+  ];
+}
+
 // The byte-identical adaptive schema is the single source of the adaptive route constants — every
 // edition's schema (the forge files keep the canonical name) re-exports the same values, so requiring
 // the canonical one is the no-drift source for the EMITTED set.
@@ -219,14 +254,60 @@ for (const ed of codexEditions) {
     'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
     'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md'
   ];
+  const issueScoutSpec = { taskName: 'issue_scout', agentType: 'issue-scout',
+    targetField: 'Selected issue/set request:', contractField: 'issue-scout skill/profile',
+    returnField: 'bounded durable recommendation JSON' };
   for (const f of nextSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(controlPlaneBlockValid(content, issueScoutSpec),
+      `T5b structural: ${f} issue-scout literal must carry the exact isolated v2 argument shape`);
+    const corrupted = content.replace('fork_turns: "none"\n  message:',
+      'fork_turns: "all"\n  model: "gpt-5.6-sol"\n  reasoning_effort: "xhigh"\n  message:');
+    assert(!controlPlaneBlockValid(corrupted, issueScoutSpec),
+      `T5b mutation: ${f} must reject a corrupted issue-scout literal despite nearby compliant prose`);
+    for (const [kind, mutation] of conflictingControlPlaneMutations(content)) {
+      assert(!controlPlaneBlockValid(mutation, issueScoutSpec),
+        `T5b duplicate mutation: ${f} must reject issue-scout ${kind}`);
+    }
     assert(content.includes('direct `agents.spawn_agent` tool')
       && content.includes('never dispatch through `functions.exec` or Code Mode'),
       `T5b: ${f} must require role-safe direct issue-scout dispatch`);
     assert(content.includes('codex_v2_encrypted_transport_unsafe')
       && content.includes('codex_v2_role_transport_unsafe'),
       `T5b: ${f} must fail closed instead of retrying nested or reserved-schema issue-scout dispatch`);
+    for (const token of ['task_name: "issue_scout"', 'agent_type: "issue-scout"', 'fork_turns: "none"',
+      'argument-shape refusal', 'exactly once', 'repository root', 'durable return']) {
+      assert(content.includes(token), `T5b: ${f} must pin isolated issue-scout control-plane token ${token}`);
+    }
+    assert(content.includes('No control-plane dispatch uses `fork_turns: "all"`'), `T5b: ${f} must prohibit full-history control-plane forks`);
+  }
+
+  const adaptSurfaces = [
+    'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md'
+  ];
+  const workflowPlannerSpec = { taskName: 'workflow_planner_<issue-or-project>', agentType: 'workflow-planner',
+    targetField: 'Selected issue/set/project:', contractField: 'workflow-planner profile contract',
+    returnField: 'bounded durable handoff packet' };
+  for (const f of adaptSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(controlPlaneBlockValid(content, workflowPlannerSpec),
+      `T5b structural: ${f} workflow-planner literal must carry the exact isolated v2 argument shape`);
+    const corrupted = content.replace('fork_turns: "none"\n  message:',
+      'fork_turns: "all"\n  model: "gpt-5.6-sol"\n  reasoning_effort: "xhigh"\n  message:');
+    assert(!controlPlaneBlockValid(corrupted, workflowPlannerSpec),
+      `T5b mutation: ${f} must reject a corrupted workflow-planner literal despite nearby compliant prose`);
+    for (const [kind, mutation] of conflictingControlPlaneMutations(content)) {
+      assert(!controlPlaneBlockValid(mutation, workflowPlannerSpec),
+        `T5b duplicate mutation: ${f} must reject workflow-planner ${kind}`);
+    }
+    for (const token of ['agents.spawn_agent', 'task_name: "workflow_planner_<issue-or-project>"',
+      'agent_type: "workflow-planner"', 'fork_turns: "none"', 'argument-shape refusal',
+      'exactly once', 'Repository root', 'durable return']) {
+      assert(content.includes(token), `T5b: ${f} must pin isolated workflow-planner control-plane token ${token}`);
+    }
+    assert(content.includes('never use `fork_turns: "all"`'), `T5b: ${f} must prohibit full-history control-plane forks`);
   }
 
   // Current-runtime adapter: pin both static pair classes and the role-owned dispatch mode.

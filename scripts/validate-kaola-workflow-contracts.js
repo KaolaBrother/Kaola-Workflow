@@ -574,6 +574,15 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'adaptive au
 // advisory-prose skill is the exact bug that ran claim + authoring inline in the main session.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'MUST delegate');
+for (const [surface, role, task] of [
+  [`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue-scout', 'issue_scout'],
+  [`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner', 'workflow_planner_<issue-or-project>']
+]) {
+  for (const token of ['agents.spawn_agent', `agent_type: "${role}"`, `task_name: "${task}"`,
+    'fork_turns: "none"', 'isolated, self-contained control-plane brief', 'argument-shape refusal', 'exactly once']) {
+    assertIncludes(surface, token);
+  }
+}
 // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
 // the project-local needle above GREEN (add, never remove) and pin the global path alongside it.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.codex/agents/kaola-workflow/');

@@ -156,6 +156,15 @@ issue-scout is read-only: it cannot claim issues, write repository files, author
 Dispatch it with `model="{ISSUE_SCOUT_MODEL}"` — the governed issue-scout tier.
 The model above is resolved at install time; the router does not substitute it.
 
+**Isolated control-plane dispatch.** Give issue-scout an isolated, self-contained control-plane brief;
+never inherit the full main-session conversation. The native `Agent(...)` prompt must state the
+repository root, the selected issue/issue-set request (including goal context when present), the
+issue-scout profile/read-only contract, and the bounded durable return (the complete recommendation
+JSON). Keep the established issue-scout identity/header convention and isolated prompt. Treat a
+spawn argument-shape refusal as correctable arguments: retry the same issue-scout role and bounded
+brief exactly once; never perform issue selection inline. Tool-unavailable fallback remains reserved
+for genuinely unavailable agent tooling.
+
 **Ordering — resolve the path BEFORE consuming a bundle:** the bundle lane is
 adaptive-only, so resolve the path intent (Step 0a-1) *before* acting on
 the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;

@@ -267,6 +267,12 @@ const REQUIRED_BLOCKS = [
       'codex_v2_encrypted_transport_unsafe',
       'codex_v2_role_transport_unsafe',
       'agents.spawn_agent',
+      'task_name: "issue_scout"',
+      'agent_type: "issue-scout"',
+      'fork_turns: "none"',
+      'isolated, self-contained control-plane brief',
+      'argument-shape refusal',
+      'exactly once',
     ],
   },
   {
@@ -288,6 +294,8 @@ const REQUIRED_BLOCKS = [
       // renders {X_MODEL} placeholders in COMMANDS; no SKILL.md may carry one), so it
       // rides this claude-live/command block, not the both/both blocks above.
       'model="{ISSUE_SCOUT_MODEL}"',
+      'isolated, self-contained control-plane brief',
+      'argument-shape refusal',
     ],
   },
 ];

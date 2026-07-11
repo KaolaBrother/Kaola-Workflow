@@ -159,6 +159,28 @@ On Codex v2, use the direct `agents.spawn_agent` tool for issue-scout; never use
 spawn. Do not retry an encrypted-output decode or reserved-schema failure and do not fall back to a
 default role: the same transport/schema mismatch will fail deterministically again.
 
+Use this literal v2 argument shape (with the repository and request values filled in); omit transient
+`model` and `reasoning_effort` fields:
+
+```yaml
+agents.spawn_agent:
+  task_name: "issue_scout"
+  agent_type: "issue-scout"
+  fork_turns: "none"
+  message: "Repository root: <absolute-root>. Selected issue/set request: <request>. Apply the issue-scout skill/profile read-only contract. Return only the bounded durable recommendation JSON required below."
+```
+
+This is an isolated, self-contained control-plane brief: it includes repository root, selected
+issue/set/project context, the required skill/profile contract, and the expected durable return.
+Codex v1 likewise uses `fork_turns: "none"` and preserves the established identity/header convention.
+No control-plane dispatch uses `fork_turns: "all"`.
+
+The rejection `Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.` is an
+**argument-shape refusal**, not capacity or unavailable tooling. Correct the arguments to the literal
+shape above and retry the same issue-scout role, task identity, isolated brief, and bounded durable
+return exactly once. Never select issues inline. Reserve `local-fallback-tool-unavailable` for agent
+tooling that is genuinely unavailable.
+
 **Ordering — resolve the path BEFORE consuming a bundle:** the bundle lane is
 adaptive-only, so resolve the path intent (Startup Step 0a-1) *before*
 acting on the scout's recommendation. Pursue a bundle ONLY when the resolved path is

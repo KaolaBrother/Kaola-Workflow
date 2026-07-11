@@ -97,9 +97,11 @@ Agent(
   subagent_type="workflow-planner",
   model="{WORKFLOW_PLANNER_MODEL}",
   description="Adaptive front end {issue}",
-  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md). The full procedure — startup, Write of ## Nodes, adaptive-handoff.js — lives there as the sole home."
+  prompt="Repository root: {repo-root}. Selected issue/set/project: {issue-or-project}. Settle the starting contract and design the adaptive workflow per the kaola-workflow-adapt skill and workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md). The full procedure — startup, Write of ## Nodes, adaptive-handoff.js — lives there as the sole home. Return only the bounded durable handoff packet."
 )
 ```
+
+This is an **isolated, self-contained control-plane brief**: never inherit the full main-session conversation. Include repository root, selected issue/set/project, workflow-planner profile/skill contract, and bounded durable handoff return. Preserve the isolated identity/header convention. A spawn **argument-shape refusal** requires correcting arguments and retrying the same planner role, identity, brief, and return exactly once; never author inline. Tool-unavailable fallback is only for genuinely unavailable agent tooling.
 
 **Read the durable state, not the planner's prose.** The structured return is a thin pointer; the
 files are authoritative.

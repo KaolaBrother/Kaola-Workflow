@@ -205,6 +205,16 @@ written. Surface `claim_reasoning` and classify by `result`:
 
 **Planner-first control boundary.** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 
+Use direct v2 control-plane dispatch:
+```yaml
+agents.spawn_agent:
+  task_name: "workflow_planner_<issue-or-project>"
+  agent_type: "workflow-planner"
+  fork_turns: "none"
+  message: "Repository root: <absolute-root>. Selected issue/set/project: <target>. Apply the kaola-workflow-adapt skill and workflow-planner profile contract. Return only the bounded durable handoff packet."
+```
+Sanitize the stable task suffix to lowercase letters, digits, and underscores. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Codex v1 keeps `fork_turns: "none"` and the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
+
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
 and `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you govern, dispatch,

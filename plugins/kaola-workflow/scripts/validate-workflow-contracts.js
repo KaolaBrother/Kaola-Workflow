@@ -75,6 +75,18 @@ function assertEveryDispatchHasModel(file) {
   }
 }
 
+function assertWorkflowPlannerPromptSelfContained(file) {
+  const content = read(file);
+  const block = content.match(/Agent\(\n\s+subagent_type="workflow-planner",[\s\S]*?\n\)/);
+  assert(block, file + ' must contain a literal workflow-planner Agent block');
+  const prompt = block[0].match(/prompt="([^"]+)"/);
+  assert(prompt, file + ' workflow-planner Agent block must contain a literal prompt');
+  for (const term of ['Repository root:', 'Selected issue/set/project:', 'workflow-planner',
+    'agents/workflow-planner.md', 'bounded durable handoff packet']) {
+    assert(prompt[1].includes(term), file + ' workflow-planner literal prompt missing: ' + term);
+  }
+}
+
 // issue #211: inline section slicer derived from
 // scripts/kaola-workflow-classifier.js so the validator carries no classifier
 // dependency. Returns the body of a `## {heading}` section, up to the next
@@ -816,6 +828,8 @@ assertIncludes('commands/workflow-next.md', 'Skip this entire step when `KAOLA_P
 // separately caught by test-install-model-rendering.js).
 assertIncludes('commands/workflow-next.md', 'the governed issue-scout tier');
 assertIncludes('commands/workflow-next.md', 'model="{ISSUE_SCOUT_MODEL}"');
+assertIncludes('commands/workflow-next.md', 'isolated, self-contained control-plane brief');
+assertIncludes('commands/workflow-next.md', 'argument-shape refusal');
 // adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance
 // #277 M3: FANOUT_CAP and post-dominate concepts relocated from commands/kaola-workflow-adapt.md
 // (now a dispatch-handle-only file) to agents/workflow-planner.md (sole home of authoring procedure).
@@ -827,6 +841,13 @@ assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
 // run claimed + authored inline in the main session.
 assertIncludes('commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
 assertIncludes('commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
+assertIncludes('commands/kaola-workflow-adapt.md', 'isolated, self-contained control-plane brief');
+assertIncludes('commands/kaola-workflow-adapt.md', 'argument-shape refusal');
+for (const file of [
+  'commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md'
+]) assertWorkflowPlannerPromptSelfContained(file);
 // v5.1.0: the refusal consumer branch must stay FAIL-CLOSED — any verdict that is not acquired/owned
 // is a refusal, never a blind read of a missing workflow-state.md.
 assertIncludes('commands/kaola-workflow-adapt.md', 'NOT `acquired` or `owned`');
