@@ -1,0 +1,51 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=legacy_multi_group_verification_refuses_before_receipt_access",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=gitlab_classification_fixtures_are_dependency_complete_and_hermetic",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=walkthrough_explicit_fanout_uses_bound_node_id_receipts",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=real_dispatch_evidence_lifecycle_reaches_whole_plan_verdict",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=NBA scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=node_brief_h3_parser_reuses_family_run_and_suffix_aware_fence_transition",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=NBB scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=brief_presence_hash_and_validation_distinguish_absent_present_and_ambiguous",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R5 scope=in_scope action=fix status=resolved severity=medium fix_role=tdd-guide rationale=four_edition_plan_consumer_parse_hash_freeze_resume_matrix_is_committed",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

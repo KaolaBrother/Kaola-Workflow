@@ -1,0 +1,48 @@
+{
+  "source_plan_hash": "e69753f11f9e10b14148d196259867a6b0ebd8805d552fe3033fdd4250f62b2f",
+  "tasks": [
+    {
+      "id": "n1-canonical-fanout-evidence",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-fence-parser-and-hermetic-fixtures",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-review-bundle-contract",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-adversarial-membership-replay",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-adversarial-parser-hermeticity",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-document-repaired-contracts",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-finalize-bundle",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-11T23:30:41.896Z"
+}

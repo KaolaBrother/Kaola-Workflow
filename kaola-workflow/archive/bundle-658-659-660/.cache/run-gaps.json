@@ -1,0 +1,25 @@
+{
+  "project": "bundle-658-659-660",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-review-bundle-contract",
+      "count": 3
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-adversarial-membership-replay",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n5-adversarial-parser-hermeticity",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:noise",
+      "sample": "post-edit four-edition Meta validation was safely interrupted during the Claude chain at the n2 wait-budget boundary with no observed failure; the exact command was rerun from the beginning and only the complete rerun is acceptance evidence.",
+      "count": 1
+    }
+  ]
+}

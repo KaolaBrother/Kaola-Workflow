@@ -1,0 +1,1 @@
+gap: noise — post-edit four-edition Meta validation was safely interrupted during the Claude chain at the n2 wait-budget boundary with no observed failure; the exact command was rerun from the beginning and only the complete rerun is acceptance evidence.
