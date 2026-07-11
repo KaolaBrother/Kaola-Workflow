@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "1e380b43aab4137ec5145bae17a553d15eff47d9bdaa6ee7d6e1aad22903318c",
+  "tasks": [
+    {
+      "id": "n1-pin-control-plane-spawn",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review-contract",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-adversarial-v2",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-adversarial-v1-retry",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-11T15:06:00.928Z"
+}

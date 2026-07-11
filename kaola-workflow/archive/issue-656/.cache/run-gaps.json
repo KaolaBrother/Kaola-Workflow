@@ -1,0 +1,25 @@
+{
+  "project": "issue-656",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-review-contract",
+      "count": 5
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-adversarial-v2",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-adversarial-v1-retry",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:fanout-evidence-path-mismatch",
+      "sample": "Adaptive dispatch emitted only node-id adversarial receipts while Finalization required role-prefixed per-instance receipts; filed as #658.",
+      "count": 1
+    }
+  ]
+}
