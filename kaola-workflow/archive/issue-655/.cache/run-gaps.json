@@ -1,0 +1,40 @@
+{
+  "project": "issue-655",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-planner-routing-contract",
+      "count": 3
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-review",
+      "count": 5
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-adversarial-freeze-compat",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n5-adversarial-open-reconcile",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:fanout-evidence-path-mismatch",
+      "sample": "Finalization required role-prefixed adversarial instance receipts in addition to runtime-seeded node receipts; filed as #658.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:gitlab-claim-fixture-nonhermetic",
+      "sample": "GitLab claim classification unit fixture reached ambient note discovery and produced an environment-dependent chain failure; filed as #659.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:fenced-section-heading-decoy",
+      "sample": "A fenced Nodes heading was selected before the real workflow table; filed as #660.",
+      "count": 1
+    }
+  ]
+}

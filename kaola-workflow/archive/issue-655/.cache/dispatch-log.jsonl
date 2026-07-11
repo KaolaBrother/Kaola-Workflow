@@ -1,0 +1,11 @@
+{"ts":"2026-07-11T15:22:27Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-07-11T15:30:08Z","agent_type":"tdd-guide","agent_id":"019f51cc-a201-7582-bad6-f3b58d3d2999","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T15:30:53Z","agent_type":"tdd-guide","agent_id":"019f51cd-5885-7ea3-9c17-0f08d644f460","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T15:49:23Z","agent_type":"tdd-guide","agent_id":"019f51de-3617-7032-91ff-84bc86d1cb6d","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T16:03:25Z","agent_type":"code-reviewer","agent_id":"019f51eb-1c96-7f60-8f7a-7bc0631d268f","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"opus"}
+{"ts":"2026-07-11T16:04:41Z","agent_type":"code-reviewer","agent_id":"019f51ec-413e-77a0-8b9b-72911c7f5bc3","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"opus"}
+{"ts":"2026-07-11T17:16:32Z","agent_type":"adversarial-verifier","agent_id":"019f522e-1544-79c1-a7e2-bfd0a918e22c","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T17:16:48Z","agent_type":"adversarial-verifier","agent_id":"019f522e-5c55-7822-8720-4357125ab20a","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T19:16:40Z","agent_type":"doc-updater","agent_id":"019f529c-1e8b-7031-a4fc-24ba9350ad72","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T19:40:27Z","agent_type":"contractor","agent_id":"019f52b1-d839-74a2-993d-a5e41de84fcd","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow","model":"gpt-5.6-sol","model_planned":"sonnet"}
+{"ts":"2026-07-11T19:43:29Z","agent_type":"contractor","agent_id":"finalize-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-655"}

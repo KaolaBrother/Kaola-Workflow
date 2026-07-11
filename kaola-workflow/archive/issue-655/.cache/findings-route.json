@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=mixed_stable_plus_opening_topup_reconcile_now_retains_both_exact_override_members_and_remains_idempotent_orientable",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
