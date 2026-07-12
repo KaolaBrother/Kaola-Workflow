@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-12T03:34:05.218Z","event":"open","nodeId":"fix-release-issue-accounting","nonce":"f3399a35efdc","by":"adaptive-node"}
+{"timestamp":"2026-07-12T03:52:37.120Z","event":"close","nodeId":"fix-release-issue-accounting","nonce":"f3399a35efdc","by":"adaptive-node"}
+{"timestamp":"2026-07-12T03:52:37.524Z","event":"open","nodeId":"review-release-issue-accounting","nonce":"3a76acbaaca6","by":"adaptive-node"}
+{"timestamp":"2026-07-12T03:58:10.810Z","event":"close","nodeId":"review-release-issue-accounting","nonce":"3a76acbaaca6","by":"adaptive-node"}
+{"timestamp":"2026-07-12T03:58:11.219Z","event":"open","nodeId":"finalize","nonce":"8f3703a6ffde","by":"adaptive-node"}
+{"timestamp":"2026-07-12T03:59:51.168Z","event":"close","nodeId":"finalize","nonce":"8f3703a6ffde","by":"adaptive-node"}

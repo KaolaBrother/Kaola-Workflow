@@ -1,0 +1,15 @@
+{
+  "project": "issue-663",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:manual-discarded-overlapping-attempts",
+      "sample": "Earlier implementation-node attempts overlapped, one nested-tool invocation lost its final envelope, and shared-fixture processes were contaminated; duplicate/contaminated processes were terminated and excluded, then one clean sequential Meta run passed and the terminal run-chains receipt was separately clean.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:manual-planner-acceptance-set-omitted-663",
+      "sample": "The planner's post-move acceptance command omitted the newly added #663 reference, so the fail-closed verifier returned changelog_unknown_reference; the corrected authoritative set including #663 passed.",
+      "count": 1
+    }
+  ]
+}

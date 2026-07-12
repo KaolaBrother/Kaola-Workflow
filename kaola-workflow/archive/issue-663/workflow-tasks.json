@@ -1,0 +1,24 @@
+{
+  "source_plan_hash": "e00a1a8bb58ad8e8f010a9c35de5ec1e3ab572792ce4eb8d4a271cb3e4e6c905",
+  "tasks": [
+    {
+      "id": "fix-release-issue-accounting",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "review-release-issue-accounting",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T03:59:51.274Z"
+}
