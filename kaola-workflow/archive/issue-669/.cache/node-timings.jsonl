@@ -1,0 +1,8 @@
+{"node":"n1-porcelain-cap","event":"opened","ts":"2026-07-12T13:05:53.869Z"}
+{"node":"n1-porcelain-cap","event":"closed","ts":"2026-07-12T13:47:58.995Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-12T13:47:59.399Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-12T13:56:42.456Z"}
+{"node":"n3-adversarial","event":"opened","ts":"2026-07-12T13:56:42.872Z"}
+{"node":"n3-adversarial","event":"closed","ts":"2026-07-12T14:11:29.260Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-12T14:11:29.667Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-12T14:20:12.195Z"}

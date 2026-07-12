@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "5a0555e4179ed49b47a6fa3cd8c62d2b06f70928dd4005c7c79c6fc8ba28c38e",
+  "tasks": [
+    {
+      "id": "n1-porcelain-cap",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-adversarial",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T14:20:12.308Z"
+}

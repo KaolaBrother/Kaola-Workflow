@@ -1,0 +1,15 @@
+{
+  "project": "issue-669",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:porcelain-leg-dirty-failopen",
+      "sample": "adaptive-node synthesizeLevel leg-dirty-commit probe fails open on porcelain overflow so real leg content is silently omitted from the merge live since #542",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:porcelain-worktree-dirtystate-failopen",
+      "sample": "claim worktreeDirtyState conflates unprobeable with missing feeding destructive cmdSweepLegacyWorktrees",
+      "count": 1
+    }
+  ]
+}

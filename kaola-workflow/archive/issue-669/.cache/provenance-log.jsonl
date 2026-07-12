@@ -1,0 +1,8 @@
+{"timestamp":"2026-07-12T13:05:53.870Z","event":"open","nodeId":"n1-porcelain-cap","nonce":"6e4a61ab3860","by":"adaptive-node"}
+{"timestamp":"2026-07-12T13:47:58.996Z","event":"close","nodeId":"n1-porcelain-cap","nonce":"6e4a61ab3860","by":"adaptive-node"}
+{"timestamp":"2026-07-12T13:47:59.399Z","event":"open","nodeId":"n2-review","nonce":"4e26c7832b79","by":"adaptive-node"}
+{"timestamp":"2026-07-12T13:56:42.456Z","event":"close","nodeId":"n2-review","nonce":"4e26c7832b79","by":"adaptive-node"}
+{"timestamp":"2026-07-12T13:56:42.872Z","event":"open","nodeId":"n3-adversarial","nonce":"5df54e41a01e","by":"adaptive-node"}
+{"timestamp":"2026-07-12T14:11:29.260Z","event":"close","nodeId":"n3-adversarial","nonce":"5df54e41a01e","by":"adaptive-node"}
+{"timestamp":"2026-07-12T14:11:29.667Z","event":"open","nodeId":"n4-finalize","nonce":"b1b8bcf42060","by":"adaptive-node"}
+{"timestamp":"2026-07-12T14:20:12.195Z","event":"close","nodeId":"n4-finalize","nonce":"b1b8bcf42060","by":"adaptive-node"}

@@ -1,5 +1,0 @@
-issue: #669
-title: fix(scripts): status --porcelain git family unbounded — ENOBUFS fail-opens the dirty-fence (post-#666 sibling tier)
-status: open
-workflow_project: —
-next_step: Surfaced by the #666 code-review (finding R1). #666 swept the confirmed unbounded-output git sites (ls-tree -r, diff --name-only, ls-files --others, diff-tree) but scoped OUT the `status --porcelain` family — unbounded in dirty/untracked path count. The plan-validator dirty-fence probe (plan-validator.js:3253, `status --porcelain -uall`) sets `porcelain=''` in its catch, so on ENOBUFS the fence sees zero dirty paths and silently FAILS OPEN (worse than #666's fail-closed null). Sibling sites: sink-merge.js:984, adaptive-node.js:4455, claim.js:483/532/1634. Fix (S-M): apply the #666 GIT_MAX_BUFFER cap to each porcelain site, and make the dirty-fence ENOBUFS path fail CLOSED (treat as cannot-prove-clean), not open. GENERATED class (plan-validator, adaptive-node) → sync:editions + four-chain; claim/sink-merge divergent forge ports hand-applied. Add a >1MB porcelain-output regression. Full body on GitHub #669.
