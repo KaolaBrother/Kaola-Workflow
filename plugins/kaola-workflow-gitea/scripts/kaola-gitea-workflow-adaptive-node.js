@@ -4520,7 +4520,16 @@ function synthesizeLevel(root, legs, groupId, planPath) {
     const leg = legs[id];
     if (!leg || !leg.legPath) continue;
     let dirty = '';
-    try { dirty = execFileSync('git', ['-C', leg.legPath, 'status', '--porcelain'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim(); } catch (_) { dirty = ''; }
+    try {
+      dirty = execFileSync('git', ['-C', leg.legPath, 'status', '--porcelain'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
+    } catch (e) {
+      // #672 fail-closed: a probe failure (>maxBuffer porcelain, a broken git invocation on the
+      // leg, ...) must NEVER be read as "leg is clean" — that would silently OMIT real committed/
+      // working leg content from the octopus merge below (never captured, never folded into M).
+      // Refuse loudly instead of guessing clean — mirrors the leg_capture_failed typed refusal
+      // just below for the symmetric capture-side failure.
+      return { ok: false, reason: 'leg_dirty_probe_failed', nodeId: id, leg: id, detail: String((e && e.message) || e) };
+    }
     if (dirty) {
       try {
         execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);

@@ -1820,6 +1820,68 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// --- #672: worktreeDirtyState's catch conflated "probe FAILED" with "path is MISSING" (both
+// returned 'missing'), and cmdLegacyWorktreeCleanup's destructive removal loop treats any
+// non-'dirty' state as removable — so a probe failure on a REAL legacy worktree (a broken git
+// invocation, corrupted worktree state, ...) could feed a destructive sweep of content that was
+// never actually proven clean or gone. This RED test forces exactly that shape: a real legacy
+// worktree whose git-link is corrupted (the path EXISTS, `git status --porcelain` throws) — never
+// a genuinely-missing worktree. --execute must SURVIVE it (dir + content intact) and report
+// skipped_unprobeable, never removed.
+{
+  const { execFileSync: execFS672, spawnSync: spawnS672 } = require('child_process');
+  const CLAIM672 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_672 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g672 = (cwd, args) => execFS672('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_672 });
+
+  const tmp672 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-672-repo-')));
+  const legacyContainer672 = path.dirname(tmp672) + '/' + path.basename(tmp672) + '.kw';
+  const wtPath672 = path.join(legacyContainer672, 'issue-96722');
+  try {
+    g672(tmp672, ['init', '-b', 'main']);
+    g672(tmp672, ['config', 'user.email', 't@t.com']);
+    g672(tmp672, ['config', 'user.name', 'Test']);
+    g672(tmp672, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp672, 'README.md'), 'fixture\n');
+    g672(tmp672, ['add', 'README.md']);
+    g672(tmp672, ['commit', '-m', 'init']);
+
+    fs.mkdirSync(legacyContainer672, { recursive: true });
+    g672(tmp672, ['worktree', 'add', '-b', 'workflow/issue-96722', '--', wtPath672, 'HEAD']);
+    fs.writeFileSync(path.join(wtPath672, 'real-work.txt'), 'content that must never be swept on a probe failure\n');
+    // Corrupt the worktree's git-link so ANY `git -C wtPath672 ...` invocation throws — the
+    // probe-error path (distinct from a genuinely-missing worktree, whose directory would not
+    // exist at all).
+    fs.writeFileSync(path.join(wtPath672, '.git'), 'gitdir: /nonexistent/broken/gitdir/path\n');
+
+    const result = spawnS672(process.execPath, [CLAIM672, 'legacy-worktree-cleanup', '--execute'], {
+      cwd: tmp672,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out672 = {};
+    try { out672 = JSON.parse(result.stdout); } catch (_) {}
+
+    assert(out672.dry_run === false, '#672: dry_run must be false, got ' + JSON.stringify(out672) + '\nstderr: ' + result.stderr);
+
+    // The critical assertion: an unprobeable worktree must SURVIVE — a probe failure must never
+    // feed a destructive removal.
+    assert(fs.existsSync(wtPath672) && fs.existsSync(path.join(wtPath672, 'real-work.txt')),
+      '#672: an unprobeable legacy worktree must SURVIVE cleanup --execute (probe failure != removable), got cleanup output: ' + JSON.stringify(out672));
+    assert(!(Array.isArray(out672.removed) && out672.removed.includes(wtPath672)),
+      '#672: removed must NOT include the unprobeable worktree, got ' + JSON.stringify(out672.removed));
+    assert(Array.isArray(out672.skipped_unprobeable) && out672.skipped_unprobeable.includes(wtPath672),
+      '#672: skipped_unprobeable must record the unprobeable worktree (fail LOUD, not silent), got ' + JSON.stringify(out672));
+  } finally {
+    fs.rmSync(tmp672, { recursive: true, force: true });
+    try { fs.rmSync(legacyContainer672, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // --- #631: cmdVerifySink must PREFER published_head over rebase-stale branch_head --------------
 // cmdVerifySink resolved implRef from `receipt.branch_head` only — stamped once at receipt init,
 // BEFORE a mid-flight rebase rewrites the branch. A clean sink whose branch was rebased false-

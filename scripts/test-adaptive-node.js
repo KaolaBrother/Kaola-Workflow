@@ -7449,6 +7449,26 @@ function rtHarness(initialFiles, opts) {
     cleanup(repoRoot);
   }
 
+  // S5-PROBE-FAILED-REFUSE (#672 fail-closed): the leg-dirty probe (`git status --porcelain` in the
+  //   leg) can itself FAIL (a broken git invocation on the leg, a >maxBuffer porcelain, ...). That
+  //   must NEVER be read as "leg is clean" — real leg content (here, A's uncommitted ax.js) would be
+  //   silently OMITTED from the octopus merge (never committed, never folded into M). synthesizeLevel
+  //   must refuse loudly instead of guessing clean. legA's worktree git-link is corrupted (a broken
+  //   invocation, not a genuinely-missing leg) so `git -C legA status --porcelain` throws.
+  {
+    const { repoRoot, legA, legB, rs } = provisionedRepo();
+    const base = rs.lane_group.legs.A.baseline;
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A real work that must never be silently dropped\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B work\n');
+    fs.writeFileSync(path.join(legA, '.git'), 'gitdir: /nonexistent/broken/gitdir/path\n');
+    const synth = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B');
+    assert(synth && synth.ok === false && synth.reason === 'leg_dirty_probe_failed' && synth.leg === 'A',
+      'S5-PROBE-FAILED-REFUSE: a leg-dirty probe failure refuses loudly (never silently treated clean), got ' + JSON.stringify(synth));
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === base,
+      'S5-PROBE-FAILED-REFUSE: HEAD unchanged after the refuse (no partial merge landed, dropping A silently), got ' + gitOut(repoRoot, ['rev-parse', 'HEAD']) + ' vs base ' + base);
+    cleanup(repoRoot);
+  }
+
   // S5-REPAIR-LIMIT-CONSTANT (contract): the K=3 cap is a schema constant (×4 byte, route-like-test_thrash)
   //   and the merge_conflict operator_hint interpolates it (so the bound is operator-visible, not buried).
   {

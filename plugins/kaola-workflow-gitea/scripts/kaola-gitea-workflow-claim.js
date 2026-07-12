@@ -489,13 +489,18 @@ function extractIssueNumber(branch) {
 }
 
 function worktreeDirtyState(wtPath) {
+  if (!fs.existsSync(wtPath)) return 'missing';
   try {
-    if (!fs.existsSync(wtPath)) return 'missing';
     const out = execFileSync('git', ['-C', wtPath, 'status', '--porcelain'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
     return out.trim().length > 0 ? 'dirty' : 'clean';
   } catch (_) {
-    return 'missing';
+    // #672 fail-closed: the path EXISTS but the probe itself failed (>maxBuffer porcelain, a
+    // corrupted/broken git invocation, a transient lock, ...) — this must NEVER be read as
+    // 'missing' (a destructive consumer treats 'missing' as prune-and-report-removed, silently
+    // dropping git's tracking of real, possibly-dirty content that was merely unprobeable).
+    // Report a distinct state every removal branch treats as KEEP.
+    return 'unprobeable';
   }
 }
 
@@ -2664,13 +2669,23 @@ function cmdStaleWorktreeCleanup() {
   const dryRun = !args.execute;
   // #620: skipped_unmerged records a branch that survived because it could not be proven merged —
   // fail LOUD (visible in the JSON report) rather than silently either destroying it or dropping it.
-  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unmerged: [] };
-  const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [] };
+  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unmerged: [], skipped_unprobeable: [] };
+  const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [], skipped_unprobeable: [] };
   const removedBranches = new Set();
 
   for (const wt of stale_worktrees) {
     const branch = wt.branch.replace(/^refs\/heads\//, '');
-    const state = wt.state; // 'clean' | 'dirty' | 'missing'
+    const state = wt.state; // 'clean' | 'dirty' | 'missing' | 'unprobeable'
+
+    // #672 fail-closed: 'unprobeable' (the probe ITSELF failed — a broken git invocation, a
+    // >maxBuffer porcelain, ...) is kept UNCONDITIONALLY, with zero override — unlike 'dirty'
+    // (whose content IS known and CAN be overridden via --archive/--export/--force), an
+    // unprobeable worktree's content was never even confirmed, so a probe failure must never
+    // lead to removal.
+    if (state === 'unprobeable') {
+      (dryRun ? dryBuckets : buckets).skipped_unprobeable.push(wt.path);
+      continue;
+    }
 
     if (state === 'dirty' && !(args.archive || args.export || args.force)) {
       (dryRun ? dryBuckets : buckets).skipped_dirty.push(wt.path);
@@ -3167,13 +3182,21 @@ function cmdLegacyWorktreeCleanup() {
   }
 
   const dryRun = !args.execute;
-  const buckets = { removed: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [] };
-  const dryBuckets = { would_remove: [], skipped_dirty: [] };
+  const buckets = { removed: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [], skipped_unprobeable: [] };
+  const dryBuckets = { would_remove: [], skipped_dirty: [], skipped_unprobeable: [] };
 
   for (const wt of legacyWorktrees) {
     const wtPath = wt.worktree;
     const branch = (wt.branch || '').replace(/^refs\/heads\//, '');
-    const state = worktreeDirtyState(wtPath);
+    const state = worktreeDirtyState(wtPath); // 'clean' | 'dirty' | 'missing' | 'unprobeable'
+
+    // #672 fail-closed: 'unprobeable' (the probe ITSELF failed) is kept UNCONDITIONALLY, with zero
+    // override — see cmdStaleWorktreeCleanup for the identical rationale. A probe failure must
+    // never lead to removal.
+    if (state === 'unprobeable') {
+      (dryRun ? dryBuckets : buckets).skipped_unprobeable.push(wtPath);
+      continue;
+    }
 
     if (state === 'dirty' && !(args.archive || args.export || args.force)) {
       (dryRun ? dryBuckets : buckets).skipped_dirty.push(wtPath);
