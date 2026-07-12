@@ -1,0 +1,1 @@
+gap: enobufs-porcelain-family — n3-review R1: git status --porcelain ENOBUFS fail-open family, one tier below #666 dirty-fence at plan-validator 3253 and siblings; see #669

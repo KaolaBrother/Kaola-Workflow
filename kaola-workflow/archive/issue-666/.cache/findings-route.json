@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=pre_existing action=follow_up status=open severity=low fix_role=none rationale=uncapped unbounded-in-dirty-size status-porcelain family (plan-validator:3253 -uall dirty-fence probe fails OPEN to empty on ENOBUFS; sink-merge:984 -uall; adaptive-node:4455; claim:483/532/1634)",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

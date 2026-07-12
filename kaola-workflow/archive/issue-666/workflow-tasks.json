@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "71d9bc14b50393543eb59e092d5f7cb75f5550a64120b37d593a3dd6064dc205",
+  "tasks": [
+    {
+      "id": "n1-plan-validator",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-sweep",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T06:22:10.703Z"
+}

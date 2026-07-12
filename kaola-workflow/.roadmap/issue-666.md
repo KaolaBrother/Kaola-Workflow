@@ -1,5 +1,0 @@
-issue: #666
-title: fix(scripts): unbounded execFileSync git output crashes ENOBUFS — upstream the live maxBuffer hot-patch
-status: open
-workflow_project: —
-next_step: Zero maxBuffer across ~350 execFileSync sites in scripts/ (Node default 1MB); git ls-tree -r HEAD is already 830KB on this repo. A live run crashed ENOBUFS on 2026-07-11 in the plan-validator worktree-hash path (plan-validator.js:2480/2499-2500); the 64MB-maxBuffer fix exists ONLY as a hand-patch in the installed Claude copy (~/.claude/kaola-workflow/scripts/, .bak-enobufs-20260711) — the 2026-07-12 12:28 reinstall wiped it and it was re-applied by hand; opencode copy never patched; every fresh install regresses. Fix (S-M): upstream the three-call patch; sweep remaining unbounded-output git call sites (ls-tree -r, diff/diff-tree --name-only, ls-files) across scripts/ and edition ports with an explicit cap; regression against a >1MB synthetic tree listing; plan-validator is GENERATED class → sync:editions + four-chain; post-ship reinstall to clear the installed divergence and delete the .bak. Full body on GitHub #666.
