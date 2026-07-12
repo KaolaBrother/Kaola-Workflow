@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Unbounded `execFileSync`/`spawnSync` git calls no longer crash `ENOBUFS` past 1 MB of output — #666.** Every unbounded-in-repo-size git call now carries an explicit 64 MB `maxBuffer` cap via a per-script local `GIT_MAX_BUFFER` constant: 10 sites in `kaola-workflow-plan-validator.js` (the `computeCodeTreeHash` `ls-tree -r` crash site plus the `diff --name-only` / `ls-files --others` / `diff-tree -r --name-only` freshness and finalize-check probes) and one each in the `adaptive-node`, `claim`, `sink-merge`, and `run-chains` sibling scripts. This upstreams the live worktree-hash hot-patch — previously carried only as a reinstall-wiped hand-patch in the installed copy, so every fresh install regressed — and extends it to every sibling of the same git-plumbing pattern; fixed-size probes (`rev-parse`, `merge-base`, `--quiet` diffs, `for-each-ref`, single-pathspec diffs, bounded `log -n <k>`) are deliberately left uncapped. A `>1 MB` synthetic-tree regression in `test-adaptive-node.js` drives `computeCodeTreeHash` past Node's default 1 MB buffer and asserts a stable hash where the unpatched code silently returned `null` (ENOBUFS swallowed → fail-closed stale). Canonical, Codex, GitLab, and Gitea editions synchronized (the plan-validator + adaptive-node GENERATED aggregators via `sync:editions`; the divergent `claim`/`sink-merge` and rename-normalized `run-chains` forge ports hand-edited to match); all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green (run sequentially).
+
 ## [6.22.1] - 2026-07-12
 
 ### Added
