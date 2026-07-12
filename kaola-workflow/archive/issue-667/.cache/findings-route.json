@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=none status=open severity=low fix_role=none rationale=pre-existing primitive semantics: an unclosed fence anywhere in fast-summary.md yields ambiguous even with no Scope heading, so such a file now classifies red rather than absent-green; strictly more conservative, primitive unchanged by this diff",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=out_of_scope action=none status=open severity=low fix_role=none rationale=forge ports no longer append newline+empty-string to combined on absent Scope; one-newline immaterial difference",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "1a6230aaa64f774bffdea7edaf3752120515cacf85912ea5bd3d222530e37f2d",
+  "tasks": [
+    {
+      "id": "fix-overlap-fail-closed",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "review-overlap-fix",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "record-fail-closed-decision",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T11:44:39.011Z"
+}
