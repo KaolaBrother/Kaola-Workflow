@@ -1280,12 +1280,12 @@ under it. Dirty worktrees are skipped unless `--archive`, `--export`, or
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `6.22.0`
-- Claude Code command install, GitLab edition: `6.22.0`
-- Claude Code command install, Gitea edition: `6.22.0`
-- Codex `kaola-workflow` plugin manifest: `4.22.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `4.22.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `4.22.0`
+- Claude Code command install, GitHub edition: `6.22.1`
+- Claude Code command install, GitLab edition: `6.22.1`
+- Claude Code command install, Gitea edition: `6.22.1`
+- Codex `kaola-workflow` plugin manifest: `4.22.1`
+- Codex `kaola-workflow-gitlab` plugin manifest: `4.22.1`
+- Codex `kaola-workflow-gitea` plugin manifest: `4.22.1`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
