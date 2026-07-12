@@ -4825,6 +4825,17 @@ function testGitlabBoundary2FetchRetry507() {
         '#519(gl-b2b): genuine-negative clean_nonzero → verdict:target_unavailable (got ' + result.verdict + ')');
       assert.strictEqual(callCount, 1,
         '#519(gl-b2b): determinate genuine NOT retried — callCount=' + callCount + ' (expected 1)');
+      // #668(gl-b2b-leak): the human-facing classification reasoning is a fixed, forge-neutral
+      // refusal sentence — it must never echo the raw fetch-error text verbatim, nor carry generic
+      // CLI diagnostic tokens an unstubbed forge call could emit on failure (auth/flag/status-code
+      // noise). This wires the invariant the #659 evidence previously verified only by a manual grep
+      // over full test output.
+      assert.ok(typeof result.reasoning === 'string' && !result.reasoning.includes(cleanErr.stderr.trim()),
+        '#668(gl-b2b-leak): reasoning must NOT echo the raw fetch-error text verbatim (got ' + JSON.stringify(result.reasoning) + ')');
+      assert.ok(!/Unknown/.test(result.reasoning),
+        '#668(gl-b2b-leak): reasoning must NOT leak an "Unknown"-style CLI diagnostic token (got ' + JSON.stringify(result.reasoning) + ')');
+      assert.ok(!/401/.test(result.reasoning),
+        '#668(gl-b2b-leak): reasoning must NOT leak a "401"-style CLI diagnostic token (got ' + JSON.stringify(result.reasoning) + ')');
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }
