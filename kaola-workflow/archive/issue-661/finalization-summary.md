@@ -37,6 +37,9 @@ DOCKED — `.cache/doc-docking.md`.
 
 No `inline_execution_suspected: true` flag was present in the inspected node evidence.
 
+- Final commit formatting check — noise: scoped Markdown formatting cleanup caught before commit;
+  no behavior or contract change.
+
 ## Run gaps
 
 - in_run_repair (n2-review-release-contract): noise: all R1–R8 and the systematic Git-probe findings were resolved within issue #661, independently re-reviewed to APPROVE/findings_blocking:0, locked by 232 focused assertions, n4 NOT-REFUTED, and the final four-chain receipt; no defect remains deferred.

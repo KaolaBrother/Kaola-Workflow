@@ -1314,62 +1314,59 @@ Use SemVer for both versions:
 - `PATCH`: compatible bug fixes, validation fixes, documentation-only updates,
   or small install clarifications.
 
-`scripts/kaola-workflow-release.js` scripts this checklist. Run `--verify` first (changelog completeness + chain-receipt greenness check), then `--cut --version X.Y.Z` to rename `[Unreleased]`, bump `package.json` and the three Codex manifests in lockstep, and create the local tag in one crash-resumable transaction. Run `--push` last to receive forge-neutral guidance for pushing the tag and publishing the forge release; no forge CLI is invoked by the script itself. See `docs/conventions.md` § "Release cutting" and `docs/decisions/D-442-01.md` for the full contract.
+`scripts/kaola-workflow-release.js` scripts a split release transaction. `--prepare`
+edits and receipts the release surface but cannot authorize or create a tag; `--tag`
+accepts only a committed, fully validated candidate whose receipt, commit, chain
+receipt, and tree all agree. `--cut` is retained only as a typed refusal that prints
+the replacement sequence. `--push` emits forge-neutral publication guidance and
+does not invoke a forge CLI. See `docs/conventions.md` § "Release cutting" and
+`docs/decisions/D-661-01.md`.
 
-Official release checklist (run the steps in order). `npm test` requires the
-release tag to exist, so the tag is created **before** the test run. A pre-tag
-release gate (issue #651) runs before the tag too — see
-`docs/conventions.md` § "Release" for the full typed-refusal contract:
+Official release checklist (run the steps in order):
 
 ```bash
-# 1. Sanity-check the working tree (no whitespace errors / conflict markers).
-git diff --check
+# 1. Prepare exactly the release surface (optionally choose the independent
+#    Codex-series version explicitly).
+node scripts/kaola-workflow-release.js --prepare --version X.Y.Z
+# node scripts/kaola-workflow-release.js --prepare --version X.Y.Z --codex-version A.B.C
 
-# 2. Stamp a chain receipt at the release commit and run the pre-tag gate
-#    (issue #651). OFFLINE skips the tag-existence check that would otherwise
-#    fail before the tag exists (step 3).
+# 2. Commit only CHANGELOG.md, README.md, package.json, the three Codex
+#    manifests, and the two Claude manifests. This must be one release-only
+#    commit from the baseline recorded by prepare.
+git add CHANGELOG.md README.md package.json \
+  plugins/kaola-workflow{,-gitlab,-gitea}/.codex-plugin/plugin.json \
+  plugins/kaola-workflow-{gitlab,gitea}/.claude-plugin/plugin.json
+git commit -m "chore: release X.Y.Z"
+
+# 3. Run every declared edition chain offline at that clean candidate. Offline
+#    suppresses the tag-existence check; it does not weaken chain greenness.
 KAOLA_WORKFLOW_OFFLINE=1 node scripts/kaola-workflow-run-chains.js
+
+# 4. Independently check that the full, unwaived, all-green receipt is clean
+#    and bound by exact SHA to HEAD.
 node scripts/kaola-workflow-plan-validator.js --release-check
-#    A red, missing, stale, incomplete (missing an edition chain), waived, or
-#    unresolvable-chain-set receipt is a typed refusal — fix it and regenerate
-#    the receipt before continuing; do not tag past this gate.
 
-# 3. Create the tag on the release commit (the commit that bumped package.json
-#    and the release surface), not HEAD.
-git tag kaola-workflow--v<X.Y.Z> <release-commit>
+# 5. Authorize and create the tag. The command verifies candidate provenance,
+#    receipt coherence, raw candidate bytes, and raw tag-tree bytes.
+node scripts/kaola-workflow-release.js --tag --version X.Y.Z
 
-# 4. Validate. The full run verifies the tag exists and that the release surface
-#    (including Codex manifest versions) matches the tag.
+# 6. Validate with the tag present.
 npm test
 
-# 5. Push the new tag by name — BEFORE `gh release create`. An unpushed tag
-#    makes `gh release create` create the REMOTE tag at the default-branch tip
-#    (a different commit than your local tag target). npm test enforces the tag
-#    is an ancestor of HEAD (issue #402), so a rebased-but-not-re-pointed tag reds.
+# 7. Push only the named tag, then publish against that pushed tag using the
+#    appropriate forge-specific release command.
 git push origin kaola-workflow--v<X.Y.Z>
-
-# 6. Only now publish the GitHub Release against the pushed tag.
-gh release create kaola-workflow--v<X.Y.Z> --latest --notes-from-tag
+node scripts/kaola-workflow-release.js --push
 ```
 
-If the release stack is rebased after tagging (origin advanced), the tag is
-orphaned onto the pre-rebase commit. Re-point it onto the new release commit and
-force-push the moved tag before publishing:
-
-```bash
-git tag -f kaola-workflow--v<X.Y.Z> <new-release-commit>
-git push --force origin kaola-workflow--v<X.Y.Z>
-```
-
-**Note:** the full `npm test` requires the release tag to exist **and** to match
-the current release surface, which is why the tag is created before the test run.
-`KAOLA_WORKFLOW_OFFLINE=1` skips the tag-existence and release-surface checks (and
-remote calls) for quick local iteration before the tag exists; it is not the
-canonical release gate — the full online `npm test` after tagging is.
+Any rebase or extra commit changes the candidate SHA. Do not move a release tag
+around the transaction: prepare again from a clean baseline, make a new
+release-only commit, restamp all chains, re-run `--release-check`, and invoke
+`--tag` again. The tag command itself verifies that the tag resolves to candidate
+HEAD and that every prepared file in the tag tree matches the recorded raw bytes.
 
 Tag rules:
-- Tag the specific release commit (the commit that bumped `package.json`
-  version and added the CHANGELOG section), not HEAD.
+- Tag only through the checked `--tag` transaction; it targets candidate HEAD.
 - GitHub/main tag (`kaola-workflow--v<X.Y.Z>`) is required. GitLab tag
   (`kaola-workflow-gitlab--v<X.Y.Z>`) is optional (no 3.12.0 GitLab tag
   was published — intentional). Gitea has no separate release tag.

@@ -1,969 +1,297 @@
 #!/usr/bin/env node
 'use strict';
-
-// Tests for kaola-workflow-release.js (#442 — D-442-01).
-// Hand-rolled assert pattern — no test framework dependency.
-// ALL fixtures are built in os.tmpdir() temp dirs / temp git repos.
-// Never mutates the real repo, real CHANGELOG, real manifests, or creates real tags.
-
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
-
-let passed = 0;
-let failed = 0;
-function assert(c, m) {
-  if (c) {
-    passed++;
-  } else {
-    failed++;
-    console.error('FAIL: ' + m);
-  }
+const SCRIPT = path.join(__dirname, 'kaola-workflow-release.js');
+const ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+let passed = 0, failed = 0;
+function assert(v, m) { if (v) passed++; else { failed++; console.error('FAIL: ' + m); } }
+function git(dir, ...args) { return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: ENV }).trim(); }
+function run(dir, args, env) { const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8', env: { ...ENV, KAOLA_RELEASE_ROOT: dir, ...(env || {}) } }); let json = null; try { json = JSON.parse(r.stdout); } catch (_) {} return { status: r.status, stdout: r.stdout, stderr: r.stderr, json }; }
+function reason(dir, args, want) { const before = git(dir, 'show-ref'), r = run(dir, [...args, '--json']); assert(r.status !== 0 && r.json && r.json.reason === want, args.join(' ') + ' refuses ' + want + '; got ' + JSON.stringify(r.json)); assert(git(dir, 'show-ref') === before, want + ' refusal is ref-side-effect-free'); return r; }
+const codex = ['plugins/kaola-workflow/.codex-plugin/plugin.json', 'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json', 'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json'];
+const claude = ['plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json', 'plugins/kaola-workflow-gitea/.claude-plugin/plugin.json'];
+const surface = ['CHANGELOG.md', 'README.md', 'package.json', ...codex, ...claude];
+function fixture() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-'));
+  git(d, 'init', '-q', '-b', 'main'); git(d, 'config', 'user.email', 't@example.com'); git(d, 'config', 'user.name', 'T');
+  const pkg = { name: 'kaola-workflow', version: '5.0.0', scripts: Object.fromEntries(['claude', 'codex', 'gitlab', 'gitea'].map(n => ['test:kaola-workflow:' + n, 'true'])) };
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify(pkg) + '\n');
+  fs.writeFileSync(path.join(d, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n- Fix (#661)\n\n## [5.0.0] - 2026-01-01\n');
+  fs.writeFileSync(path.join(d, 'README.md'), '# K\n- Claude Code command install, GitHub edition: `5.0.0`\n- Claude Code command install, GitLab edition: `5.0.0`\n- Claude Code command install, Gitea edition: `5.0.0`\n- Codex `kaola-workflow` plugin manifest: `3.0.0`\n- Codex `kaola-workflow-gitlab` plugin manifest: `3.0.0`\n- Codex `kaola-workflow-gitea` plugin manifest: `3.0.0`\n');
+  for (const rel of codex) { fs.mkdirSync(path.dirname(path.join(d, rel)), { recursive: true }); fs.writeFileSync(path.join(d, rel), JSON.stringify({ version: '3.0.0' }) + '\n'); }
+  for (const rel of claude) { fs.mkdirSync(path.dirname(path.join(d, rel)), { recursive: true }); fs.writeFileSync(path.join(d, rel), JSON.stringify({ version: '5.0.0' }) + '\n'); }
+  fs.writeFileSync(path.join(d, 'unrelated.txt'), 'unchanged\n');
+  git(d, 'add', '.'); git(d, 'commit', '-qm', 'fixture (#661)'); git(d, 'tag', 'kaola-workflow--v5.0.0');
+  return d;
 }
+function prepare(d, extra) { return run(d, ['--prepare', '--version', '5.1.0', '--json', '--issues-closed', '661', ...(extra || [])], { KAOLA_RELEASE_DATE: '2026-07-12' }); }
+function commitCandidate(d) { git(d, 'add', ...surface); git(d, 'commit', '-qm', 'release: 5.1.0'); return git(d, 'rev-parse', 'HEAD'); }
+function chain(d, patch) { const obj = { headSha: git(d, 'rev-parse', 'HEAD'), workTreeHash: 'clean', chains: ['claude', 'codex', 'gitlab', 'gitea'].map(name => ({ name, exitCode: 0, accepted_red: false })), ...(patch || {}) }; fs.mkdirSync(path.join(d, '.cache'), { recursive: true }); fs.writeFileSync(path.join(d, '.cache/chain-receipt.json'), JSON.stringify(obj)); return obj; }
 
-const RELEASE_SCRIPT = path.join(__dirname, 'kaola-workflow-release.js');
-
-// ---------------------------------------------------------------------------
-// Fixture helpers
-// ---------------------------------------------------------------------------
-
-// Create a minimal git repo with one commit and a version tag.
-function makeGitRepo(version) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-'));
-  const g = (args) => execFileSync('git', ['-C', dir, ...args], {
-    encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-  }).trim();
-  g(['init', '-q', '-b', 'main']);
-  g(['config', 'user.email', 'test@example.com']);
-  g(['config', 'user.name', 'Test']);
-  fs.writeFileSync(path.join(dir, 'seed.txt'), 'seed\n');
-  g(['add', 'seed.txt']);
-  g(['commit', '-q', '-m', 'seed']);
-  if (version) {
-    g(['tag', 'kaola-workflow--v' + version]);
-  }
-  return dir;
-}
-
-// Write a minimal fixture repo with CHANGELOG, package.json, codex manifests, README,
-// and optionally .claude-plugin manifests.
-function makeFixtureRepo(opts) {
-  const {
-    version = '5.0.0',
-    changelogUnreleased = '## [Unreleased]\n\n### Added\n\n- Nothing yet\n',
-    codexVersions = ['3.0.0', '3.0.0', '3.0.0'],
-    claudeVersion = version, // version for .claude-plugin manifests (gitlab + gitea)
-    readmeCodexVersions = null, // null = auto-derive from codexVersions[0]
-    extraCommitMessages = [],
-    tagVersion = version, // create a tag at this version (null to skip)
-    dateEnv = null,
-  } = opts || {};
-
-  const dir = makeGitRepo(null);
-  const g = (args) => execFileSync('git', ['-C', dir, ...args], {
-    encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-  }).trim();
-
-  // Write package.json
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'kaola-workflow', version }) + '\n');
-
-  // Write CHANGELOG.md
-  const changelogContent = '# Changelog\n\n' + changelogUnreleased + '\n## [' + version + '] — 2026-01-01\n\n- Initial release\n';
-  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), changelogContent);
-
-  // Write README.md with codex version lines AND the 3 claude-install lines
-  const cv0 = readmeCodexVersions ? readmeCodexVersions[0] : codexVersions[0];
-  const cv1 = readmeCodexVersions ? readmeCodexVersions[1] : codexVersions[1];
-  const cv2 = readmeCodexVersions ? readmeCodexVersions[2] : codexVersions[2];
-  const readmeContent = '# Kaola-Workflow\n\n' +
-    'Some text\n\n' +
-    '- Claude Code command install, GitHub edition: `' + claudeVersion + '`\n' +
-    '- Claude Code command install, GitLab edition: `' + claudeVersion + '`\n' +
-    '- Claude Code command install, Gitea edition: `' + claudeVersion + '`\n' +
-    '- Codex `kaola-workflow` plugin manifest: `' + cv0 + '`\n' +
-    '- Codex `kaola-workflow-gitlab` plugin manifest: `' + cv1 + '`\n' +
-    '- Codex `kaola-workflow-gitea` plugin manifest: `' + cv2 + '`\n';
-  fs.writeFileSync(path.join(dir, 'README.md'), readmeContent);
-
-  // Write three codex manifests
-  const codexManifestPaths = [
-    'plugins/kaola-workflow/.codex-plugin/plugin.json',
-    'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json',
-    'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json',
-  ];
-  const codexNames = ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'];
-  for (let i = 0; i < 3; i++) {
-    fs.mkdirSync(path.join(dir, path.dirname(codexManifestPaths[i])), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, codexManifestPaths[i]),
-      JSON.stringify({ name: codexNames[i], version: codexVersions[i] }) + '\n'
-    );
-  }
-
-  // Write two .claude-plugin manifests (gitlab + gitea only; no github-base manifest)
-  const claudeManifests = [
-    { path: 'plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json', name: 'kaola-workflow-gitlab' },
-    { path: 'plugins/kaola-workflow-gitea/.claude-plugin/plugin.json', name: 'kaola-workflow-gitea' },
-  ];
-  for (const { path: rel, name } of claudeManifests) {
-    fs.mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, rel),
-      JSON.stringify({ name, version: claudeVersion }) + '\n'
-    );
-  }
-
-  // Stage and commit all fixture files
-  g(['add', '.']);
-  g(['commit', '-q', '-m', 'fixture: initial state']);
-
-  // Create tag if requested
-  if (tagVersion) {
-    g(['tag', 'kaola-workflow--v' + tagVersion]);
-  }
-
-  // Add extra commits (to simulate work done since the tag)
-  for (const msg of extraCommitMessages) {
-    fs.appendFileSync(path.join(dir, 'seed.txt'), msg + '\n');
-    g(['add', 'seed.txt']);
-    g(['commit', '-q', '-m', msg]);
-  }
-
-  return dir;
-}
-
-// Run the release script as a subprocess. Returns {exitCode, stdout, stderr, json?}
-function run(dir, args, extraEnv) {
-  const envBase = Object.fromEntries(
-    Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_'))
-  );
-  envBase.GIT_CONFIG_GLOBAL = '/dev/null';
-  envBase.GIT_CONFIG_NOSYSTEM = '1';
-  const r = spawnSync(process.execPath, [RELEASE_SCRIPT, ...args], {
-    cwd: dir,
-    encoding: 'utf8',
-    timeout: 30000,
-    env: { ...envBase, ...(extraEnv || {}), KAOLA_RELEASE_ROOT: dir },
-  });
-  let parsed = null;
-  try { parsed = JSON.parse(r.stdout); } catch (_) {}
-  return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, json: parsed };
-}
-
-// ---------------------------------------------------------------------------
-// T1: changelog_incomplete — [Unreleased] cites #N absent from git log -> refuse
-// ---------------------------------------------------------------------------
-const repo1 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix something (#99)\n',
-  extraCommitMessages: ['chore: unrelated work'],
-  // issue #99 is NOT in git log commit messages
-});
+// RED control preserved as an executable historical proof: the old implementation
+// tagged unchanged HEAD after writing bumps. The committed baseline is 5.0.0.
 {
-  const r = run(repo1, ['--verify', '--json', '--issues-closed', '']);
-  assert(r.json !== null, 'T1: --verify --json produces parseable JSON');
-  if (r.json !== null) {
-    assert(r.json.result === 'refuse', 'T1: result must be refuse when #N not in git log; got ' + r.json.result);
-    assert(r.json.reason === 'changelog_incomplete', 'T1: reason must be changelog_incomplete; got ' + r.json.reason);
-    assert(Array.isArray(r.json.missing), 'T1: missing must be an array; got ' + JSON.stringify(r.json.missing));
-    assert(r.json.missing.includes(99), 'T1: missing must include 99; got ' + JSON.stringify(r.json.missing));
-  }
+  const d = fixture(), baseline = git(d, 'show', 'HEAD:package.json');
+  assert(JSON.parse(baseline).version === '5.0.0', 'RED control baseline tag tree is pre-bump 5.0.0');
+  const p = prepare(d); assert(p.status === 0 && p.json.result === 'ok', 'prepare succeeds');
+  assert(git(d, 'tag', '-l', 'kaola-workflow--v5.1.0') === '', 'prepare creates no tag');
+  assert(JSON.parse(fs.readFileSync(path.join(d, 'package.json'))).version === '5.1.0', 'prepare writes bumped package');
+  const changed = git(d, 'diff', '--name-only').split('\n').filter(Boolean).sort();
+  assert(JSON.stringify(changed) === JSON.stringify(surface.slice().sort()), 'prepare mutates exact release allowlist: ' + changed.join(','));
+  assert(fs.readFileSync(path.join(d, 'unrelated.txt'), 'utf8') === 'unchanged\n', 'non-allowlisted tracked file unchanged');
+  const rec = fs.readFileSync(path.join(d, '.cache/release-receipt.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find(x => x.step === 'prepared');
+  assert(rec.step === 'prepared' && rec.version === '5.1.0' && rec.rootVersion === '5.1.0' && rec.codexVersion === '3.1.0', 'receipt binds resolved versions');
+  assert(rec.candidateSha === null && rec.authorized === false && rec.preparedSurface.length === surface.length, 'prepare does not pre-authorize candidate and records exact surface');
+  const again = prepare(d); assert(again.status === 0 && again.json.idempotent === true, 'same-binding prepare resumes idempotently');
+  reason(d, ['--prepare', '--version', '5.2.0'], 'stale_release_receipt');
+  const candidate = commitCandidate(d); chain(d);
+  const t = run(d, ['--tag', '--version', '5.1.0', '--json']);
+  assert(t.status === 0 && t.json.tag_tree_verified === true && t.json.candidate_sha === candidate, 'tag succeeds only for committed authorized candidate');
+  assert(git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}') === candidate, 'tag resolves exactly to HEAD');
+  for (const rel of surface) assert(execFileSync('git', ['-C', d, 'show', 'kaola-workflow--v5.1.0:' + rel], { env: ENV }).equals(fs.readFileSync(path.join(d, rel))), 'tag tree equals prepared ' + rel);
+  const rows = fs.readFileSync(path.join(d, '.cache/release-receipt.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert(rows.some(x => x.step === 'tag_authorized' && x.candidateSha === candidate) && rows.some(x => x.step === 'tag_complete' && x.candidateSha === candidate), 'authorization and completion bind candidate SHA');
+  const idem = run(d, ['--tag', '--version', '5.1.0', '--json']); assert(idem.status === 0 && idem.json.idempotent === true, 'fully agreeing tag rerun is idempotent');
+  fs.rmSync(d, { recursive: true, force: true });
 }
-fs.rmSync(repo1, { recursive: true, force: true });
 
-// ---------------------------------------------------------------------------
-// T2: lockstep_violation — three codex manifests disagree -> refuse
-// ---------------------------------------------------------------------------
-const repo2 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Nothing\n',
-  codexVersions: ['3.0.0', '3.0.1', '3.0.0'], // gitlab is different
-});
+// Deterministic crash resume: retain binding + first two completed mutations,
+// restore the later files, and prove the persisted Codex resolution is reused.
 {
-  const r = run(repo2, ['--cut', '--version', '5.1.0', '--json']);
-  assert(r.json !== null, 'T2: --cut --json produces parseable JSON');
-  if (r.json !== null) {
-    assert(r.json.result === 'refuse', 'T2: result must be refuse on lockstep violation; got ' + r.json.result);
-    assert(r.json.reason === 'lockstep_violation', 'T2: reason must be lockstep_violation; got ' + r.json.reason);
-  }
+  const d = fixture(); prepare(d);
+  const rp = path.join(d, '.cache/release-receipt.jsonl');
+  const rows = fs.readFileSync(rp, 'utf8').trim().split('\n').map(JSON.parse).filter(x => ['prepare_binding', 'prepare_changelog', 'prepare_package'].includes(x.step));
+  fs.writeFileSync(rp, rows.map(JSON.stringify).join('\n') + '\n');
+  for (const rel of [...codex, ...claude, 'README.md']) fs.writeFileSync(path.join(d, rel), execFileSync('git', ['-C', d, 'show', 'HEAD:' + rel], { env: ENV }));
+  const resumed = prepare(d);
+  assert(resumed.status === 0 && resumed.json.codex_version === '3.1.0', 'partial prepare resumes with persisted Codex resolution; got ' + JSON.stringify(resumed.json));
+  assert(codex.every(rel => JSON.parse(fs.readFileSync(path.join(d, rel))).version === '3.1.0'), 'partial prepare completes every missing manifest step');
+  fs.rmSync(d, { recursive: true, force: true });
 }
-fs.rmSync(repo2, { recursive: true, force: true });
 
-// ---------------------------------------------------------------------------
-// T3: non_monotonic_version — --cut --version <= last tag -> refuse
-// ---------------------------------------------------------------------------
-const repo3 = makeFixtureRepo({
-  version: '5.5.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Nothing\n',
-  tagVersion: '5.5.0',
-});
+// Prepare guards and crash/stale receipt controls.
+for (const [setup, want] of [
+  [d => fs.appendFileSync(path.join(d, 'unrelated.txt'), 'dirty\n'), 'dirty_worktree'],
+  [d => { fs.writeFileSync(path.join(d, codex[1]), JSON.stringify({ version: '3.0.1' })); git(d, 'add', codex[1]); git(d, 'commit', '-qm', 'fixture mismatch'); }, 'lockstep_violation'],
+]) { const d = fixture(); setup(d); reason(d, ['--prepare', '--version', '5.1.0'], want); assert(JSON.parse(git(d, 'show', 'HEAD:package.json')).version === '5.0.0', want + ' pre-mutation guard'); fs.rmSync(d, { recursive: true, force: true }); }
 {
-  // Same version as existing tag — non-monotonic
-  const r = run(repo3, ['--cut', '--version', '5.5.0', '--json']);
-  assert(r.json !== null, 'T3: --cut --json produces parseable JSON');
-  if (r.json !== null) {
-    assert(r.json.result === 'refuse', 'T3: result must be refuse for non-monotonic version; got ' + r.json.result);
-    assert(r.json.reason === 'non_monotonic_version', 'T3: reason must be non_monotonic_version; got ' + r.json.reason);
-  }
-  // Also test strictly less-than case
-  const r2 = run(repo3, ['--cut', '--version', '5.4.0', '--json']);
-  assert(r2.json !== null, 'T3b: --cut --json produces parseable JSON for lower version');
-  if (r2.json !== null) {
-    assert(r2.json.result === 'refuse', 'T3b: result must be refuse for lower version; got ' + r2.json.result);
-    assert(r2.json.reason === 'non_monotonic_version', 'T3b: reason must be non_monotonic_version; got ' + r2.json.reason);
-  }
+  const d = fixture(); const p = prepare(d, ['--codex-version', '3.9.9']); assert(p.json.codex_version === '3.9.9' && p.json.codex_version_source === 'explicit', 'independent explicit Codex version'); commitCandidate(d);
+  reason(d, ['--prepare', '--version', '5.2.0'], 'stale_release_receipt'); fs.rmSync(d, { recursive: true, force: true });
 }
-fs.rmSync(repo3, { recursive: true, force: true });
 
-// ---------------------------------------------------------------------------
-// T4: offline --verify -> receipt carries verification:"offline"
-// ---------------------------------------------------------------------------
-const repo4 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Nothing\n',
-  tagVersion: '5.0.0',
-});
+// Cut is compatibility refusal-only and non-mutating for every shape.
+for (const args of [['--cut'], ['--cut', '--version', '5.1.0'], ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9']]) {
+  const d = fixture(), tree = git(d, 'write-tree'), refs = git(d, 'show-ref'); const r = run(d, [...args, '--json']);
+  assert(r.status !== 0 && r.json.reason === 'cut_compatibility_refusal' && r.json.sequence.length === 5, 'cut typed refusal names executable sequence');
+  assert(git(d, 'write-tree') === tree && git(d, 'show-ref') === refs, 'cut is non-mutating'); fs.rmSync(d, { recursive: true, force: true });
+}
+
+// Tag refusal matrix. Each fixture has a committed prepared candidate unless its
+// setup intentionally damages the release receipt.
+const cases = [
+  ['dirty_worktree', d => fs.appendFileSync(path.join(d, 'unrelated.txt'), 'dirty\n')],
+  ['release_receipt_missing', d => fs.rmSync(path.join(d, '.cache/release-receipt.jsonl'))],
+  ['release_receipt_unparseable', d => fs.writeFileSync(path.join(d, '.cache/release-receipt.jsonl'), '{bad')],
+  ['release_receipt_missing', d => {}, '5.2.0'],
+  ['readme_version_mismatch', d => { const p = path.join(d, 'README.md'); fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace('3.1.0', '9.9.9')); git(d, 'add', 'README.md'); git(d, 'commit', '--amend', '-qm', 'tamper'); }],
+  ['chains_unverified', d => {}],
+  ['chains_unverified', d => { fs.mkdirSync(path.join(d, '.cache'), { recursive: true }); fs.writeFileSync(path.join(d, '.cache/chain-receipt.json'), '{bad'); }],
+  ['chains_stale', d => chain(d, { headSha: 'deadbeef', workTreeHash: 'clean' })],
+  ['chains_stale', d => chain(d, { workTreeHash: 'dirty' })],
+  ['chains_empty', d => chain(d, { chains: [] })],
+  ['chains_incomplete', d => chain(d, { chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] })],
+  ['chains_red', d => chain(d, { chains: ['claude','codex','gitlab','gitea'].map((name, i) => ({ name, exitCode: i ? 0 : 1, accepted_red: false })) })],
+  ['chains_waived', d => chain(d, { chains: ['claude','codex','gitlab','gitea'].map((name, i) => ({ name, exitCode: i ? 0 : 1, accepted_red: i === 0 })) })],
+];
+cases.push(
+  ['package_version_mismatch', d => { const p = JSON.parse(fs.readFileSync(path.join(d, 'package.json'))); p.version = '9.9.9'; fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify(p) + '\n'); git(d, 'add', 'package.json'); git(d, 'commit', '--amend', '-qm', 'tamper package'); }],
+  ...codex.map(rel => ['codex_manifest_mismatch', d => { const m = JSON.parse(fs.readFileSync(path.join(d, rel))); m.version = '9.9.9'; fs.writeFileSync(path.join(d, rel), JSON.stringify(m) + '\n'); git(d, 'add', rel); git(d, 'commit', '--amend', '-qm', 'tamper codex'); }]),
+  ...claude.map(rel => ['claude_manifest_mismatch', d => { const m = JSON.parse(fs.readFileSync(path.join(d, rel))); m.version = '9.9.9'; fs.writeFileSync(path.join(d, rel), JSON.stringify(m) + '\n'); git(d, 'add', rel); git(d, 'commit', '--amend', '-qm', 'tamper claude'); }]),
+  ['changelog_heading_mismatch', d => { const p = path.join(d, 'CHANGELOG.md'); fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace('## [5.1.0] - 2026-07-12', '## [5.1.0] - 2026-07-13')); git(d, 'add', 'CHANGELOG.md'); git(d, 'commit', '--amend', '-qm', 'tamper changelog'); }],
+  ['prepared_surface_stale', d => { const p = JSON.parse(fs.readFileSync(path.join(d, 'package.json'))); p.note = 'tampered'; fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify(p) + '\n'); git(d, 'add', 'package.json'); git(d, 'commit', '--amend', '-qm', 'tamper surface'); }],
+);
+const preChainRefusals = new Set(['release_receipt_missing', 'release_receipt_unparseable', 'dirty_worktree', 'readme_version_mismatch', 'package_version_mismatch', 'codex_manifest_mismatch', 'claude_manifest_mismatch', 'changelog_heading_mismatch', 'prepared_surface_stale']);
+for (const [want, setup, version] of cases) { const d = fixture(); prepare(d); commitCandidate(d); setup(d); if (want !== 'chains_unverified' && !preChainRefusals.has(want) && !fs.existsSync(path.join(d, '.cache/chain-receipt.json'))) chain(d); reason(d, ['--tag', '--version', version || '5.1.0'], want); fs.rmSync(d, { recursive: true, force: true }); }
+
+// Existing tag conflict cannot be laundered.
 {
-  // No --issues-closed flag = offline mode (no forge query, no injected set)
-  const r = run(repo4, ['--verify', '--json']);
-  assert(r.json !== null, 'T4: offline --verify produces parseable JSON');
-  if (r.json !== null) {
-    assert(r.json.verification === 'offline',
-      'T4: offline verify must carry verification:"offline"; got ' + JSON.stringify(r.json.verification));
-    // Must not be a silent pass — should include some signal
-    assert(r.json.result !== undefined, 'T4: offline verify must have a result field');
+  const d = fixture(); prepare(d); const candidate = commitCandidate(d); chain(d); git(d, 'tag', 'kaola-workflow--v5.1.0', 'kaola-workflow--v5.0.0');
+  reason(d, ['--tag', '--version', '5.1.0'], 'tag_conflict'); assert(git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}') !== candidate, 'conflicting tag remains untouched'); fs.rmSync(d, { recursive: true, force: true });
+}
+
+// Verify and push stay compatible; source stays forge-token-neutral.
+{
+  const d = fixture(); chain(d, { headSha: 'unknown', chains: [] });
+  const v = run(d, ['--verify', '--json', '--issues-closed', '661']);
+  assert(v.status === 0 && Array.isArray(v.json.changelog_refs) && Array.isArray(v.json.closed_issues) && v.json.chain_greenness.reason === 'chains_empty' && v.json.chain_warning === 'chains_empty', '--verify preserves full legacy JSON envelope');
+  const vh = run(d, ['--verify', '--issues-closed', '661']); assert(vh.stdout.includes('verify: ok (verification=online)'), '--verify preserves human envelope');
+  const p = run(d, ['--push', '--json']); assert(p.status === 0 && /release create/.test(p.json.guidance) && /--notes-from-tag --latest/.test(p.json.guidance), '--push preserves publish guidance JSON');
+  const ph = run(d, ['--push']); assert(ph.stdout.includes('Push the local tag to the remote:') && ph.stdout.includes('<forge-cli> release create'), '--push preserves full human guidance');
+  fs.rmSync(d, { recursive: true, force: true });
+  const src = fs.readFileSync(SCRIPT, 'utf8'); assert(!/\b(gh|glab|tea)\s+(release|repo|api|auth|pr)\b/.test(src), 'no forge-specific CLI token');
+}
+
+// Repair RED controls: receipt coherence, baseline allowlist, rollback, bootstrap.
+{
+  const d = fixture(); prepare(d); const candidate = commitCandidate(d); chain(d);
+  const rp = path.join(d, '.cache/release-receipt.jsonl'), all = fs.readFileSync(rp, 'utf8').trim().split('\n').map(JSON.parse);
+  const preparedOnly = all.filter(x => x.step === 'prepared'); fs.writeFileSync(rp, preparedOnly.map(JSON.stringify).join('\n') + '\n');
+  reason(d, ['--tag', '--version', '5.1.0'], 'release_receipt_incomplete');
+  for (const step of ['prepare_changelog','prepare_package','prepare_codex_0','prepare_codex_1','prepare_codex_2','prepare_claude_0','prepare_claude_1','prepare_readme']) {
+    fs.writeFileSync(rp, all.filter(x => x.step !== step).map(JSON.stringify).join('\n') + '\n');
+    reason(d, ['--tag', '--version', '5.1.0'], 'release_receipt_incomplete');
   }
+  fs.writeFileSync(rp, [...all, all.find(x => x.step === 'prepare_package')].map(JSON.stringify).join('\n') + '\n');
+  reason(d, ['--tag', '--version', '5.1.0'], 'release_receipt_contradictory');
+  fs.writeFileSync(rp, [...all, { ...all.find(x => x.step === 'prepare_package'), version: '9.9.9' }].map(JSON.stringify).join('\n') + '\n');
+  reason(d, ['--tag', '--version', '5.1.0'], 'release_receipt_contradictory');
+  const subset = all.map(x => x.step === 'prepared' ? { ...x, preparedSurface: x.preparedSurface.slice(1) } : x);
+  fs.writeFileSync(rp, subset.map(JSON.stringify).join('\n') + '\n'); reason(d, ['--tag', '--version', '5.1.0'], 'release_receipt_contradictory');
+  const duplicateSurface = all.map(x => x.step === 'prepared' ? { ...x, preparedSurface: [...x.preparedSurface.slice(0, -1), x.preparedSurface[0]] } : x);
+  fs.writeFileSync(rp, duplicateSurface.map(JSON.stringify).join('\n') + '\n'); reason(d, ['--tag', '--version', '5.1.0'], 'release_receipt_contradictory');
+  fs.writeFileSync(rp, all.map(JSON.stringify).join('\n') + '\n');
+  fs.appendFileSync(path.join(d, 'unrelated.txt'), 'extra\n'); git(d, 'add', 'unrelated.txt'); git(d, 'commit', '-qm', 'unrelated candidate content'); chain(d);
+  reason(d, ['--tag', '--version', '5.1.0'], 'candidate_surface_mismatch');
+  assert(git(d, 'rev-parse', 'HEAD') !== candidate, 'baseline probe includes later unrelated commit'); fs.rmSync(d, { recursive: true, force: true });
 }
-fs.rmSync(repo4, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T5: cut-without-push -> local tag/bumps land; codex derived by bump-kind (minor)
-// root 5.0.0 / codex 3.0.0 -> cut 5.1.0 -> codex must be 3.1.0 (NOT 5.1.0)
-// ---------------------------------------------------------------------------
-const repo5 = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix bug (#100)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: the bug (#100)'],
-});
-{
-  const cutDate = '2026-06-13';
-  const r = run(repo5, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '100'], {
-    KAOLA_RELEASE_DATE: cutDate,
-  });
-  assert(r.json !== null, 'T5: --cut produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.result === 'ok', 'T5: --cut must return ok; got ' + r.json.result + ' reason=' + r.json.reason);
-  }
-
-  if (r.json && r.json.result === 'ok') {
-    // Verify local tag was created
-    const tags = execFileSync('git', ['-C', repo5, 'tag', '-l', 'kaola-workflow--v5.1.0'], {
-      encoding: 'utf8',
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-    }).trim();
-    assert(tags === 'kaola-workflow--v5.1.0', 'T5: local tag kaola-workflow--v5.1.0 must be created; got=' + JSON.stringify(tags));
-
-    // Verify no remote was pushed to (no remote refs exist)
-    const remoteCheck = spawnSync('git', ['-C', repo5, 'remote'], {
-      encoding: 'utf8',
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-    });
-    assert(remoteCheck.stdout.trim() === '', 'T5: no remote must exist (no push happened); got=' + JSON.stringify(remoteCheck.stdout.trim()));
-
-    // Verify CHANGELOG was updated
-    const changelog = fs.readFileSync(path.join(repo5, 'CHANGELOG.md'), 'utf8');
-    assert(changelog.includes('[5.1.0]'), 'T5: CHANGELOG must contain [5.1.0]');
-    assert(!changelog.includes('[Unreleased]') || changelog.indexOf('[5.1.0]') < changelog.indexOf('[Unreleased]'),
-      'T5: [Unreleased] must be replaced by versioned heading in CHANGELOG');
-
-    // Verify package.json was bumped to ROOT version
-    const pkg = JSON.parse(fs.readFileSync(path.join(repo5, 'package.json'), 'utf8'));
-    assert(pkg.version === '5.1.0', 'T5: package.json version must be 5.1.0; got=' + pkg.version);
-
-    // Verify all three codex manifests were bumped to CODEX version (3.1.0, not 5.1.0)
-    const codexPaths = [
-      'plugins/kaola-workflow/.codex-plugin/plugin.json',
-      'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json',
-      'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json',
-    ];
-    for (const cp of codexPaths) {
-      const manifest = JSON.parse(fs.readFileSync(path.join(repo5, cp), 'utf8'));
-      assert(manifest.version === '3.1.0', 'T5: ' + cp + ' version must be 3.1.0 (codex derived minor); got=' + manifest.version);
-    }
-
-    // Verify two .claude-plugin manifests were bumped to ROOT version (5.1.0)
-    const claudePaths = [
-      'plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json',
-      'plugins/kaola-workflow-gitea/.claude-plugin/plugin.json',
-    ];
-    for (const cp of claudePaths) {
-      const manifest = JSON.parse(fs.readFileSync(path.join(repo5, cp), 'utf8'));
-      assert(manifest.version === '5.1.0', 'T5: ' + cp + ' version must be 5.1.0 (root); got=' + manifest.version);
-    }
-
-    // Verify README codex lines updated to 3.1.0
-    const readme = fs.readFileSync(path.join(repo5, 'README.md'), 'utf8');
-    assert(readme.includes('Codex `kaola-workflow` plugin manifest: `3.1.0`'),
-      'T5: README codex line must be 3.1.0; readme=' + readme.slice(0, 400));
-    assert(!readme.includes('Codex `kaola-workflow` plugin manifest: `5.1.0`'),
-      'T5: README codex line must NOT be 5.1.0 (wrong — that is root version)');
-
-    // Verify README claude-install lines updated to ROOT 5.1.0
-    assert(readme.includes('Claude Code command install, GitHub edition: `5.1.0`'),
-      'T5: README GitHub claude-install line must be 5.1.0; readme=' + readme.slice(0, 500));
-    assert(readme.includes('Claude Code command install, GitLab edition: `5.1.0`'),
-      'T5: README GitLab claude-install line must be 5.1.0');
-    assert(readme.includes('Claude Code command install, Gitea edition: `5.1.0`'),
-      'T5: README Gitea claude-install line must be 5.1.0');
-
-    // Verify JSON envelope carries codex_version + codex_version_source
-    assert(r.json.codex_version === '3.1.0',
-      'T5: r.json.codex_version must be 3.1.0; got=' + r.json.codex_version);
-    assert(r.json.codex_version_source === 'derived',
-      'T5: r.json.codex_version_source must be "derived"; got=' + r.json.codex_version_source);
-
-    // T5d (#460): re-running an already-completed cut hits the idempotent
-    // short-circuit; its envelope must be shape-consistent with the normal
-    // success envelope and carry codex_version + codex_version_source (not undefined).
-    const r2 = run(repo5, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '100'], {
-      KAOLA_RELEASE_DATE: cutDate,
-    });
-    assert(r2.json !== null, 'T5d: idempotent re-run produces parseable JSON; stderr=' + (r2.stderr || ''));
-    if (r2.json !== null) {
-      assert(r2.json.result === 'ok', 'T5d: idempotent re-run must return ok; got ' + r2.json.result);
-      assert(r2.json.idempotent === true, 'T5d: re-run must be flagged idempotent; got ' + r2.json.idempotent);
-      assert(r2.json.codex_version === '3.1.0',
-        'T5d: idempotent envelope must carry codex_version 3.1.0 (not undefined); got=' + r2.json.codex_version);
-      assert(r2.json.codex_version_source === 'derived',
-        'T5d: idempotent envelope must carry codex_version_source "derived"; got=' + r2.json.codex_version_source);
-    }
-  }
-}
-fs.rmSync(repo5, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T5b: derive-major — cut 6.0.0 from baseline 5.0.0 / codex 3.0.0 -> codex 4.0.0
-// ---------------------------------------------------------------------------
-const repo5b = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Major (#101)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['feat!: major release (#101)'],
-});
-{
-  const r = run(repo5b, ['--cut', '--version', '6.0.0', '--json', '--issues-closed', '101'], {
-    KAOLA_RELEASE_DATE: '2026-06-13',
-  });
-  assert(r.json !== null, 'T5b: --cut produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json && r.json.result === 'ok') {
-    assert(r.json.codex_version === '4.0.0',
-      'T5b: codex_version must be 4.0.0 (major derived); got=' + r.json.codex_version);
-    assert(r.json.codex_version_source === 'derived',
-      'T5b: codex_version_source must be "derived"; got=' + r.json.codex_version_source);
-    // Verify codex manifests are 4.0.0
-    const m = JSON.parse(fs.readFileSync(
-      path.join(repo5b, 'plugins/kaola-workflow/.codex-plugin/plugin.json'), 'utf8'));
-    assert(m.version === '4.0.0', 'T5b: codex manifest must be 4.0.0; got=' + m.version);
-    // Verify package.json is 6.0.0
-    const pkg = JSON.parse(fs.readFileSync(path.join(repo5b, 'package.json'), 'utf8'));
-    assert(pkg.version === '6.0.0', 'T5b: package.json must be 6.0.0; got=' + pkg.version);
-  } else {
-    assert(false, 'T5b: --cut must return ok for major bump; got result=' + (r.json && r.json.result) +
-      ' reason=' + (r.json && r.json.reason) + ' stderr=' + (r.stderr || ''));
-  }
-}
-fs.rmSync(repo5b, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T5c: explicit-override — cut 5.1.0 --codex-version 3.9.9 -> codex==3.9.9, source explicit
-// ---------------------------------------------------------------------------
-const repo5c = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Override (#102)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: override (#102)'],
-});
-{
-  const r = run(repo5c, ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9', '--json', '--issues-closed', '102'], {
-    KAOLA_RELEASE_DATE: '2026-06-13',
-  });
-  assert(r.json !== null, 'T5c: --cut with --codex-version produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json && r.json.result === 'ok') {
-    assert(r.json.codex_version === '3.9.9',
-      'T5c: codex_version must be 3.9.9 (explicit); got=' + r.json.codex_version);
-    assert(r.json.codex_version_source === 'explicit',
-      'T5c: codex_version_source must be "explicit"; got=' + r.json.codex_version_source);
-    const m = JSON.parse(fs.readFileSync(
-      path.join(repo5c, 'plugins/kaola-workflow/.codex-plugin/plugin.json'), 'utf8'));
-    assert(m.version === '3.9.9', 'T5c: codex manifest must be 3.9.9; got=' + m.version);
-  } else {
-    assert(false, 'T5c: --cut with --codex-version 3.9.9 must return ok; got result=' +
-      (r.json && r.json.result) + ' reason=' + (r.json && r.json.reason) + ' stderr=' + (r.stderr || ''));
-  }
-}
-fs.rmSync(repo5c, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T5d: non_monotonic_codex_version — cut 5.1.0 --codex-version 2.9.0 (<=baseline 3.0.0) -> refuse
-// ---------------------------------------------------------------------------
-const repo5d = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Something (#103)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: something (#103)'],
-});
-{
-  const r = run(repo5d, ['--cut', '--version', '5.1.0', '--codex-version', '2.9.0', '--json', '--issues-closed', '103'], {
-    KAOLA_RELEASE_DATE: '2026-06-13',
-  });
-  assert(r.json !== null, 'T5d: --cut with non-monotonic codex-version produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.result === 'refuse', 'T5d: must refuse non_monotonic_codex_version; got=' + r.json.result);
-    assert(r.json.reason === 'non_monotonic_codex_version',
-      'T5d: reason must be non_monotonic_codex_version; got=' + r.json.reason);
-  }
-}
-fs.rmSync(repo5d, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T5e: codex_version_underivable — no last root tag + no --codex-version -> refuse + NO mutation
-// ---------------------------------------------------------------------------
-const repo5e = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Something (#104)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: null, // NO tag -> no lastVer -> cannot derive codex version
-  extraCommitMessages: ['fix: something (#104)'],
-});
-{
-  const r = run(repo5e, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '104'], {
-    KAOLA_RELEASE_DATE: '2026-06-13',
-  });
-  assert(r.json !== null, 'T5e: codex_version_underivable produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.result === 'refuse', 'T5e: must refuse codex_version_underivable; got=' + r.json.result);
-    assert(r.json.reason === 'codex_version_underivable',
-      'T5e: reason must be codex_version_underivable; got=' + r.json.reason);
-    // Assert NO mutation: package.json must still be 5.0.0 and CHANGELOG must still have [Unreleased]
-    const pkg = JSON.parse(fs.readFileSync(path.join(repo5e, 'package.json'), 'utf8'));
-    assert(pkg.version === '5.0.0', 'T5e: package.json must NOT be mutated (still 5.0.0); got=' + pkg.version);
-    const cl = fs.readFileSync(path.join(repo5e, 'CHANGELOG.md'), 'utf8');
-    assert(cl.includes('[Unreleased]'), 'T5e: CHANGELOG must NOT be mutated ([Unreleased] must still be present)');
-  }
-}
-fs.rmSync(repo5e, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T6: --cut without --version is a typed refusal (missing_version)
-// ---------------------------------------------------------------------------
-const repo6 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Nothing\n',
-  tagVersion: '5.0.0',
-});
-{
-  const r = run(repo6, ['--cut', '--json']);
-  assert(r.json !== null, 'T6: --cut without --version produces parseable JSON');
-  if (r.json !== null) {
-    assert(r.json.result === 'refuse', 'T6: --cut without --version must refuse; got ' + r.json.result);
-    assert(r.json.reason === 'missing_version', 'T6: reason must be missing_version; got ' + r.json.reason);
-  }
-}
-fs.rmSync(repo6, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T7: --push emits forge-neutral guidance (no forge CLI name in output)
-// ---------------------------------------------------------------------------
-const repo7 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Nothing\n',
-  tagVersion: '5.0.0',
-});
-{
-  const r = run(repo7, ['--push', '--json']);
-  // The output should not contain forge CLI binary names as standalone words
-  const combined = (r.stdout || '') + (r.stderr || '');
-  // "gh " as a command invocation (start of token followed by space or end) — check stdout only
-  const hasForgeInvocation = /\b(gh|glab|tea)\s+(release|repo|api|auth|pr)\b/.test(combined);
-  assert(!hasForgeInvocation, 'T7: --push output must not contain forge CLI invocations; found in: ' + combined.slice(0, 200));
-}
-fs.rmSync(repo7, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T8: crash-resume — step receipt JSONL is written during --cut
-// ---------------------------------------------------------------------------
-const repo8 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix crash (#200)\n',
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: crash (#200)'],
-});
-{
-  const cutDate = '2026-06-13';
-  const r = run(repo8, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '200'], {
-    KAOLA_RELEASE_DATE: cutDate,
-  });
-  if (r.json && r.json.result === 'ok') {
-    // Check that the receipt file exists
-    const receiptPath = path.join(repo8, '.cache', 'release-receipt.jsonl');
-    assert(fs.existsSync(receiptPath), 'T8: .cache/release-receipt.jsonl must be written after --cut');
-    if (fs.existsSync(receiptPath)) {
-      const lines = fs.readFileSync(receiptPath, 'utf8').trim().split('\n').filter(Boolean);
-      assert(lines.length > 0, 'T8: release receipt must contain at least one line');
-      // Each line must be valid JSON
-      let allValid = true;
-      for (const line of lines) {
-        try { JSON.parse(line); } catch (_) { allValid = false; }
-      }
-      assert(allValid, 'T8: all receipt lines must be valid JSON');
-    }
-  } else {
-    // If cut failed, skip the receipt check but note why
-    console.error('T8: skipped receipt check — --cut did not return ok; result=' + (r.json && r.json.result) + ' reason=' + (r.json && r.json.reason));
-  }
-}
-fs.rmSync(repo8, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T9 (R1 regression): source must not contain literal forge-mangled tokens
-// The rename-normalizer in validate-script-sync.js rewrites the substring
-// 'kaola-workflow-' -> 'kaola-{gitlab,gitea}-workflow-' when generating the
-// forge ports. Manifest paths and tag prefixes that contain 'kaola-workflow-'
-// followed by a forge suffix or '--v' will be mangled. The canonical source
-// MUST NOT contain these literal substrings so that the normalizer is a no-op
-// on the relevant data tokens.
-// ---------------------------------------------------------------------------
-{
-  const src = fs.readFileSync(RELEASE_SCRIPT, 'utf8');
-
-  // These are the exact substrings the normalizer produces when applied to
-  // 'kaola-workflow-gitlab', 'kaola-workflow-gitea', 'kaola-workflow--v'
-  // in the canonical source. Their presence in source means forge ports get
-  // paths like 'plugins/kaola-gitlab-workflow-gitlab/...' (nonexistent).
-  assert(
-    !src.includes('kaola-workflow-gitlab'),
-    'T9a (R1): canonical source must NOT contain literal "kaola-workflow-gitlab" — use base+suffix construction'
-  );
-  assert(
-    !src.includes('kaola-workflow-gitea'),
-    'T9b (R1): canonical source must NOT contain literal "kaola-workflow-gitea" — use base+suffix construction'
-  );
-  assert(
-    !src.includes('kaola-workflow--v'),
-    'T9c (R1): canonical source must NOT contain literal "kaola-workflow--v" — use RELEASE_TAG_PREFIX constant'
-  );
-
-  // Bonus: verify that applying the documented normalizer transform
-  // ('kaola-workflow-' -> 'kaola-gitlab-workflow-') to the source does NOT
-  // corrupt the PLUGIN_BASE constant literal — that constant is the root of
-  // all manifest path construction, so preserving it guarantees forge ports
-  // produce paths pointing at the real directories.
-  const gitlabTransformed = src.split('kaola-workflow-').join('kaola-gitlab-workflow-');
-  // The PLUGIN_BASE literal 'plugins/kaola-workflow' (quote-terminated, no hyphen)
-  // must survive the transform unchanged.  The normalizer only matches
-  // 'kaola-workflow-' (hyphen suffix), so the slash/quote-terminated base is safe.
-  assert(
-    gitlabTransformed.includes("'plugins/kaola-workflow'"),
-    "T9d (R1): after normalizer transform, PLUGIN_BASE literal 'plugins/kaola-workflow' must still appear verbatim"
-  );
-  // Also verify the forge-suffix string literals survive (they don't start with 'kaola-workflow-')
-  assert(
-    gitlabTransformed.includes("'-gitlab/.codex-plugin/plugin.json'"),
-    "T9d (R1): after normalizer transform, '-gitlab/.codex-plugin/plugin.json' suffix literal must survive"
-  );
-  assert(
-    gitlabTransformed.includes("'-gitea/.codex-plugin/plugin.json'"),
-    "T9d (R1): after normalizer transform, '-gitea/.codex-plugin/plugin.json' suffix literal must survive"
-  );
-}
-
-// ---------------------------------------------------------------------------
-// T10 (R2 regression): idempotent re-run of a completed --cut returns ok not refuse
-// A second --cut with the SAME version after the first succeeded must return
-// {result:'ok', idempotent:true}, NOT {result:'refuse', reason:'non_monotonic_version'}.
-// This validates the D-442-01 §5 crash-resume idempotency contract.
-// ---------------------------------------------------------------------------
-const repo10 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix something (#300)\n',
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: something (#300)'],
-});
-{
-  const cutDate = '2026-06-13';
-  const cutArgs = ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '300'];
-  const cutEnv = { KAOLA_RELEASE_DATE: cutDate };
-
-  // First run — must succeed
-  const r1 = run(repo10, cutArgs, cutEnv);
-  assert(r1.json !== null, 'T10: first --cut produces parseable JSON; stderr=' + (r1.stderr || ''));
-  assert(
-    r1.json && r1.json.result === 'ok',
-    'T10: first --cut must return ok; got result=' + (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason)
-  );
-
-  // Second run with the identical version — must be a no-op ok, NOT refuse
-  const r2 = run(repo10, cutArgs, cutEnv);
-  assert(r2.json !== null, 'T10: second --cut (idempotent) produces parseable JSON; stderr=' + (r2.stderr || ''));
-  if (r2.json !== null) {
-    assert(
-      r2.json.result === 'ok',
-      'T10: second --cut with same version must return ok (idempotent), not refuse; got result=' + r2.json.result + ' reason=' + r2.json.reason
-    );
-    assert(
-      r2.json.idempotent === true,
-      'T10: second --cut must include idempotent:true in response; got ' + JSON.stringify(r2.json.idempotent)
-    );
-  }
-}
-fs.rmSync(repo10, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T11 (issue #449 regression): stale-receipt cross-version fabricated-pass.
-// Running --cut 5.1.0 followed by --cut 5.2.0 in the SAME workspace WITHOUT
-// clearing the receipt MUST NOT fabricate result:ok while package.json still
-// says 5.1.0 and the 5.2.0 tag does not exist.  Either:
-//   (a) the 5.2.0 release is genuinely executed (tag+package.json+CHANGELOG all
-//       reflect 5.2.0), OR
-//   (b) the script cleanly refuses with stale_receipt or version_mismatch.
-// Fabricated-pass (result:ok + package.json@5.1.0 + no 5.2.0 tag) MUST FAIL.
-// ---------------------------------------------------------------------------
-const repo11 = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix bug (#500)\n',
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: bug (#500)'],
-});
-{
-  const cutDate = '2026-06-13';
-  const g11 = (gitArgs) => execFileSync('git', ['-C', repo11, ...gitArgs], {
-    encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-  }).trim();
-
-  // Step 1: --cut 5.1.0 — must succeed fully.
-  const r1 = run(repo11, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '500'], {
-    KAOLA_RELEASE_DATE: cutDate,
-  });
-  assert(r1.json !== null, 'T11: first --cut 5.1.0 produces parseable JSON; stderr=' + (r1.stderr || ''));
-  assert(
-    r1.json && r1.json.result === 'ok',
-    'T11: first --cut 5.1.0 must return ok; got result=' + (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason)
-  );
-
-  if (r1.json && r1.json.result === 'ok') {
-    // Step 2: Reset CHANGELOG to have a new [Unreleased] section for 5.2.0,
-    // because the 5.1.0 cut already consumed the old [Unreleased] section.
-    // We also bump the fixture to version 5.1.0 consistent with what cut did.
-    // BUT: we do NOT clear the receipt — this is the cross-version stale-receipt scenario.
-    const changelog11 = fs.readFileSync(path.join(repo11, 'CHANGELOG.md'), 'utf8');
-    // Prepend a new [Unreleased] section on top.
-    const updated11 = '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Another fix (#501)\n\n' +
-      changelog11.replace(/^# Changelog\n\n/, '');
-    fs.writeFileSync(path.join(repo11, 'CHANGELOG.md'), updated11);
-    // Add commit so #501 appears in git log.
-    fs.appendFileSync(path.join(repo11, 'seed.txt'), 'fix: another fix (#501)\n');
-    g11(['add', '.']);
-    g11(['commit', '-q', '-m', 'fix: another fix (#501)']);
-    // Confirm receipt is still present (not cleared).
-    const receiptFile = path.join(repo11, '.cache', 'release-receipt.jsonl');
-    assert(fs.existsSync(receiptFile), 'T11: receipt from 5.1.0 cut must still exist before 5.2.0 cut');
-
-    // Step 3: --cut 5.2.0 WITHOUT clearing the receipt.
-    const r2 = run(repo11, ['--cut', '--version', '5.2.0', '--json', '--issues-closed', '500,501'], {
-      KAOLA_RELEASE_DATE: cutDate,
-    });
-    assert(r2.json !== null, 'T11: second --cut 5.2.0 produces parseable JSON; stderr=' + (r2.stderr || ''));
-
-    if (r2.json !== null) {
-      if (r2.json.result === 'ok') {
-        // If it claims success, verify it actually did the work — fabricated-pass is a FAIL.
-        const tag52 = g11(['tag', '-l', 'kaola-workflow--v5.2.0']);
-        const pkg52 = JSON.parse(fs.readFileSync(path.join(repo11, 'package.json'), 'utf8'));
-        const cl52 = fs.readFileSync(path.join(repo11, 'CHANGELOG.md'), 'utf8');
-        assert(
-          tag52 === 'kaola-workflow--v5.2.0',
-          'T11: result:ok claimed but 5.2.0 tag is absent — fabricated-pass detected; tags=' + JSON.stringify(tag52)
-        );
-        assert(
-          pkg52.version === '5.2.0',
-          'T11: result:ok claimed but package.json still at ' + pkg52.version + ' — fabricated-pass detected'
-        );
-        assert(
-          cl52.includes('[5.2.0]'),
-          'T11: result:ok claimed but CHANGELOG does not contain [5.2.0] — fabricated-pass detected'
-        );
-      } else {
-        // A clean refuse (stale_receipt, version_mismatch, etc.) is also acceptable.
-        assert(
-          r2.json.result === 'refuse',
-          'T11: second --cut must return ok (with real work done) or refuse; got ' + r2.json.result
-        );
-      }
-    }
-  }
-}
-fs.rmSync(repo11, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// Crash-resume surgery helper: simulate a --cut that crashed AFTER the codex
-// manifests were bumped but BEFORE the git tag was created.
-//   - delete the local git tag
-//   - remove the 'git_tag' and 'readme' receipt lines (so they get redone)
-//   - reset the README codex lines back to the pre-bump baseline (visible redo)
-//   - LEAVE the codex manifests bumped (the live baseline has moved)
-//   - LEAVE the codex_resolution receipt present
-// ---------------------------------------------------------------------------
-function simulatePartialCrash(dir, rootVersion, codexBaselineBeforeBump) {
-  const g = (gitArgs) => execFileSync('git', ['-C', dir, ...gitArgs], {
-    encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-  }).trim();
-  // Delete the local tag (git_tag step did not durably complete)
-  g(['tag', '-d', 'kaola-workflow--v' + rootVersion]);
-  // Remove the git_tag and readme receipt lines (they must be redone on resume)
-  const receiptFile = path.join(dir, '.cache', 'release-receipt.jsonl');
-  const lines = fs.readFileSync(receiptFile, 'utf8').trim().split('\n').filter(Boolean);
-  const kept = lines.filter(line => {
-    let entry;
-    try { entry = JSON.parse(line); } catch (_) { return true; }
-    return entry.step !== 'git_tag' && entry.step !== 'readme';
-  });
-  fs.writeFileSync(receiptFile, kept.join('\n') + '\n');
-  // Reset README codex lines back to the pre-bump baseline so the readme step
-  // has visible work to redo. (The claude-install lines / root version untouched.)
-  let readme = fs.readFileSync(path.join(dir, 'README.md'), 'utf8');
-  readme = readme.replace(
-    /(Codex `kaola-workflow[^`]*` plugin manifest: `)[^`]*/g,
-    '$1' + codexBaselineBeforeBump
-  );
-  fs.writeFileSync(path.join(dir, 'README.md'), readme);
-}
-
-// ---------------------------------------------------------------------------
-// T12 (crash-resume regression, Face 1 — derived): a resume must reuse the
-// persisted codex resolution, NOT re-derive against the already-bumped live
-// baseline. baseline 3.0.0, first cut 5.1.0 -> codex 3.1.0. After partial
-// crash (manifests left at 3.1.0), re-cut 5.1.0 must keep codex at 3.1.0
-// EVERYWHERE (manifests, README, JSON envelope), NOT re-derive to 3.2.0.
-// ---------------------------------------------------------------------------
-const repo12 = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#600)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: thing (#600)'],
-});
-{
-  const cutEnv = { KAOLA_RELEASE_DATE: '2026-06-13' };
-  // First cut — completes fully (codex 3.0.0 -> 3.1.0).
-  const r1 = run(repo12, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '600'], cutEnv);
-  assert(r1.json && r1.json.result === 'ok', 'T12: first --cut 5.1.0 must return ok; got=' +
-    (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason) + ' stderr=' + (r1.stderr || ''));
-  assert(r1.json && r1.json.codex_version === '3.1.0', 'T12: first cut codex_version must be 3.1.0; got=' +
-    (r1.json && r1.json.codex_version));
-
-  if (r1.json && r1.json.result === 'ok') {
-    // Simulate a crash AFTER codex manifests bumped (3.1.0) but BEFORE git tag.
-    simulatePartialCrash(repo12, '5.1.0', '3.0.0');
-
-    // Resume: re-cut the SAME version. Must NOT re-derive 3.2.0.
-    const r2 = run(repo12, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '600'], cutEnv);
-    assert(r2.json !== null, 'T12: resume --cut produces parseable JSON; stderr=' + (r2.stderr || ''));
-    assert(r2.json && r2.json.result === 'ok', 'T12: resume --cut must return ok; got=' +
-      (r2.json && r2.json.result) + ' reason=' + (r2.json && r2.json.reason));
-
-    if (r2.json && r2.json.result === 'ok') {
-      // codex_version in the envelope must still be 3.1.0 (reused), not 3.2.0.
-      assert(r2.json.codex_version === '3.1.0',
-        'T12: resume codex_version must stay 3.1.0 (reused), NOT re-derived; got=' + r2.json.codex_version);
-      // The 3 codex manifests must still read 3.1.0.
-      const codexPaths = [
-        'plugins/kaola-workflow/.codex-plugin/plugin.json',
-        'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json',
-        'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json',
-      ];
-      for (const cp of codexPaths) {
-        const m = JSON.parse(fs.readFileSync(path.join(repo12, cp), 'utf8'));
-        assert(m.version === '3.1.0', 'T12: ' + cp + ' must stay 3.1.0 on resume; got=' + m.version);
-      }
-      // The README codex line (re-done on resume) must read 3.1.0, NOT 3.2.0 —
-      // this is the README<->manifest mismatch the bug produces.
-      const readme = fs.readFileSync(path.join(repo12, 'README.md'), 'utf8');
-      assert(readme.includes('Codex `kaola-workflow` plugin manifest: `3.1.0`'),
-        'T12: README codex line must be 3.1.0 on resume (match manifests); readme=' + readme.slice(0, 400));
-      assert(!readme.includes('Codex `kaola-workflow` plugin manifest: `3.2.0`'),
-        'T12: README codex line must NOT be 3.2.0 (re-derived against bumped baseline = the bug)');
-    }
-  }
-}
-fs.rmSync(repo12, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T13 (crash-resume regression, Face 2 — explicit): a resume with an explicit
-// --codex-version that already landed must NOT refuse non_monotonic_codex_version
-// (the bug: live baseline == target -> semverCompare(==)=0 <= 0 -> refuse forever).
-// baseline 3.0.0, first cut 5.1.0 --codex-version 3.9.9 -> codex 3.9.9. After
-// partial crash, re-cut --version 5.1.0 --codex-version 3.9.9 must return ok.
-// ---------------------------------------------------------------------------
-const repo13 = makeFixtureRepo({
-  version: '5.0.0',
-  claudeVersion: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#601)\n',
-  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
-  tagVersion: '5.0.0',
-  extraCommitMessages: ['fix: thing (#601)'],
-});
-{
-  const cutEnv = { KAOLA_RELEASE_DATE: '2026-06-13' };
-  // First cut with explicit override (codex 3.0.0 -> 3.9.9).
-  const r1 = run(repo13, ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9', '--json', '--issues-closed', '601'], cutEnv);
-  assert(r1.json && r1.json.result === 'ok', 'T13: first --cut with --codex-version must return ok; got=' +
-    (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason) + ' stderr=' + (r1.stderr || ''));
-  assert(r1.json && r1.json.codex_version === '3.9.9', 'T13: first cut codex_version must be 3.9.9; got=' +
-    (r1.json && r1.json.codex_version));
-
-  if (r1.json && r1.json.result === 'ok') {
-    // Simulate a crash AFTER codex manifests bumped (3.9.9) but BEFORE git tag.
-    simulatePartialCrash(repo13, '5.1.0', '3.0.0');
-
-    // Resume: re-cut SAME version + SAME explicit codex version. Must NOT refuse.
-    const r2 = run(repo13, ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9', '--json', '--issues-closed', '601'], cutEnv);
-    assert(r2.json !== null, 'T13: resume --cut produces parseable JSON; stderr=' + (r2.stderr || ''));
-    assert(r2.json && r2.json.result === 'ok',
-      'T13: resume --cut with same explicit codex-version must return ok (NOT refuse non_monotonic_codex_version); got result=' +
-      (r2.json && r2.json.result) + ' reason=' + (r2.json && r2.json.reason));
-
-    if (r2.json && r2.json.result === 'ok') {
-      assert(r2.json.codex_version === '3.9.9', 'T13: resume codex_version must stay 3.9.9; got=' + r2.json.codex_version);
-      const m = JSON.parse(fs.readFileSync(
-        path.join(repo13, 'plugins/kaola-workflow/.codex-plugin/plugin.json'), 'utf8'));
-      assert(m.version === '3.9.9', 'T13: codex manifest must stay 3.9.9 on resume; got=' + m.version);
-    }
-  }
-}
-fs.rmSync(repo13, { recursive: true, force: true });
-
-// ---------------------------------------------------------------------------
-// T14 (#632 regression): chainReceiptGreenness must fail CLOSED on an empty or
-// missing chains[] — "zero chains verified" must not read as "all green".
-// Mirrors the #618 precedent (plan-validator.js --finalize-check chains_empty
-// guard) at the release-side chainReceiptGreenness consumer.
-// ---------------------------------------------------------------------------
-function writeChainReceipt(dir, receipt) {
-  const cacheDir = path.join(dir, '.cache');
-  fs.mkdirSync(cacheDir, { recursive: true });
-  fs.writeFileSync(path.join(cacheDir, 'chain-receipt.json'), JSON.stringify(receipt));
-}
-
-// T14a: an EMPTY chains[] array must refuse-shape as green:false / chains_empty.
-// Pre-fix, the red-chain loop body never runs over an empty array, so this
-// falls through to `return {green:true}` — fails OPEN.
-const repo14a = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#602)\n',
-  extraCommitMessages: ['fix: thing (#602)'],
-});
-writeChainReceipt(repo14a, { headSha: 'unknown', chains: [] });
-{
-  const r = run(repo14a, ['--verify', '--json', '--issues-closed', '602']);
-  assert(r.json !== null, 'T14a: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.chain_greenness && r.json.chain_greenness.green === false,
-      'T14a: chainReceiptGreenness over an empty chains[] must be green:false (zero chains verified is not "all green"); got=' + JSON.stringify(r.json.chain_greenness));
-    assert(r.json.chain_greenness && r.json.chain_greenness.reason === 'chains_empty',
-      'T14a: chainReceiptGreenness over an empty chains[] must report reason chains_empty; got=' + JSON.stringify(r.json.chain_greenness));
-  }
-}
-fs.rmSync(repo14a, { recursive: true, force: true });
-
-// T14b: a receipt with NO chains[] key at all must ALSO refuse chains_empty.
-// Pre-fix, Array.isArray(receipt.chains) is false, so the loop is skipped
-// entirely and this also falls through to `return {green:true}` — fails OPEN.
-const repo14b = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#603)\n',
-  extraCommitMessages: ['fix: thing (#603)'],
-});
-writeChainReceipt(repo14b, { headSha: 'unknown' }); // no chains key at all
-{
-  const r = run(repo14b, ['--verify', '--json', '--issues-closed', '603']);
-  assert(r.json !== null, 'T14b: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.chain_greenness && r.json.chain_greenness.green === false,
-      'T14b: chainReceiptGreenness over a receipt with NO chains[] key must be green:false; got=' + JSON.stringify(r.json.chain_greenness));
-    assert(r.json.chain_greenness && r.json.chain_greenness.reason === 'chains_empty',
-      'T14b: chainReceiptGreenness over a receipt with NO chains[] key must report reason chains_empty; got=' + JSON.stringify(r.json.chain_greenness));
-  }
-}
-fs.rmSync(repo14b, { recursive: true, force: true });
-
-// T14c (precedence regression guard): the pre-existing chains_stale HEAD-bound
-// check must still run BEFORE the new chains_empty guard — a stale+empty
-// receipt reports chains_stale, not chains_empty, mirroring the #618
-// precedence chains_unverified > chains_stale > chains_empty > chains_red.
-const repo14c = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#604)\n',
-  extraCommitMessages: ['fix: thing (#604)'],
-});
-writeChainReceipt(repo14c, { headSha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', chains: [] });
-{
-  const r = run(repo14c, ['--verify', '--json', '--issues-closed', '604']);
-  assert(r.json !== null, 'T14c: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.chain_greenness && r.json.chain_greenness.green === false,
-      'T14c: a stale + empty receipt must be green:false; got=' + JSON.stringify(r.json.chain_greenness));
-    assert(r.json.chain_greenness && r.json.chain_greenness.reason === 'chains_stale',
-      'T14c: a stale + empty receipt must report chains_stale (precedence over chains_empty); got=' + JSON.stringify(r.json.chain_greenness));
-  }
-}
-fs.rmSync(repo14c, { recursive: true, force: true });
-
-// T14d (regression guard): a non-empty, all-green, HEAD-bound receipt must
-// still pass (green:true) with no chain_warning — the new guard must not
-// fail-close on legitimate all-green input.
-const repo14d = makeFixtureRepo({
-  version: '5.0.0',
-  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#605)\n',
-  extraCommitMessages: ['fix: thing (#605)'],
-});
-{
-  const headSha = execFileSync('git', ['-C', repo14d, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  writeChainReceipt(repo14d, { headSha, chains: [{ name: 'claude', exitCode: 0 }] });
+for (const mutate of [
+  d => { fs.writeFileSync(path.join(d, 'extra.txt'), 'extra\n'); git(d, 'add', 'extra.txt'); git(d, 'commit', '-qm', 'extra file'); },
+  d => { git(d, 'mv', 'README.md', 'RENAMED.md'); git(d, 'commit', '-qm', 'rename release file'); },
+  d => { git(d, 'rm', 'README.md'); git(d, 'commit', '-qm', 'delete release file'); },
+  d => { git(d, 'add', '-f', '.cache/release-receipt.jsonl'); git(d, 'commit', '-qm', 'commit receipt'); },
+  d => { git(d, 'commit', '--allow-empty', '-qm', 'extra empty commit'); },
+]) {
+  const d = fixture(); prepare(d); commitCandidate(d); mutate(d); chain(d); reason(d, ['--tag', '--version', '5.1.0'], 'candidate_surface_mismatch'); fs.rmSync(d, { recursive: true, force: true });
 }
 {
-  const r = run(repo14d, ['--verify', '--json', '--issues-closed', '605']);
-  assert(r.json !== null, 'T14d: --verify --json produces parseable JSON; stderr=' + (r.stderr || ''));
-  if (r.json !== null) {
-    assert(r.json.chain_greenness && r.json.chain_greenness.green === true,
-      'T14d: a genuinely all-green non-empty receipt must still pass green:true; got=' + JSON.stringify(r.json.chain_greenness));
-    assert(r.json.chain_warning === undefined,
-      'T14d: a green receipt must not carry a chain_warning; got=' + JSON.stringify(r.json.chain_warning));
-  }
+  const d = fixture(); prepare(d); commitCandidate(d); chain(d); const refs = git(d, 'show-ref');
+  const r = run(d, ['--tag', '--version', '5.1.0', '--json'], { KAOLA_RELEASE_TEST_FAIL_POST_CREATE_SHOW: '1' });
+  assert(r.status !== 0 && r.json.reason === 'tag_tree_verification_failed', 'post-create show fault is typed');
+  assert(git(d, 'show-ref') === refs && git(d, 'tag', '-l', 'kaola-workflow--v5.1.0') === '', 'post-create failure rolls back only new matching tag'); fs.rmSync(d, { recursive: true, force: true });
 }
-fs.rmSync(repo14d, { recursive: true, force: true });
+{
+  const d = fixture(); git(d, 'tag', '-d', 'kaola-workflow--v5.0.0');
+  const explicit = prepare(d, ['--codex-version', '3.9.9']); assert(explicit.status === 0 && explicit.json.codex_version === '3.9.9', 'explicit Codex version bootstraps without root tag'); fs.rmSync(d, { recursive: true, force: true });
+  const d2 = fixture(); git(d2, 'tag', '-d', 'kaola-workflow--v5.0.0'); reason(d2, ['--prepare', '--version', '5.1.0'], 'codex_version_underivable'); fs.rmSync(d2, { recursive: true, force: true });
+}
 
-// ---------------------------------------------------------------------------
-// Done
-// ---------------------------------------------------------------------------
-if (failed > 0) {
-  console.error('\ntest-release: ' + failed + ' test(s) FAILED, ' + passed + ' passed');
-  process.exit(1);
-} else {
-  console.log('test-release: all ' + passed + ' assertions passed');
+// R6 RED controls: a completed rerun must prove the whole publication receipt.
+function completedFixture() { const d = fixture(); prepare(d); commitCandidate(d); chain(d); const first = run(d, ['--tag', '--version', '5.1.0', '--json']); assert(first.status === 0, 'R6 setup completes initial tag'); return d; }
+const terminalTamperCases = [
+  ['missing authorization', rows => rows.filter(x => x.step !== 'tag_authorized'), 'publication_receipt_incomplete'],
+  ['missing completion', rows => rows.filter(x => x.step !== 'tag_complete'), 'publication_receipt_incomplete'],
+  ['duplicate authorization', rows => [...rows, { ...rows.find(x => x.step === 'tag_authorized') }], 'publication_receipt_contradictory'],
+  ['duplicate completion', rows => [...rows, { ...rows.find(x => x.step === 'tag_complete') }], 'publication_receipt_contradictory'],
+  ['foreign authorization', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, version: '9.9.9' } : x), 'publication_receipt_contradictory'],
+  ['foreign completion', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, version: '9.9.9' } : x), 'publication_receipt_contradictory'],
+  ['authorization candidate', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, candidateSha: 'deadbeef' } : x), 'publication_receipt_contradictory'],
+  ['authorization root version', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, rootVersion: '9.9.9' } : x), 'publication_receipt_contradictory'],
+  ['authorization Codex version', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, codexVersion: '8.8.8' } : x), 'publication_receipt_contradictory'],
+  ['authorization surface', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, preparedSurface: [] } : x), 'publication_receipt_contradictory'],
+  ['authorization chain HEAD', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, chainHeadSha: 'deadbeef' } : x), 'publication_receipt_contradictory'],
+  ['authorization tag', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, tag: 'wrong' } : x), 'publication_receipt_contradictory'],
+  ['authorization status', rows => rows.map(x => x.step === 'tag_authorized' ? { ...x, status: 'partial' } : x), 'publication_receipt_contradictory'],
+  ['completion candidate', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, candidateSha: 'deadbeef' } : x), 'publication_receipt_contradictory'],
+  ['completion root version', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, rootVersion: '9.9.9' } : x), 'publication_receipt_contradictory'],
+  ['completion Codex version', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, codexVersion: '8.8.8' } : x), 'publication_receipt_contradictory'],
+  ['completion surface', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, preparedSurface: [] } : x), 'publication_receipt_contradictory'],
+  ['completion chain HEAD', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, chainHeadSha: 'deadbeef' } : x), 'publication_receipt_contradictory'],
+  ['completion tag', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, tag: 'wrong' } : x), 'publication_receipt_contradictory'],
+  ['completion status', rows => rows.map(x => x.step === 'tag_complete' ? { ...x, status: 'partial' } : x), 'publication_receipt_contradictory'],
+];
+for (const [label, tamper, want] of terminalTamperCases) {
+  const d = completedFixture(), rp = path.join(d, '.cache/release-receipt.jsonl');
+  const rows = fs.readFileSync(rp, 'utf8').trim().split('\n').map(JSON.parse); fs.writeFileSync(rp, tamper(rows).map(JSON.stringify).join('\n') + '\n');
+  const refs = git(d, 'show-ref'), r = run(d, ['--tag', '--version', '5.1.0', '--json']);
+  assert(r.status !== 0 && r.json.reason === want, 'R6 ' + label + ' refuses ' + want + '; got ' + JSON.stringify(r.json));
+  assert(git(d, 'show-ref') === refs, 'R6 ' + label + ' leaves refs unchanged'); fs.rmSync(d, { recursive: true, force: true });
 }
+
+// R7 RED: a failed porcelain probe must never be interpreted as clean.
+function statusFaultPath() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-git-fault-')), real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const wrapper = path.join(d, 'git');
+  fs.writeFileSync(wrapper, '#!/bin/sh\nif [ "$1" = "status" ]; then exit 74; fi\nexec "' + real + '" "$@"\n'); fs.chmodSync(wrapper, 0o755);
+  return { dir: d, path: d + path.delimiter + process.env.PATH };
+}
+function releaseSnapshot(d) {
+  const rp = path.join(d, '.cache/release-receipt.jsonl');
+  return { files: surface.map(rel => fs.readFileSync(path.join(d, rel)).toString('base64')), receiptExists: fs.existsSync(rp), receipt: fs.existsSync(rp) ? fs.readFileSync(rp).toString('base64') : null, head: git(d, 'rev-parse', 'HEAD'), status: git(d, 'status', '--porcelain', '--untracked-files=no'), refs: git(d, 'show-ref') };
+}
+function withoutReceipt(s) { const x = { ...s }; delete x.receipt; delete x.receiptExists; return x; }
+for (const dirty of [false, true]) {
+  const d = fixture(); if (dirty) fs.appendFileSync(path.join(d, 'unrelated.txt'), 'dirty\n');
+  const before = releaseSnapshot(d), fault = statusFaultPath(), r = run(d, ['--prepare', '--version', '5.1.0', '--json'], { PATH: fault.path });
+  assert(r.status !== 0 && r.json.reason === 'worktree_status_unavailable', 'R7 prepare status fault refuses on ' + (dirty ? 'dirty' : 'clean') + ' fixture');
+  assert(JSON.stringify(releaseSnapshot(d)) === JSON.stringify(before), 'R7 prepare status fault preserves files/receipt/HEAD/status/refs on ' + (dirty ? 'dirty' : 'clean') + ' fixture');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+for (const dirty of [false, true]) {
+  const d = fixture(); prepare(d); commitCandidate(d); chain(d); if (dirty) fs.appendFileSync(path.join(d, 'unrelated.txt'), 'dirty\n');
+  const before = releaseSnapshot(d), fault = statusFaultPath(), r = run(d, ['--tag', '--version', '5.1.0', '--json'], { PATH: fault.path });
+  assert(r.status !== 0 && r.json.reason === 'worktree_status_unavailable', 'R7 tag status fault refuses on ' + (dirty ? 'dirty' : 'clean') + ' fixture');
+  assert(JSON.stringify(releaseSnapshot(d)) === JSON.stringify(before), 'R7 tag status fault preserves files/receipt/HEAD/status/refs on ' + (dirty ? 'dirty' : 'clean') + ' fixture');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+
+// R8 + systematic authorization-relevant Git probe audit.
+function gitFaultPath(fragment) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-git-probe-')), real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const wrapper = path.join(d, 'git'), safe = fragment.replace(/'/g, "'\\''");
+  fs.writeFileSync(wrapper, '#!/bin/sh\ncase "$*" in *\'' + safe + '\'*) exit 74;; esac\nexec "' + real + '" "$@"\n'); fs.chmodSync(wrapper, 0o755);
+  return { dir: d, path: d + path.delimiter + process.env.PATH };
+}
+for (const dirty of [false, true]) {
+  const d = fixture(); if (dirty) fs.appendFileSync(path.join(d, 'unrelated.txt'), 'dirty\n'); const before = releaseSnapshot(d), fault = gitFaultPath('tag -l');
+  const r = run(d, ['--prepare', '--version', '4.0.0', '--codex-version', '3.9.9', '--issues-closed', '661', '--json'], { PATH: fault.path });
+  assert(r.status !== 0 && r.json.reason === 'release_tag_list_unavailable', 'R8 tag-list failure refuses existing-tag downgrade on ' + (dirty ? 'dirty' : 'clean') + ' fixture');
+  assert(JSON.stringify(releaseSnapshot(d)) === JSON.stringify(before), 'R8 tag-list failure preserves full state on ' + (dirty ? 'dirty' : 'clean') + ' fixture');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+const prepareProbeCases = [
+  ['log --format=', 'release_history_unavailable'],
+  ['rev-parse HEAD', 'git_head_unavailable'],
+];
+for (const [fragment, want] of prepareProbeCases) {
+  const d = fixture(), before = releaseSnapshot(d), fault = gitFaultPath(fragment), r = run(d, ['--prepare', '--version', '5.1.0', '--json', '--issues-closed', '661'], { PATH: fault.path });
+  assert(r.status !== 0 && r.json.reason === want, 'prepare probe ' + fragment + ' refuses ' + want); assert(JSON.stringify(releaseSnapshot(d)) === JSON.stringify(before), 'prepare probe ' + fragment + ' is mutation-free');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+const tagProbeCases = [
+  ['tag -l', 'release_tag_list_unavailable'],
+  ['rev-parse HEAD', 'git_head_unavailable'],
+  ['rev-parse --verify', 'candidate_baseline_unavailable'],
+  ['rev-list --count', 'candidate_history_unavailable'],
+  ['diff --name-status', 'candidate_diff_unavailable'],
+  ['show ', 'candidate_tree_verification_failed'],
+  ['update-ref refs/tags/', 'tag_create_failed'],
+];
+for (const [fragment, want] of tagProbeCases) {
+  const d = fixture(); prepare(d); commitCandidate(d); chain(d); const before = releaseSnapshot(d), fault = gitFaultPath(fragment), r = run(d, ['--tag', '--version', '5.1.0', '--json'], { PATH: fault.path });
+  assert(r.status !== 0 && r.json.reason === want, 'tag probe ' + fragment + ' refuses ' + want + '; got ' + JSON.stringify(r.json));
+  const after = releaseSnapshot(d); assert(JSON.stringify(fragment.startsWith('update-ref') ? withoutReceipt(after) : after) === JSON.stringify(fragment.startsWith('update-ref') ? withoutReceipt(before) : before), 'tag probe ' + fragment + ' preserves authorization-relevant state');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+{
+  const d = completedFixture(), before = releaseSnapshot(d), fault = gitFaultPath('rev-parse --verify kaola-workflow--v5.1.0');
+  const r = run(d, ['--tag', '--version', '5.1.0', '--json'], { PATH: fault.path }); assert(r.status !== 0 && r.json.reason === 'tag_target_unavailable', 'existing tag target probe failure is typed'); assert(JSON.stringify(releaseSnapshot(d)) === JSON.stringify(before), 'existing tag target failure is mutation-free');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+{
+  const d = fixture(); prepare(d); const candidate = commitCandidate(d); chain(d); const before = releaseSnapshot(d), fault = gitFaultPath('rev-parse --verify kaola-workflow--v5.1.0');
+  const r = run(d, ['--tag', '--version', '5.1.0', '--json'], { PATH: fault.path }); assert(r.status !== 0 && r.json.reason === 'tag_target_unavailable', 'post-create tag target probe failure is typed'); assert(JSON.stringify(withoutReceipt(releaseSnapshot(d))) === JSON.stringify(withoutReceipt(before)), 'post-create target failure compare-rolls back ref and preserves files/HEAD/status'); assert(git(d, 'tag', '-l', 'kaola-workflow--v5.1.0') === '' && candidate === git(d, 'rev-parse', 'HEAD'), 'post-create rollback preserves candidate and removes new tag');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+{
+  const d = fixture(); prepare(d); const candidate = commitCandidate(d); chain(d); const fault = gitFaultPath('update-ref -d');
+  const r = run(d, ['--tag', '--version', '5.1.0', '--json'], { PATH: fault.path, KAOLA_RELEASE_TEST_FAIL_POST_CREATE_SHOW: '1' });
+  assert(r.status !== 0 && r.json.reason === 'tag_rollback_failed', 'compare-delete probe failure is explicit tag_rollback_failed');
+  assert(git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}') === candidate, 'failed compare-delete never deletes an unverified/nonmatching ref');
+  fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
+}
+
+if (failed) { console.error(`\ntest-release: ${failed} test(s) FAILED, ${passed} passed`); process.exit(1); }
+console.log(`test-release: all ${passed} assertions passed`);

@@ -646,6 +646,38 @@ node scripts/kaola-workflow-plan-validator.js --release-check [--json] [--candid
 See `docs/conventions.md` § Release for the documented pre-tag sequence this gate is wired into,
 and `docs/decisions/D-651-01.md` for the design record.
 
+**Release transaction CLI.** `node scripts/kaola-workflow-release.js` accepts
+`--verify`, `--prepare --version X.Y.Z [--codex-version A.B.C]`, `--tag --version X.Y.Z`,
+`--cut`, or `--push`; add `--json` for the stable machine envelope. `--root <path>` selects a
+repository root. `--prepare` also accepts `--date YYYY-MM-DD`; `--issues-closed N,N` supplies the
+online closed-issue input used by verify/prepare fixtures.
+
+Success fields are mode-specific:
+
+- prepare: `result:"ok"`, `mode:"prepare"`, `version`, `codex_version`,
+  `codex_version_source:"derived"|"explicit"`, `prepared_surface:[{file,sha256}]`,
+  `tag:null`, `candidate_authorized:false`; an unchanged replay returns the common identity/surface
+  fields plus `idempotent:true` (and omits the new-prepare-only source/authorization fields);
+- tag: `result:"ok"`, `mode:"tag"`, `version`, `codex_version`, `candidate_sha`, `tag`,
+  and `tag_tree_verified:true`; a fully agreeing replay returns the common binding fields plus
+  `idempotent:true` (and omits `tag_tree_verified`);
+- verify: `result:"ok"`, `verification:"online"|"offline"`, `changelog_refs`,
+  `closed_issues`, `chain_greenness`, and conditional `chain_warning`;
+- push: `result:"ok"`, `version`, `tag`, `guidance`.
+
+Every refusal has `result:"refuse"` and stable `reason`; probe failures may add `exit_code`,
+changelog refusal adds `missing`, resume dirt may add `changed`, and `--cut` returns
+`reason:"cut_compatibility_refusal"` plus `sequence`. Authorization-relevant reason families include
+version/binding and release-receipt errors, candidate provenance/content errors, chain receipt errors,
+tag conflict/publication-receipt errors, and typed Git-probe or tag create/rollback errors. Consumers
+must branch on `reason`, not human text. See `docs/conventions.md` § Release cutting for the exact
+state and mutation boundaries.
+
+This CLI does not replace the plan-independent `kaola-workflow-plan-validator.js --release-check`
+contract above. The executable order is prepare → release-only commit → offline full-chain receipt →
+`--release-check` → tag → post-tag validation/push/publish. Neither command consults an external
+pipeline as a gate.
+
 ### Export: `ROLE_TOKEN_REGISTRY` (issue #433)
 
 Exported from `scripts/kaola-workflow-plan-validator.js`. The single source of truth for the evidence token vocabulary per role — the token shapes that `open-next`/`open-ready` seed into `.cache/<node-id>.md` stubs and that the close gate verifies.
