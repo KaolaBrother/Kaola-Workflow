@@ -1,0 +1,1 @@
+gap: manual:n3-adversarial-transport-filter — n3 adversarial-verifier transport was rejected by the content filter before execution across four adversarial attempts plus one code-reviewer fallback; the main-session fallback ran the 232-assertion release suite and recorded schema-valid returned_partial/local-fallback evidence, while n4 independently returned NOT-REFUTED

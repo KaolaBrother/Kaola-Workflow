@@ -1,0 +1,39 @@
+{
+  "plan_hash": "1c15f72a40fe4d3c3ecfd921ba37dd308e0fac0616ad1a35160dfc56245ff6a0",
+  "updated_at": "2026-07-12T02:41:01.770Z",
+  "op": "close-and-open-next",
+  "node_ledger": [
+    {
+      "id": "n1-split-release-transaction",
+      "role": "tdd-guide",
+      "status": "complete"
+    },
+    {
+      "id": "n2-review-release-contract",
+      "role": "code-reviewer",
+      "status": "complete"
+    },
+    {
+      "id": "n3-adversarial-prepare-receipt",
+      "role": "adversarial-verifier",
+      "status": "complete"
+    },
+    {
+      "id": "n4-adversarial-tag-binding",
+      "role": "adversarial-verifier",
+      "status": "complete"
+    },
+    {
+      "id": "n5-document-release-protocol",
+      "role": "doc-updater",
+      "status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "complete"
+    }
+  ],
+  "in_progress": [],
+  "all_done": true
+}

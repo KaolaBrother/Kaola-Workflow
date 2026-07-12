@@ -1,0 +1,58 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=coherent_prepare_transaction_enforced",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=exact_candidate_allowlist_enforced",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=tree_faults_are_ref_safe",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=verify_and_push_compatibility_restored",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R5 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=explicit_empty_tag_bootstrap_preserved",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R6 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=terminal_publication_transaction_strict",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R7 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=worktree_status_probe_refuses_fail_closed",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R8 scope=in_scope action=fix status=resolved severity=critical fix_role=tdd-guide rationale=authorization_relevant_git_probes_are_typed_and_fail_closed",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
