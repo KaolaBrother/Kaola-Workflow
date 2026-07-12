@@ -148,6 +148,10 @@ const OPERATOR_HINT_REGISTRY = {
   leg_base_unreachable: (ctx) => `The anchored leg-base for node "${ctx.nodeId || '(unknown)'}" is not an ancestor of the leg HEAD — the base does not sit in this leg's history (a forward/unrelated ref). Re-provision the leg; do not pass a hand-rolled base.`,
   // #463 Slice 4 — the synthesizer-resolved level commit barrier (parent-clean fence + union-on-COMMIT).
   parent_dirty: (ctx) => `The parent (integration) worktree carries an out-of-allowband production change (${ctx.file || 'see paths'}) before the synthesizer merge. In a fan-out level ALL work belongs in legs; a floated own-lane slip (a relative-path write to the parent) is caught here fail-closed. Move the change into its leg, or route to repair.`,
+  // #669: the parent-clean fence's own `git status --porcelain -uall` probe is unbounded in dirty/
+  // untracked path COUNT and can overflow even the 64 MB cap on a huge tree. An unreadable probe means
+  // the fence CANNOT prove the parent is clean — never conflate that with an actually-clean parent.
+  cannot_prove_clean: (ctx) => `The parent-clean fence's own dirty-tree probe (git status --porcelain --untracked-files=all) could not be read${ctx.file ? ' (' + ctx.file + ')' : ''} — the tree is too large or the probe otherwise failed. The fence cannot PROVE the parent is clean, so it refuses fail-closed rather than assuming clean. Investigate the probe failure (a huge untracked fan-out, a git fault) and re-run.`,
   missing_merge_commit: () => '--group-barrier --merge-commit requires a commit-ish M (the synthesizer merge result). Provide the merged SHA.',
   merge_commit_invalid: (ctx) => `--merge-commit "${ctx.file || '(unknown)'}" does not resolve to a commit in this repo. Pass the SHA the synthesizer committed (git -C <root> rev-parse HEAD after the merge).`,
   merge_base_unreachable: (ctx) => `The lane-group baseline is not an ancestor of the merge commit M — M does not descend from the pre-fan-out HEAD (an unrelated/forced commit). The union barrier measures base→M; a non-descendant M would mismeasure. Re-run the synthesizer from the recorded baseline.`,
@@ -3250,8 +3254,22 @@ function main() {
     // leak.js` masked by `?? kaola-workflow/`, or any production file under a freshly-created exempt-named
     // dir — would be classified by the collapsed dir name and EVADE the fence. `-uall` lists every file
     // individually so each path is classified precisely against barrierExemptPath.
+    // #669: this probe is UNBOUNDED in dirty/untracked path COUNT (unlike a diff/ls-tree scaling with
+    // repo size, it scales with the number of DIRTY paths, which an adversarial or merely huge untracked
+    // fan-out can drive arbitrarily high). maxBuffer raises the ceiling 64x, but on ANY exec failure —
+    // ENOBUFS past even that cap, or any other git fault — the fence MUST NOT collapse to "porcelain=''"
+    // (zero dirty paths ⇒ a false PASS on a tree it never actually read). That is the exact fail-OPEN
+    // inversion #496/#557/#563 already close off on the destructive worktree-remove/branch-advance
+    // paths elsewhere in this codebase: an unreadable probe means "cannot prove clean", not "clean".
+    // This IS the safety-critical crux (the ONLY gate before the synthesizer's irreversible merge) — so
+    // it fails CLOSED unconditionally on the GENERAL error path, not only a matched ENOBUFS code.
     let porcelain = '';
-    try { porcelain = execFileSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }); } catch (_) { porcelain = ''; }
+    try {
+      porcelain = execFileSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+    } catch (probeErr) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'cannot_prove_clean', operator_hint: getOperatorHint('cannot_prove_clean', { file: String((probeErr && probeErr.message) || probeErr) }), errors: ['parent-clean-check could not read git status --porcelain --untracked-files=all: ' + String((probeErr && probeErr.message) || probeErr)] }) : 'typed refusal: cannot_prove_clean') + '\n');
+      process.exitCode = 1; return;
+    }
     // Parse each porcelain line: 2 status cols + space, then the path. A rename shows `orig -> new`; take
     // the NEW (working-tree) path. git quotes special-char paths in double-quotes; strip them.
     const unq = s => (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') ? s.slice(1, -1) : s;

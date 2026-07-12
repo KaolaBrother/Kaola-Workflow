@@ -144,7 +144,7 @@ function assertCleanWorktree(mainRoot, ownedProjects) {
   // excluded). #579: ownedProjects param added for API consistency with the parked-aware design;
   // --untracked-files=no already excludes all untracked lane dirs so the parked filter is a
   // secondary defense for any tracked modifications outside owned projects.
-  const rawStatus = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+  const rawStatus = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
   if (!rawStatus) return;
   const owned = Array.isArray(ownedProjects) ? ownedProjects : [];
   const relevant = parsePorcelainPaths(rawStatus).filter(p => !isParkedLanePath(p, owned));
@@ -220,7 +220,7 @@ function assertWorktreeClean(mainRoot, branch, ownedProjects) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (FORCE_WT_STATUS_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL — status probe forced to fail');
-        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
         probeErr = null;
         break;
       } catch (e) {
@@ -981,7 +981,7 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     return { ok: false, reason: 'worktree_dirty', detail: err.message };
   }
 
-  const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
+  const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const lines = porcelain.split('\n').filter(Boolean);
 
   // Collect registered worktree paths so we can exclude them from foreign-dirt classification.

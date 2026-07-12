@@ -4520,7 +4520,7 @@ function synthesizeLevel(root, legs, groupId, planPath) {
     const leg = legs[id];
     if (!leg || !leg.legPath) continue;
     let dirty = '';
-    try { dirty = execFileSync('git', ['-C', leg.legPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim(); } catch (_) { dirty = ''; }
+    try { dirty = execFileSync('git', ['-C', leg.legPath, 'status', '--porcelain'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim(); } catch (_) { dirty = ''; }
     if (dirty) {
       try {
         execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
@@ -5482,7 +5482,7 @@ function memberInLaneChanges(declaredRaw, legCtx) {
   if (legCtx && legCtx.legPath) {
     const lines = [];
     try {
-      const st = execFileSync('git', ['-C', legCtx.legPath, 'status', '--porcelain', '--', ...paths], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const st = execFileSync('git', ['-C', legCtx.legPath, 'status', '--porcelain', '--', ...paths], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
       for (const l of String(st).split('\n').map(s => s.trim()).filter(Boolean)) lines.push(l);
     } catch (_) { /* fall through to committed probe */ }
     if (legCtx.baseRev) {
@@ -5498,7 +5498,7 @@ function memberInLaneChanges(declaredRaw, legCtx) {
   let out = '';
   try {
     out = execFileSync('git', ['-C', root, 'status', '--porcelain', '--', ...paths], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER,
     });
   } catch (_) { return { changed: false, lines: [] }; }
   const lines = String(out).split('\n').map(s => s.trim()).filter(Boolean);

@@ -6720,9 +6720,15 @@ function rtHarness(initialFiles, opts) {
   // =========================================================================
   const STDIO_Q = { stdio: ['ignore', 'ignore', 'ignore'] };
   // Run the validator CLI as a REAL subprocess; parse the trailing JSON line like runNode.
+  // #669: a --parent-clean-check refuse over a large dirty set echoes every offending path into the
+  // JSON payload (dirty/errors/operator_hint), so a post-#669 (64 MB probe cap) SUCCESSFUL detection
+  // over a large synthetic fixture produces a response well past THIS harness's own execFileSync
+  // default 1 MB capture buffer — a distinct boundary from the production probe under test. Raise it
+  // to the same GIT_MAX_BUFFER ceiling so the test's own capture is never the accidental bottleneck.
   function runVal(repoRoot, subArgs) {
+    const VAL_MAX_BUFFER = 64 * 1024 * 1024;
     try {
-      const stdout = execFileSync('node', [VALIDATOR, ...subArgs], { cwd: repoRoot, encoding: 'utf8' });
+      const stdout = execFileSync('node', [VALIDATOR, ...subArgs], { cwd: repoRoot, encoding: 'utf8', maxBuffer: VAL_MAX_BUFFER });
       let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
       return { exitCode: 0, ...parsed };
     } catch (err) {
@@ -7037,6 +7043,54 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(repoRoot, 'kaola-workflow', 'archive', 'OTHER-PROJECT', 'leak.js'), '// foreign-archive production leak masked by dir-collapse\n');
     const r = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
     assert(r.result === 'refuse' && r.reason === 'parent_dirty' && (r.dirty || []).some(p => /archive\/OTHER-PROJECT\/leak\.js/.test(p)), 'PARENT-CLEAN-UALL: a foreign-archive leak in a new collapsed subdir trips parent_dirty (RED without -uall: collapses to kaola-workflow/archive/ → exempt → false pass), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // ★ PARENT-CLEAN-CHECK-ENOBUFS (#669): the dirty-fence's own `git status --porcelain -uall` probe is
+  //   UNBOUNDED in dirty/untracked path COUNT. A huge out-of-allowband PRODUCTION untracked fan-out
+  //   (thousands of paths under a long shared prefix, NOT allowband kaola-workflow/** paths — the fence
+  //   only flags out-of-allowband paths as dirty in the first place) blows past Node's 1 MB
+  //   execFileSync default maxBuffer. Pre-#669 the exec throws ENOBUFS -> `catch (_) { porcelain = ''; }`
+  //   collapses to ZERO dirty paths -> the fence returns a false PASS on a tree that is DEMONSTRABLY not
+  //   clean (fail-OPEN — the crux this node fixes). Post-#669 the SAME probe now carries
+  //   maxBuffer:GIT_MAX_BUFFER (64 MB), so this particular (~1.26 MB) fixture no longer overflows the
+  //   probe itself — it succeeds and CORRECTLY classifies the dirt as parent_dirty (the strictly better
+  //   outcome: real detection, not just a generic "can't tell" refuse). Either way the invariant under
+  //   test — NEVER a bare "pass" on a demonstrably non-clean tree — holds both pre- and post-fix, so
+  //   this fixture stays a valid RED->GREEN regression across the fix (RED: false pass; GREEN: refuse).
+  {
+    const { repoRoot } = makeLaneRepo(); // fully-committed baseline (no open-ready — legs not needed here)
+    // Long shared path prefix so far fewer files are needed to clear 1 MB (build-time budget: seconds,
+    // not the file COUNT). Deeply-nested production dir, NOT under kaola-workflow/ (would be allowband-
+    // exempt and never register as dirty at all — the fence would just as validly report clean).
+    const bigDir = path.join(repoRoot, 'src', 'generated', 'a'.repeat(60), 'b'.repeat(60), 'c'.repeat(60));
+    fs.mkdirSync(bigDir, { recursive: true });
+    // Each porcelain line ≈ "?? " + relPath + "\n" ≈ 210 bytes (relPath ≈ 14 + 182 + 1 + 9 chars). 6000
+    // files ≈ 1.26 MB of porcelain text — comfortably (~20%) over Node's 1,048,576-byte default
+    // maxBuffer, reliably tripping ENOBUFS on the unpatched (no maxBuffer option) exec call.
+    const FILE_COUNT = 6000;
+    for (let i = 0; i < FILE_COUNT; i++) {
+      fs.writeFileSync(path.join(bigDir, 'f' + String(i).padStart(5, '0') + '.js'), '');
+    }
+    const r = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
+    assert(r.result !== 'pass', 'PARENT-CLEAN-ENOBUFS: a >1MB dirty tree must NEVER fall through to a "pass" verdict (fail-OPEN), got ' + JSON.stringify(r));
+    assert(r.result === 'refuse' && (r.reason === 'parent_dirty' || r.reason === 'cannot_prove_clean') && r.exitCode !== 0,
+      'PARENT-CLEAN-ENOBUFS: fails CLOSED with a typed refuse (exitCode!=0), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // ★ PARENT-CLEAN-CHECK-CANNOT-PROVE-CLEAN (#669): the fail-closed flip is UNCONDITIONAL — it must
+  //   trip on ANY probe failure, not only a size-driven ENOBUFS (an adversary could otherwise construct
+  //   a non-buffer git fault and find the fence still silently passes). Corrupt `.git/index` so `git
+  //   status --porcelain` itself fails (a real git error, unrelated to output size) and assert the
+  //   fence refuses `cannot_prove_clean` — the DISTINCT reason for "the probe itself is unreadable",
+  //   never conflated with `parent_dirty` (which asserts REAL, ENUMERATED dirty paths).
+  {
+    const { repoRoot } = makeLaneRepo();
+    fs.writeFileSync(path.join(repoRoot, '.git', 'index'), 'not a valid git index\n');
+    const r = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'cannot_prove_clean' && r.exitCode !== 0,
+      'PARENT-CLEAN-CANNOT-PROVE-CLEAN: a non-buffer git fault (corrupt index) fails CLOSED with the typed cannot_prove_clean refuse, got ' + JSON.stringify(r));
     cleanup(repoRoot);
   }
 

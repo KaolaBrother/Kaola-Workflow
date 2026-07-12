@@ -156,7 +156,7 @@ function finalValidationPassed(root, project) {
 }
 
 function assertCleanWorktree(gitExec) {
-  const status = gitExec('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+  const status = gitExec('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
   assert(!status, 'Worktree must be clean before direct merge sink runs');
 }
 
@@ -224,7 +224,7 @@ function assertWorktreeClean(mainRoot, branch) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (FORCE_WT_STATUS_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL — status probe forced to fail');
-        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
         probeErr = null;
         break;
       } catch (e) {
@@ -813,7 +813,7 @@ function runDirectMerge(args, opts) {
     process.exitCode = 1;
     return;
   }
-  const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+  const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
   assert(!status, 'Worktree must be clean before direct merge sink runs');
   assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
@@ -1032,7 +1032,7 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     return { ok: false, reason: 'worktree_dirty', detail: err.message };
   }
 
-  const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
+  const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const lines = porcelain.split('\n').filter(Boolean);
   const worktreePaths = new Set();
   try {

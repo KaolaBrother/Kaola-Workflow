@@ -290,7 +290,7 @@ function treeDirty(root, ownedProjects) {
   // #579: parked-aware — kaola-workflow/<non-owned>/* and .kw/worktrees/<non-owned>/* are ignored.
   try {
     if (process.env.KAOLA_WORKFLOW_FORCE_STATUS_FAIL === '1') throw new Error('forced git status probe failure [TEST ONLY]');
-    const status = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const status = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER }).trim();
     if (!status) return false;
     const owned = Array.isArray(ownedProjects) ? ownedProjects : [];
     return parsePorcelainPaths(status).some(p => !isParkedLanePath(p, owned));
@@ -492,7 +492,7 @@ function worktreeDirtyState(wtPath) {
   try {
     if (!fs.existsSync(wtPath)) return 'missing';
     const out = execFileSync('git', ['-C', wtPath, 'status', '--porcelain'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
     return out.trim().length > 0 ? 'dirty' : 'clean';
   } catch (_) {
     return 'missing';
@@ -1400,7 +1400,7 @@ function archiveDirDirty(root, project) {
   // --keep-worktree resumes, rather than falsely declaring the work safely committed.
   try {
     const out = execFileSync('git', ['-C', root, 'status', '--porcelain', '--', path.join('kaola-workflow', 'archive', project)],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
     return out.trim().length > 0;
   } catch (_) { return true; }
 }
