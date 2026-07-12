@@ -36,6 +36,14 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process'); // #231: ONLY the --barrier-check / --gate-verify CLI handlers shell out to git; the core functions stay IO-free.
+// #666: Node's execFileSync/spawnSync default to a 1 MB stdout maxBuffer. Any git call whose output
+// scales with repo size (a full `ls-tree -r`, a `diff-tree`/`diff --name-only` over an unbounded path
+// set) can overflow that on a large-enough tree and throw ENOBUFS — silently degrading callers that
+// wrap the call in a fail-closed try/catch (e.g. computeCodeTreeHash returns null: "stale, re-run"
+// forever) or surfacing as a spurious typed refusal on callers that let it propagate. Cap every
+// unbounded-output git call at this single local constant; leave fixed-size probes (rev-parse,
+// merge-base, --quiet diffs, tag/for-each-ref, single-pathspec diffs, bounded `log -n`) uncapped.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const classifier = require('./kaola-gitlab-workflow-classifier');
 const schema = require('./kaola-workflow-adaptive-schema');
 const { resolveAgentModel } = require('./kaola-workflow-resolve-agent-model');
@@ -2478,7 +2486,7 @@ function computeCodeTreeHash(root, project, testConsumedExtra) {
   try { treeSha = snapshotWorktree(root, 'validation'); } catch (_) { return null; }
   if (!treeSha) return null;
   let listing;
-  try { listing = execFileSync('git', ['-C', root, 'ls-tree', '-r', treeSha], { encoding: 'utf8' }); } catch (_) { return null; }
+  try { listing = execFileSync('git', ['-C', root, 'ls-tree', '-r', treeSha], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }); } catch (_) { return null; }
   const lines = listing.split('\n').map(s => s.replace(/\r$/, '')).filter(Boolean).filter(line => {
     const tab = line.indexOf('\t');
     const rel = tab >= 0 ? line.slice(tab + 1) : line;
@@ -2497,8 +2505,8 @@ function computeChainsStaleDiagnostics(root, project, receipt) {
   let diffOut = '';
   let untrackedOut = '';
   try {
-    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, '--name-only'], { encoding: 'utf8' });
-    untrackedOut = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
+    diffOut = execFileSync('git', ['-C', root, 'diff', stampedHead, '--name-only'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+    untrackedOut = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   } catch (_) {
     return null;
   }
@@ -3037,7 +3045,7 @@ function main() {
       const now = snapshotWorktree(root, nodeId + '-now');
       // base is the ref-anchored commit (resolves to the node-start tree); now is the barrier tree.
       // diff-tree prints only the changed paths (no leading object header for explicit tree-ishes).
-      const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
+      const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     } else {
       // WHOLE-PLAN (phase6 merge gate): cumulative diff vs the merge-base of HEAD and the integration
@@ -3046,7 +3054,7 @@ function main() {
       // the top-level catch converts it to a typed (fail-closed) refusal.
       const base = flagVal('--base') || 'origin/main';
       const mergeBase = execFileSync('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).trim();
-      const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8' });
+      const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     }
     const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag });
@@ -3184,7 +3192,7 @@ function main() {
         }
       }
       // The union diff: base→M, COMMIT to COMMIT (only-committed semantics).
-      const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', baseRev, mSha], { encoding: 'utf8' });
+      const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', baseRev, mSha], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
       const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
       if (r.result === 'pass') { r.merge_commit = mSha; r.base = baseRev; }
@@ -3208,7 +3216,7 @@ function main() {
       process.exitCode = 1; return;
     }
     const now = snapshotWorktree(root, groupId + '-now');
-    const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
+    const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
@@ -3332,7 +3340,7 @@ function main() {
     }
     // Script-owned capture: snapshot the LEG worktree (NOT the plan-derived root) + tree-diff base -> now.
     const now = snapshotWorktree(legRoot, nodeId + '-leg');
-    const diffOut = execFileSync('git', ['-C', legRoot, 'diff-tree', '-r', '--name-only', baseSha, now], { encoding: 'utf8' });
+    const diffOut = execFileSync('git', ['-C', legRoot, 'diff-tree', '-r', '--name-only', baseSha, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     const r = barrierCheck(content, actualPaths, { nodeId, root: legRoot, project: legSan(legProject) });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'leg barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
@@ -3540,7 +3548,7 @@ function main() {
     const base = flagVal('--base') || 'main';
     let changed = [];
     try {
-      const diffOut = execFileSync('git', ['-C', root, 'diff', base + '...HEAD', '--name-only'], { encoding: 'utf8' });
+      const diffOut = execFileSync('git', ['-C', root, 'diff', base + '...HEAD', '--name-only'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       changed = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     } catch (e) {
       // Fail CLOSED: a git failure (no such base, detached) is a refusal, not a silent pass.
@@ -3595,7 +3603,7 @@ function main() {
         barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId }), errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
       } else {
         const now = snapshotWorktree(root, nodeId + '-now');
-        const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
+        const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
         const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
         barrierCheckOut = barrierCheck(content, actualPaths, { nodeId, root, project: projTag });
       }
