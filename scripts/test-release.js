@@ -154,7 +154,25 @@ for (const [want, setup, version] of cases) { const d = fixture(); prepare(d); c
   assert(headingLike.status === 0 && JSON.stringify(headingLike.json.changelog_refs) === '[721,722,723]', 'heading-like text that is not a real level-2 heading does not truncate Unreleased; got ' + JSON.stringify(headingLike.json));
 
   const missing = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Missing (#731)\n', '661');
-  assert(missing.status !== 0 && missing.json && missing.json.reason === 'changelog_incomplete' && JSON.stringify(missing.json.missing) === '[731]', 'unknown Unreleased ref refuses changelog_incomplete with exact missing refs; got ' + JSON.stringify(missing.json));
+  assert(missing.status !== 0 && missing.json && missing.json.reason === 'changelog_unknown_reference' && JSON.stringify(missing.json.unknown) === '[731]', 'unknown Unreleased ref refuses distinctly with exact refs; got ' + JSON.stringify(missing.json));
+
+  const incomplete = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Present (#658)\n', '654,655,656,658');
+  assert(incomplete.status !== 0 && incomplete.json.reason === 'changelog_incomplete' && JSON.stringify(incomplete.json.missing) === '[654,655,656]', 'authoritative closed set requires every injected issue in Unreleased; got ' + JSON.stringify(incomplete.json));
+
+  const complete = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- First (#654), duplicate (#654)\n- Next (#655) and (#656)\n- Last (#658)\n', '654,655,654,656,658');
+  assert(complete.status === 0 && JSON.stringify(complete.json.changelog_refs) === '[654,655,656,658]' && JSON.stringify(complete.json.closed_issues) === '[654,655,656,658]', 'complete authoritative set passes with deterministic deduplication; got ' + JSON.stringify(complete.json));
+
+  const unknown = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Known (#654)\n- Unknown (#999)\n', '654');
+  assert(unknown.status !== 0 && unknown.json.reason === 'changelog_unknown_reference' && JSON.stringify(unknown.json.unknown) === '[999]', 'unknown Unreleased reference remains a distinct refusal; got ' + JSON.stringify(unknown.json));
+}
+
+// Offline verification is honest about its best-effort git-log knowledge.
+{
+  const d = fixture();
+  git(d, 'commit', '--allow-empty', '-qm', 'follow-up accounting (#661)');
+  const offline = run(d, ['--verify', '--json']);
+  assert(offline.status === 0 && offline.json.verification === 'offline' && JSON.stringify(offline.json.closed_issues) === '[661]', 'offline verification reports its mode and git-log-only accounting; got ' + JSON.stringify(offline.json));
+  fs.rmSync(d, { recursive: true, force: true });
 }
 
 // Repair RED controls: receipt coherence, baseline allowlist, rollback, bootstrap.

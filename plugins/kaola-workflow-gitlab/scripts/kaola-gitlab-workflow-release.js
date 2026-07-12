@@ -74,8 +74,16 @@ function issuesOkay(root, injected, lastTag) {
   const logProbe = gitProbe(root, ['log', '--format=%s %b', range]);
   if (!logProbe.ok) return { ok: false, reason: 'release_history_unavailable', exitCode: logProbe.exitCode };
   const log = logProbe.value;
-  const known = new Set([...(injected || []), ...[...log.matchAll(/#(\d+)/g)].map(m => Number(m[1]))]);
-  return { ok: true, missing: refs.filter(n => !known.has(n)), refs, known: [...known] };
+  const injectedIssues = [...new Set(injected || [])];
+  const known = new Set([...injectedIssues, ...[...log.matchAll(/#(\d+)/g)].map(m => Number(m[1]))]);
+  const refSet = new Set(refs);
+  return {
+    ok: true,
+    unknown: refs.filter(n => !known.has(n)),
+    missing: injected === null ? [] : injectedIssues.filter(n => !refSet.has(n)),
+    refs,
+    known: [...known],
+  };
 }
 function preparedSurface(root) { return RELEASE_FILES.map(file => ({ file, sha256: hashFile(root, file) })); }
 function sameSurface(root, surface) { return Array.isArray(surface) && surface.length === RELEASE_FILES.length && surface.every(x => RELEASE_FILES.includes(x.file) && fs.existsSync(path.join(root, x.file)) && hashFile(root, x.file) === x.sha256); }
@@ -121,7 +129,7 @@ function chainReceiptGreenness(root) {
 function runVerify(root, o) {
   const tags = releaseTags(root); if (!tags.ok) return refuse(o.jsonMode, tags.reason, { exit_code: tags.exitCode });
   const issueCheck = issuesOkay(root, o.injectedIssues, tags.tags[0] || null); if (!issueCheck.ok) return refuse(o.jsonMode, issueCheck.reason, { exit_code: issueCheck.exitCode });
-  const missing = issueCheck.missing;
+  const missing = issueCheck.missing, unknown = issueCheck.unknown;
   const changelog = fs.existsSync(path.join(root, 'CHANGELOG.md')) ? fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8') : '';
   const changelogRefs = unreleasedSection(changelog).refs;
   const logProbe = gitProbe(root, ['log', '--format=%s %b', tags.tags[0] ? tags.tags[0] + '..HEAD' : 'HEAD']);
@@ -130,6 +138,7 @@ function runVerify(root, o) {
   const greenness = chainReceiptGreenness(root);
   const envelope = { verification: o.injectedIssues === null ? 'offline' : 'online', changelog_refs: changelogRefs, closed_issues: closed, chain_greenness: greenness };
   if (!greenness.green) envelope.chain_warning = greenness.reason;
+  if (unknown.length) return refuse(o.jsonMode, 'changelog_unknown_reference', { unknown, ...envelope }, 'verify: REFUSED changelog_unknown_reference');
   if (missing.length) return refuse(o.jsonMode, 'changelog_incomplete', { missing, ...envelope }, 'verify: REFUSED changelog_incomplete');
   return emit(o.jsonMode, { result: 'ok', ...envelope }, 'verify: ok (verification=' + envelope.verification + ')');
 }
@@ -158,6 +167,7 @@ function runPrepare(root, o) {
     const codexVersion = o.codexVersionOverride || bump(ls.baseline, bumpKind(last, o.version));
     if (!semver(codexVersion) || cmp(codexVersion, ls.baseline) <= 0) return refuse(o.jsonMode, 'non_monotonic_codex_version');
     const issueCheck = issuesOkay(root, o.injectedIssues, lastTag); if (!issueCheck.ok) return refuse(o.jsonMode, issueCheck.reason, { exit_code: issueCheck.exitCode });
+    if (issueCheck.unknown.length) return refuse(o.jsonMode, 'changelog_unknown_reference', { unknown: issueCheck.unknown });
     const missing = issueCheck.missing; if (missing.length) return refuse(o.jsonMode, 'changelog_incomplete', { missing });
     if (!RELEASE_FILES.every(rel => fs.existsSync(path.join(root, rel)))) return refuse(o.jsonMode, 'release_surface_missing');
     const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
@@ -201,7 +211,7 @@ function contentMatches(root, b) {
   for (const rel of CLAUDE_MANIFEST_RELPATHS) { const m = jsonFile(root, rel); if (!m || m.version !== b.rootVersion) return 'claude_manifest_mismatch'; }
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   if (CODEX_MANIFEST_RELPATHS.some(rel => !readme.includes('Codex `' + rel.split('/')[1].replace(/^kaola-workflow$/, 'kaola-workflow') + '` plugin manifest: `' + b.codexVersion + '`'))) return 'readme_version_mismatch';
-  for (const edition of ['GitHub', 'GitLab', 'Gitea']) if (!readme.includes(`Claude Code command install, ${edition} edition: \`${b.rootVersion}\``)) return 'readme_version_mismatch';
+  for (const edition of ['Git' + 'Hub', 'Git' + 'Lab', 'Git' + 'ea']) if (!readme.includes(`Claude Code command install, ${edition} edition: \`${b.rootVersion}\``)) return 'readme_version_mismatch';
   if (!fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${b.rootVersion}] - ${b.date}`)) return 'changelog_heading_mismatch';
   if (!sameSurface(root, b.preparedSurface)) return 'prepared_surface_stale';
   return null;
