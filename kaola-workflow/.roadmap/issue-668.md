@@ -1,0 +1,5 @@
+issue: #668
+title: chore(tests,docs): post-v6.22.1-audit hygiene — vacuous assertion, release-receipt disposal doc, gitlab leak assertion
+status: open
+workflow_project: —
+next_step: Three LOW test/doc-only items from the 2026-07-12 audit. (1) test-adaptive-node.js ~:7830 (#434-b harness, shipped 05a3ae11): assertion includes() against the local constant it was built from — can never fail; assert on observed output. (2) Document release-receipt disposal: .cache/release-receipt.jsonl persists as the idempotency record and the NEXT --prepare refuses typed stale_release_receipt (release.js:158, test-release.js:57) until it is deleted — one sentence in docs/conventions.md release sequencing + docs/api.md; live file already carries 6.20.1-era rows, so the next release session hits this first. (3) Optional: wire a real assertion that gitlab claim-classification OUTPUT contains no leaked stderr text (the #659 evidence relied on a manual grep). Fix (S, test/doc-only); claude + gitlab chains. Full body on GitHub #668.
