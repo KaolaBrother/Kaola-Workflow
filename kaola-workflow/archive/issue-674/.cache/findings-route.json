@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=follow_up status=deferred severity=low fix_role=none rationale=concur with n2",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=concur with n2",
+    "file": "the SIGKILL/power-loss window between the member-baseline loop and the Phase-1 running-set write predates #674 (journal-after-baselines ordering is untouched by this diff), is unreachable via any refusal return (all helpers in the window are no-throw by construction), and no in-function abort-path code can cover a process kill; needs a journal-ordering redesign or pre-open sweep",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
