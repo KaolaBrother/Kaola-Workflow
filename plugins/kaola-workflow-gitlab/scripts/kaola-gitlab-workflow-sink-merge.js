@@ -23,6 +23,9 @@ const FORCE_PUSH_MAIN_FAIL = process.env.KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL ===
 const FORCE_PUSH_UPSTREAM_FAIL = process.env.KAOLA_WORKFLOW_FORCE_PUSH_UPSTREAM_FAIL === '1';
 const SKIP_TESTGATE = process.env.KAOLA_WORKFLOW_SKIP_TESTGATE === '1'; // #350 test-only
 const FF_RACE_PUSH_DIR = process.env.KAOLA_WORKFLOW_FF_RACE_PUSH_DIR || ''; // #350 test-only
+// #666: cap unbounded-in-repo-size git execFileSync calls at 64 MB — Node's execFileSync default
+// maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
@@ -261,7 +264,7 @@ function assertBranchHasNonWorkflowChanges(mainRoot, branch, defBranch) {
   let files;
   try {
     const out = execFileSync('git', ['-C', mainRoot, 'diff', '--name-only', base + '...' + branch],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     files = out.split('\n').map(s => s.trim()).filter(Boolean);
   } catch (_) { return; } // diff failed → do not fabricate a refusal
   if (files.length === 0) return; // no changes at all — leave to the existing up-to-date / FF logic

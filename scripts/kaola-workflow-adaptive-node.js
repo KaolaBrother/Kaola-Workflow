@@ -39,6 +39,10 @@ const nextActionPath = path.join(__dirname, NEXT_ACTION);
 const validatorPath  = path.join(__dirname, VALIDATOR);
 const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
+// #666: cap unbounded-in-repo-size git execFileSync calls at 64 MB — Node's execFileSync default
+// maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
 const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
@@ -5415,7 +5419,7 @@ function memberInLaneChanges(declaredRaw, legCtx) {
     } catch (_) { /* fall through to committed probe */ }
     if (legCtx.baseRev) {
       try {
-        const d = execFileSync('git', ['-C', legCtx.legPath, 'diff', '--name-only', legCtx.baseRev, 'HEAD', '--', ...paths], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const d = execFileSync('git', ['-C', legCtx.legPath, 'diff', '--name-only', legCtx.baseRev, 'HEAD', '--', ...paths], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
         for (const l of String(d).split('\n').map(s => s.trim()).filter(Boolean)) lines.push(l);
       } catch (_) { /* fail-open */ }
     }

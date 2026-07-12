@@ -6101,6 +6101,40 @@ function rtHarness(initialFiles, opts) {
     cleanup(repoRoot);
   }
 
+  // -------------------------------------------------------------------------
+  // #666-ENOBUFS-TREE-HASH: computeCodeTreeHash (the finalize-check freshness key) walks
+  //   snapshotWorktree -> `git ls-tree -r <tree>` over the FULL landable tree. Node's execFileSync
+  //   defaults to a 1 MB maxBuffer on stdout; a tree whose ls-tree listing exceeds that (many
+  //   tracked paths, or a few long ones) overflows it. The overflow is ENOBUFS, caught by
+  //   computeCodeTreeHash's own try/catch, so it degrades SILENTLY to `null` (fail-closed to
+  //   "stale, re-run") rather than crashing loudly — a real repo of this size just never gets a
+  //   freshness hit. Build a synthetic tree whose ls-tree listing is just past 1 MB (many small
+  //   empty files under long-ish names, no commit needed — computeCodeTreeHash only needs a git
+  //   repo + a working tree) and assert a stable 64-hex sha256 comes back, not null.
+  // -------------------------------------------------------------------------
+  {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-666-enobufs-'));
+    execFileSync('git', ['-C', repoRoot, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'kw@test']);
+    execFileSync('git', ['-C', repoRoot, 'config', 'user.name', 'kw']);
+    execFileSync('git', ['-C', repoRoot, 'config', 'commit.gpgsign', 'false']);
+    // 4200 empty files with a 196-char name each puts the `ls-tree -r` listing at ~1.05 MB — just
+    // past Node's 1 MB default maxBuffer, not far past (fast to build: well under a second).
+    const bigDir = path.join(repoRoot, 'bigdir');
+    fs.mkdirSync(bigDir);
+    for (let i = 0; i < 4200; i++) {
+      fs.writeFileSync(path.join(bigDir, 'a'.repeat(190) + String(i).padStart(6, '0') + '.txt'), '');
+    }
+    const hash1 = planValidator.computeCodeTreeHash(repoRoot, 'test-project');
+    assert(typeof hash1 === 'string' && /^[0-9a-f]{64}$/.test(hash1),
+      '#666-ENOBUFS-TREE-HASH: computeCodeTreeHash returns a stable 64-hex sha256 over a >1MB ls-tree listing, got ' + JSON.stringify(hash1));
+    // Stable across repeated calls (same tree -> same hash; also proves the run is deterministic,
+    // not a fluke pass caused by OS-level buffer slack).
+    const hash2 = planValidator.computeCodeTreeHash(repoRoot, 'test-project');
+    assert(hash1 === hash2, '#666-ENOBUFS-TREE-HASH: repeated computeCodeTreeHash calls over the same big tree agree, got ' + JSON.stringify([hash1, hash2]));
+    cleanup(repoRoot);
+  }
+
   // =========================================================================
   // #463-LEG-PROVISION (Slice 2) — DORMANT per-leg `.kw` worktree provisioning for the write-lane
   // scheduler. Reuses the D-437 REAL-git harness above (makeLaneRepo / runNode / readRS / ledgerStatus
