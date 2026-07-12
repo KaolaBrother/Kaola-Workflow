@@ -1,0 +1,5 @@
+issue: #670
+title: fix(scripts): locateSection fence detection uses ln.trim() vs classifier ^\s{0,3} — indented-fence decoy can win (post-#665 residual)
+status: open
+workflow_project: —
+next_step: Surfaced by #665 review (R3) + adversary (A2). #665 aligned locateSection's fence CLOSER semantics with the classifier and fixed the same indent divergence in release.unreleasedSection (^\s{0,3} anchor), but locateSection (adaptive-schema.js:~1144/1160) still detects fences via ln.trim() (any indent) while the hash-covering classifier (classifier.js:~286) anchors at ^\s{0,3}. A 4+-space-indented backtick run (indented code per CommonMark, not a fence) is treated as a fence by locateSection, so a runtime reader can select a fenced decoy the classifier does not → plan_hash mismatch wedge risk (adversary V7 demonstrated decoy-wins). Pre-existing (byte-identical pre/post #665), out of #665 AC. Fix (S): anchor locateSection's fence match at ^\s{0,3} on the raw line; byte-identical ×4 adaptive-schema copies; add a 4-space-indented decoy regression asserting locateSection ↔ classifier.sectionBody parity. Byte-anchor class → four-chain. Full body on GitHub #670.

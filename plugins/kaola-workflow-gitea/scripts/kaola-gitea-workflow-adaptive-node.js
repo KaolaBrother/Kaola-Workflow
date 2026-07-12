@@ -3664,15 +3664,21 @@ function runRevertOverflow(opts) {
 //   (1) Refuse over a live running set.
 //   (2) Require the writer node to be a COMPLETE ledger row (the reviewer is in_progress).
 //   (3) Reset the post-dominating gate(s) of the writer to pending (same logic as reopen-node).
+//       #664: an explicit skeptic (adversarial-verifier) fan-out GROUP folds as ONE collective
+//       post-dominating unit — mirroring reopen-node's #658 fold — once every member has voted
+//       (all complete); a mid-vote member is left alone so (3b) still refuses it as an orphan.
 //   (4) Delete their stale barrier-base files (downstream baselines; NOT the writer's own).
+//   (4c) #664: purge the folded fan-out GROUP's own receipts (stale round-1 votes must not
+//       satisfy a later --verdict-check). A singleton (non-fanout) gate's evidence is deliberately
+//       RETAINED as the repair brief for the reopened writer.
 //   (5) Transition the writer back to in_progress (pending→in_progress via complete→pending).
 //   (6) Write the updated plan.
-//   (7) Return { result:'ok', baselineReused:true, deletedDownstreamBaselines:[...] }.
+//   (7) Return { result:'ok', baselineReused:true, deletedDownstreamBaselines:[...], evidenceRemoved:[...] }.
 //
 // The original barrier-base-{nodeId} is NEVER removed. commit-node is NEVER shelled.
 // ---------------------------------------------------------------------------
 function runRepairNode(opts) {
-  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir } = opts;
 
   if (!nodeId) return { result: 'refuse', errors: ['--node-id required for repair-node'] };
 
@@ -3766,6 +3772,23 @@ function runRepairNode(opts) {
       // If the sink is not reachable when excluding `did`, it post-dominates.
       if (uniqueSink && !descWithoutGate.has(uniqueSink)) {
         gatesReset.push(did);
+      } else if (dn.role === 'adversarial-verifier' && dn.shape && dn.shape.kind === 'fanout' && String(dn.cardinality) === '1') {
+        // #664: an explicit skeptic group is an AND-joined collective gate. No individual
+        // member post-dominates the writer in the simple path graph (a sibling member supplies
+        // an alternate path around this one), but the frozen group AS A WHOLE does when every
+        // member is a descendant of the repaired writer — mirror reopen-node's (#658) group-aware
+        // fold. Gated on every member being COMPLETE (fully voted): a mid-vote (in_progress)
+        // member is left untouched so the pre-existing (3b) would_orphan_in_progress refusal
+        // still catches it exactly as before this fix.
+        const { resolveAdversarialFanoutGroup } = require('./kaola-gitea-workflow-plan-validator');
+        const group = resolveAdversarialFanoutGroup(nodes, dn);
+        if (group && group.members.length > 0
+          && group.members.every(id => desc.has(id))
+          && group.members.every(id => ledgerStatuses[id] === 'complete')) {
+          for (const memberId of group.members) {
+            if (!gatesReset.includes(memberId)) gatesReset.push(memberId);
+          }
+        }
       }
     }
   }
@@ -3805,6 +3828,48 @@ function runRepairNode(opts) {
     }
   }
 
+  // (4c) #664: purge the folded adversarial-verifier fan-out GROUP's own receipt(s) — a stale
+  // COMPLETED skeptic vote must never silently satisfy a later --verdict-check on the writer's
+  // changed tree. Scoped to fan-out groups only: a singleton (non-fanout) gate-role's evidence
+  // (e.g. a code-reviewer's `verdict: fail` body) is deliberately RETAINED as the repair brief for
+  // the reopened writer — unchanged from before this fix. Mirrors reopen-node's (#349/#658) purge,
+  // including its per-receipt-NAME dedupe (#665 R2): the validator keys fan-out groups by (label,
+  // origin) — resolveAdversarialFanoutGroup — so two independent groups sharing a label at DIFFERENT
+  // origins are two distinct receipt sets. A group-LABEL-only dedupe would purge only the first.
+  const cacheDir = path.dirname(cacheBaseFile(nodeId));
+  const gateById = new Map(nodes.map(n => [n.id, n]));
+  const evidenceRemoved = [];
+  const removedNames = new Set();
+  const removeEvidenceName = (name, knownPresent) => {
+    if (removedNames.has(name)) return;
+    const ev = path.join(cacheDir, name);
+    if ((knownPresent || (cacheExists ? cacheExists(ev) : false)) && typeof unlink === 'function') {
+      unlink(ev);
+      evidenceRemoved.push(name);
+      removedNames.add(name);
+    }
+  };
+  for (const gid of gatesReset) {
+    const gn = gateById.get(gid);
+    if (!gn || gn.role !== 'adversarial-verifier' || !gn.shape || gn.shape.kind !== 'fanout') continue;
+    const { resolveAdversarialFanoutGroup } = require('./kaola-gitea-workflow-plan-validator');
+    const group = resolveAdversarialFanoutGroup(nodes, gn);
+    if (!group) continue;
+    if (group.mode === 'canonical-node-id') {
+      for (const memberId of group.members) removeEvidenceName(memberId + '.md');
+    } else if (typeof readdir === 'function') {
+      // Archived role-prefix receipts carry no group label. Attributable only when the
+      // frozen plan contains exactly one legacy adversarial fan-out (same guard as reopen-node).
+      const legacyGroups = nodes.filter(n => n.role === 'adversarial-verifier'
+        && n.shape && n.shape.kind === 'fanout' && String(n.cardinality) !== '1');
+      if (legacyGroups.length === 1) {
+        for (const name of readdir(cacheDir)) {
+          if (typeof name === 'string' && /^adversarial-verifier-.*\.md$/.test(name)) removeEvidenceName(name, true);
+        }
+      }
+    }
+  }
+
   // (5) Transition writer: complete→pending→in_progress.
   const resetWriter = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
   if (!resetWriter.changed) {
@@ -3828,6 +3893,8 @@ function runRepairNode(opts) {
     gatesReset,
     gatesFolded,
     deletedDownstreamBaselines,
+    // #664: fan-out group receipts purged (empty when no reset gate was a fan-out group).
+    evidenceRemoved,
     // The CRITICAL anti-laundering invariant: the original barrier-base is reused, NOT re-snapshotted.
     baselineReused: true,
     taskTransitions: [
@@ -6895,6 +6962,9 @@ function main() {
       result = runRepairNode({
         planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+        // #665 R1: mirror reopen-node's dispatch — without readdir, a resumed LEGACY (role-prefix,
+        // cardinality>1) adversarial-verifier fan-out's (4c) receipt purge branch is silently dead.
+        readdir: (d) => { try { return fs.readdirSync(d); } catch (_) { return []; } },
       });
     }
   } else if (subcommand === 'discard-speculative') {

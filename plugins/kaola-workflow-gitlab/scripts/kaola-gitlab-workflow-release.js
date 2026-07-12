@@ -59,12 +59,32 @@ function append(root, row) { fs.mkdirSync(path.dirname(receiptPath(root)), { rec
 function binding(rows, version) { return rows && rows.find(r => r.step === 'prepared' && r.status === 'done' && r.version === version) || null; }
 function latestRowsForOtherVersion(rows, version) { return rows && rows.some(r => r.step === 'prepared' && r.status === 'done' && r.version !== version); }
 function startedBinding(rows, version) { return rows && rows.find(r => r.step === 'prepare_binding' && r.status === 'done' && r.version === version) || null; }
+// #665: fence-aware termination — a fenced column-0 `## ` line must NOT end [Unreleased] early.
+// Mirrors the classifier's markdownFenceTransition closer semantics locally (same family AND a
+// run-length >= the opener's AND an empty/whitespace-only suffix AND the CommonMark 0-3-space
+// indent anchor — a 4+-space-indented backtick run is an indented code block, not a fence; pure
+// string ops, no cross-dependency) so only a fence-depth-0 `## ` heading terminates the section.
 function unreleasedSection(text) {
   const heading = /^##[ \t]+\[Unreleased\][^\r\n]*/mi.exec(text);
   if (!heading) return { section: '', refs: [] };
   const bodyStart = heading.index + heading[0].length;
-  const nextHeading = /^##[ \t]+/m.exec(text.slice(bodyStart));
-  const section = text.slice(heading.index, nextHeading ? bodyStart + nextHeading.index : text.length);
+  const body = text.slice(bodyStart);
+  const lines = body.split('\n');
+  const fenceRe = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
+  let fam = '', fenceLen = 0, off = lines[0].length + 1, nextIdx = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const ln = lines[i];
+    const fm = ln.match(fenceRe);
+    if (fm) {
+      const f = fm[1][0], len = fm[1].length;
+      if (!fam) { fam = f; fenceLen = len; }
+      else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { fam = ''; fenceLen = 0; }
+    } else if (!fam && /^##[ \t]+/.test(ln)) {
+      nextIdx = off; break;
+    }
+    off += ln.length + 1;
+  }
+  const section = text.slice(heading.index, nextIdx >= 0 ? bodyStart + nextIdx : text.length);
   return { section, refs: [...new Set([...section.matchAll(/#(\d+)/g)].map(m => Number(m[1])))] };
 }
 function issuesOkay(root, injected, lastTag) {

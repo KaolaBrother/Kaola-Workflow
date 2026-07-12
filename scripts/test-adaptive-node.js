@@ -484,6 +484,123 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T6c (#665): locateSection's fence closer was FAMILY-ONLY (no run-length / empty-suffix check), so
+// a SHORTER same-family fence nested inside a LONGER one closed it early, exposing a fenced decoy
+// heading as "unfenced". Reproduces the exact plan: a 5-backtick `## Node Briefs` fence enclosing a
+// single stray 3-backtick line, then a fenced `## Node Ledger` DECOY — driven END-TO-END through
+// open -> splice -> close -> resume, proving there is no hash-mismatch wedge.
+// ---------------------------------------------------------------------------
+{
+  // Direct unit check: locateSection must agree with classifier.sectionBody (ground truth) on
+  // which `## Node Ledger` is genuine, once the run-length-aware closer is applied.
+  const classifier = require('./kaola-workflow-classifier');
+  const decoyPlan665 = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Briefs', '',
+    '### impl-core',
+    'Illustrative fenced example (NOT the real ledger):',
+    '`````',
+    'Some brief text with a stray triple-backtick marker below:',
+    '```',
+    '## Node Ledger',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '`````',
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '',
+  ].join('\n') + '\n';
+
+  const loc665 = locateSection(decoyPlan665, 'Node Ledger');
+  assert(loc665.start >= 0, 'T6c: locateSection finds a ledger despite the run-length decoy');
+  const sliced665 = decoyPlan665.slice(loc665.start, loc665.next >= 0 ? loc665.next : decoyPlan665.length);
+  const groundTruth665 = classifier.sectionBodyState(decoyPlan665, 'Node Ledger');
+  assert(groundTruth665.status === 'present', 'T6c: classifier ground truth finds the genuine ledger present');
+  assert(sliced665.replace(/^\n## Node Ledger\n/, '') === groundTruth665.body,
+    'T6c: locateSection agrees with classifier.sectionBody on the genuine (not decoy) ledger body, got ' + JSON.stringify(sliced665));
+  assert(!sliced665.includes('`````') && !sliced665.includes('Illustrative fenced example'),
+    'T6c: the located section excludes the 5-backtick decoy block entirely (a shorter interior fence no longer closes it early)');
+
+  // End-to-end: real subprocess open -> splice -> close -> resume proves no hash-mismatch wedge.
+  const { execFileSync: exec665, spawnSync: spawn665 } = require('child_process');
+  const planValidator665 = require('./kaola-workflow-plan-validator');
+  const NODE_CLI_665 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_665 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const hash665 = planValidator665.computePlanHash(decoyPlan665);
+  const frozen665 = '<!-- plan_hash: ' + hash665 + ' -->\n' + decoyPlan665;
+
+  const repoRoot665 = fs.mkdtempSync(path.join(os.tmpdir(), 'd665-fence-'));
+  const project665 = 'test-project';
+  const projDir665 = path.join(repoRoot665, 'kaola-workflow', project665);
+  fs.mkdirSync(path.join(projDir665, '.cache'), { recursive: true });
+  const planPath665 = path.join(projDir665, 'workflow-plan.md');
+  fs.writeFileSync(planPath665, frozen665);
+  fs.writeFileSync(path.join(projDir665, 'workflow-state.md'), '# State\n');
+  const g665 = (a) => exec665('git', ['-C', repoRoot665, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  g665(['init']); g665(['config', 'user.email', 'kw@test']); g665(['config', 'user.name', 'kw']); g665(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repoRoot665, '.gitignore'), '.kw/\n');
+  g665(['add', '-A']); g665(['commit', '-m', 'init']);
+
+  const run665 = (args) => {
+    let out = {}; let exit = 0;
+    try { out = JSON.parse(exec665('node', args, { cwd: repoRoot665, encoding: 'utf8' }).trim().split('\n').pop()); }
+    catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+    return { out, exit };
+  };
+
+  // Control: the hand-frozen plan resume-checks clean before anything opens.
+  let r665 = run665([VALIDATOR_665, planPath665, '--resume-check', '--json']);
+  assert(r665.exit === 0 && r665.out.ok === true, 'T6c: control — the frozen decoy plan passes --resume-check, got ' + JSON.stringify(r665.out));
+
+  // open: the real open-next opens impl-core (the sole ready node).
+  r665 = run665([NODE_CLI_665, 'open-next', '--project', project665, '--json']);
+  assert(r665.out.result === 'ok' && r665.out.opened && r665.out.opened.id === 'impl-core',
+    'T6c: open-next opens impl-core, got ' + JSON.stringify(r665.out));
+
+  // splice + resume: opening flips the ledger status via the (now fixed) locateSection; the write
+  // must land OUTSIDE the hash-covered ## Node Briefs body, so --resume-check still passes.
+  r665 = run665([VALIDATOR_665, planPath665, '--resume-check', '--json']);
+  assert(r665.exit === 0 && r665.out.ok === true,
+    'T6c: after open, --resume-check still passes — no plan_hash_mismatch wedge from a mis-targeted splice, got ' + JSON.stringify(r665.out));
+
+  // close: record RED/GREEN evidence for impl-core, then close-and-open-next opens review.
+  const rec665 = spawn665(process.execPath, [NODE_CLI_665, 'record-evidence', '--project', project665, '--node-id', 'impl-core', '--stdin', '--json'], {
+    cwd: repoRoot665, encoding: 'utf8', input: 'RED: impl-core failed before implementation\nGREEN: impl-core passes after implementation\n',
+  });
+  assert(rec665.status === 0, 'T6c: impl-core evidence records: ' + rec665.stderr + rec665.stdout);
+  r665 = run665([NODE_CLI_665, 'close-and-open-next', '--project', project665, '--node-id', 'impl-core', '--json']);
+  assert(r665.out.result === 'ok' && r665.out.opened && r665.out.opened.id === 'review',
+    'T6c: close-and-open-next closes impl-core and opens review, got ' + JSON.stringify(r665.out));
+
+  // resume: the plan still resume-checks clean after the close-time splice too.
+  r665 = run665([VALIDATOR_665, planPath665, '--resume-check', '--json']);
+  assert(r665.exit === 0 && r665.out.ok === true,
+    'T6c: after close, --resume-check still passes — sustained stability across open+close, got ' + JSON.stringify(r665.out));
+
+  // The GENUINE ledger reflects both transitions; the decoy inside ## Node Briefs is never the target.
+  const finalContent665 = fs.readFileSync(planPath665, 'utf8');
+  const finalLedger665 = classifier.sectionBody(finalContent665, 'Node Ledger');
+  assert(finalLedger665.includes('| impl-core | complete |') && finalLedger665.includes('| review | in_progress |'),
+    'T6c: the genuine ledger shows impl-core complete / review in_progress, got ' + JSON.stringify(finalLedger665));
+
+  try { fs.rmSync(repoRoot665, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // T6b (#354, AC3): `## Nodes` row-walk PARITY — validator.parseNodes(content) and
 // classifier.readPlanNodes(path) must extract the same id/role/depends_on set (both delegate
 // section-slicing to the fence-aware classifier.sectionBody; this pins the row-walk against drift).
@@ -8279,6 +8396,234 @@ function rtHarness(initialFiles, opts) {
   });
   assert(refuseResult && refuseResult.result === 'refuse',
     '#434-b: repair-node refuses on a complete node (no writer+reviewer in_progress pair), got ' + JSON.stringify(refuseResult));
+}
+
+// ---------------------------------------------------------------------------
+// #664: repair-node MIXED-shape group fold — a writer repair downstream of a COMPLETED
+// {av-a, av-b} explicit adversarial-verifier fan-out group (round-1 votes already cast) PLUS
+// a singleton code-reviewer gate (currently in_progress — the active flagging gate) must reset
+// BOTH skeptic rows (not just one, and not zero — #664 is exactly the case where NEITHER
+// individually post-dominates the writer) AND purge BOTH stale receipts, while the singleton
+// reviewer's evidence is retained as the repair brief (unchanged non-group behavior, #434-b).
+// This is the repair-path twin of #658 (which fixed only reopen-node's collective fold).
+// ---------------------------------------------------------------------------
+{
+  const planNodes664 = [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| av-a | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| av-b | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| review | code-reviewer | av-a, av-b | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent664 = makePlan([
+    '| impl | complete | |',
+    '| av-a | complete | |',
+    '| av-b | complete | |',
+    '| review | in_progress | |',
+    '| finalize | pending | |',
+  ], planNodes664);
+
+  const present664 = new Set([
+    'barrier-base-impl', 'barrier-base-av-a', 'barrier-base-av-b', 'barrier-base-review',
+    'av-a.md', 'av-b.md', 'review.md',
+  ]);
+  const removed664 = [];
+  const shelled664 = [];
+
+  const result664 = runRepairNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (sp) => { shelled664.push(path.basename(sp)); return { exitCode: 0, result: 'ok' }; },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent664; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent664 = c; },
+    cacheExists: (f) => present664.has(path.basename(f)),
+    unlink: (f) => removed664.push(path.basename(f)),
+  });
+
+  assert(result664 && result664.result === 'ok', '#664: repair-node ok, got ' + JSON.stringify(result664));
+  assert(result664.baselineReused === true, '#664: baselineReused true (writer baseline kept)');
+  assert(result664.gatesReset.includes('av-a') && result664.gatesReset.includes('av-b'),
+    '#664: repair-node folds the WHOLE completed adversarial-verifier fan-out group (BOTH av-a and av-b), got gatesReset=' + JSON.stringify(result664.gatesReset));
+  assert(result664.gatesReset.includes('review'),
+    '#664 MIXED-shape: the singleton downstream gate (review) ALSO folds alongside the group, got gatesReset=' + JSON.stringify(result664.gatesReset));
+  assert(/\|\s*av-a\s*\|\s*pending\s*\|/.test(planContent664),
+    '#664: av-a ledger row reset to pending, got plan=' + planContent664);
+  assert(/\|\s*av-b\s*\|\s*pending\s*\|/.test(planContent664),
+    '#664: av-b ledger row reset to pending, got plan=' + planContent664);
+  assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent664),
+    '#664: singleton review gate ALSO reset to pending, got plan=' + planContent664);
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent664),
+    '#664: writer impl reopened to in_progress, got plan=' + planContent664);
+  assert(removed664.includes('av-a.md') && removed664.includes('av-b.md'),
+    '#664: BOTH stale skeptic receipts purged — the reclose requires FRESH votes, stale round-1 votes must no longer satisfy --verdict-check; got removed=' + JSON.stringify(removed664));
+  assert(!removed664.includes('review.md'),
+    '#664: singleton reviewer evidence retained as the repair brief (unchanged non-group behavior), got removed=' + JSON.stringify(removed664));
+  assert(!removed664.includes('barrier-base-impl'),
+    '#664: writer baseline NOT removed (anti-laundering invariant), got removed=' + JSON.stringify(removed664));
+  assert(!shelled664.includes('kaola-workflow-commit-node.js'),
+    '#664: commit-node NOT shelled for repair-node (original baseline reused)');
+
+  // #664: a MID-VOTE (in_progress) group must NOT be collectively folded — the pre-existing
+  // would_orphan_in_progress refusal stays UNCHANGED (this must pass both before and after the fix).
+  const planNodes664mv = [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| av-a | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| av-b | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| finalize | finalize | av-a, av-b | — | 1 | sequence |',
+  ];
+  const planMidVote = makePlan([
+    '| impl | complete | |',
+    '| av-a | in_progress | |', // mid-vote: still deciding
+    '| av-b | complete | |',
+    '| finalize | pending | |',
+  ], planNodes664mv);
+  const resultMidVote = runRepairNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planMidVote; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('must not write on refusal'); },
+    cacheExists: () => false,
+    unlink: () => { throw new Error('must not unlink on refusal'); },
+  });
+  assert(resultMidVote && resultMidVote.result === 'refuse' && resultMidVote.reason === 'would_orphan_in_progress',
+    '#664: a mid-vote (in_progress) group is NOT collectively folded — would_orphan_in_progress refusal preserved UNCHANGED, got ' + JSON.stringify(resultMidVote));
+  assert(resultMidVote.inProgress && resultMidVote.inProgress.includes('av-a'),
+    '#664: the mid-vote member (av-a) is reported as the orphan, got ' + JSON.stringify(resultMidVote));
+}
+
+// ---------------------------------------------------------------------------
+// #665 R2: repair-node's (4c) fan-out receipt purge deduped by LABEL ONLY (group.group), but the
+// validator keys fan-out groups by (label, origin) — resolveAdversarialFanoutGroup (#B6) — so TWO
+// independent `fanout(red-team)` groups at DIFFERENT origins are two distinct receipt sets. A plan
+// with a sequential pair of same-label groups (av-a{1,2} gated directly off the writer, av-b{1,2}
+// gated off av-a{1,2}) — both COMPLETE, both post-dominating the writer through the #664 collective
+// fold — must purge BOTH groups' receipts, not just the first one encountered.
+// ---------------------------------------------------------------------------
+{
+  const planNodes665 = [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| av-a1 | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| av-a2 | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+    '| av-b1 | adversarial-verifier | av-a1, av-a2 | — | 1 | fanout(red-team) |',
+    '| av-b2 | adversarial-verifier | av-a1, av-a2 | — | 1 | fanout(red-team) |',
+    '| review | code-reviewer | av-b1, av-b2 | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent665 = makePlan([
+    '| impl | complete | |',
+    '| av-a1 | complete | |',
+    '| av-a2 | complete | |',
+    '| av-b1 | complete | |',
+    '| av-b2 | complete | |',
+    '| review | in_progress | |',
+    '| finalize | pending | |',
+  ], planNodes665);
+
+  const present665 = new Set([
+    'barrier-base-impl', 'barrier-base-av-a1', 'barrier-base-av-a2',
+    'barrier-base-av-b1', 'barrier-base-av-b2', 'barrier-base-review',
+    'av-a1.md', 'av-a2.md', 'av-b1.md', 'av-b2.md', 'review.md',
+  ]);
+  const removed665 = [];
+
+  const result665 = runRepairNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent665; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent665 = c; },
+    cacheExists: (f) => present665.has(path.basename(f)),
+    unlink: (f) => removed665.push(path.basename(f)),
+  });
+
+  assert(result665 && result665.result === 'ok', '#665 R2: repair-node ok, got ' + JSON.stringify(result665));
+  assert(['av-a1', 'av-a2', 'av-b1', 'av-b2'].every(id => result665.gatesReset.includes(id)),
+    '#665 R2: BOTH same-label groups (av-a{1,2} AND av-b{1,2}) fold as post-dominating gates, got gatesReset=' + JSON.stringify(result665.gatesReset));
+  assert(removed665.includes('av-a1.md') && removed665.includes('av-a2.md'),
+    '#665 R2: the FIRST same-label group (av-a1/av-a2) receipts are purged, got removed=' + JSON.stringify(removed665));
+  assert(removed665.includes('av-b1.md') && removed665.includes('av-b2.md'),
+    '#665 R2: the SECOND same-label-different-origin group (av-b1/av-b2) receipts are ALSO purged — a '
+    + 'label-only dedupe would wrongly skip this group because "red-team" was already seen, got removed=' + JSON.stringify(removed665));
+  assert(result665.evidenceRemoved && ['av-a1.md', 'av-a2.md', 'av-b1.md', 'av-b2.md'].every(n => result665.evidenceRemoved.includes(n)),
+    '#665 R2: result.evidenceRemoved names all four member receipts, got ' + JSON.stringify(result665.evidenceRemoved));
+  assert(!removed665.includes('review.md'),
+    '#665 R2: the singleton reviewer evidence is retained as the repair brief (unchanged non-group behavior), got removed=' + JSON.stringify(removed665));
+}
+
+// ---------------------------------------------------------------------------
+// #665 R1: repair-node's LEGACY (role-prefix, cardinality>1) fan-out receipt purge branch is wired
+// through the `readdir` opt — but the `repair-node` CLI dispatch omitted it (unlike reopen-node's
+// dispatch, which passes both `unlink` and `readdir`), so a resumed legacy-format plan folded the
+// gate but silently skipped the receipt purge. Drives the REAL CLI subcommand (subprocess, not a
+// direct runRepairNode(...) call) so the assertion actually exercises the dispatch wiring, not just
+// the function body — a direct call with a hand-supplied `readdir` would pass even with the CLI
+// dispatch left broken.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: exec665r1 } = require('child_process');
+  const NODE_CLI_665R1 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+
+  const planNodes665r1 = [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| av | adversarial-verifier | impl | — | 3 | fanout(legacy) |',
+    '| finalize | finalize | av | — | 1 | sequence |',
+  ];
+  const decoyPlan665r1 = makePlan([
+    '| impl | complete | |',
+    '| av | in_progress | |',
+    '| finalize | pending | |',
+  ], planNodes665r1);
+  const hash665r1 = planValidator.computePlanHash(decoyPlan665r1);
+  const frozen665r1 = '<!-- plan_hash: ' + hash665r1 + ' -->\n' + decoyPlan665r1;
+
+  const repoRoot665r1 = fs.mkdtempSync(path.join(os.tmpdir(), 'd665r1-repair-'));
+  const project665r1 = 'test-project';
+  const projDir665r1 = path.join(repoRoot665r1, 'kaola-workflow', project665r1);
+  const cacheDir665r1 = path.join(projDir665r1, '.cache');
+  fs.mkdirSync(cacheDir665r1, { recursive: true });
+  const planPath665r1 = path.join(projDir665r1, 'workflow-plan.md');
+  fs.writeFileSync(planPath665r1, frozen665r1);
+  fs.writeFileSync(path.join(projDir665r1, 'workflow-state.md'), '# State\n');
+  // Legacy round-1 role-prefix receipts + downstream/writer barrier-bases.
+  fs.writeFileSync(path.join(cacheDir665r1, 'adversarial-verifier-0.md'), 'verdict: pass\n');
+  fs.writeFileSync(path.join(cacheDir665r1, 'adversarial-verifier-1.md'), 'verdict: pass\n');
+  fs.writeFileSync(path.join(cacheDir665r1, 'adversarial-verifier-2.md'), 'verdict: fail\n');
+  fs.writeFileSync(path.join(cacheDir665r1, 'unrelated.md'), 'not a skeptic receipt\n');
+  fs.writeFileSync(path.join(cacheDir665r1, 'barrier-base-impl'), 'writer-baseline\n');
+  fs.writeFileSync(path.join(cacheDir665r1, 'barrier-base-av'), 'gate-baseline\n');
+
+  const g665r1 = (a) => exec665r1('git', ['-C', repoRoot665r1, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  g665r1(['init']); g665r1(['config', 'user.email', 'kw@test']); g665r1(['config', 'user.name', 'kw']); g665r1(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repoRoot665r1, '.gitignore'), '.kw/\n');
+  g665r1(['add', '-A']); g665r1(['commit', '-m', 'init']);
+
+  let out665r1 = {};
+  try {
+    out665r1 = JSON.parse(exec665r1('node', [NODE_CLI_665R1, 'repair-node', '--project', project665r1, '--node-id', 'impl', '--json'],
+      { cwd: repoRoot665r1, encoding: 'utf8' }).trim());
+  } catch (err) {
+    try { out665r1 = JSON.parse(String(err.stdout || '').trim()); } catch (_) { out665r1 = { execError: String(err.message || err) }; }
+  }
+
+  assert(out665r1.result === 'ok', '#665 R1: the real repair-node CLI subcommand succeeds, got ' + JSON.stringify(out665r1));
+  assert(out665r1.gatesReset && out665r1.gatesReset.includes('av'),
+    '#665 R1: the legacy fan-out row (av) folds as the post-dominating gate, got ' + JSON.stringify(out665r1.gatesReset));
+  assert(!fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-0.md'))
+    && !fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-1.md'))
+    && !fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-2.md')),
+    '#665 R1: the real CLI dispatch purges the legacy role-prefix receipts (readdir now flows through repair-node\'s dispatch, mirroring reopen-node\'s)');
+  assert(fs.existsSync(path.join(cacheDir665r1, 'unrelated.md')),
+    '#665 R1: an unrelated .cache file (non-matching name) is left untouched');
+  assert(fs.existsSync(path.join(cacheDir665r1, 'barrier-base-impl')),
+    "#665 R1: the writer's OWN barrier-base is NEVER removed (anti-laundering invariant)");
+  assert(!fs.existsSync(path.join(cacheDir665r1, 'barrier-base-av')),
+    '#665 R1: the downstream gate barrier-base IS removed (stale baseline)');
+
+  try { fs.rmSync(repoRoot665r1, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------

@@ -164,6 +164,30 @@ for (const [want, setup, version] of cases) { const d = fixture(); prepare(d); c
 
   const unknown = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Known (#654)\n- Unknown (#999)\n', '654');
   assert(unknown.status !== 0 && unknown.json.reason === 'changelog_unknown_reference' && JSON.stringify(unknown.json.unknown) === '[999]', 'unknown Unreleased reference remains a distinct refusal; got ' + JSON.stringify(unknown.json));
+
+  // #665: a fenced column-0 `## ` line inside [Unreleased] must not truncate the section — both
+  // accounting directions are checked: (a) a ref documented AFTER the fence is not spuriously
+  // "missing", and (b) an unknown ref documented after the fence is not hidden from the guard.
+  const fencedComplete = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n```\n## fenced decoy heading\n```\n- Real fix (#741)\n', '741');
+  assert(fencedComplete.status === 0 && JSON.stringify(fencedComplete.json.changelog_refs) === '[741]', 'a ref documented after a fenced column-0 `## ` line is recognized (no spurious changelog_incomplete); got ' + JSON.stringify(fencedComplete.json));
+
+  const fencedUnknown = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Known (#654)\n```\n## fenced decoy heading\n```\n- Unknown (#999)\n', '654');
+  assert(fencedUnknown.status !== 0 && fencedUnknown.json.reason === 'changelog_unknown_reference' && JSON.stringify(fencedUnknown.json.unknown) === '[999]', 'an unknown ref documented after a fenced column-0 `## ` line is not hidden from changelog_unknown_reference; got ' + JSON.stringify(fencedUnknown.json));
+
+  // A1 (post-#665 regression): the fence detector matched fences at ANY indentation via
+  // `ln.trim()`, so a 4+-space-indented backtick run (a CommonMark *indented code block*, not a
+  // fence) was wrongly treated as an open fence, swallowing every subsequent `## ` heading into
+  // [Unreleased]. Anchored at `^\s{0,3}` (matching the classifier's markdownFenceTransition) so
+  // an indented backtick run does not suppress heading detection — both accounting directions
+  // are checked: (a) a ref genuinely inside Unreleased is attributed correctly and a ref only
+  // documented after the (non-fence) heading is not spuriously required or flagged unknown, and
+  // (b) the fail-open direction: an issue only documented after the indented backtick run is
+  // genuinely missing from Unreleased and must still be caught as changelog_incomplete.
+  const indentedComplete = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Real fix (#700)\n    ```\n\n## [5.0.0] - 2026-01-01\n\n- Historical (#654)\n', '700');
+  assert(indentedComplete.status === 0 && JSON.stringify(indentedComplete.json.changelog_refs) === '[700]', 'an indented (4-space) backtick run is not a fence: the following `## ` heading still terminates Unreleased so only the current-section ref is attributed (no spurious changelog_incomplete/changelog_unknown_reference for the ref documented after it); got ' + JSON.stringify(indentedComplete.json));
+
+  const indentedIncomplete = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Real fix (#700)\n    ```\n\n## [5.0.0] - 2026-01-01\n\n- Historical (#654)\n', '700,654');
+  assert(indentedIncomplete.status !== 0 && indentedIncomplete.json.reason === 'changelog_incomplete' && JSON.stringify(indentedIncomplete.json.missing) === '[654]', 'an issue only documented in a section after an indented backtick run is genuinely missing from Unreleased and must still fail changelog_incomplete, not be swallowed into a fail-open pass; got ' + JSON.stringify(indentedIncomplete.json));
 }
 
 // Offline verification is honest about its best-effort git-log knowledge.

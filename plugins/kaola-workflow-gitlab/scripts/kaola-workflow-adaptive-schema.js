@@ -1124,19 +1124,28 @@ function resolveMainRoot(root) {
 // `next` = offset of the '\n' before the next fence-depth-0 `## ` heading after it (-1 → EOF).
 // PURE String ops only — NO classifier import, preserving the ×4 byte-identity contract (see the
 // readDurableConsentHalt note above). Prefix match mirrors the legacy indexOf semantics.
+// #665: the closer check is RUN-LENGTH-aware (mirrors the classifier's markdownFenceTransition
+// semantics locally): a closer must be the SAME family AND have a run-length >= the OPENER's AND
+// an empty/whitespace-only suffix. The prior family-only check let a SHORTER same-family fence
+// nested inside a longer one close it early, exposing a fenced decoy heading as "unfenced". FIRST-
+// HIT selection among unfenced heading candidates is unchanged; a genuine duplicate unfenced
+// heading (vanishingly rare malformed input) still resolves to the first-hit — a deliberate
+// documented fallback, since this {start,next} offset-pair contract has no ambiguous-status
+// channel the way classifier.sectionBodyState does, and every existing caller already tolerates
+// first-hit-wins here.
 function locateSection(content, heading) {
   const lines = String(content).split('\n');
   const prefix = '## ' + heading;
-  const fenceRe = /^(`{3,}|~{3,})/;
-  let inFence = false, fam = '';
+  const fenceRe = /^(`{3,}|~{3,})(.*)$/;
+  let inFence = false, fam = '', fenceLen = 0;
   let off = 0, start = -1, headingLine = -1;
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
     const fm = ln.trim().match(fenceRe);
     if (fm) {
-      const f = fm[1][0];
-      if (!inFence) { inFence = true; fam = f; }
-      else if (f === fam) { inFence = false; fam = ''; }
+      const f = fm[1][0], len = fm[1].length;
+      if (!inFence) { inFence = true; fam = f; fenceLen = len; }
+      else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { inFence = false; fam = ''; fenceLen = 0; }
     } else if (!inFence && i > 0 && ln.startsWith(prefix)) {
       start = off - 1; headingLine = i; break;
     }
@@ -1144,15 +1153,15 @@ function locateSection(content, heading) {
   }
   if (start < 0) return { start: -1, next: -1 };
   let off2 = off + lines[headingLine].length + 1;
-  inFence = false; fam = '';
+  inFence = false; fam = ''; fenceLen = 0;
   let next = -1;
   for (let i = headingLine + 1; i < lines.length; i++) {
     const ln = lines[i];
     const fm = ln.trim().match(fenceRe);
     if (fm) {
-      const f = fm[1][0];
-      if (!inFence) { inFence = true; fam = f; }
-      else if (f === fam) { inFence = false; fam = ''; }
+      const f = fm[1][0], len = fm[1].length;
+      if (!inFence) { inFence = true; fam = f; fenceLen = len; }
+      else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { inFence = false; fam = ''; fenceLen = 0; }
     } else if (!inFence && ln.startsWith('## ')) {
       next = off2 - 1; break;
     }
