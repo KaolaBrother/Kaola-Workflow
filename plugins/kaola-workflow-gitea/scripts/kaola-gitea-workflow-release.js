@@ -59,10 +59,17 @@ function append(root, row) { fs.mkdirSync(path.dirname(receiptPath(root)), { rec
 function binding(rows, version) { return rows && rows.find(r => r.step === 'prepared' && r.status === 'done' && r.version === version) || null; }
 function latestRowsForOtherVersion(rows, version) { return rows && rows.some(r => r.step === 'prepared' && r.status === 'done' && r.version !== version); }
 function startedBinding(rows, version) { return rows && rows.find(r => r.step === 'prepare_binding' && r.status === 'done' && r.version === version) || null; }
+function unreleasedSection(text) {
+  const heading = /^##[ \t]+\[Unreleased\][^\r\n]*/mi.exec(text);
+  if (!heading) return { section: '', refs: [] };
+  const bodyStart = heading.index + heading[0].length;
+  const nextHeading = /^##[ \t]+/m.exec(text.slice(bodyStart));
+  const section = text.slice(heading.index, nextHeading ? bodyStart + nextHeading.index : text.length);
+  return { section, refs: [...new Set([...section.matchAll(/#(\d+)/g)].map(m => Number(m[1])))] };
+}
 function issuesOkay(root, injected, lastTag) {
   const text = fs.existsSync(path.join(root, 'CHANGELOG.md')) ? fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8') : '';
-  const block = ((text.match(/^##\s+\[Unreleased\][\s\S]*?(?=^##\s+|$)/mi) || [''])[0]);
-  const refs = [...block.matchAll(/#(\d+)/g)].map(m => Number(m[1]));
+  const refs = unreleasedSection(text).refs;
   const range = lastTag ? lastTag + '..HEAD' : 'HEAD';
   const logProbe = gitProbe(root, ['log', '--format=%s %b', range]);
   if (!logProbe.ok) return { ok: false, reason: 'release_history_unavailable', exitCode: logProbe.exitCode };
@@ -116,8 +123,7 @@ function runVerify(root, o) {
   const issueCheck = issuesOkay(root, o.injectedIssues, tags.tags[0] || null); if (!issueCheck.ok) return refuse(o.jsonMode, issueCheck.reason, { exit_code: issueCheck.exitCode });
   const missing = issueCheck.missing;
   const changelog = fs.existsSync(path.join(root, 'CHANGELOG.md')) ? fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8') : '';
-  const block = ((changelog.match(/^##\s+\[Unreleased\][\s\S]*?(?=^##\s+|$)/mi) || [''])[0]);
-  const changelogRefs = [...new Set([...block.matchAll(/#(\d+)/g)].map(m => Number(m[1])))];
+  const changelogRefs = unreleasedSection(changelog).refs;
   const logProbe = gitProbe(root, ['log', '--format=%s %b', tags.tags[0] ? tags.tags[0] + '..HEAD' : 'HEAD']);
   const log = logProbe.ok ? logProbe.value : '';
   const closed = [...new Set([...(o.injectedIssues || []), ...[...log.matchAll(/#(\d+)/g)].map(m => Number(m[1]))])];

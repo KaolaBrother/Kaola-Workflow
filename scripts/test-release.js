@@ -31,6 +31,14 @@ function prepare(d, extra) { return run(d, ['--prepare', '--version', '5.1.0', '
 function commitCandidate(d) { git(d, 'add', ...surface); git(d, 'commit', '-qm', 'release: 5.1.0'); return git(d, 'rev-parse', 'HEAD'); }
 function chain(d, patch) { const obj = { headSha: git(d, 'rev-parse', 'HEAD'), workTreeHash: 'clean', chains: ['claude', 'codex', 'gitlab', 'gitea'].map(name => ({ name, exitCode: 0, accepted_red: false })), ...(patch || {}) }; fs.mkdirSync(path.join(d, '.cache'), { recursive: true }); fs.writeFileSync(path.join(d, '.cache/chain-receipt.json'), JSON.stringify(obj)); return obj; }
 
+function verifyChangelog(changelog, closed) {
+  const d = fixture();
+  fs.writeFileSync(path.join(d, 'CHANGELOG.md'), changelog);
+  const result = run(d, ['--verify', '--json', '--issues-closed', closed || '']);
+  fs.rmSync(d, { recursive: true, force: true });
+  return result;
+}
+
 // RED control preserved as an executable historical proof: the old implementation
 // tagged unchanged HEAD after writing bumps. The committed baseline is 5.0.0.
 {
@@ -132,6 +140,21 @@ for (const [want, setup, version] of cases) { const d = fixture(); prepare(d); c
   const ph = run(d, ['--push']); assert(ph.stdout.includes('Push the local tag to the remote:') && ph.stdout.includes('<forge-cli> release create'), '--push preserves full human guidance');
   fs.rmSync(d, { recursive: true, force: true });
   const src = fs.readFileSync(SCRIPT, 'utf8'); assert(!/\b(gh|glab|tea)\s+(release|repo|api|auth|pr)\b/.test(src), 'no forge-specific CLI token');
+}
+
+// [Unreleased] references are structurally bounded and stable in source order.
+{
+  const eof = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- First (#703) and duplicate (#701)\n- Second (#702), then (#701)\n', '701,702,703');
+  assert(eof.status === 0 && JSON.stringify(eof.json.changelog_refs) === '[703,701,702]', 'Unreleased reaches EOF and deduplicates exact refs in source order; got ' + JSON.stringify(eof.json));
+
+  const nextHeading = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Current (#711)\n\n## [5.0.0] - 2026-01-01\n\n- Historical (#799)\n', '711');
+  assert(nextHeading.status === 0 && JSON.stringify(nextHeading.json.changelog_refs) === '[711]', 'Unreleased terminates at the next real level-2 heading; got ' + JSON.stringify(nextHeading.json));
+
+  const headingLike = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Current (#721)\n### Detail (#722)\nText with ## heading-like (#723)\n', '721,722,723');
+  assert(headingLike.status === 0 && JSON.stringify(headingLike.json.changelog_refs) === '[721,722,723]', 'heading-like text that is not a real level-2 heading does not truncate Unreleased; got ' + JSON.stringify(headingLike.json));
+
+  const missing = verifyChangelog('# Changelog\n\n## [Unreleased]\n\n- Missing (#731)\n', '661');
+  assert(missing.status !== 0 && missing.json && missing.json.reason === 'changelog_incomplete' && JSON.stringify(missing.json.missing) === '[731]', 'unknown Unreleased ref refuses changelog_incomplete with exact missing refs; got ' + JSON.stringify(missing.json));
 }
 
 // Repair RED controls: receipt coherence, baseline allowlist, rollback, bootstrap.
