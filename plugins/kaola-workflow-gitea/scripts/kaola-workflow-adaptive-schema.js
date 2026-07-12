@@ -1136,12 +1136,12 @@ function resolveMainRoot(root) {
 function locateSection(content, heading) {
   const lines = String(content).split('\n');
   const prefix = '## ' + heading;
-  const fenceRe = /^(`{3,}|~{3,})(.*)$/;
+  const fenceRe = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
   let inFence = false, fam = '', fenceLen = 0;
   let off = 0, start = -1, headingLine = -1;
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
-    const fm = ln.trim().match(fenceRe);
+    const fm = ln.match(fenceRe);
     if (fm) {
       const f = fm[1][0], len = fm[1].length;
       if (!inFence) { inFence = true; fam = f; fenceLen = len; }
@@ -1157,7 +1157,7 @@ function locateSection(content, heading) {
   let next = -1;
   for (let i = headingLine + 1; i < lines.length; i++) {
     const ln = lines[i];
-    const fm = ln.trim().match(fenceRe);
+    const fm = ln.match(fenceRe);
     if (fm) {
       const f = fm[1][0], len = fm[1].length;
       if (!inFence) { inFence = true; fam = f; fenceLen = len; }

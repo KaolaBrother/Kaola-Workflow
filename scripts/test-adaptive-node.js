@@ -601,6 +601,120 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T6d (#670): CommonMark fence-detection PARITY — locateSection's fence regex/closer check ran on
+// `ln.trim()`, so a 4-SPACE-INDENTED backtick run (an INDENTED CODE BLOCK per CommonMark, never a
+// fence) was misread as a fence CLOSER (trim strips the indent). The oracle classifier
+// (markdownFenceTransition, kaola-workflow-classifier.js) anchors `^\s{0,3}(...)` on the RAW line —
+// 4+ spaces disqualifies a fence marker. Reproduces: a 0-indent opener, a 4-space-indented pseudo-
+// closer (closes the fence early under the buggy `ln.trim()` code, keeps it open under the fixed
+// raw-line anchor), a fenced `## Node Ledger` DECOY, a genuine 0-indent closer, then the GENUINE
+// (truly unfenced) `## Node Ledger`. Driven END-TO-END through open -> resume, proving no
+// plan_hash_mismatch wedge.
+// ---------------------------------------------------------------------------
+{
+  // Direct unit check: locateSection must agree with classifier.sectionBodyState (ground truth) on
+  // which `## Node Ledger` is genuine, once the RAW-LINE fence anchor is applied.
+  const classifier = require('./kaola-workflow-classifier');
+  const decoyPlan670 = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Briefs', '',
+    '### impl-core',
+    'Illustrative fenced example (NOT the real ledger):',
+    '```',
+    'Some brief text with an indented pseudo-closer below (NOT a real fence marker —',
+    '4-space indent makes it an indented code block per CommonMark):',
+    '    ```',
+    '## Node Ledger',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '```',
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '',
+  ].join('\n') + '\n';
+
+  const loc670 = locateSection(decoyPlan670, 'Node Ledger');
+  assert(loc670.start >= 0, 'T6d: locateSection finds a ledger despite the indented pseudo-closer');
+  const sliced670 = decoyPlan670.slice(loc670.start, loc670.next >= 0 ? loc670.next : decoyPlan670.length);
+  const groundTruth670 = classifier.sectionBodyState(decoyPlan670, 'Node Ledger');
+  assert(groundTruth670.status === 'present', 'T6d: classifier ground truth finds the genuine ledger present');
+  assert(sliced670.replace(/^\n## Node Ledger\n/, '') === groundTruth670.body,
+    'T6d: locateSection agrees with classifier.sectionBodyState on the genuine (not decoy) ledger body, got ' + JSON.stringify(sliced670));
+  assert(sliced670.includes('| review | pending |') && sliced670.includes('| finalize | pending |'),
+    'T6d: sanity — the genuine slice does carry the real review/finalize rows, got ' + JSON.stringify(sliced670));
+  assert(!sliced670.includes('Illustrative fenced example'),
+    'T6d: the located section excludes the fenced ## Node Briefs decoy block entirely (a 4-space-indented line no longer closes the fence early)');
+
+  // End-to-end: real subprocess open -> resume proves no hash-mismatch wedge (the write must land
+  // on the GENUINE ledger, outside the hash-covered ## Node Briefs body).
+  const { execFileSync: exec670, spawnSync: spawn670 } = require('child_process');
+  const planValidator670 = require('./kaola-workflow-plan-validator');
+  const NODE_CLI_670 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_670 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const hash670 = planValidator670.computePlanHash(decoyPlan670);
+  const frozen670 = '<!-- plan_hash: ' + hash670 + ' -->\n' + decoyPlan670;
+
+  const repoRoot670 = fs.mkdtempSync(path.join(os.tmpdir(), 'd670-fence-'));
+  const project670 = 'test-project';
+  const projDir670 = path.join(repoRoot670, 'kaola-workflow', project670);
+  fs.mkdirSync(path.join(projDir670, '.cache'), { recursive: true });
+  const planPath670 = path.join(projDir670, 'workflow-plan.md');
+  fs.writeFileSync(planPath670, frozen670);
+  fs.writeFileSync(path.join(projDir670, 'workflow-state.md'), '# State\n');
+  const g670 = (a) => exec670('git', ['-C', repoRoot670, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  g670(['init']); g670(['config', 'user.email', 'kw@test']); g670(['config', 'user.name', 'kw']); g670(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repoRoot670, '.gitignore'), '.kw/\n');
+  g670(['add', '-A']); g670(['commit', '-m', 'init']);
+
+  const run670 = (args) => {
+    let out = {}; let exit = 0;
+    try { out = JSON.parse(exec670('node', args, { cwd: repoRoot670, encoding: 'utf8' }).trim().split('\n').pop()); }
+    catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+    return { out, exit };
+  };
+
+  // Control: the hand-frozen plan resume-checks clean before anything opens.
+  let r670 = run670([VALIDATOR_670, planPath670, '--resume-check', '--json']);
+  assert(r670.exit === 0 && r670.out.ok === true, 'T6d: control — the frozen decoy plan passes --resume-check, got ' + JSON.stringify(r670.out));
+
+  // open: the real open-next opens impl-core (the sole ready node); this splices the ledger.
+  r670 = run670([NODE_CLI_670, 'open-next', '--project', project670, '--json']);
+  assert(r670.out.result === 'ok' && r670.out.opened && r670.out.opened.id === 'impl-core',
+    'T6d: open-next opens impl-core, got ' + JSON.stringify(r670.out));
+
+  // resume: the write must land OUTSIDE the hash-covered ## Node Briefs body, so --resume-check
+  // still passes (the bug's mis-targeted splice into ## Node Briefs would break the plan_hash).
+  r670 = run670([VALIDATOR_670, planPath670, '--resume-check', '--json']);
+  assert(r670.exit === 0 && r670.out.ok === true,
+    'T6d: after open, --resume-check still passes — no plan_hash_mismatch wedge from a mis-targeted splice, got ' + JSON.stringify(r670.out));
+
+  // The GENUINE ledger reflects the transition; the decoy inside ## Node Briefs is never the target.
+  const finalContent670 = fs.readFileSync(planPath670, 'utf8');
+  const finalLedger670 = classifier.sectionBody(finalContent670, 'Node Ledger');
+  assert(finalLedger670.includes('| impl-core | in_progress |'),
+    'T6d: the genuine ledger shows impl-core in_progress, got ' + JSON.stringify(finalLedger670));
+  // The decoy embedded ledger row inside ## Node Briefs stays byte-intact (still shows pending).
+  assert(finalContent670.includes('Illustrative fenced example') && /```[\s\S]*## Node Ledger[\s\S]*\| impl-core \| pending \|[\s\S]*```/.test(finalContent670),
+    'T6d: the fenced ## Node Briefs decoy block is left byte-intact (still shows pending), got ' + JSON.stringify(finalContent670));
+
+  try { fs.rmSync(repoRoot670, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // T6b (#354, AC3): `## Nodes` row-walk PARITY — validator.parseNodes(content) and
 // classifier.readPlanNodes(path) must extract the same id/role/depends_on set (both delegate
 // section-slicing to the fence-aware classifier.sectionBody; this pins the row-walk against drift).
