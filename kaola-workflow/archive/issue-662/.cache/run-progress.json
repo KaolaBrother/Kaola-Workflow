@@ -1,0 +1,24 @@
+{
+  "plan_hash": "be942c92da4b5986b9b400558b3c6c973f89e205b827d0e2d5e190f1e0199c81",
+  "updated_at": "2026-07-12T03:18:43.361Z",
+  "op": "close-and-open-next",
+  "node_ledger": [
+    {
+      "id": "fix-unreleased-parser",
+      "role": "tdd-guide",
+      "status": "complete"
+    },
+    {
+      "id": "review-release-parser",
+      "role": "code-reviewer",
+      "status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "complete"
+    }
+  ],
+  "in_progress": [],
+  "all_done": true
+}
