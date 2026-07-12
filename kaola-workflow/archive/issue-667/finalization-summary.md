@@ -34,7 +34,7 @@ Public-behavior change (overlap-guard verdict direction) → recorded in CHANGEL
 The value call was resolved by the operator (fail-closed) and implemented + reviewed; #667 acceptance criteria pass. No deferred defects or user-decision items remain. Safe to close.
 
 ## Commit And Push
-[pending final Git gate; final hash reported after push]
+Implementation: 6cbacd7b (fix + tests + CHANGELOG + D-667-01). Archive + roadmap closure: 5b3a4143 `chore: archive issue-667` (cmdFinalize atomic commit; renamed kaola-workflow/issue-667/ → kaola-workflow/archive/issue-667/, removed kaola-workflow/.roadmap/issue-667.md, regenerated ROADMAP.md). Branch clean after archive; push/sink-merge owned by the main session.
 
 ## GitHub Issue
 #667 — to be closed by sink-merge after merge to main.
@@ -43,7 +43,7 @@ The value call was resolved by the operator (fail-closed) and implemented + revi
 Updated: issue-667.md removed at closure; ROADMAP.md regenerated.
 
 ## Archive
-pending (cmdFinalize)
+Archived to kaola-workflow/archive/issue-667/ (commit 5b3a4143, chore: archive issue-667).
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -52,8 +52,8 @@ pending (cmdFinalize)
 | documentation docking | invoked | this summary (DOCKED) | |
 | final-validation fix executors | N/A | | no validation failures; clean first-pass review |
 | roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status/upstream check | final gate runs after this file is committed |
+| archive completed folder | invoked | commit 5b3a4143 (kaola-workflow/archive/issue-667/) | |
+| final commit and push | invoked | commit 5b3a4143; branch clean, nothing further to commit | push/sink-merge owned by main session |
 
 ## Status
 ARCHIVED AFTER FINAL GIT GATE
