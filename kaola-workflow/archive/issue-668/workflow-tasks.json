@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "8eab4d3c445d48ed2dd0941c40a3dcfb046bcc34387a744ccf9385290dfa6a5d",
+  "tasks": [
+    {
+      "id": "n1-fix-assertion",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-release-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-gitlab-leak",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T12:32:57.437Z"
+}

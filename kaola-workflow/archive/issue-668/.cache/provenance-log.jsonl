@@ -1,0 +1,10 @@
+{"timestamp":"2026-07-12T12:11:04.407Z","event":"open","nodeId":"n1-fix-assertion","nonce":"7d81297cad4c","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:11:04.511Z","event":"open","nodeId":"n3-gitlab-leak","nonce":"4ea6c89e47b8","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:11:04.616Z","event":"open","nodeId":"n2-release-docs","nonce":"b0c7df3e5d4b","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:23:59.571Z","event":"close","nodeId":"n1-fix-assertion","nonce":"7d81297cad4c","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:24:00.511Z","event":"close","nodeId":"n3-gitlab-leak","nonce":"4ea6c89e47b8","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:24:02.027Z","event":"close","nodeId":"n2-release-docs","nonce":"b0c7df3e5d4b","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:24:16.531Z","event":"open","nodeId":"n4-review","nonce":"e70bc3bac308","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:32:19.798Z","event":"close","nodeId":"n4-review","nonce":"e70bc3bac308","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:32:20.198Z","event":"open","nodeId":"n5-finalize","nonce":"08f50e469896","by":"adaptive-node"}
+{"timestamp":"2026-07-12T12:32:57.330Z","event":"close","nodeId":"n5-finalize","nonce":"08f50e469896","by":"adaptive-node"}
