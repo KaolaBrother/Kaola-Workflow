@@ -8372,8 +8372,14 @@ function rtHarness(initialFiles, opts) {
     '#434-b: downstream review baseline removed or tracked in deletedDownstreamBaselines');
   assert(!removedBaselines.includes('review.md'),
     '#434-b: downstream reviewer evidence is retained as the repair brief');
-  assert(reviewerEvidence.includes('verdict: fail') && reviewerEvidence.includes('findings_blocking: 1'),
-    '#434-b: retained reviewer evidence keeps its blocking body for the reopened writer');
+  // The singleton code-reviewer's review.md is retained (not purged) — contrast the #664 fan-out
+  // case, which purges group receipts INTO result.evidenceRemoved. Asserted against the OBSERVED
+  // return value of runRepairNode (not the local reviewerEvidence literal it was read from), so
+  // this fails if a future change ever starts purging the singleton reviewer's evidence.
+  assert(result.evidenceRemoved && !result.evidenceRemoved.includes('review.md'),
+    '#434-b: result.evidenceRemoved must NOT include review.md — the singleton reviewer evidence' +
+    ' (with its blocking verdict: fail / findings_blocking: 1 body) is retained as the repair' +
+    ' brief for the reopened writer, got evidenceRemoved=' + JSON.stringify(result.evidenceRemoved));
   // commit-node must NOT be shelled (no re-snapshot)
   assert(!shelled.includes('kaola-workflow-commit-node.js'),
     '#434-b: commit-node NOT shelled for repair-node (original baseline reused, no re-snapshot)');
