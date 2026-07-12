@@ -40,6 +40,9 @@ const { parseGoal } = require('./kaola-gitea-workflow-plan-validator');
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE !== '0';
+// #666: cap unbounded-in-repo-size git execFileSync calls at 64 MB — Node's execFileSync default
+// maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -369,11 +372,11 @@ function exportWorktreeDiff(root, wtPath, issueNumber) {
     fs.mkdirSync(exportsDir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const untrackedOut = execFileSync('git', ['-C', wtPath, 'ls-files', '-z', '--others', '--exclude-standard'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
     const untrackedFiles = untrackedOut.split('\x00').filter(Boolean);
     const patchPath = path.join(exportsDir, 'issue-' + issueNumber + '-' + ts + '.patch');
     const diff = execFileSync('git', ['-C', wtPath, 'diff', 'HEAD'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
     fs.writeFileSync(patchPath, diff);
     const artifacts = [patchPath];
     if (untrackedFiles.length > 0) {

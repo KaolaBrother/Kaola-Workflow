@@ -40,6 +40,9 @@ const REMOTE_TIMEOUT_MS = (() => {
   const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
   return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
 })();
+// #666: cap unbounded-in-repo-size git execFileSync calls at 64 MB — Node's execFileSync default
+// maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -257,7 +260,7 @@ function assertBranchHasNonWorkflowChanges(mainRoot, branch, defBranch) {
   let files;
   try {
     const out = execFileSync('git', ['-C', mainRoot, 'diff', '--name-only', base + '...' + branch],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     files = out.split('\n').map(s => s.trim()).filter(Boolean);
   } catch (_) { return; } // diff failed → do not fabricate a refusal
   if (files.length === 0) return; // no changes at all — leave to the existing up-to-date / FF logic

@@ -116,6 +116,10 @@ const crypto = require('crypto');
 // transient-infra signature (TLS/handshake/ETIMEDOUT/ECONNRESET/429/EAI_AGAIN/5xx, classifier ~:853).
 const { isTransientFetchStderr } = require('./kaola-workflow-classifier.js');
 
+// #666: cap unbounded-in-repo-size git spawnSync/execFileSync calls at 64 MB — Node's default
+// maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
 const KNOWN_CHAINS = ['claude', 'codex', 'gitlab', 'gitea'];
 
 const CHAIN_COMMANDS = {
@@ -362,7 +366,7 @@ function getHeadSha(cwd) {
 
 // Compute a hash of `git diff HEAD` output. Returns 'clean' when the diff is empty.
 function getWorkTreeHash(cwd) {
-  const r = spawnSync('git', ['diff', 'HEAD'], { cwd, encoding: 'utf8' });
+  const r = spawnSync('git', ['diff', 'HEAD'], { cwd, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const diff = (r.status === 0 && !r.error) ? (r.stdout || '') : '';
   if (diff.length === 0) return 'clean';
   return crypto.createHash('sha256').update(diff).digest('hex');
