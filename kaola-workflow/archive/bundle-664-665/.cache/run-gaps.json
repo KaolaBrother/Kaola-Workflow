@@ -1,0 +1,35 @@
+{
+  "project": "bundle-664-665",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-review",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-adversary",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:locate-section-indent",
+      "sample": "R3/A2 locateSection ln.trim indent divergence vs classifier 0-3-space anchor; indented-fence decoy risk; pre-existing post-#665 residual; filed #670",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:task-mirror-eisdir",
+      "sample": "R4 task-mirror refreshTaskMirror EISDIR fail-open prints a raw stack trace on a workflow-tasks.json dir collision; pre-existing; filed #671",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:legacy-purge-fs-seam",
+      "sample": "A3 legacy-purge fs-seam caller-sensitivity; no reachable production caller omits readdir after the R1 dispatch fix; harness-only seam",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:cosmetic-test-label",
+      "sample": "R5 cosmetic 665-labelled tests covering the 664 repair fix; non-blocking bookkeeping nit",
+      "count": 1
+    }
+  ]
+}

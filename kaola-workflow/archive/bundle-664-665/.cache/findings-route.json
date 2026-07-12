@@ -1,0 +1,37 @@
+[
+  {
+    "finding_id": "id=A1 scope=in_scope action=fix status=resolved severity=high fix_role=tdd-guide rationale=unreleasedSection fence regex anchored ^\\s{0,3} on the RAW line across all 4 release copies; indented-fence counterexample refuses changelog_incomplete both e2e directions; 17-case attack matrix + 5000-doc fuzz show exact markdownFenceTransition parity; trim-mutant reconstruction proves fixtures discriminate; new tests at test-release.js:186-190",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=A2 scope=pre_existing action=follow_up status=deferred severity=low fix_role=none rationale=locateSection (adaptive-schema.js:1144/1160) still uses ln.trim() vs classifier 0-3-space anchor",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=A3 scope=pre_existing action=follow_up status=deferred severity=low fix_role=none rationale=legacy-purge fs-seam caller-sensitivity",
+    "file": "harness-level readdir omission skips purge, but every production dispatch (adaptive-node.js:6946/6966) now passes readdir (R1 resolved), so no reachable caller hits the seam",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=pre_existing action=follow_up status=deferred severity=low fix_role=none rationale=#437-lane EISDIR stderr traces in test-adaptive-node fixture; suite exits 0; not introduced by this diff",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R5 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=cosmetic \"#665 R1/R2\" labels on the two repair tests covering the #664 fix; non-blocking",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  }
+]
