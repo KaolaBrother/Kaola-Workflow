@@ -1,0 +1,10 @@
+{
+  "project": "issue-672",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:sweep-consumer-residuals",
+      "sample": "worktree-cleanup existsSync stat-failure fail-open plus untested stale-sweep unprobeable-keep both outside the porcelain-probe family",
+      "count": 1
+    }
+  ]
+}

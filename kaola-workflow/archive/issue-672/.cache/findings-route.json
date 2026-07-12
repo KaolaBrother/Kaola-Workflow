@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=A1 scope=out_of_scope action=follow_up status=deferred severity=low fix_role=none rationale=live-proved n2's R1 gap: with ONLY the cmdStaleWorktreeCleanup unprobeable-guard removed on a scratch copy, the shipped test-claim-hardening.js still PASSES (173 assertions) while a live ENOBUFS-shaped stale sweep physically DELETES the worktree AND its branch",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=A2 scope=out_of_scope action=follow_up status=deferred severity=low fix_role=none rationale=existsSync-fail-false boundary (stat failure, NOT the porcelain probe #672 fixed): an EXISTING stale worktree behind a chmod-000 parent classifies 'missing' -> registration pruned + reported removed + its fully-MERGED branch ref deleted. NO content deletion possible on this path (dir+files survive; 'missing' never calls removeWorktree; removeBranchIfMerged refuses unmerged work)",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

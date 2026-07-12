@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "43d3ad6449ce6b65da9d504165b97deb8ceba9482503dff471eece80692bb8f5",
+  "tasks": [
+    {
+      "id": "n1-fix",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-adversary",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T17:59:58.810Z"
+}
