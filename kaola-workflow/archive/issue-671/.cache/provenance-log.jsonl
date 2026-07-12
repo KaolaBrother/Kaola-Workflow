@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-12T15:51:18.132Z","event":"open","nodeId":"n1-mirror-guard","nonce":"e95390a29996","by":"adaptive-node"}
+{"timestamp":"2026-07-12T16:15:26.767Z","event":"close","nodeId":"n1-mirror-guard","nonce":"e95390a29996","by":"adaptive-node"}
+{"timestamp":"2026-07-12T16:15:27.158Z","event":"open","nodeId":"n2-review","nonce":"3d66e4812b23","by":"adaptive-node"}
+{"timestamp":"2026-07-12T16:24:13.299Z","event":"close","nodeId":"n2-review","nonce":"3d66e4812b23","by":"adaptive-node"}
+{"timestamp":"2026-07-12T16:24:13.685Z","event":"open","nodeId":"n3-finalize","nonce":"b466f3d5314c","by":"adaptive-node"}
+{"timestamp":"2026-07-12T16:25:37.186Z","event":"close","nodeId":"n3-finalize","nonce":"b466f3d5314c","by":"adaptive-node"}

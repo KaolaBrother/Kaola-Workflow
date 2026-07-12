@@ -1,0 +1,24 @@
+{
+  "source_plan_hash": "3240aa696abfa7aafeb39fee1e97fa9452101027fde7d7c33d2b21eb80eafba9",
+  "tasks": [
+    {
+      "id": "n1-mirror-guard",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-12T16:25:37.297Z"
+}
