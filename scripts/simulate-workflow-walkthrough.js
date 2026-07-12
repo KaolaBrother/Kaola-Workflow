@@ -5439,12 +5439,15 @@ function testClassifierFastScopeFenceInFencePathRed() {
   console.log('testClassifierFastScopeFenceInFencePathRed: PASSED');
 }
 
-// issue #215 regression: an unterminated fence in a section BEFORE ## Scope must NOT
-// prevent sectionBody from finding ## Scope. The buggy locator (with fence-tracking)
-// stayed inFence=true after an unclosed fence in ## Status, skipped ## Scope, returned
-// '' → no Write Set → verdict green (wrong). The fix removes fence-tracking from the
-// locator loop so ## Scope is always found regardless of prior fence state.
-// FAILING-FIRST: against the buggy #215 locator this test returns green, not red.
+// issue #215 / #667: an unterminated fence in a section BEFORE ## Scope leaves the
+// claimed fast project's ## Scope STRUCTURALLY UNREADABLE (sectionBodyState returns
+// {status:'ambiguous'}). The #660 fail-open fix collapsed that into sectionBody's bare
+// '' ("no write set") at the scanClaimedOverlap consumer, so a genuinely-overlapping
+// candidate silently classified green. #667 restores fail-closed at the CONSUMER: an
+// ambiguous claimed Scope is INDETERMINATE, not "no write set", so the candidate must
+// classify red regardless of whether its own declared paths textually match the
+// unreadable section. FAILING-FIRST: against the pre-#667 fail-open consumer this test
+// asserts green, not red.
 function testClassifierFastScopePreSectionUnclosedFenceRed() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fence-pre-'));
   try {
@@ -5459,12 +5462,36 @@ function testClassifierFastScopePreSectionUnclosedFenceRed() {
     );
     plantRoadmapIssue(tmp, 215, 'body: candidate also touches scripts/kaola-workflow-claim.js');
     const result = runClassifierOffline(tmp, 215);
-    assert(result.verdict === 'green',
-      'malformed markdown with an unclosed fence before ## Scope must not manufacture an authoritative section; expected green, got ' + result.verdict);
+    assert(result.verdict === 'red',
+      'a claimed fast project with a structurally-ambiguous ## Scope (unclosed fence) must fail closed to red; expected red, got ' + result.verdict);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   console.log('testClassifierFastScopePreSectionUnclosedFenceRed: PASSED');
+}
+
+// issue #667 companion: a claimed fast project with a genuinely ABSENT ## Scope (no
+// heading at all — status 'absent', not 'ambiguous') must NOT be manufactured into an
+// overlap. Only structurally-ambiguous/unparseable Scope sections fail closed; an
+// honestly-empty declaration stays today's behavior (no overlap from nothing).
+function testClassifierFastScopeAbsentNotManufacturedOverlap() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-scope-absent-'));
+  try {
+    plantActiveFolder(tmp, 'fast-scope-absent', 216, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-scope-absent', 'fast-summary.md'),
+      ['# Fast Summary: fast-scope-absent', '',
+        '## Status', 'IN_PROGRESS', '',
+        '## Plan', 'stuff'].join('\n')
+    );
+    plantRoadmapIssue(tmp, 217, 'body: candidate touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 217);
+    assert(result.verdict === 'green',
+      'a claimed fast project with a genuinely absent ## Scope must not manufacture an overlap; expected green, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeAbsentNotManufacturedOverlap: PASSED');
 }
 
 function testClassifierSectionBodyFenceIdentity() {
@@ -15048,6 +15075,7 @@ function buildRegistry() {
   add('testClassifierFastScopeFenceMixedMarkerRed',       testClassifierFastScopeFenceMixedMarkerRed);
   add('testClassifierFastScopeFenceInFencePathRed',       testClassifierFastScopeFenceInFencePathRed);
   add('testClassifierFastScopePreSectionUnclosedFenceRed', testClassifierFastScopePreSectionUnclosedFenceRed);
+  add('testClassifierFastScopeAbsentNotManufacturedOverlap', testClassifierFastScopeAbsentNotManufacturedOverlap);
   add('testClassifierDependsOnGate',                      testClassifierDependsOnGate);
   add('testProbeIssueStateOffline',                       testProbeIssueStateOffline);
   add('testProbeIssueStateNullIssue',                     testProbeIssueStateNullIssue);

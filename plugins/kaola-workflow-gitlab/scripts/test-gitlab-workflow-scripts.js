@@ -935,10 +935,12 @@ withClassifierForge({
   assert.strictEqual(result.verdict, 'red');
 });
 
-// issue #215 regression: an unterminated fence in a section BEFORE ## Scope must NOT
-// prevent sectionBody from finding ## Scope. The buggy locator stayed inFence=true after
-// an unclosed fence in ## Status, skipped ## Scope, returned '' → no Write Set → green.
-// FAILING-FIRST against the buggy locator.
+// issue #215 / #667: an unterminated fence in a section BEFORE ## Scope leaves the claimed
+// fast project's ## Scope structurally ambiguous (sectionBodyState status 'ambiguous'). The
+// #660 fail-open fix collapsed that into sectionBody's bare '' at the scanClaimedOverlap
+// consumer, so an overlapping candidate silently classified green. #667 restores fail-closed
+// at the consumer: an ambiguous claimed Scope is INDETERMINATE, so the candidate classifies
+// red. FAILING-FIRST against the pre-#667 fail-open consumer this asserted green.
 withClassifierForge({
   discoverProject() { return { project_id: 1 }; },
   listIssueNotes() { return []; },
@@ -951,7 +953,7 @@ withClassifierForge({
   fs.writeFileSync(path.join(dir, 'fast-summary.md'),
     '# Fast Summary: fast-fence-pre-project\n\n## Status\n```sh\nIN_PROGRESS\n## Scope\n- Write Set: plugins/kaola-workflow-gitlab/scripts/claimed.js\n- Acceptance: node x\n');
   const result = classifier.classifyIssue(35, root);
-  assert.strictEqual(result.verdict, 'green');
+  assert.strictEqual(result.verdict, 'red');
 });
 
 withForge({

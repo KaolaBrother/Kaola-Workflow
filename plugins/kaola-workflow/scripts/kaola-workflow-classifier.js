@@ -550,6 +550,10 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
   let hasCuratedRootOverlap = false;
   let curatedRootOverlapName = '';
   let anyClaimedAtPhaseLeTwo = false;
+  // #667: a claimed fast project whose ## Scope is structurally AMBIGUOUS (unclosed fence or
+  // duplicate heading) has an unreadable write set — see the sectionBodyState branch below.
+  let hasAmbiguousScope = false;
+  let ambiguousScopeProject = '';
 
   for (const folder of activeFolders) {
     if (!isSafeName(folder.project)) continue;
@@ -566,7 +570,20 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     // section only, so its in-flight files are visible to overlap detection (parity
     // with full projects). Scope-only avoids false overlaps from command/test-output
     // path tokens in the Implementation Evidence / Review sections.
-    try { fastScope = sectionBody(fs.readFileSync(path.join(projectDir, 'fast-summary.md'), 'utf8'), 'Scope'); } catch (_) {}
+    // #667: read via sectionBodyState (not sectionBody) so an AMBIGUOUS Scope (unclosed
+    // fence / duplicate heading) is distinguishable from a genuinely ABSENT one. sectionBody
+    // collapses both to '' ("no write set"), which fails OPEN: a claimed project's write set
+    // becomes invisible to overlap detection instead of INDETERMINATE. Fail closed here —
+    // ambiguous flags this folder as hasAmbiguousScope (forcing red below); absent is
+    // UNCHANGED (fastScope stays '', no overlap manufactured from nothing).
+    try {
+      const fastState = sectionBodyState(fs.readFileSync(path.join(projectDir, 'fast-summary.md'), 'utf8'), 'Scope');
+      if (fastState.status === 'ambiguous') {
+        if (!hasAmbiguousScope) { hasAmbiguousScope = true; ambiguousScopeProject = folder.project; }
+      } else if (fastState.status === 'present') {
+        fastScope = fastState.body;
+      }
+    } catch (_) {}
     // issue #227 / #238: an adaptive project declares its write set STRUCTURALLY in
     // workflow-plan.md's `## Nodes` table. Fold those parsed paths in DIRECTLY (they
     // natively carry root-level + dot-leading + slash paths) instead of stringifying
@@ -629,7 +646,7 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     }
   }
 
-  return { hasExactOverlap, exactOverlapPath, hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo };
+  return { hasExactOverlap, exactOverlapPath, hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo, hasAmbiguousScope, ambiguousScopeProject };
 }
 
 function checkDependsOn(depN) {
@@ -666,7 +683,16 @@ function classify(issue, activeFolders, root) {
     hasDirectOverlap, directOverlapArea,
     hasSharedInfraOverlap, sharedOverlapArea,
     hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo,
+    hasAmbiguousScope, ambiguousScopeProject,
   } = scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root);
+
+  // #667: a claimed fast project's fast-summary.md ## Scope that is structurally ambiguous
+  // (unclosed fence / duplicate heading) makes its write set INDETERMINATE — fail closed
+  // before any of the (necessarily incomplete) overlap checks below, rather than silently
+  // treating the unreadable section as "no write set" (the #660 fail-open regression).
+  if (hasAmbiguousScope) {
+    return { verdict: 'red', reasoning: 'claimed project "' + ambiguousScopeProject + '" fast-summary.md has a structurally ambiguous/unparseable ## Scope section (unclosed fence or duplicate heading); write set indeterminate; conservative red' };
+  }
 
   if (hasExactOverlap) {
     return { verdict: 'red', reasoning: 'exact file path overlap at "' + exactOverlapPath + '" with a claimed project' };
