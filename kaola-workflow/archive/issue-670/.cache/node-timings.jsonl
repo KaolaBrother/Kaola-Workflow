@@ -1,0 +1,8 @@
+{"node":"n1-fence-parity","event":"opened","ts":"2026-07-12T14:45:17.116Z"}
+{"node":"n1-fence-parity","event":"closed","ts":"2026-07-12T14:58:22.984Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-12T14:58:23.364Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-12T15:09:40.275Z"}
+{"node":"n3-adversary","event":"opened","ts":"2026-07-12T15:09:40.660Z"}
+{"node":"n3-adversary","event":"closed","ts":"2026-07-12T15:26:16.444Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-12T15:26:16.829Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-12T15:29:13.710Z"}

@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=fix status=deferred severity=medium fix_role=none rationale=heading-MATCH divergence (not fence-anchor): locateSection startsWith(prefix) selects \"## Node Ledger Extra\" while classifier anchored ^##\\s+H\\s*$ selects the genuine \"## Node Ledger\"",
+    "file": "reader/writer can splice a different (unfenced) heading region than the hash-side oracle reads; reverse direction also live (\"##  H\" two-space, \"##\\t\" terminator, line-0 heading: reader misses what classifier finds). Pre-existing, outside #670 fence-anchor AC. NEEDS a follow-up issue filed.",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=CRLF plans: \"```\\r\" fails the shared raw-line fenceRe in BOTH parsers (dot/$ exclude \\r) so both are identically fence-blind on CRLF",
+    "file": "parity HOLDS (pre-fix trim() made locateSection alone see the fence, i.e. #670 REMOVED a CRLF divergence); residual is only the documented ambiguous-vs-first-hit status channel (schema.js:1130-1135) on the resulting duplicate unfenced headings. Document with the R1 follow-up.",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "project": "issue-670",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:locatesection-heading-match-divergence",
+      "sample": "locateSection selects headings via startsWith prefix while the classifier uses an anchored heading regex so a runtime reader can pick a heading the hash-covering classifier does not",
+      "count": 1
+    }
+  ]
+}
