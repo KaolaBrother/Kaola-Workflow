@@ -5988,7 +5988,9 @@ function rtHarness(initialFiles, opts) {
     // writing the same file) — those tests serial-degrade BEFORE the group barrier, so a freeze failure
     // there is non-fatal (handled in the test).
     try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
-    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    // #674a: optional consumer-repo convention — gitignore `.cache/` too (a common pattern for cache
+    // dirs). Absent ⇒ byte-identical '.kw/\n' fixture every other caller relies on.
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), opts.gitignoreCache ? '.kw/\n.cache/\n' : '.kw/\n');
     g(['add', '-A']);
     g(['commit', '-m', 'init']);
     return { repoRoot, project, planPath, projDir, cacheDir, g };
@@ -6314,6 +6316,74 @@ function rtHarness(initialFiles, opts) {
     assert(r.closed === openedId, 'D437-CLOSE-NODE-SERIAL: serial close returns closed id');
     assert(ledgerStatus(planPath, openedId) === 'complete', 'D437-CLOSE-NODE-SERIAL: node complete via serial per-node barrier');
     cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #674a (D-674-01 a): a consumer repo that gitignores `.cache/` (a common convention) must NOT abort
+  //   the lane-group co-open. The seeded member evidence stubs are explicitly enumerated paths (never a
+  //   glob), so `git add -f` on them is safe and required — an unforced add refuses on a gitignored path
+  //   (stub_commit_failed), silently serial-degrading the authored parallel-write antichain.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ gitignoreCache: true });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 2,
+      '#674a: gitignored .cache/ must not abort the co-open (the stub add needs -f), got ' + JSON.stringify({ result: r.result, reason: r.reason, opened: r.opened }));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+      '#674a: the lane group [A,B] still forms despite gitignored .cache/, got ' + JSON.stringify(r.laneGroup));
+    const rs = readRS(cacheDir);
+    assert(rs && rs.state === 'open' && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.A && rs.lane_group.legs.B,
+      '#674a: running set reaches open state with both legs provisioned, got ' + JSON.stringify(rs));
+    assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress',
+      '#674a: both A and B in_progress (co-opened, not serial-degraded)');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #674b (D-674-01 b): a group-form abort AFTER the member-baseline loop has recorded a baseline for
+  //   every `toOpen` member must transactionally DROP those baselines — otherwise a LATER serial open of
+  //   the SAME member id REUSES the stale pre-abort snapshot (--record-base's crash-resume idempotent
+  //   reuse), so the member's close barrier misattributes a SIBLING's uncommitted write (landed in the
+  //   shared, leg-less tree between the abort and the re-open) as an out-of-declared-set overflow.
+  //   Repro (mirrors the vrpai-cli#948 incident): force B's leg provisioning to fail — pre-checkout B's
+  //   deterministic leg branch in a decoy worktree so provisionLeg's branch-reuse
+  //   `git worktree add -- <legPath> <legBranch>` collides with git's "already checked out" refusal —
+  //   AFTER the member loop has already recorded baselines for BOTH A and B at a clean pre-run tree T0.
+  //   Land B's declared file (a sibling diff) into the shared tree, THEN open A serially (doc-index
+  //   tie-break picks A first — see makeLaneRepo's A-before-B declaration order), THEN close A.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, project, cacheDir, g } = makeLaneRepo();
+    const legBranchB = 'kw/legs/' + project + '/B';
+    // Decoy worktree lives OUTSIDE repoRoot (a sibling tmpdir) so it never shows up as untracked dirt in
+    // the parent tree's `git status` (parentCarriesProductionDirt would otherwise misclassify the fixture
+    // itself as dirty and route open-ready down the unrelated R2b legless-degrade path).
+    const decoyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-674-decoy-'));
+    fs.rmdirSync(decoyPath);
+    g(['worktree', 'add', '-b', legBranchB, '--', decoyPath, 'HEAD']);
+
+    const aborted = runNode(repoRoot, ['open-ready', '--project', project, '--json'], DEFAULT);
+    assert(aborted.result === 'refuse' && aborted.reason === 'leg_provision_failed',
+      '#674b: forced group-form abort (leg_provision_failed) AFTER the member-baseline loop recorded both baselines, got ' + JSON.stringify(aborted));
+    // The fix drops the baseline TRANSACTIONALLY as part of the same abort — so by the time this call
+    // RETURNS, A's stale baseline must already be gone (not left stranded for a later serial reuse).
+    assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-A')),
+      '#674b: A\'s member baseline is DROPPED as part of the group-form abort (never left stranded for a later stale reuse)');
+
+    // A sibling's diff lands in the SAME shared (leg-less) worktree after the aborted co-open.
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// sibling diff landed after the aborted co-open\n');
+
+    const opened = runNode(repoRoot, ['open-ready', '--project', project, '--json'], SERIAL);
+    assert(opened.result === 'ok' && opened.opened && opened.opened[0] && opened.opened[0].id === 'A',
+      '#674b: the later serial open picks A first, got ' + JSON.stringify(opened));
+
+    writeEvidence(cacheDir, 'A');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane serial write\n');
+    const closed = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', project, '--json'], SERIAL);
+    assert(closed.result === 'ok' && closed.closed === 'A',
+      '#674b: A\'s close must NOT false-positive write_set_overflow on the sibling\'s (B\'s) landed diff — the reused stale baseline must not misattribute it, got ' + JSON.stringify(closed));
+    cleanup(repoRoot);
+    try { fs.rmSync(decoyPath, { recursive: true, force: true }); } catch (_) {}
   }
 
   // -------------------------------------------------------------------------

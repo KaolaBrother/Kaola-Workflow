@@ -5189,12 +5189,32 @@ function runOpenReady(opts) {
     // INVISIBLE workflow-state band, so this commit is invisible to every barrier/group-barrier diff
     // (never trips write_set_overflow). Fail-closed: a commit failure here refuses the open rather than
     // silently leaving the pre-#633 collision risk in place.
+    // #674 (D-674-01 b): a group-form abort AFTER this loop has recorded ≥1 member baseline must
+    // transactionally DROP every baseline it recorded — otherwise a LATER open (a serial degrade, or a
+    // retried group open) of the SAME member id REUSES the stale pre-abort snapshot (--record-base's
+    // crash-resume idempotent reuse, see #385 above), so that member's eventual close barrier
+    // misattributes ANY sibling's uncommitted writes that later land in the shared (leg-less) tree as
+    // this member's own overflow (the vrpai-cli#948 incident). --drop-base is legal here (never
+    // drop_base_window_open): the ledger flip to in_progress happens in Phase 2, strictly AFTER this
+    // whole leg-provisioning block, so every member is still `pending` at every abort point below.
+    // dropRecordedBaselines is called with the id list this loop has actually recorded a baseline for at
+    // the moment of each abort (a prefix of `toOpen` for the mid-loop baseline_failed itself; the FULL
+    // `toOpen` set for every abort strictly after this loop completes — stub_commit_failed and both
+    // leg_provision_failed variants below).
+    const recordedBaselineIds = [];
+    const dropRecordedBaselines = (ids) => {
+      for (const id of ids) shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+    };
     const seededRelPaths = [];
     for (const n of toOpen) {
       const memberBaseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
       if (!(memberBaseline.exitCode === 0 && memberBaseline.result === 'ok')) {
+        // #674 (D-674-01 b): n.id itself never recorded a baseline (memberBaseline refused), so drop only
+        // the PRIOR members this loop already recorded one for.
+        dropRecordedBaselines(recordedBaselineIds);
         return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: memberBaseline };
       }
+      recordedBaselineIds.push(n.id);
       const memberNonce = (memberBaseline.recordBase && memberBaseline.recordBase.base)
         ? String(memberBaseline.recordBase.base).slice(0, 12) : null;
       const seeded = seedEvidenceFile(planPath, n.id, memberNonce, n.role, false);
@@ -5205,10 +5225,17 @@ function runOpenReady(opts) {
     }
     if (seededRelPaths.length) {
       try {
-        execFileSync('git', ['add', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
+        // #674 (D-674-01 a): -f — a consumer repo may gitignore `.cache/` (a common convention for cache
+        // dirs). The stub paths are explicitly enumerated above by seedEvidenceFile (never a glob), so
+        // forcing the add is safe and REQUIRED: the stub MUST be tracked so every leg (branched off the
+        // commit below) inherits it (see the #633 comment above) — an unforced add on a gitignored path
+        // refuses instead, silently serial-degrading the authored parallel-write antichain.
+        execFileSync('git', ['add', '-f', '--', ...seededRelPaths], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
         execFileSync('git', ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow',
           'commit', '-m', 'kw-stub: ' + groupForm.group_id, '--allow-empty'], { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
       } catch (e) {
+        // #674 (D-674-01 b): the loop above recorded a baseline for EVERY toOpen member — drop them all.
+        dropRecordedBaselines(recordedBaselineIds);
         return { result: 'refuse', reason: 'stub_commit_failed', group_id: groupForm.group_id, detail: String((e && e.message) || e) };
       }
     }
@@ -5218,6 +5245,8 @@ function runOpenReady(opts) {
     let baseRev = null;
     try { baseRev = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { baseRev = null; }
     if (!baseRev) {
+      // #674 (D-674-01 b): same drop — every member baseline was recorded above.
+      dropRecordedBaselines(recordedBaselineIds);
       return { result: 'refuse', reason: 'leg_provision_failed', detail: 'could not resolve base HEAD for leg provisioning' };
     }
     legs = {};
@@ -5229,6 +5258,9 @@ function runOpenReady(opts) {
       if (!r.ok) {
         // Clean rollback: teardown every leg already provisioned this call (no partial leg set).
         for (const p of provisionedThisCall) teardownLeg(mainRoot, p.legPath, p.legBranch);
+        // #674 (D-674-01 b): drop every member baseline recorded above (this abort fires after the
+        // member loop AND the stub commit both completed, so all of `toOpen` has a recorded baseline).
+        dropRecordedBaselines(recordedBaselineIds);
         return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: r.error || null, detail: r.detail || null };
       }
       // #463 Slice 3: ANCHOR the leg's branch-point under a ref so the close-side --leg-barrier resolves
@@ -5241,6 +5273,8 @@ function runOpenReady(opts) {
       if (!anchored) {
         teardownLeg(mainRoot, legPath, legBranch);
         for (const p of provisionedThisCall) teardownLeg(mainRoot, p.legPath, p.legBranch);
+        // #674 (D-674-01 b): same drop as the sibling leg_provision_failed above.
+        dropRecordedBaselines(recordedBaselineIds);
         return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: 'leg_base_anchor_failed', detail: 'could not anchor leg-base ref ' + legBaseRef(project, n.id) };
       }
       provisionedThisCall.push({ legPath, legBranch });
