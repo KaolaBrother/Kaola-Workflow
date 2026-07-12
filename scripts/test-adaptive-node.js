@@ -7955,6 +7955,40 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #671-MIRROR-CRASH-OBSERVABILITY: the durable task-mirror CLI must fail-CLOSED at the SUBPROCESS
+  //   boundary with a concise ONE-LINE machine-readable refusal — never an uncaught-exception stack
+  //   trace. The #588 fixtures above already force workflow-tasks.json to collide with a DIRECTORY
+  //   (EISDIR on fs.writeFileSync) and pin the CALLER's fail-OPEN (ledger still advances); THIS test
+  //   pins the CHILD's OWN crash surface directly (single-hop CLI invocation, no adaptive-node relay):
+  //   no raw stack-trace noise, a typed `mirror_write_failed` envelope on stdout. RED (pre-fix): the
+  //   CLI has no try/catch around writeFileSync, so Node's uncaught-exception handler dumps a
+  //   multi-line stack trace to stderr and stdout is EMPTY (no envelope) — every assertion below
+  //   fails against the current code.
+  // -------------------------------------------------------------------------
+  {
+    const { spawnSync } = require('child_process');
+    const taskMirrorPath = path.join(__dirname, 'kaola-workflow-task-mirror.js');
+    const { repoRoot, projDir } = makeLaneRepo();
+    fs.mkdirSync(path.join(projDir, 'workflow-tasks.json'), { recursive: true });
+    const res = spawnSync(process.execPath, [taskMirrorPath, '--project', 'test-project', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    const combined = (res.stdout || '') + (res.stderr || '');
+    assert(res.status !== 0, '#671-MIRROR-CRASH-OBSERVABILITY: EISDIR collision still exits non-zero, got ' + JSON.stringify(res.status));
+    assert(!/at Object\.<anonymous>/.test(combined) && !/at Module\./.test(combined),
+      '#671-MIRROR-CRASH-OBSERVABILITY: NO raw stack-trace frames (at Object.<anonymous> / at Module.) in output, got ' + JSON.stringify(combined));
+    assert(!/Error: EISDIR[^\n]*\n\s+at /.test(combined),
+      '#671-MIRROR-CRASH-OBSERVABILITY: NO bare "Error: EISDIR" immediately followed by a stack frame, got ' + JSON.stringify(combined));
+    const stdoutLines = (res.stdout || '').trim().split('\n').filter(Boolean);
+    assert(stdoutLines.length === 1, '#671-MIRROR-CRASH-OBSERVABILITY: stdout carries exactly ONE line (the machine envelope), got ' + JSON.stringify(res.stdout));
+    let envelope = null;
+    try { envelope = JSON.parse(stdoutLines[0] || ''); } catch (_) {}
+    assert(envelope && envelope.result === 'refuse' && envelope.reason === 'mirror_write_failed',
+      '#671-MIRROR-CRASH-OBSERVABILITY: stdout is a concise machine-readable {result:refuse, reason:mirror_write_failed} envelope, got ' + JSON.stringify({ stdout: res.stdout, envelope }));
+    assert(envelope && typeof envelope.message === 'string' && envelope.message.indexOf('\n') === -1,
+      '#671-MIRROR-CRASH-OBSERVABILITY: envelope message is a single line (no embedded stack dump), got ' + JSON.stringify(envelope && envelope.message));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
   // #615-MIXED-SERIAL-LANE-DEGRADE (D-615-01) — the mixed serial-write + lane-group deadlock, dissolved
   //   at the SCHEDULING boundary. A plan whose DAG is two SERIAL write nodes (sA→sB) followed by a
   //   disjoint PARALLEL write frontier (pA,pB) is the canonical trap: the serial siblings run first and,

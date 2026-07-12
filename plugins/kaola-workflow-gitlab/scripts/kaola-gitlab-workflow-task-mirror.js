@@ -140,7 +140,19 @@ if (require.main === module) {
   }
 
   const json = JSON.stringify(result, null, 2) + '\n';
-  fs.writeFileSync(outPath, json, 'utf8');
+  // #671: writeFileSync can throw (e.g. EISDIR when outPath collides with a directory). A mirror
+  // write must never crash with a raw multi-line stack trace — that noise can mask a real failure
+  // in a long log AND leaves a production collision silently unobservable beyond stderr noise. Fail
+  // CLOSED here with the SAME concise one-line machine envelope every other refusal in this CLI
+  // uses; the mirror write itself stays fail-OPEN end-to-end because refreshTaskMirror (the caller,
+  // in kaola-workflow-adaptive-node.js) already swallows this non-zero exit and reads the `reason`
+  // off stdout (the #355 mechanism) — a mirror-write failure still never blocks a run.
+  try {
+    fs.writeFileSync(outPath, json, 'utf8');
+  } catch (e) {
+    emit(refuse('mirror_write_failed', { status: 'mirror_write_failed', path: outPath, message: e.message }));
+    process.exit(1);
+  }
 
   if (jsonFlag) {
     process.stdout.write(json);
