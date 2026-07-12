@@ -460,7 +460,10 @@ receipt alone authorizes a ref mutation.
   ordered file hashes, `candidateSha:null`, and `authorized:false`. A crash resumes only missing
   steps for the same binding. An identical completed prepare is idempotent; another version,
   duplicate/foreign rows, inconsistent fields, or changed prepared bytes refuses. Git fact probes
-  fail closed before preparation mutation.
+  fail closed before preparation mutation. Starting the next release's `--prepare` requires first
+  deleting `.cache/release-receipt.jsonl` (and the stale `.cache/chain-receipt.json`), because a
+  completed `prepared` row for a prior version makes the next `--prepare` refuse
+  `stale_release_receipt`.
 - **Release-only candidate.** Commit exactly the eight allowlisted paths as exactly one commit from
   the recorded baseline. Renames, deletions, additions, unrelated files, empty/extra commits, or a
   committed receipt refuse `candidate_surface_mismatch`.

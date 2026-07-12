@@ -671,7 +671,10 @@ changelog refusal adds `missing`, resume dirt may add `changed`, and `--cut` ret
 version/binding and release-receipt errors, candidate provenance/content errors, chain receipt errors,
 tag conflict/publication-receipt errors, and typed Git-probe or tag create/rollback errors. Consumers
 must branch on `reason`, not human text. See `docs/conventions.md` § Release cutting for the exact
-state and mutation boundaries.
+state and mutation boundaries. A completed `prepared` row for a prior version in
+`.cache/release-receipt.jsonl` makes `--prepare` for the next version refuse
+`reason:"stale_release_receipt"`; delete `.cache/release-receipt.jsonl` (and the stale
+`.cache/chain-receipt.json`) before starting the next release's `--prepare`.
 
 This CLI does not replace the plan-independent `kaola-workflow-plan-validator.js --release-check`
 contract above. The executable order is prepare → release-only commit → offline full-chain receipt →
