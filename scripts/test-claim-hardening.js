@@ -1882,6 +1882,172 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// --- #677 (A1): cmdStaleWorktreeCleanup unprobeable-keep — mirrors the #672 regression, which
+// drove only cmdLegacyWorktreeCleanup. cmdStaleWorktreeCleanup keeps the SAME 'unprobeable' state
+// unconditionally, but had NO shipped unit test of its own. Same fault shape as #672 (a real
+// registered worktree whose git-link is corrupted, so the path EXISTS but `git status --porcelain`
+// throws), driven through stale-worktree-cleanup with a gh mock reporting the issue CLOSED (the
+// collectStale trigger). --execute must SURVIVE it (worktree + branch intact) and report
+// skipped_unprobeable, never removed / deleted_branch.
+{
+  const { execFileSync: execFS677a, spawnSync: spawnS677a } = require('child_process');
+  const CLAIM677a = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_677a = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g677a = (cwd, args) => execFS677a('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_677a });
+
+  const tmp677a = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-677a-repo-')));
+  const kwRoot677a = tmp677a + '.kw';
+  const binDir677a = path.join(tmp677a, 'bin');
+  const issueNum677a = 96773;
+  try {
+    g677a(tmp677a, ['init', '-b', 'main']);
+    g677a(tmp677a, ['config', 'user.email', 't@t.com']);
+    g677a(tmp677a, ['config', 'user.name', 'Test']);
+    g677a(tmp677a, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp677a, 'README.md'), 'fixture\n');
+    g677a(tmp677a, ['add', 'README.md']);
+    g677a(tmp677a, ['commit', '-m', 'init']);
+
+    const wtPath677a = path.join(kwRoot677a, 'issue-' + issueNum677a);
+    fs.mkdirSync(kwRoot677a, { recursive: true });
+    g677a(tmp677a, ['worktree', 'add', '-b', 'workflow/issue-' + issueNum677a, '--', wtPath677a, 'HEAD']);
+    fs.writeFileSync(path.join(wtPath677a, 'real-work.txt'), 'content that must never be swept on a probe failure\n');
+    // Corrupt the worktree's git-link so ANY `git -C wtPath677a ...` invocation throws — the
+    // probe-error path (distinct from a genuinely-missing worktree).
+    fs.writeFileSync(path.join(wtPath677a, '.git'), 'gitdir: /nonexistent/broken/gitdir/path\n');
+
+    // gh mock: the issue reports CLOSED (the collectStale trigger for stale-worktree-cleanup).
+    fs.mkdirSync(binDir677a, { recursive: true });
+    fs.writeFileSync(path.join(binDir677a, 'gh.js'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view " + issueNum677a + "')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+      "process.stdout.write('[\\n'); process.exit(0);"
+    ].join('\n'));
+
+    const result = spawnS677a(process.execPath, [CLAIM677a, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp677a,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir677a, 'gh.js')
+      })
+    });
+    let out677a = {};
+    try { out677a = JSON.parse(result.stdout); } catch (_) {}
+
+    assert(out677a.dry_run === false, '#677a: dry_run must be false, got ' + JSON.stringify(out677a) + '\nstderr: ' + result.stderr);
+
+    // The critical assertion: an unprobeable worktree must SURVIVE — a probe failure must never
+    // feed a destructive removal, mirrored for the stale-worktree-cleanup consumer.
+    assert(fs.existsSync(wtPath677a) && fs.existsSync(path.join(wtPath677a, 'real-work.txt')),
+      '#677a: an unprobeable stale worktree must SURVIVE cleanup --execute (probe failure != removable), got cleanup output: ' + JSON.stringify(out677a));
+    assert(!(Array.isArray(out677a.removed) && out677a.removed.includes(wtPath677a)),
+      '#677a: removed must NOT include the unprobeable worktree, got ' + JSON.stringify(out677a.removed));
+    assert(Array.isArray(out677a.skipped_unprobeable) && out677a.skipped_unprobeable.includes(wtPath677a),
+      '#677a: skipped_unprobeable must record the unprobeable worktree (fail LOUD, not silent), got ' + JSON.stringify(out677a));
+    assert(!(Array.isArray(out677a.deleted_branch) && out677a.deleted_branch.includes('workflow/issue-' + issueNum677a)),
+      '#677a: deleted_branch must NOT include the branch of an unprobeable worktree, got ' + JSON.stringify(out677a.deleted_branch));
+    let branchSurvived677a = false;
+    try {
+      execFS677a('git', ['-C', tmp677a, 'rev-parse', '--verify', '--quiet', 'refs/heads/workflow/issue-' + issueNum677a], { stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV_677a });
+      branchSurvived677a = true;
+    } catch (_) {}
+    assert(branchSurvived677a,
+      '#677a: the branch of an unprobeable worktree must SURVIVE cleanup --execute, got cleanup output: ' + JSON.stringify(out677a));
+  } finally {
+    fs.rmSync(tmp677a, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot677a, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// --- #677 (A2): worktreeDirtyState's `!fs.existsSync(wtPath)` gate fails OPEN when the path's
+// PARENT directory is unreadable (chmod 000) — fs.existsSync returns false for a path that
+// genuinely EXISTS whenever traversal into an ancestor directory is blocked, so a real, present
+// legacy worktree gets misclassified 'missing' and fed straight to the destructive
+// prune-and-report-removed branch instead of the 'unprobeable' keep state a probe fault deserves.
+// Root ignores the permission bit entirely, so this regression is inert (and MUST be skipped) when
+// run as root. The chmod is always restored in a finally, even on assertion failure.
+{
+  const isRoot677b = typeof process.getuid === 'function' && process.getuid() === 0;
+  if (isRoot677b) {
+    console.error('SKIP #677b: running as root — chmod 000 is not enforced, skipping the parent-unreadable regression');
+  } else {
+    const { execFileSync: execFS677b, spawnSync: spawnS677b } = require('child_process');
+    const CLAIM677b = path.join(__dirname, 'kaola-workflow-claim.js');
+    const GIT_ENV_677b = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+    });
+    const g677b = (cwd, args) => execFS677b('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_677b });
+
+    const tmp677b = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-677b-repo-')));
+    const legacyContainer677b = path.dirname(tmp677b) + '/' + path.basename(tmp677b) + '.kw';
+    const wtPath677b = path.join(legacyContainer677b, 'issue-96774');
+    let chmodApplied677b = false;
+    try {
+      g677b(tmp677b, ['init', '-b', 'main']);
+      g677b(tmp677b, ['config', 'user.email', 't@t.com']);
+      g677b(tmp677b, ['config', 'user.name', 'Test']);
+      g677b(tmp677b, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(tmp677b, 'README.md'), 'fixture\n');
+      g677b(tmp677b, ['add', 'README.md']);
+      g677b(tmp677b, ['commit', '-m', 'init']);
+
+      fs.mkdirSync(legacyContainer677b, { recursive: true });
+      g677b(tmp677b, ['worktree', 'add', '-b', 'workflow/issue-96774', '--', wtPath677b, 'HEAD']);
+      fs.writeFileSync(path.join(wtPath677b, 'real-work.txt'), 'content that must never be swept on a parent-unreadable probe fault\n');
+
+      // Block traversal into the legacy container so `fs.existsSync(wtPath677b)` reads false even
+      // though the worktree genuinely exists on disk — the exact A2 shape (never a genuinely-
+      // missing path).
+      fs.chmodSync(legacyContainer677b, 0o000);
+      chmodApplied677b = true;
+      assert(fs.existsSync(wtPath677b) === false,
+        '#677b fixture: existsSync must read false under a chmod-000 parent (test setup precondition), got true');
+
+      const result = spawnS677b(process.execPath, [CLAIM677b, 'legacy-worktree-cleanup', '--execute'], {
+        cwd: tmp677b,
+        encoding: 'utf8',
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+      });
+      let out677b = {};
+      try { out677b = JSON.parse(result.stdout); } catch (_) {}
+
+      assert(out677b.dry_run === false, '#677b: dry_run must be false, got ' + JSON.stringify(out677b) + '\nstderr: ' + result.stderr);
+
+      // The critical assertion: a worktree whose PARENT was merely unreadable must be classified
+      // 'unprobeable' (KEPT), never 'missing' (pruned-and-removed).
+      assert(!(Array.isArray(out677b.removed) && out677b.removed.includes(wtPath677b)),
+        '#677b: removed must NOT include a worktree whose parent dir was merely unreadable (existsSync false != missing), got ' + JSON.stringify(out677b.removed));
+      assert(Array.isArray(out677b.skipped_unprobeable) && out677b.skipped_unprobeable.includes(wtPath677b),
+        '#677b: skipped_unprobeable must record the parent-unreadable worktree (fail LOUD, not silent), got ' + JSON.stringify(out677b));
+
+      // Restore access and confirm git's own registration + content survived (never pruned).
+      fs.chmodSync(legacyContainer677b, 0o755);
+      chmodApplied677b = false;
+      let stillRegistered677b = false;
+      try {
+        const list = execFS677b('git', ['worktree', 'list', '--porcelain'], { cwd: tmp677b, encoding: 'utf8' });
+        stillRegistered677b = list.includes(wtPath677b);
+      } catch (_) {}
+      assert(stillRegistered677b,
+        '#677b: the worktree registration must SURVIVE cleanup --execute (kept, not pruned) once access is restored');
+      assert(fs.existsSync(path.join(wtPath677b, 'real-work.txt')),
+        '#677b: the worktree content must SURVIVE cleanup --execute once access is restored');
+    } finally {
+      if (chmodApplied677b) { try { fs.chmodSync(legacyContainer677b, 0o755); } catch (_) {} }
+      fs.rmSync(tmp677b, { recursive: true, force: true });
+      try { fs.rmSync(legacyContainer677b, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+}
+
 // --- #631: cmdVerifySink must PREFER published_head over rebase-stale branch_head --------------
 // cmdVerifySink resolved implRef from `receipt.branch_head` only — stamped once at receipt init,
 // BEFORE a mid-flight rebase rewrites the branch. A clean sink whose branch was rebased false-

@@ -188,6 +188,36 @@ function runScan(opts) {
 
   const cacheDir = path.join(projectDir, '.cache');
 
+  // #679: the #675 refusal above only fires when the ACTIVE project dir is GONE. When a LIVE project
+  // dir AND a same-named leftover archive (or any other foreign project) BOTH exist, and the scan
+  // runs with an explicit --output aimed at a run-gaps.json that lives OUTSIDE this project's own
+  // .cache/, the live scan's result would otherwise silently clobber that foreign/archived
+  // run-gaps.json — destroying a prior cycle's durable gap evidence. Refuse whenever the resolved
+  // --output path is itself a run-gaps.json file, is not this project's own default artifact path,
+  // and already exists (i.e. the write would actually overwrite something). A brand-new or
+  // differently-named --output path is unaffected — nothing there to clobber.
+  const ownArtifactPath = path.join(cacheDir, 'run-gaps.json');
+  if (
+    path.basename(outputPath) === 'run-gaps.json' &&
+    path.resolve(outputPath) !== path.resolve(ownArtifactPath) &&
+    fs.existsSync(outputPath)
+  ) {
+    const detail = '--output ' + outputPath + ' points at a run-gaps.json outside this project\'s own ' +
+      '.cache/ (' + ownArtifactPath + ') and already exists there; refusing to overwrite a foreign ' +
+      'or archived cycle\'s gap evidence. Re-run without --output (writes to the project\'s own ' +
+      '.cache/) or point --output at a path that is not an existing run-gaps.json.';
+    if (asJson) {
+      process.stdout.write(JSON.stringify({
+        result: 'refuse',
+        reason: 'foreign_run_gaps_output',
+        detail,
+      }) + '\n');
+    } else {
+      process.stderr.write('gap-sweep: ' + detail + '\n');
+    }
+    return 1;
+  }
+
   // Scope guard: only read from this project's .cache.
   const raw = [
     ...scanProvenance(cacheDir),

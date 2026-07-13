@@ -552,6 +552,82 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T14 (#679): a LIVE project dir AND a same-named leftover archive BOTH exist (the #675 refusal
+// above only fires when the active dir is GONE — !existsSync(projectDir) && existsSync(archiveDir)
+// is false here since projectDir exists). An explicit --output aimed at the archive's run-gaps.json
+// must still refuse — never silently clobber a prior cycle's durable archived gap evidence — and the
+// archived artifact must come out byte-for-byte unchanged.
+// ---------------------------------------------------------------------------
+const fix14 = makeFixture('proj-t14');
+try {
+  // Live project has its own distinct defect signal (differs from the archived content below, so a
+  // clobber would be detectable even by content, not just by refusal).
+  writeProvenance(fix14.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+
+  const archiveCacheDir14 = path.join(fix14.root, 'kaola-workflow', 'archive', 'proj-t14', '.cache');
+  fs.mkdirSync(archiveCacheDir14, { recursive: true });
+  const archivedRunGapsPath14 = path.join(archiveCacheDir14, 'run-gaps.json');
+  const archivedArtifact14 = {
+    project: 'proj-t14',
+    sweptClasses: [{ reasonClass: 'in_run_repair', sample: 'archived-n9', count: 5 }],
+  };
+  const archivedRaw14 = JSON.stringify(archivedArtifact14, null, 2) + '\n';
+  fs.writeFileSync(archivedRunGapsPath14, archivedRaw14, 'utf8');
+
+  const r14 = run(fix14.root, [
+    '--project', 'proj-t14', '--json',
+    '--output', path.join('kaola-workflow', 'archive', 'proj-t14', '.cache', 'run-gaps.json'),
+  ]);
+
+  assert(r14.exitCode !== 0, 'T14: scanner exits non-zero when --output targets a foreign/archived run-gaps.json while the live project dir exists');
+  assert(r14.jsonOut !== null, 'T14: JSON output parseable on refuse');
+  if (r14.jsonOut) {
+    assert(r14.jsonOut.result === 'refuse', 'T14: result = refuse, got ' + r14.jsonOut.result);
+    assert(typeof r14.jsonOut.reason === 'string' && r14.jsonOut.reason.length > 0, 'T14: reason is a non-empty typed string, got ' + r14.jsonOut.reason);
+    assert(r14.jsonOut.reason !== 'project_archived', 'T14: reason must NOT be project_archived (the live project dir exists — this is the residual #679 edge, distinct from #675)');
+  }
+  const afterRaw14 = fs.readFileSync(archivedRunGapsPath14, 'utf8');
+  assert(afterRaw14 === archivedRaw14, 'T14: the archived run-gaps.json must be byte-for-byte unchanged after the refused scan');
+} finally {
+  try { fs.rmSync(fix14.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T15 (#679): a normal explicit --output pointed at the SCANNED project's own .cache/run-gaps.json
+// (no foreign/archived path involved) must still write as before — the #679 guard must not
+// over-refuse a legitimate in-project --output.
+// ---------------------------------------------------------------------------
+const fix15 = makeFixture('proj-t15');
+try {
+  writeProvenance(fix15.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+
+  const ownOutputPath15 = path.join('kaola-workflow', 'proj-t15', '.cache', 'run-gaps.json');
+  const r15 = run(fix15.root, [
+    '--project', 'proj-t15', '--json',
+    '--output', ownOutputPath15,
+  ]);
+
+  assert(r15.exitCode === 0, 'T15: scanner exits 0 with an explicit --output at the project\'s own .cache/run-gaps.json, got ' + r15.exitCode);
+  assert(r15.jsonOut !== null, 'T15: JSON output parseable');
+  if (r15.jsonOut) {
+    assert(r15.jsonOut.result === 'swept', 'T15: result = swept, got ' + r15.jsonOut.result);
+    assert(Array.isArray(r15.jsonOut.sweptClasses) && r15.jsonOut.sweptClasses.length === 1, 'T15: exactly 1 swept class written');
+  }
+  const writtenPath15 = path.join(fix15.root, ownOutputPath15);
+  assert(fs.existsSync(writtenPath15), 'T15: artifact written at the project\'s own explicit --output path');
+} finally {
+  try { fs.rmSync(fix15.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

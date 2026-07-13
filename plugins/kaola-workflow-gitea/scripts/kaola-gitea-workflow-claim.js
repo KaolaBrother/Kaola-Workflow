@@ -489,7 +489,19 @@ function extractIssueNumber(branch) {
 }
 
 function worktreeDirtyState(wtPath) {
-  if (!fs.existsSync(wtPath)) return 'missing';
+  // #677 fail-closed: `fs.existsSync(wtPath)` returns false not only for a genuinely-absent path
+  // but ALSO for a path that EXISTS whose PARENT directory is unreadable (chmod 000 / EACCES on an
+  // ancestor) — the bare existsSync gate misrouted that second, genuinely-present case to
+  // 'missing', feeding it straight to the same destructive prune-and-report-removed branch #672
+  // already fail-closed for probe failures. Stat the path itself inside try/catch instead: only a
+  // genuinely-absent path (ENOENT) is 'missing'; any other stat failure (EACCES/ENOTDIR on a
+  // parent, ...) means the path could not be PROVEN absent, so it gets the existing 'unprobeable'
+  // keep state — never a new state; both destructive consumers already keep it unconditionally.
+  try {
+    fs.lstatSync(wtPath);
+  } catch (err) {
+    return (err && err.code === 'ENOENT') ? 'missing' : 'unprobeable';
+  }
   try {
     const out = execFileSync('git', ['-C', wtPath, 'status', '--porcelain'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
