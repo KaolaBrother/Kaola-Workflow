@@ -6588,6 +6588,59 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #678 R1 (the #674 symmetric gap): a group-form abort AFTER the SHARED GROUP baseline was recorded
+  //   (once, before the member loop — see the `if (groupForm)` block that precedes the leg-provisioning
+  //   loop) must ALSO drop that group baseline on every one of the 5 abort paths — #674 only dropped the
+  //   per-MEMBER baselines (dropRecordedBaselines), leaving the group's OWN `barrier-base-lg-<...>` file
+  //   + `refs/kaola-workflow/barrier/<project>/lg-<...>` ref stranded. Repro: reuse #674b's exact
+  //   leg_provision_failed forcing (decoy worktree pre-checks-out B's deterministic leg branch so
+  //   provisionLeg's `git worktree add` collides), which fires strictly AFTER the group baseline was
+  //   already recorded. Assert the group baseline file+ref are BOTH gone post-abort, and that the ledger
+  //   + lane_group descriptor (no running-set.json was ever written — the abort fires before Phase 1)
+  //   stay untouched.
+  // -------------------------------------------------------------------------
+  function groupBaselineFile678(cacheDir, groupId) {
+    return path.join(cacheDir, 'barrier-base-' + groupId.replace(/[^A-Za-z0-9_-]/g, '_'));
+  }
+  function groupBaselineRefExists678(repoRoot, project, groupId) {
+    try {
+      execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet',
+        'refs/kaola-workflow/barrier/' + project + '/' + groupId.replace(/[^A-Za-z0-9_-]/g, '_') + '^{commit}'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+      return true;
+    } catch (_) { return false; }
+  }
+  {
+    const { repoRoot, project, planPath, cacheDir, g } = makeLaneRepo();
+    const groupId = 'lg-A-B';
+    const legBranchB = 'kw/legs/' + project + '/B';
+    const decoyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-678-decoy-'));
+    fs.rmdirSync(decoyPath);
+    g(['worktree', 'add', '-b', legBranchB, '--', decoyPath, 'HEAD']);
+
+    const aborted = runNode(repoRoot, ['open-ready', '--project', project, '--json'], DEFAULT);
+    assert(aborted.result === 'refuse' && aborted.reason === 'leg_provision_failed',
+      '#678: forced group-form abort (leg_provision_failed) AFTER the group baseline was recorded, got ' + JSON.stringify(aborted));
+
+    // Pre-fix: both of these survive the abort (the strand this issue fixes). Post-fix: both are gone.
+    assert(!fs.existsSync(groupBaselineFile678(cacheDir, groupId)),
+      '#678: the SHARED GROUP baseline FILE must be dropped as part of the group-form abort (was stranded pre-fix), got file exists=' + fs.existsSync(groupBaselineFile678(cacheDir, groupId)));
+    assert(!groupBaselineRefExists678(repoRoot, project, groupId),
+      '#678: the SHARED GROUP baseline REF must be dropped as part of the group-form abort (was stranded pre-fix), got ref exists=' + groupBaselineRefExists678(repoRoot, project, groupId));
+
+    // The ledger + lane_group descriptor stay untouched: the abort fires inside the leg-provisioning
+    // block, strictly BEFORE Phase 1 writes running-set.json, so no running set / lane_group is ever
+    // created and both A and B are still `pending`.
+    assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending',
+      '#678: A and B stay pending on the aborted group-form open (ledger untouched), got ' + JSON.stringify({ A: ledgerStatus(planPath, 'A'), B: ledgerStatus(planPath, 'B') }));
+    assert(!readRS(cacheDir),
+      '#678: no running-set.json (and therefore no lane_group descriptor) was ever written by the aborted open, got ' + JSON.stringify(readRS(cacheDir)));
+
+    cleanup(repoRoot);
+    try { fs.rmSync(decoyPath, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // -------------------------------------------------------------------------
   // D437-MUTATION-GUARD-NOT-VACUOUS (#542 kill-switch): the kill-switch is NOT vacuous —
   //   KAOLA_PARALLEL_WRITES=0 must SUPPRESS the default-on co-open and fall back to the serial single
   //   open (one write, no group), so the second write never enters a group. Without an effective

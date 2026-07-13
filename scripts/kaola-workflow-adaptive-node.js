@@ -5205,6 +5205,19 @@ function runOpenReady(opts) {
     const dropRecordedBaselines = (ids) => {
       for (const id of ids) shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
     };
+    // #678 (R1, the #674 symmetric gap): dropRecordedBaselines above only drops the per-MEMBER
+    // baselines; the SHARED GROUP baseline (recorded once, BEFORE this loop, into groupBaselineSha —
+    // see the `if (groupForm)` block above) is a SEPARATE --record-base keyed by groupForm.group_id and
+    // must be dropped on the SAME 5 aborts below, or it strands (`barrier-base-lg-<...>` file +
+    // `refs/kaola-workflow/barrier/<project>/lg-<...>` ref both survive the abort). Guarded on
+    // groupBaselineSha so a call before the group baseline was ever recorded is a no-op (never reachable
+    // here in practice — this whole block only runs after the `if (groupForm)` record-or-refuse gate
+    // above already succeeded — but the guard keeps the helper safe if that invariant ever shifts).
+    // Reuses the SAME idempotent --drop-base mechanism the close/merge path uses for the group baseline
+    // (a group_id has no ledger row, so the #424 window-lock never blocks it).
+    const dropGroupBaseline = () => {
+      if (groupBaselineSha) shell(validatorPath, [planPath, '--drop-base', '--node-id', groupForm.group_id, '--json']);
+    };
     const seededRelPaths = [];
     for (const n of toOpen) {
       const memberBaseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
@@ -5212,6 +5225,8 @@ function runOpenReady(opts) {
         // #674 (D-674-01 b): n.id itself never recorded a baseline (memberBaseline refused), so drop only
         // the PRIOR members this loop already recorded one for.
         dropRecordedBaselines(recordedBaselineIds);
+        // #678 (R1): also drop the shared group baseline recorded before this loop started.
+        dropGroupBaseline();
         return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: memberBaseline };
       }
       recordedBaselineIds.push(n.id);
@@ -5236,6 +5251,8 @@ function runOpenReady(opts) {
       } catch (e) {
         // #674 (D-674-01 b): the loop above recorded a baseline for EVERY toOpen member — drop them all.
         dropRecordedBaselines(recordedBaselineIds);
+        // #678 (R1): also drop the shared group baseline recorded before this loop started.
+        dropGroupBaseline();
         return { result: 'refuse', reason: 'stub_commit_failed', group_id: groupForm.group_id, detail: String((e && e.message) || e) };
       }
     }
@@ -5247,6 +5264,8 @@ function runOpenReady(opts) {
     if (!baseRev) {
       // #674 (D-674-01 b): same drop — every member baseline was recorded above.
       dropRecordedBaselines(recordedBaselineIds);
+      // #678 (R1): also drop the shared group baseline recorded before this loop started.
+      dropGroupBaseline();
       return { result: 'refuse', reason: 'leg_provision_failed', detail: 'could not resolve base HEAD for leg provisioning' };
     }
     legs = {};
@@ -5261,6 +5280,8 @@ function runOpenReady(opts) {
         // #674 (D-674-01 b): drop every member baseline recorded above (this abort fires after the
         // member loop AND the stub commit both completed, so all of `toOpen` has a recorded baseline).
         dropRecordedBaselines(recordedBaselineIds);
+        // #678 (R1): also drop the shared group baseline recorded before this loop started.
+        dropGroupBaseline();
         return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: r.error || null, detail: r.detail || null };
       }
       // #463 Slice 3: ANCHOR the leg's branch-point under a ref so the close-side --leg-barrier resolves
@@ -5275,6 +5296,8 @@ function runOpenReady(opts) {
         for (const p of provisionedThisCall) teardownLeg(mainRoot, p.legPath, p.legBranch);
         // #674 (D-674-01 b): same drop as the sibling leg_provision_failed above.
         dropRecordedBaselines(recordedBaselineIds);
+        // #678 (R1): also drop the shared group baseline recorded before this loop started.
+        dropGroupBaseline();
         return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: 'leg_base_anchor_failed', detail: 'could not anchor leg-base ref ' + legBaseRef(project, n.id) };
       }
       provisionedThisCall.push({ legPath, legBranch });
