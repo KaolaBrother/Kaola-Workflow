@@ -1135,7 +1135,18 @@ function resolveMainRoot(root) {
 // first-hit-wins here.
 function locateSection(content, heading) {
   const lines = String(content).split('\n');
-  const prefix = '## ' + heading;
+  // #673: ANCHORED heading match — byte-parity with the classifier's oracle
+  // (classifier.sectionBodyState's headRe: `^##\s+<escaped heading>\s*$`), replacing the loose
+  // `startsWith('## ' + heading)` PREFIX test that false-positived on a longer decoy heading
+  // (`## Node Ledger Extra`) and false-negatived on legal extra intra-heading whitespace
+  // (`##  Node Ledger` two-space, `##\tNode Ledger` tab). Same escape as the classifier so a
+  // heading containing regex metacharacters behaves identically in both.
+  const escapedHeading = String(heading).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headRe = new RegExp('^##\\s+' + escapedHeading + '\\s*$');
+  // #673: the next-heading TERMINATOR is likewise anchored to `^##\s` (matches the classifier's
+  // `/^##\s/` collecting-loop terminator) instead of the loose `startsWith('## ')`, which missed a
+  // tab-headed (`##\tAppendix`) following section and let its body bleed into the prior slice.
+  const nextHeadRe = /^##\s/;
   const fenceRe = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
   let inFence = false, fam = '', fenceLen = 0;
   let off = 0, start = -1, headingLine = -1;
@@ -1146,7 +1157,12 @@ function locateSection(content, heading) {
       const f = fm[1][0], len = fm[1].length;
       if (!inFence) { inFence = true; fam = f; fenceLen = len; }
       else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { inFence = false; fam = ''; fenceLen = 0; }
-    } else if (!inFence && i > 0 && ln.startsWith(prefix)) {
+    // #673: `i > 0` is KEPT — NOT a stylistic no-op. A heading at absolute line 0 has no leading
+    // '\n', so `start = off - 1` would collapse to -1 regardless of match style, colliding with the
+    // "-1 = absent" sentinel; without this guard a line-0 false "match" would `break` the scan
+    // immediately and hide a genuine heading later in the same content (a WORSE divergence than the
+    // documented, structurally-unreachable line-0 gap — see T6e-d in test-adaptive-node.js).
+    } else if (!inFence && i > 0 && headRe.test(ln)) {
       start = off - 1; headingLine = i; break;
     }
     off += ln.length + 1; // +1 for the consumed '\n'
@@ -1162,7 +1178,7 @@ function locateSection(content, heading) {
       const f = fm[1][0], len = fm[1].length;
       if (!inFence) { inFence = true; fam = f; fenceLen = len; }
       else if (f === fam && len >= fenceLen && /^\s*$/.test(fm[2])) { inFence = false; fam = ''; fenceLen = 0; }
-    } else if (!inFence && ln.startsWith('## ')) {
+    } else if (!inFence && nextHeadRe.test(ln)) {
       next = off2 - 1; break;
     }
     off2 += ln.length + 1;

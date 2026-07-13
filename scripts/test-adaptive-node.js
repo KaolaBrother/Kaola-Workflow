@@ -715,6 +715,207 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T6e (#673): HEADING-MATCH parity (the #670 sibling channel) — locateSection's heading match was a
+// loose `startsWith('## ' + heading)` PREFIX test at the opener and a bare `startsWith('## ')` at the
+// next-heading terminator; the classifier's oracle (classifier.sectionBodyState / headRe) uses an
+// ANCHORED `^##\s+<heading>\s*$` opener and an `^##\s` terminator. Four divergence channels:
+//   (a) forward suffix   — `## Node Ledger Extra` prefix-matches the loose opener (false positive).
+//   (b) two-space        — `##  Node Ledger` fails the loose opener's single-space prefix (false negative).
+//   (c) tab (terminator) — `##\tAppendix` fails the loose `startsWith('## ')` terminator, so a
+//                           following tab-heading section bleeds into the prior section's slice.
+//   (d) line-0           — a heading at absolute offset 0 has no leading '\n' to report as `start`;
+//                           this collides with locateSection's `-1 = absent` sentinel regardless of
+//                           match style, so it is NOT reconcilable without breaking the offset
+//                           contract every caller depends on (see the T6e-d comment below).
+// ---------------------------------------------------------------------------
+{
+  const classifier673 = require('./kaola-workflow-classifier');
+
+  // (a) forward-suffix decoy: an UNFENCED '## Node Ledger Extra' line precedes the genuine
+  // '## Node Ledger' heading. The loose prefix opener false-positives on it (a decoy superstring);
+  // the anchored opener correctly skips it and finds the genuine heading further down.
+  const decoyPlanA = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Briefs', '',
+    '### impl-core',
+    'Some prose mentioning an unrelated decoy heading below (NOT the real ledger — extra suffix):',
+    '## Node Ledger Extra',
+    'This decoy section body must never be read as the real ledger.',
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '',
+  ].join('\n') + '\n';
+
+  const locA = locateSection(decoyPlanA, 'Node Ledger');
+  const groundTruthA = classifier673.sectionBodyState(decoyPlanA, 'Node Ledger');
+  assert(groundTruthA.status === 'present', 'T6e-a: classifier ground truth finds the genuine ledger present');
+  assert(locA.start >= 0, 'T6e-a (#673): locateSection finds a ledger despite the forward-suffix decoy');
+  const slicedA = locA.start >= 0 ? decoyPlanA.slice(locA.start, locA.next >= 0 ? locA.next : decoyPlanA.length) : '';
+  assert(slicedA.replace(/^\n## Node Ledger\n/, '') === groundTruthA.body,
+    'T6e-a (#673): locateSection agrees with classifier.sectionBodyState on the genuine (not the "Extra" suffix decoy) ledger body, got ' + JSON.stringify(slicedA));
+  assert(!slicedA.includes('This decoy section body'),
+    'T6e-a (#673): the located section excludes the forward-suffix decoy heading/body entirely, got ' + JSON.stringify(slicedA));
+
+  // (b) two-space heading: `##  Node Ledger` (two spaces after `##`) is the SOLE ledger heading.
+  // The loose opener's single-space prefix `'## ' + heading` fails to match it (false negative —
+  // locateSection reports the section entirely absent); the anchored `\s+` opener matches it.
+  const decoyPlanB = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '##  Node Ledger', '',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '',
+  ].join('\n') + '\n';
+
+  const locB = locateSection(decoyPlanB, 'Node Ledger');
+  const groundTruthB = classifier673.sectionBodyState(decoyPlanB, 'Node Ledger');
+  assert(groundTruthB.status === 'present', 'T6e-b: classifier ground truth accepts a two-space `##  Node Ledger` heading');
+  assert(locB.start >= 0, 'T6e-b (#673): locateSection finds the two-space `##  Node Ledger` heading, got ' + JSON.stringify(locB));
+  const slicedB = locB.start >= 0 ? decoyPlanB.slice(locB.start, locB.next >= 0 ? locB.next : decoyPlanB.length) : '';
+  assert(slicedB.replace(/^\n##  Node Ledger\n/, '') === groundTruthB.body,
+    'T6e-b (#673): locateSection agrees with classifier.sectionBodyState on the two-space heading body, got ' + JSON.stringify(slicedB));
+
+  // (c) tab heading as the NEXT-HEADING TERMINATOR: a genuine (normal single-space) `## Node Ledger`
+  // is immediately followed by a `##\tAppendix` section. The loose terminator `startsWith('## ')`
+  // fails on the tab (not a literal space), so the Appendix content bleeds into the ledger slice;
+  // the anchored `^##\s` terminator recognizes the tab and correctly ends the ledger section there.
+  const decoyPlanC = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '##\tAppendix',
+    'Appendix content that must NOT be included in the Node Ledger section slice.',
+    '',
+  ].join('\n') + '\n';
+
+  const locC = locateSection(decoyPlanC, 'Node Ledger');
+  const groundTruthC = classifier673.sectionBodyState(decoyPlanC, 'Node Ledger');
+  assert(groundTruthC.status === 'present', 'T6e-c: classifier ground truth finds the ledger present, correctly terminated by the tab heading');
+  assert(locC.start >= 0, 'T6e-c (#673): locateSection finds the ledger, got ' + JSON.stringify(locC));
+  const slicedC = locC.start >= 0 ? decoyPlanC.slice(locC.start, locC.next >= 0 ? locC.next : decoyPlanC.length) : '';
+  assert(slicedC.replace(/^\n## Node Ledger\n/, '') === groundTruthC.body,
+    'T6e-c (#673): locateSection agrees with classifier.sectionBodyState — the tab heading correctly terminates the ledger slice, got ' + JSON.stringify(slicedC));
+  assert(!slicedC.includes('Appendix content'),
+    'T6e-c (#673): the tab-heading `##\\tAppendix` section is excluded from the Node Ledger slice (terminator anchored to `^##\\s`), got ' + JSON.stringify(slicedC));
+
+  // (d) #673: a heading at absolute file offset 0 (no leading '\n'). The classifier's line-index
+  // scan treats it as present (it has no notion of "the newline before the heading line"). But
+  // locateSection's {start,next} CONTRACT reports `start` as the char offset of the '\n' BEFORE the
+  // heading line — mirroring the pre-#354 legacy `content.indexOf('\n## ' + heading)` lookup, which
+  // ALSO required a leading '\n' and therefore ALSO could never match a heading at position 0. This
+  // is not a NEW divergence introduced by the opener/terminator match-style fix: at position 0 the
+  // offset arithmetic collapses `start` to `off - 1 === -1`, which is INDISTINGUISHABLE from the
+  // "-1 = absent" sentinel regardless of whether the opener uses `startsWith` or an anchored regex —
+  // parity is structurally unreachable without redefining the offset contract, which every caller
+  // (e.g. `materializeSpeculativePolicy`'s `headingStart = start + 1`) depends on. Reconciliation:
+  // the `i > 0` guard is KEPT — removing it would not achieve parity (a line-0 "match" still
+  // degrades to start=-1) and would introduce a WORSE divergence: the scan loop would `break`
+  // immediately on the line-0 hit instead of continuing to find a genuine non-zero-line heading
+  // elsewhere in the same content. Unreachable in practice: every real plan file opens with a
+  // `# Workflow Plan — {project}` title line before any `##` section.
+  const lineZeroContent = [
+    '## Node Ledger', '',
+    '| id | status |',
+    '| --- | --- |',
+    '| impl-core | pending |',
+    '',
+  ].join('\n') + '\n';
+  const locD = locateSection(lineZeroContent, 'Node Ledger');
+  const groundTruthD = classifier673.sectionBodyState(lineZeroContent, 'Node Ledger');
+  assert(groundTruthD.status === 'present', 'T6e-d: classifier ground truth treats a line-0 heading as present (line-index scan, no offset contract)');
+  assert(locD.start === -1 && locD.next === -1,
+    'T6e-d (#673): locateSection cannot represent a line-0 heading under its "-1 = absent" offset contract (documented, structurally unreachable — see comment above), got ' + JSON.stringify(locD));
+
+  // End-to-end (mirrors #670's T6d/T6c): a real subprocess open -> resume proves the forward-suffix
+  // decoy (a) does not wedge the plan_hash — the write must land on the GENUINE ledger, matched by
+  // the anchored opener, not the loose-prefix decoy.
+  const { execFileSync: exec673 } = require('child_process');
+  const NODE_CLI_673 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_673 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const hash673 = planValidator.computePlanHash(decoyPlanA);
+  const frozen673 = '<!-- plan_hash: ' + hash673 + ' -->\n' + decoyPlanA;
+
+  const repoRoot673 = fs.mkdtempSync(path.join(os.tmpdir(), 'd673-heading-'));
+  const project673 = 'test-project';
+  const projDir673 = path.join(repoRoot673, 'kaola-workflow', project673);
+  fs.mkdirSync(path.join(projDir673, '.cache'), { recursive: true });
+  const planPath673 = path.join(projDir673, 'workflow-plan.md');
+  fs.writeFileSync(planPath673, frozen673);
+  fs.writeFileSync(path.join(projDir673, 'workflow-state.md'), '# State\n');
+  const g673 = (a) => exec673('git', ['-C', repoRoot673, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  g673(['init']); g673(['config', 'user.email', 'kw@test']); g673(['config', 'user.name', 'kw']); g673(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repoRoot673, '.gitignore'), '.kw/\n');
+  g673(['add', '-A']); g673(['commit', '-m', 'init']);
+
+  const run673 = (args) => {
+    let out = {}; let exit = 0;
+    try { out = JSON.parse(exec673('node', args, { cwd: repoRoot673, encoding: 'utf8' }).trim().split('\n').pop()); }
+    catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+    return { out, exit };
+  };
+
+  // Control: the hand-frozen plan resume-checks clean before anything opens.
+  let r673 = run673([VALIDATOR_673, planPath673, '--resume-check', '--json']);
+  assert(r673.exit === 0 && r673.out.ok === true, 'T6e: control — the frozen decoy plan passes --resume-check, got ' + JSON.stringify(r673.out));
+
+  // open: the real open-next opens impl-core (the sole ready node); this splices the ledger.
+  r673 = run673([NODE_CLI_673, 'open-next', '--project', project673, '--json']);
+  assert(r673.out.result === 'ok' && r673.out.opened && r673.out.opened.id === 'impl-core',
+    'T6e: open-next opens impl-core, got ' + JSON.stringify(r673.out));
+
+  // resume: the write must land on the GENUINE ledger (outside the hash-covered ## Node Briefs decoy
+  // body), so --resume-check still passes — the bug's decoy-targeted splice would break the plan_hash.
+  r673 = run673([VALIDATOR_673, planPath673, '--resume-check', '--json']);
+  assert(r673.exit === 0 && r673.out.ok === true,
+    'T6e (#673): after open, --resume-check still passes — no plan_hash_mismatch wedge from a decoy-targeted splice, got ' + JSON.stringify(r673.out));
+
+  const finalContent673 = fs.readFileSync(planPath673, 'utf8');
+  const finalLedger673 = classifier673.sectionBody(finalContent673, 'Node Ledger');
+  assert(finalLedger673.includes('| impl-core | in_progress |'),
+    'T6e (#673): the genuine ledger shows impl-core in_progress, got ' + JSON.stringify(finalLedger673));
+  assert(finalContent673.includes('This decoy section body must never be read as the real ledger.'),
+    'T6e (#673): the forward-suffix decoy prose is left byte-intact, got ' + JSON.stringify(finalContent673));
+
+  try { fs.rmSync(repoRoot673, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // T6b (#354, AC3): `## Nodes` row-walk PARITY — validator.parseNodes(content) and
 // classifier.readPlanNodes(path) must extract the same id/role/depends_on set (both delegate
 // section-slicing to the fence-aware classifier.sectionBody; this pins the row-walk against drift).
