@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Documentation
+
+- **The Codex installation guide now configures long-poll subagent joins.** The recommended user-owned `~/.codex/config.toml` posture sets both the default and per-call maximum Multi-Agent V2 wait to Codex's one-hour ceiling, explicitly distinguishes a mailbox timeout from a subagent runtime deadline, requires repeated long waits without a Kaola-imposed total deadline while work is progressing, forbids status-only polling or interruption, explains how to merge existing TOML keys safely, and requires a fresh Codex session after the edit.
+
 ## [6.22.2] - 2026-07-13
 
 ### Fixed

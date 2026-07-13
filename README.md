@@ -570,17 +570,42 @@ The audit must keep these facts separate:
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
 
+`developer_instructions` is a top-level key, so place it before the first TOML
+table. If the key already exists, merge these rules into its existing value
+instead of declaring it twice. Likewise, extend the existing inline or table
+form of `features.multi_agent_v2`; do not declare both forms.
+
 ```toml
+developer_instructions = """
+Kaola-Workflow subagents may legitimately run for more than an hour while
+reasoning, collecting data, calculating results, or running terminal commands.
+After dispatching them, continue any useful independent work. When none remains,
+call wait_agent once per join iteration with timeout_ms = 3600000. A wait timeout
+is only a mailbox wake-up, not evidence that the agent stalled and not a limit on
+its total runtime. While an agent is running or making progress, repeat the long
+wait without a total deadline. Do not poll, list, message, or interrupt agents
+merely for status. Process results immediately because the wait returns early on
+an update.
+"""
+
 [notice]
 suppress_unstable_features_warning = true
 
 [features]
 multi_agent = true
-multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }
+multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 5, default_wait_timeout_ms = 3600000, max_wait_timeout_ms = 3600000, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }
 ```
 
-After changing this setting, start a fresh Codex session so the tool surface is
-rebuilt. The preflight and doctor report `codex_v2_transport_mode`,
+Codex currently caps one `wait_agent` call at one hour. Setting both values to
+that ceiling minimizes status-only wakeups; it does **not** impose a one-hour
+subagent runtime limit. If no update arrives, the parent repeats the wait while
+the agent remains active or is making progress, so total patience has no
+Kaola-imposed deadline. A wait still returns immediately when an agent reports
+completion or another update. This is a user-owned global setting; the installer
+reports the effective values but does not overwrite them.
+
+After changing these settings, start a fresh Codex session so the tool surface
+and injected instructions are rebuilt. The preflight and doctor report `codex_v2_transport_mode`,
 `codex_v2_direct_transport_ready`, `codex_v2_tool_namespace`,
 `codex_v2_role_metadata_visible`, `codex_v2_role_transport_ready`, and
 `codex_v2_transport_warning`. Nested collaboration refuses with
