@@ -1,0 +1,23 @@
+[
+  {
+    "finding_id": "id=N1 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=sidecar denylist is fixed-name; a planner naming a plan node exactly doc-updater/doc-docking/final-validation/selection-evidence/run-gaps-manual would have that evidence excluded, but no shipped run produces it (zero barrier-base-<sidecar> in archives) and finalize sub-steps clobber such a node evidence anyway; strictly better than the pre-fix glob",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=N2 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=gate covers .cache/*.md + fixed 4 top-level names only; non-.md artifacts (workflow-tasks.json, run-gaps.json) are outside the claim scope; copyDir carries them faithfully so no real loss, gate simply would not CATCH a lossy drop of a non-.md",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=pre-existing/known explicit --output clobber on gap-sweep, already deferred; unchanged by this repair",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

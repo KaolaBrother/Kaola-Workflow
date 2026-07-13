@@ -1,0 +1,25 @@
+{
+  "project": "bundle-675-676",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n1-fix",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-review",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-adversary",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:gapsweep-explicit-output-archive-clobber",
+      "sample": "a live scan with explicit --output at a same-named leftover archive run-gaps.json still clobbers it outside the archived-project scope of #675",
+      "count": 1
+    }
+  ]
+}

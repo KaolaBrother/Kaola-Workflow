@@ -1,0 +1,12 @@
+{"node":"n1-fix","event":"opened","ts":"2026-07-12T19:56:49.544Z"}
+{"node":"n1-fix","event":"closed","ts":"2026-07-13T00:49:29.749Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-13T00:49:30.151Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-13T01:04:10.639Z"}
+{"node":"n3-adversary","event":"opened","ts":"2026-07-13T01:04:11.025Z"}
+{"node":"n1-fix","event":"closed","ts":"2026-07-13T01:35:35.752Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-13T01:35:36.157Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-13T01:45:01.110Z"}
+{"node":"n3-adversary","event":"opened","ts":"2026-07-13T01:45:01.524Z"}
+{"node":"n3-adversary","event":"closed","ts":"2026-07-13T01:57:15.565Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-13T01:57:15.959Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-13T02:01:45.591Z"}
