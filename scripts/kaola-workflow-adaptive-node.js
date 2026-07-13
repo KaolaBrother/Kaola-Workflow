@@ -6181,9 +6181,13 @@ function runReconcileRunningSet(opts) {
   // when the id is (a) an in_progress ledger row (a member awaiting its close barrier), (b) a running-set
   // node id (the reconcile machine below owns that member's precise roll-forward/back + baseline drop), or
   // (c) a live lane_group member id / the live lane_group group_id (the group baseline is the diff anchor
-  // for the eventual group barrier). Sanitizer collisions (`a.b` and `a_b` both → `barrier-base-a_b`) only
-  // ever ADD to the keep set, so they fail SAFE (under-reap, never over-reap). Fail-soft: any error aborts
-  // the sweep silently (reconcile must never throw) — we prefer leaving an orphan to risking a live drop.
+  // for the eventual group barrier), or (d) — #680 REPAIR — ANY `barrier-base-lg-*` group baseline when
+  // `running` is null (torn/absent Phase-3 journal) AND ≥1 in_progress ledger row exists: a live group's
+  // members are in_progress but its group_id (`lg-<memberIds…>`) has no ledger row and is unrecoverable, so
+  // its deadness is UNPROVABLE and it is kept (see the drop loop). Sanitizer collisions (`a.b` and `a_b`
+  // both → `barrier-base-a_b`) only ever ADD to the keep set, so they fail SAFE (under-reap, never
+  // over-reap). Fail-soft: any error aborts the sweep silently (reconcile must never throw) — we prefer
+  // leaving an orphan to risking a live drop.
   const orphanBaselinesDropped = [];
   if (typeof shell === 'function') {
     try {
@@ -6192,7 +6196,12 @@ function runReconcileRunningSet(opts) {
       const cacheDirB = path.join(path.dirname(planPath), '.cache');
       const keep = new Set();
       const ledgerB = readLedgerStatuses(readFile(planPath));
-      for (const id of Object.keys(ledgerB)) { if (ledgerB[id] === 'in_progress') keep.add(sanB(id)); }
+      // #680 REPAIR: track whether ANY member is mid-flight. A live lane_group's members are in_progress
+      // but its group_id (`lg-<memberIds…>`) has NO ledger row and cannot be re-parsed back into member ids
+      // (member ids themselves contain hyphens), so when running is torn/absent the ONLY authoritative
+      // signal that a `barrier-base-lg-*` might be live is the presence of an in_progress row.
+      let hasInProgressB = false;
+      for (const id of Object.keys(ledgerB)) { if (ledgerB[id] === 'in_progress') { keep.add(sanB(id)); hasInProgressB = true; } }
       if (running) {
         for (const n of (running.nodes || [])) { if (n && n.id) keep.add(sanB(n.id)); }
         if (running.lane_group) {
@@ -6209,6 +6218,18 @@ function runReconcileRunningSet(opts) {
         if (name.indexOf('barrier-base-') !== 0) continue;
         const sanId = name.slice('barrier-base-'.length);
         if (!sanId || keep.has(sanId)) continue;
+        // #680 REPAIR (adversary R1 — the torn-Phase-3 LIVE-group-baseline drop): a GROUP baseline
+        // (`barrier-base-lg-*`) has NO ledger row, so the in_progress-ledger keep above never covers it —
+        // and its group_id (`lg-<memberIds…>`) cannot be reliably re-parsed into member ids (member ids
+        // contain hyphens), so a live group is knowable ONLY from a readable running-set. When `running` is
+        // non-null the live group_id was already added to `keep` above (so reaching here means this lg-* is
+        // NOT the live group → a genuine orphan, drop it). When `running` is null (torn/absent Phase-3
+        // journal) AND ≥1 in_progress row exists, we CANNOT prove ANY lg-* is dead — a live group's members
+        // are in_progress but its group_id is unrecoverable — so KEEP it (fail-safe under-reap; dropping it
+        // would strand A,B in_progress against a `no_group_base` group barrier). Only when there are ZERO
+        // in_progress rows (a genuine pre-journal orphan: SIGKILL before Phase-2 flipped any member) is a
+        // torn-running lg-* provably dead → drop it. Non-lg-* (member) baselines keep their logic unchanged.
+        if (sanId.indexOf('lg-') === 0 && !running && hasInProgressB) continue;
         // No live owner → orphan of a dead run. --drop-base removes the file + anchored ref + freshness
         // token together (idempotent; a missing artifact is a clean no-op). Passing the already-sanitized
         // id re-sanitizes to the SAME file/ref keys, so the drop is exact.

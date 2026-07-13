@@ -6778,6 +6778,56 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #680 Part B REPAIR (adversary R1 — the torn-Phase-3 LIVE-group-baseline drop): the orphan-baseline
+  //   sweep gave the GROUP baseline exactly ONE keep-source — `running.lane_group.group_id`, added only
+  //   inside `if (running)`. A group_id has NO ledger row, so the in_progress-ledger keep loop never
+  //   covers it. Reproduced failing path: open-ready co-opens {A,B} → Phase-1 records the group baseline
+  //   `barrier-base-lg-A-B` + both member baselines; Phase-2 flips A,B → in_progress AND persists the
+  //   ledger; Phase-3 promotes the running-set journal via a NON-atomic writeFileSync (O_TRUNC). A crash
+  //   during that Phase-3 write TRUNCATES running-set.json AFTER the ledger flip persisted → readRunningSet
+  //   returns null. reconcile then keeps A,B member baselines (in_progress ledger) but — `running` null —
+  //   never adds `lg-A-B`, so it DROPS the LIVE group baseline (file + ref). A,B stay in_progress and their
+  //   eventual group barrier refuses `no_group_base` → corrupted in-flight run. This is NET-NEW sweep
+  //   behavior → a regression. FIX: a `barrier-base-lg-*` candidate is dropped only when its deadness is
+  //   authoritative — (`running` non-null and not the live group) OR (zero in_progress rows). When running
+  //   is null AND ≥1 in_progress row exists, its group_id (`lg-<memberIds…>`) is unrecoverable (member ids
+  //   contain hyphens), so the group baseline is KEPT (fail-safe under-reap).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
+    const groupId = 'lg-A-B';
+    // Phase-2 already flipped A,B → in_progress and persisted the ledger before the crash.
+    let plan = fs.readFileSync(planPath, 'utf8');
+    plan = plan.replace('| A | pending |', '| A | in_progress |').replace('| B | pending |', '| B | in_progress |');
+    fs.writeFileSync(planPath, plan);
+    // Phase-1 recorded the LIVE group baseline (file + ref) + both member baselines — all on disk.
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', groupId, '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'A', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'B', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    // Torn Phase-3: running-set.json is ABSENT (the O_TRUNC write left no readable manifest).
+    assert(!readRS(cacheDir), '#680-B-repair: precondition — running-set.json is absent (torn Phase-3 write)');
+    assert(fs.existsSync(groupBaselineFile678(cacheDir, groupId)) && groupBaselineRefExists678(repoRoot, project, groupId),
+      '#680-B-repair: precondition — the live group baseline (file + ref) is seeded before reconcile');
+
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', project, '--json'], DEFAULT);
+    assert(rec.result === 'ok', '#680-B-repair: reconcile-running-set ok, got ' + JSON.stringify(rec));
+
+    // POST-fix the LIVE group baseline (file + ref) SURVIVES (RED pre-fix: it was dropped → no_group_base
+    // corruption on the eventual group barrier). running is torn + A,B are in_progress → the sweep cannot
+    // prove the group dead, so it must KEEP `barrier-base-lg-A-B`.
+    assert(fs.existsSync(groupBaselineFile678(cacheDir, groupId)) && groupBaselineRefExists678(repoRoot, project, groupId),
+      '#680-B-repair: the LIVE group baseline (file + ref) is KEPT when running is torn but members are in_progress (dropped pre-fix → no_group_base corruption), got file=' + fs.existsSync(groupBaselineFile678(cacheDir, groupId)) + ' ref=' + groupBaselineRefExists678(repoRoot, project, groupId));
+    assert(!(Array.isArray(rec.orphanBaselinesDropped) && rec.orphanBaselinesDropped.includes(groupId)),
+      '#680-B-repair: the live group baseline is NOT reported dropped, got ' + JSON.stringify(rec.orphanBaselinesDropped));
+    // The in_progress member baselines stay kept too (protected by the in_progress-ledger keep, unchanged).
+    assert(fs.existsSync(path.join(cacheDir, 'barrier-base-A')) && fs.existsSync(path.join(cacheDir, 'barrier-base-B')),
+      '#680-B-repair: the in_progress member baselines (A, B) are KEPT');
+    assert(groupBaselineRefExists678(repoRoot, project, 'A') && groupBaselineRefExists678(repoRoot, project, 'B'),
+      '#680-B-repair: the in_progress member baseline REFS (A, B) are KEPT');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
   // D437-MUTATION-GUARD-NOT-VACUOUS (#542 kill-switch): the kill-switch is NOT vacuous —
   //   KAOLA_PARALLEL_WRITES=0 must SUPPRESS the default-on co-open and fall back to the serial single
   //   open (one write, no group), so the second write never enters a group. Without an effective
