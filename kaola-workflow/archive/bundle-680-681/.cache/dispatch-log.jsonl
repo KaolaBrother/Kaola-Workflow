@@ -1,0 +1,10 @@
+{"ts":"2026-07-13T05:53:02Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-07-13T05:59:32Z","agent_type":"tdd-guide","agent_id":"a4987674a8f4c7494","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-13T05:59:46Z","agent_type":"tdd-guide","agent_id":"acb928dcb79322fd9","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-13T06:37:57Z","agent_type":"code-reviewer","agent_id":"a030cb44063674b4c","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"opus"}
+{"ts":"2026-07-13T06:51:33Z","agent_type":"adversarial-verifier","agent_id":"a3b118b5c1b4114f9","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-13T07:11:11Z","agent_type":"tdd-guide","agent_id":"a79aa330662e73ba5","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-13T07:22:18Z","agent_type":"code-reviewer","agent_id":"a9139a3bc34ad69d5","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"opus"}
+{"ts":"2026-07-13T07:36:31Z","agent_type":"adversarial-verifier","agent_id":"a73c9725923468bc3","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-13T08:05:57Z","agent_type":"contractor","agent_id":"a88a531eff222a089","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-13T08:08:21Z","agent_type":"contractor","agent_id":"finalize-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/bundle-680-681"}

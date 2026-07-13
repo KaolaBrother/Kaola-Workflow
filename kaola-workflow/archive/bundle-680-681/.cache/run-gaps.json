@@ -1,0 +1,20 @@
+{
+  "project": "bundle-680-681",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n1-node-680",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n3-review",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-adversary",
+      "count": 1
+    }
+  ]
+}

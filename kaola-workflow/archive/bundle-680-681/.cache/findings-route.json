@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1-residual scope=out_of_scope action=none status=open severity=low fix_role=none rationale=torn-null-with-unrelated-in_progress leaves a dead lg-* orphan un-reaped (deliberate fail-safe under-reap, never a live drop; reaped at next zero-in_progress reconcile)",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
