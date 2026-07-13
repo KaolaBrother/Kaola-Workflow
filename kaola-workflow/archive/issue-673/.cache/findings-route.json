@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=A1 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=pre-existing-documented-divergence-NOT-in-the-673-heading-match-channel-the-start-next-offset-contract-has-no-ambiguous-status-channel-so-a-duplicate-target-heading-classifier-ambiguous-or-an-unclosed-fence-classifier-ambiguous-still-yields-a-first-hit-slice-from-locateSection-predates-673-and-is-documented-at-schema.js-1130-1135-and-covered-by-667-670",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

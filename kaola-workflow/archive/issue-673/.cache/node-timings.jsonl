@@ -1,0 +1,8 @@
+{"node":"n1-heading-parity","event":"opened","ts":"2026-07-13T02:25:14.847Z"}
+{"node":"n1-heading-parity","event":"closed","ts":"2026-07-13T02:57:14.442Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-13T02:57:14.851Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-13T03:07:48.456Z"}
+{"node":"n3-adversary","event":"opened","ts":"2026-07-13T03:07:48.872Z"}
+{"node":"n3-adversary","event":"closed","ts":"2026-07-13T03:20:38.734Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-13T03:20:40.168Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-13T03:22:24.989Z"}
