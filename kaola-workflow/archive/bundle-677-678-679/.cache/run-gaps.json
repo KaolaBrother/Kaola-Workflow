@@ -1,0 +1,20 @@
+{
+  "project": "bundle-677-678-679",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:crash-window",
+      "sample": "#678 R2 SIGKILL pre-journal strand plus Phase-2 group and member baseline non-drop deferred to a journal-ordering redesign",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:foreign-output",
+      "sample": "#679 existsSync-gated stray write into a non-existent foreign run-gaps.json target",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:symlink-resolve",
+      "sample": "#679 lexical path.resolve vs realpathSync proven safe over-refusal only",
+      "count": 1
+    }
+  ]
+}
