@@ -5158,6 +5158,22 @@ function runOpenReady(opts) {
     groupBaselineSha = (gb.recordBase && gb.recordBase.base) ? gb.recordBase.base : (gb.base || null);
   }
 
+  // #674/#678/#680: the transactional baseline-drop helpers, declared at runOpenReady scope so BOTH the
+  // Phase-1 leg-provisioning aborts AND the Phase-2 ledger-seed aborts (below) can drop every baseline
+  // this call recorded. recordedBaselineIds accumulates each member id whose baseline was recorded (the
+  // Phase-1 group-member loop pushes all of `toOpen`; the Phase-2 loop pushes any serial/read member it
+  // records for the first time). dropRecordedBaselines removes the per-MEMBER baselines; dropGroupBaseline
+  // removes the SHARED group baseline (`barrier-base-lg-<...>` file + ref), guarded on groupBaselineSha so
+  // it is a clean no-op when no group formed. --drop-base is idempotent (a missing file/ref/token is a
+  // no-op), so a member dropped by both a Phase-1 and a Phase-2 path is safe.
+  const recordedBaselineIds = [];
+  const dropRecordedBaselines = (ids) => {
+    for (const id of ids) shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+  };
+  const dropGroupBaseline = () => {
+    if (groupBaselineSha) shell(validatorPath, [planPath, '--drop-base', '--node-id', groupForm.group_id, '--json']);
+  };
+
   // #463 Slice 2: per-leg `.kw` worktree provisioning (ADR-0010: containment, not construction).
   // Gated by groupForm AND legCoupled. #542 (D-542-01): legCoupled is now parallelWritesDefaultOn
   // (default TRUE), so a disjoint co-opened frontier provisions legs BY DEFAULT — the per-leg worktree
@@ -5196,29 +5212,19 @@ function runOpenReady(opts) {
     // crash-resume idempotent reuse, see #385 above), so that member's eventual close barrier
     // misattributes ANY sibling's uncommitted writes that later land in the shared (leg-less) tree as
     // this member's own overflow (the vrpai-cli#948 incident). --drop-base is legal here (never
-    // drop_base_window_open): the ledger flip to in_progress happens in Phase 2, strictly AFTER this
-    // whole leg-provisioning block, so every member is still `pending` at every abort point below.
+    // drop_base_window_open): the ledger flip to in_progress is spliced in Phase 2 and written to disk
+    // only AFTER the whole Phase-2 loop, so every member's ON-DISK ledger row is still `pending` at every
+    // abort point — the Phase-1 leg-provisioning aborts below AND the two Phase-2 ledger-seed aborts
+    // (#680). (The earlier reading that a Phase-2 abort could not --drop-base "because the ledger is
+    // flipping" was wrong: the flip is in-memory until writeFile(planPath) at the end of Phase 2.)
     // dropRecordedBaselines is called with the id list this loop has actually recorded a baseline for at
     // the moment of each abort (a prefix of `toOpen` for the mid-loop baseline_failed itself; the FULL
     // `toOpen` set for every abort strictly after this loop completes — stub_commit_failed and both
     // leg_provision_failed variants below).
-    const recordedBaselineIds = [];
-    const dropRecordedBaselines = (ids) => {
-      for (const id of ids) shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
-    };
-    // #678 (R1, the #674 symmetric gap): dropRecordedBaselines above only drops the per-MEMBER
-    // baselines; the SHARED GROUP baseline (recorded once, BEFORE this loop, into groupBaselineSha —
-    // see the `if (groupForm)` block above) is a SEPARATE --record-base keyed by groupForm.group_id and
-    // must be dropped on the SAME 5 aborts below, or it strands (`barrier-base-lg-<...>` file +
-    // `refs/kaola-workflow/barrier/<project>/lg-<...>` ref both survive the abort). Guarded on
-    // groupBaselineSha so a call before the group baseline was ever recorded is a no-op (never reachable
-    // here in practice — this whole block only runs after the `if (groupForm)` record-or-refuse gate
-    // above already succeeded — but the guard keeps the helper safe if that invariant ever shifts).
-    // Reuses the SAME idempotent --drop-base mechanism the close/merge path uses for the group baseline
-    // (a group_id has no ledger row, so the #424 window-lock never blocks it).
-    const dropGroupBaseline = () => {
-      if (groupBaselineSha) shell(validatorPath, [planPath, '--drop-base', '--node-id', groupForm.group_id, '--json']);
-    };
+    // #674/#678/#680: recordedBaselineIds + dropRecordedBaselines + dropGroupBaseline are declared at
+    // runOpenReady scope (above the group-baseline record) so the Phase-2 aborts reach them too. This
+    // loop appends each member id as its baseline lands; the 5 aborts below (and the two Phase-2 aborts)
+    // all call dropRecordedBaselines(recordedBaselineIds) + dropGroupBaseline().
     const seededRelPaths = [];
     for (const n of toOpen) {
       const memberBaseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
@@ -5366,12 +5372,28 @@ function runOpenReady(opts) {
   for (const n of toOpen) {
     const baseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
     if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
+      // #680 (Part A): a Phase-2 baseline abort must drop EVERY baseline this open recorded — the shared
+      // GROUP baseline AND every per-MEMBER baseline — exactly like the Phase-1 aborts above, NOT strand
+      // them. This is legal here (never drop_base_window_open): the ledger flip to in_progress is spliced
+      // into `planContent` in memory only; the on-disk plan is not written until AFTER this loop
+      // (writeFile(planPath) below), so every member's ON-DISK ledger row is still `pending` at this
+      // abort (a group_id never has a ledger row at all).
+      dropRecordedBaselines(recordedBaselineIds);
+      dropGroupBaseline();
       return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: baseline };
     }
+    // Track this member's recorded baseline so the aborts below reach it. Group members were already
+    // pushed in Phase 1; the includes-guard keeps the id list dup-free while still covering the
+    // serial/read path (which records here for the first time). --drop-base is idempotent regardless.
+    if (!recordedBaselineIds.includes(n.id)) recordedBaselineIds.push(n.id);
     nonceById[n.id] = (baseline.recordBase && baseline.recordBase.base)
       ? String(baseline.recordBase.base).slice(0, 12) : null;
     const spliced = spliceLedgerNode(planContent, n.id, 'in_progress', { allowFrom: ['pending'] });
     if (!spliced.found) {
+      // #680 (Part A): same transactional drop on the ledger-seed abort — the on-disk ledger is still
+      // unwritten here, so --drop-base is legal for the member baselines too (never window-locked).
+      dropRecordedBaselines(recordedBaselineIds);
+      dropGroupBaseline();
       return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: n.id };
     }
     if (spliced.changed) planContent = spliced.content;
@@ -6145,8 +6167,62 @@ function runReconcileRunningSet(opts) {
     sweepOrphanLegs(mainRoot, project, keepLegPaths);
   }
 
+  // #680 (Part B): orphan-BASELINE sweep — the pre-journal SIGKILL-window sibling of the orphan-LEG sweep
+  // above. A hard crash BETWEEN open-ready recording its baselines (Phase 1: the shared group baseline +
+  // each member baseline) and writing the 'opening' running-set journal strands `barrier-base-*` files +
+  // their anchored refs with NO 'opening' marker for the roll-forward/back machine below to find — and,
+  // when the crash predates the journal write, NO running-set.json at all (so the !running early-return
+  // below would skip them forever, a permanent leak). Hoisted ABOVE that early-return (mirrors the
+  // orphan-leg sweep) so a manifest-losing crash still reclaims them. reconcile-running-set is the
+  // crash-repair entry point and holds the project scheduler lock (SPLIT_GUARDED), so NO live open-ready
+  // can be mid-Phase-1 while this runs — every baseline with no live owner here belongs to a dead run.
+  //
+  // FALSE-POSITIVE GUARD (correctness-critical — dropping a LIVE baseline corrupts an in-flight run):
+  // a `barrier-base-<san>` file is an ORPHAN only when its (sanitized) id matches NO live owner. KEEP it
+  // when the id is (a) an in_progress ledger row (a member awaiting its close barrier), (b) a running-set
+  // node id (the reconcile machine below owns that member's precise roll-forward/back + baseline drop), or
+  // (c) a live lane_group member id / the live lane_group group_id (the group baseline is the diff anchor
+  // for the eventual group barrier). Sanitizer collisions (`a.b` and `a_b` both → `barrier-base-a_b`) only
+  // ever ADD to the keep set, so they fail SAFE (under-reap, never over-reap). Fail-soft: any error aborts
+  // the sweep silently (reconcile must never throw) — we prefer leaving an orphan to risking a live drop.
+  const orphanBaselinesDropped = [];
+  if (typeof shell === 'function') {
+    try {
+      const fsB = require('fs');
+      const sanB = (id) => String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+      const cacheDirB = path.join(path.dirname(planPath), '.cache');
+      const keep = new Set();
+      const ledgerB = readLedgerStatuses(readFile(planPath));
+      for (const id of Object.keys(ledgerB)) { if (ledgerB[id] === 'in_progress') keep.add(sanB(id)); }
+      if (running) {
+        for (const n of (running.nodes || [])) { if (n && n.id) keep.add(sanB(n.id)); }
+        if (running.lane_group) {
+          if (running.lane_group.group_id) keep.add(sanB(running.lane_group.group_id));
+          for (const m of (running.lane_group.members || [])) {
+            const mid = (typeof m === 'string') ? m : (m && (m.nodeId || m.id));
+            if (mid) keep.add(sanB(mid));
+          }
+        }
+      }
+      let entries = [];
+      try { entries = fsB.readdirSync(cacheDirB); } catch (_) { entries = []; }
+      for (const name of entries) {
+        if (name.indexOf('barrier-base-') !== 0) continue;
+        const sanId = name.slice('barrier-base-'.length);
+        if (!sanId || keep.has(sanId)) continue;
+        // No live owner → orphan of a dead run. --drop-base removes the file + anchored ref + freshness
+        // token together (idempotent; a missing artifact is a clean no-op). Passing the already-sanitized
+        // id re-sanitizes to the SAME file/ref keys, so the drop is exact.
+        shell(validatorPath, [planPath, '--drop-base', '--node-id', sanId, '--json']);
+        orphanBaselinesDropped.push(sanId);
+      }
+    } catch (_) { /* fail-soft: never throw from reconcile; prefer under-reaping to a live drop */ }
+  }
+
   if (!running) {
-    return { result: 'ok', reconciled: false, reason: 'no_running_set', taskTransitions: [] };
+    return { result: 'ok', reconciled: false, reason: 'no_running_set',
+      ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
+      taskTransitions: [] };
   }
 
   const wholeOpening = running.state === 'opening';
@@ -6180,7 +6256,10 @@ function runReconcileRunningSet(opts) {
 
   // No opening transaction AND no stale terminal member AND no stale pending member → nothing to do.
   if (!wholeOpening && openingNodes.length === 0 && closed.length === 0 && stale.length === 0) {
-    return { result: 'ok', reconciled: false, reason: 'not_opening', state: running.state, taskTransitions: [] };
+    return { result: 'ok', reconciled: false, reason: 'not_opening', state: running.state,
+      // #680 (Part B): surface any orphan baseline the hoisted sweep dropped even on the not_opening exit.
+      ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
+      taskTransitions: [] };
   }
 
   // In a rolling top-up crash, state:'opening' covers the transaction but only
@@ -6407,6 +6486,9 @@ function runReconcileRunningSet(opts) {
     rolledForward: kept,
     rolledBack: dropped,
     cappedOut,
+    // #680 (Part B): sanitized ids of pre-journal orphan baselines dropped by the sweep above (absent when
+    // none — the sweep found no barrier-base file without a live owner).
+    ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
     // #384: members dropped because their ledger row was already terminal (close-crash recovery).
     closedDropped: closed,
     // #293/S-fix: members dropped because they were stale non-opening pending (or otherwise not-in-flight)

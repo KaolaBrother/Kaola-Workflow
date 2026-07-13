@@ -6641,6 +6641,143 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #680 Part A (the Phase-2 non-drop): a group co-open that ABORTS in Phase 2 (the ledger-seeding/
+  //   promotion loop, AFTER the Phase-1 group + member baseline record + leg provisioning) must drop BOTH
+  //   the shared GROUP baseline (barrier-base-lg-<...> file + ref) AND every per-MEMBER baseline — NOT
+  //   strand them. The two Phase-2 aborts are `baseline_failed` and `node_not_in_ledger`; pre-fix neither
+  //   dropped anything (the drop helpers were block-scoped to the Phase-1 leg-provisioning block). --drop-
+  //   base IS legal at both aborts: the ledger flip to in_progress is spliced into planContent in memory
+  //   and written to disk only AFTER the whole Phase-2 loop, so every member's on-disk ledger row is still
+  //   `pending` at the abort (a group_id has no ledger row at all).
+  //   Drive the REAL runOpenReady in-process against a REAL git repo (so the barrier-base files + anchored
+  //   refs are real and directly assertable), with a shell wrapper that forces the SECOND (Phase-2) commit-
+  //   node --start for member A to fail → baseline_failed. Phase 1's group + member baselines are recorded
+  //   by passthrough to the real shellNode FIRST, so all three baselines exist on disk at the abort point.
+  // -------------------------------------------------------------------------
+  {
+    const lane = makeLaneRepo();
+    const project = lane.project;
+    const groupId = 'lg-A-B';
+    // #292 io-shim trap: getRoot() inside runOpenReady resolves the repo toplevel via `git rev-parse`
+    // (realpath form), while mkdtemp hands back the /var symlink form on macOS. path.relative(root, ...)
+    // over the two forms yields a bogus ../../.. path and the stub `git add` fails BEFORE Phase 2. Pin
+    // EVERYTHING to the realpath'd root so getRoot() and the injected planPath agree.
+    const repoRoot = fs.realpathSync(lane.repoRoot);
+    const planPath = path.join(repoRoot, path.relative(lane.repoRoot, lane.planPath));
+    const cacheDir = path.join(repoRoot, path.relative(lane.repoRoot, lane.cacheDir));
+    // Wrapper over the real shellNode: count commit-node --start calls per node id and force the 2nd
+    // start for A (its Phase-2 idempotent-reuse call) to fail. Everything else passes through, so the
+    // Phase-1 group baseline (lg-A-B) + member baselines (A, B) land on disk as REAL files + refs.
+    const startCounts = {};
+    const forcedShell = (scriptPath, args) => {
+      const a = args || [];
+      if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js' && a.includes('--start')) {
+        const idIdx = a.indexOf('--node-id');
+        const id = idIdx >= 0 ? a[idIdx + 1] : null;
+        startCounts[id] = (startCounts[id] || 0) + 1;
+        if (id === 'A' && startCounts[id] === 2) {
+          return { exitCode: 1, result: 'refuse', reason: 'baseline_failed_forced' };
+        }
+      }
+      return shellNode(scriptPath, a);
+    };
+    const savedCwd = process.cwd();
+    let aborted;
+    try {
+      process.chdir(repoRoot);
+      aborted = runOpenReady({
+        planPath, project, max: null, fanoutCapReadonly: 8,
+        shell: forcedShell,
+        readFile: (f) => fs.readFileSync(f, 'utf8'),
+        writeFile: (f, c) => { try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch (_) {} fs.writeFileSync(f, c); },
+        cacheExists: (f) => fs.existsSync(f),
+        mkdirp: (d) => { try { fs.mkdirSync(d, { recursive: true }); } catch (_) {} },
+        now: () => new Date().toISOString(),
+      });
+    } finally { process.chdir(savedCwd); }
+    assert(aborted && aborted.result === 'refuse' && aborted.reason === 'baseline_failed',
+      '#680-A: a forced Phase-2 baseline abort refuses baseline_failed, got ' + JSON.stringify(aborted));
+    // GROUP baseline (file + ref) dropped — pre-fix this stranded.
+    assert(!fs.existsSync(groupBaselineFile678(cacheDir, groupId)),
+      '#680-A: the Phase-2 abort drops the shared GROUP baseline FILE (was stranded pre-fix), got exists=' + fs.existsSync(groupBaselineFile678(cacheDir, groupId)));
+    assert(!groupBaselineRefExists678(repoRoot, project, groupId),
+      '#680-A: the Phase-2 abort drops the shared GROUP baseline REF (was stranded pre-fix)');
+    // Per-MEMBER baselines (file + ref) dropped — pre-fix these stranded too.
+    assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-A')) && !fs.existsSync(path.join(cacheDir, 'barrier-base-B')),
+      '#680-A: the Phase-2 abort drops BOTH member baseline FILES (were stranded pre-fix)');
+    assert(!groupBaselineRefExists678(repoRoot, project, 'A') && !groupBaselineRefExists678(repoRoot, project, 'B'),
+      '#680-A: the Phase-2 abort drops BOTH member baseline REFS (were stranded pre-fix)');
+    // Ledger untouched: the on-disk plan is never written on a Phase-2 abort, so A and B stay pending.
+    assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending',
+      '#680-A: the durable ledger rows stay pending on the aborted Phase-2 open (ledger + lane_group untouched), got ' + JSON.stringify({ A: ledgerStatus(planPath, 'A'), B: ledgerStatus(planPath, 'B') }));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #680 Part B positive (the pre-journal SIGKILL window): a baseline recorded with NO 'opening' journal
+  //   ever written (a hard crash between open-ready's baseline record and its Phase-1 running-set journal
+  //   write) has NO ledger in_progress row AND NO running-set owner — an orphan unreachable by any refusal-
+  //   return path. reconcile-running-set's additive orphan-baseline sweep (hoisted above the no_running_set
+  //   early-return) must detect and drop it (file + ref). Pre-fix (no sweep) the orphan survives forever.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
+    // Record a REAL orphan baseline (file + ref) for an id in NO ledger row and NO running set.
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'orphan', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    assert(fs.existsSync(path.join(cacheDir, 'barrier-base-orphan')) && groupBaselineRefExists678(repoRoot, project, 'orphan'),
+      '#680-B: the orphan baseline (file + ref) is seeded before reconcile');
+    // No running-set.json exists (the crash predated the Phase-1 journal write) → reconcile takes the
+    // no_running_set path, and the hoisted orphan sweep still reclaims the strand.
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', project, '--json'], DEFAULT);
+    assert(rec.result === 'ok', '#680-B: reconcile-running-set ok, got ' + JSON.stringify(rec));
+    assert(Array.isArray(rec.orphanBaselinesDropped) && rec.orphanBaselinesDropped.includes('orphan'),
+      '#680-B: reconcile reports the orphan baseline dropped, got ' + JSON.stringify(rec.orphanBaselinesDropped));
+    assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-orphan')),
+      '#680-B: the pre-journal orphan baseline FILE is dropped by the sweep (survived pre-fix)');
+    assert(!groupBaselineRefExists678(repoRoot, project, 'orphan'),
+      '#680-B: the pre-journal orphan baseline REF is dropped by the sweep (survived pre-fix)');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #680 Part B negative (the false-positive guard): the sweep must NOT drop a LIVE baseline. A baseline
+  //   owned by an in_progress ledger member AND a live lane_group's group baseline must SURVIVE (the
+  //   survives-checks hold both pre- and post-fix). A co-present orphan is dropped in the SAME run, so the
+  //   sweep is proven active and discriminating — a buggy over-reaping sweep would drop the live baselines
+  //   and fail the survives-checks.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, project, planPath, cacheDir } = makeLaneRepo();
+    const groupId = 'lg-A-B';
+    // A is a genuinely-live in_progress member; stand up a live 'open' lane_group with A as a live node.
+    fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('| A | pending |', '| A | in_progress |'));
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'A', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', groupId, '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'orphan', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({
+      state: 'open', max_concurrent: 2,
+      lane_group: { group_id: groupId, members: ['A', 'B'], baseline: 'recorded', write_union: ['ax.js', 'by.js'] },
+      nodes: [ { id: 'A', role: 'tdd-guide', kind: 'write', group_id: groupId, baseline: 'recorded' } ],
+    }, null, 2));
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', project, '--json'], DEFAULT);
+    assert(rec.result === 'ok', '#680-B-neg: reconcile-running-set ok, got ' + JSON.stringify(rec));
+    // Discrimination: the orphan is dropped, the live member/group baselines are NOT in the drop list.
+    assert(Array.isArray(rec.orphanBaselinesDropped) && rec.orphanBaselinesDropped.includes('orphan')
+      && !rec.orphanBaselinesDropped.includes('A') && !rec.orphanBaselinesDropped.includes(groupId),
+      '#680-B-neg: only the orphan is dropped; the live member/group baselines are NOT, got ' + JSON.stringify(rec.orphanBaselinesDropped));
+    // False-positive guard (holds pre- AND post-fix): the LIVE in_progress member baseline survives.
+    assert(fs.existsSync(path.join(cacheDir, 'barrier-base-A')) && groupBaselineRefExists678(repoRoot, project, 'A'),
+      '#680-B-neg: the LIVE in_progress member baseline (A, file + ref) is KEPT by the sweep');
+    // False-positive guard: the LIVE lane_group group baseline survives.
+    assert(fs.existsSync(groupBaselineFile678(cacheDir, groupId)) && groupBaselineRefExists678(repoRoot, project, groupId),
+      '#680-B-neg: the LIVE lane_group group baseline (file + ref) is KEPT by the sweep');
+    // And the co-present orphan really is gone (sweep active in the presence of live owners).
+    assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-orphan')),
+      '#680-B-neg: the co-present orphan baseline is dropped while the live baselines are kept');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
   // D437-MUTATION-GUARD-NOT-VACUOUS (#542 kill-switch): the kill-switch is NOT vacuous —
   //   KAOLA_PARALLEL_WRITES=0 must SUPPRESS the default-on co-open and fall back to the serial single
   //   open (one write, no group), so the second write never enters a group. Without an effective
