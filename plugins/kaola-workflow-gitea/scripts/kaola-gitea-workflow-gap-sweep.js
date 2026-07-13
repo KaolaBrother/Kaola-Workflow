@@ -188,24 +188,27 @@ function runScan(opts) {
 
   const cacheDir = path.join(projectDir, '.cache');
 
-  // #679: the #675 refusal above only fires when the ACTIVE project dir is GONE. When a LIVE project
-  // dir AND a same-named leftover archive (or any other foreign project) BOTH exist, and the scan
-  // runs with an explicit --output aimed at a run-gaps.json that lives OUTSIDE this project's own
-  // .cache/, the live scan's result would otherwise silently clobber that foreign/archived
+  // #679/#681: the #675 refusal above only fires when the ACTIVE project dir is GONE. When a LIVE
+  // project dir AND a same-named leftover archive (or any other foreign project) BOTH exist, and the
+  // scan runs with an explicit --output aimed at a run-gaps.json that lives OUTSIDE this project's
+  // own .cache/, the live scan's result would otherwise silently clobber that foreign/archived
   // run-gaps.json — destroying a prior cycle's durable gap evidence. Refuse whenever the resolved
-  // --output path is itself a run-gaps.json file, is not this project's own default artifact path,
-  // and already exists (i.e. the write would actually overwrite something). A brand-new or
-  // differently-named --output path is unaffected — nothing there to clobber.
+  // --output path is itself a run-gaps.json file and is not this project's own default artifact
+  // path — regardless of whether a file already exists there (#681: a scan must NEVER write a
+  // run-gaps.json outside its own .cache/, even into a foreign/archive tree that has no file there
+  // yet — leaving that precondition in place let an explicit --output at a NON-EXISTENT foreign
+  // run-gaps.json silently write a stray fresh file). A brand-new or differently-named --output path
+  // (any basename other than run-gaps.json) is unaffected.
   const ownArtifactPath = path.join(cacheDir, 'run-gaps.json');
   if (
     path.basename(outputPath) === 'run-gaps.json' &&
-    path.resolve(outputPath) !== path.resolve(ownArtifactPath) &&
-    fs.existsSync(outputPath)
+    path.resolve(outputPath) !== path.resolve(ownArtifactPath)
   ) {
     const detail = '--output ' + outputPath + ' points at a run-gaps.json outside this project\'s own ' +
-      '.cache/ (' + ownArtifactPath + ') and already exists there; refusing to overwrite a foreign ' +
-      'or archived cycle\'s gap evidence. Re-run without --output (writes to the project\'s own ' +
-      '.cache/) or point --output at a path that is not an existing run-gaps.json.';
+      '.cache/ (' + ownArtifactPath + '); refusing to write there — a scan must never write a ' +
+      'run-gaps.json into a foreign or archived cycle\'s tree, whether or not one already exists. ' +
+      'Re-run without --output (writes to the project\'s own .cache/) or point --output at a path ' +
+      'that is not named run-gaps.json.';
     if (asJson) {
       process.stdout.write(JSON.stringify({
         result: 'refuse',

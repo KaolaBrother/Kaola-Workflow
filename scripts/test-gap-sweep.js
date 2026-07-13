@@ -628,6 +628,43 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T16 (#681): an explicit --output aimed at a run-gaps.json OUTSIDE the scanned project's own
+// .cache/ that does NOT yet exist there must STILL refuse foreign_run_gaps_output — the #679
+// guard's "&& fs.existsSync(outputPath)" precondition let a scan silently write a stray FRESH
+// run-gaps.json into a foreign/archive tree as long as nothing was there yet. Nothing must be
+// written at that path at all.
+// ---------------------------------------------------------------------------
+const fix16 = makeFixture('proj-t16');
+try {
+  writeProvenance(fix16.cacheDir, [
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'open',  nodeId: 'n1' },
+    { event: 'close', nodeId: 'n1' },
+  ]);
+
+  // Foreign archive dir for a DIFFERENT project exists, but no run-gaps.json lives there yet.
+  const foreignArchiveCacheDir16 = path.join(fix16.root, 'kaola-workflow', 'archive', 'proj-t16-other', '.cache');
+  fs.mkdirSync(foreignArchiveCacheDir16, { recursive: true });
+  const foreignOutputPath16 = path.join(foreignArchiveCacheDir16, 'run-gaps.json');
+  assert(!fs.existsSync(foreignOutputPath16), 'T16: precondition — foreign run-gaps.json does not exist yet');
+
+  const r16 = run(fix16.root, [
+    '--project', 'proj-t16', '--json',
+    '--output', path.join('kaola-workflow', 'archive', 'proj-t16-other', '.cache', 'run-gaps.json'),
+  ]);
+
+  assert(r16.exitCode !== 0, 'T16: scanner exits non-zero when --output targets a NON-EXISTENT foreign run-gaps.json');
+  assert(r16.jsonOut !== null, 'T16: JSON output parseable on refuse');
+  if (r16.jsonOut) {
+    assert(r16.jsonOut.result === 'refuse', 'T16: result = refuse, got ' + r16.jsonOut.result);
+    assert(r16.jsonOut.reason === 'foreign_run_gaps_output', 'T16: reason = foreign_run_gaps_output, got ' + r16.jsonOut.reason);
+  }
+  assert(!fs.existsSync(foreignOutputPath16), 'T16: nothing must be written at the foreign path — pre-fix this silently writes a stray file');
+} finally {
+  try { fs.rmSync(fix16.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {
