@@ -159,7 +159,34 @@ function dedup(items) {
 
 function runScan(opts) {
   const { project, outputPath, asJson, root } = opts;
-  const cacheDir = path.join(root, 'kaola-workflow', project, '.cache');
+  const projectDir = path.join(root, 'kaola-workflow', project);
+  const archiveDir = path.join(root, 'kaola-workflow', 'archive', project);
+
+  // #675: the active project folder is gone (already archived by cmdFinalize) while an archived
+  // copy exists. The scanner only ever reads the ACTIVE .cache/ tree — scanning here would (a)
+  // recreate a stray active kaola-workflow/<project>/ dir via the mkdirSync below, and (b) with an
+  // explicit --output pointed at the archive, silently overwrite the archived run-gaps.json with an
+  // empty re-scan. Refuse loudly instead of ever touching either path. A project that was never
+  // claimed at all (neither active nor archived) is unaffected — that is the pre-existing vacuous
+  // first-scan case, not the archived-project case this refusal targets.
+  if (!fs.existsSync(projectDir) && fs.existsSync(archiveDir)) {
+    const detail = 'project ' + project + ' is already archived at kaola-workflow/archive/' + project +
+      '; the scanner only reads the active .cache/ tree and never re-scans or writes into an ' +
+      'archived project. Run the scanner BEFORE cmdFinalize archives the project, or inspect ' +
+      'kaola-workflow/archive/' + project + '/.cache/run-gaps.json directly.';
+    if (asJson) {
+      process.stdout.write(JSON.stringify({
+        result: 'refuse',
+        reason: 'project_archived',
+        detail,
+      }) + '\n');
+    } else {
+      process.stderr.write('gap-sweep: ' + detail + '\n');
+    }
+    return 1;
+  }
+
+  const cacheDir = path.join(projectDir, '.cache');
 
   // Scope guard: only read from this project's .cache.
   const raw = [

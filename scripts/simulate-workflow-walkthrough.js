@@ -15285,6 +15285,7 @@ function buildRegistry() {
   add('testAdaptiveLedgerHeaderInvalid425',               testAdaptiveLedgerHeaderInvalid425);
   add('testAdaptiveGeneratedPortSplit431',                testAdaptiveGeneratedPortSplit431);
   add('testFinalizeArchiveVerifiesBeforeDelete',          testFinalizeArchiveVerifiesBeforeDelete);
+  add('testArchiveCompleteSourceRelative676',             testArchiveCompleteSourceRelative676);
   add('testFinalizeClosesIssueBundleMembers',             testFinalizeClosesIssueBundleMembers);
   add('testFinalizeRoadmapResidueDetection',              testFinalizeRoadmapResidueDetection);
   add('testFinalizeBaseFlagScopesAttributionSweep',       testFinalizeBaseFlagScopesAttributionSweep);
@@ -16674,6 +16675,132 @@ function testFinalizeArchiveVerifiesBeforeDelete() {
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
   console.log('testFinalizeArchiveVerifiesBeforeDelete: PASSED');
+}
+
+function testArchiveCompleteSourceRelative676() {
+  // #676 SOURCE-RELATIVE archive-completeness (sibling to the #426 verify-before-delete test above).
+  // verifyArchiveComplete(src, dest) must refuse when the archive DEST dropped an evidence file the
+  // live SOURCE actually held (a lossy copy), pass a faithful copy, and pass a minimal state-only
+  // source — with workflow-state.md kept as the unconditional archive-identity anchor. RED vs the
+  // pre-fix fixed ['workflow-state.md'] floor: a copy dropping the frozen plan / finalization-summary
+  // / a per-node .cache/n*-*.md gate-evidence file passed as complete and BOTH live copies were
+  // deleted (the evidence-loss bug). copyDir is faithful, so a source-relative loss cannot be forced
+  // end-to-end; Part A exercises the loss detection directly and Part B drives the refuse-before-
+  // delete ordering end-to-end through the anchor path exactly as #426 does.
+  const claim = require(claimScript);
+  function seedProj676(dir, f) {
+    fs.mkdirSync(dir, { recursive: true });
+    if (f.state)   fs.writeFileSync(path.join(dir, 'workflow-state.md'), 'issue_number: 1\nphase: adaptive\n');
+    if (f.plan)    fs.writeFileSync(path.join(dir, 'workflow-plan.md'), '<!-- plan_hash: ' + '0'.repeat(64) + ' -->\n');
+    if (f.summary) fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization Summary\n');
+    if (f.fast)    fs.writeFileSync(path.join(dir, 'fast-summary.md'), '# Fast Summary\n');
+    if (f.nodes) {
+      fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+      for (const n of f.nodes) fs.writeFileSync(path.join(dir, '.cache', n), 'evidence\n');
+    }
+  }
+
+  // Part A — pure-function source-relative semantics (no git needed).
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-676-srcrel-')));
+  try {
+    // (1) faithful full-adaptive copy (plan+state+summary+node evidence) → PASS.
+    const s1 = path.join(tmp, 's1'); seedProj676(s1, { state: 1, plan: 1, summary: 1, nodes: ['n1-fix.md'] });
+    const d1 = path.join(tmp, 'd1'); seedProj676(d1, { state: 1, plan: 1, summary: 1, nodes: ['n1-fix.md'] });
+    const v1 = claim.verifyArchiveComplete(s1, d1);
+    assert(v1.ok === true && v1.missing.length === 0,
+      '#676 src-rel: a faithful full-adaptive copy passes, got ' + JSON.stringify(v1));
+
+    // (2) dest dropped finalization-summary.md the source held → REFUSE (the real bug vs the old floor).
+    const d2 = path.join(tmp, 'd2'); seedProj676(d2, { state: 1, plan: 1, nodes: ['n1-fix.md'] });
+    const v2 = claim.verifyArchiveComplete(s1, d2);
+    assert(v2.ok === false && v2.missing.includes('finalization-summary.md'),
+      '#676 src-rel: a dest dropping finalization-summary.md the source held must refuse, got ' + JSON.stringify(v2));
+
+    // (3) dest dropped a per-node .cache gate-evidence file the source held → REFUSE.
+    const s3 = path.join(tmp, 's3'); seedProj676(s3, { state: 1, plan: 1, summary: 1, nodes: ['n1-fix.md', 'n2-doc.md'] });
+    const d3 = path.join(tmp, 'd3'); seedProj676(d3, { state: 1, plan: 1, summary: 1, nodes: ['n1-fix.md'] });
+    const v3 = claim.verifyArchiveComplete(s3, d3);
+    assert(v3.ok === false && v3.missing.includes(path.join('.cache', 'n2-doc.md')),
+      '#676 src-rel: a dest dropping a per-node .cache evidence file must refuse, got ' + JSON.stringify(v3));
+
+    // (4) dest dropped fast-summary.md a fast-run source held → REFUSE (fast is source-relative too).
+    const s4 = path.join(tmp, 's4'); seedProj676(s4, { state: 1, fast: 1 });
+    const d4 = path.join(tmp, 'd4'); seedProj676(d4, { state: 1 });
+    const v4 = claim.verifyArchiveComplete(s4, d4);
+    assert(v4.ok === false && v4.missing.includes('fast-summary.md'),
+      '#676 src-rel: a dest dropping fast-summary.md the source held must refuse, got ' + JSON.stringify(v4));
+
+    // (5) minimal source (only workflow-state.md), faithful dest → PASS (nothing else demanded → no breakage).
+    const s5 = path.join(tmp, 's5'); seedProj676(s5, { state: 1 });
+    const d5 = path.join(tmp, 'd5'); seedProj676(d5, { state: 1 });
+    const v5 = claim.verifyArchiveComplete(s5, d5);
+    assert(v5.ok === true && v5.missing.length === 0,
+      '#676 src-rel: a minimal state-only source passes faithfully, got ' + JSON.stringify(v5));
+
+    // (6) workflow-state.md is the unconditional archive-identity anchor: a malformed source lacking
+    //     it still refuses when the dest lacks it (preserves the #426 verify-before-delete guarantee).
+    const s6 = path.join(tmp, 's6'); seedProj676(s6, { plan: 1 });
+    const d6 = path.join(tmp, 'd6'); seedProj676(d6, { plan: 1 });
+    const v6 = claim.verifyArchiveComplete(s6, d6);
+    assert(v6.ok === false && v6.missing.includes('workflow-state.md'),
+      '#676 src-rel: workflow-state.md anchor is required even when the source lacks it, got ' + JSON.stringify(v6));
+
+    // (8) DISCRIMINATING — FREE-FORM node-id gate evidence (design.md / review.md / finalize.md /
+    //     t414.md), matching the shapes real archived runs actually produce. A node id is free-form
+    //     [A-Za-z0-9_-]+, NOT n<digits>-<slug>, so the old name-shape glob MISSED every one of these:
+    //     a dest dropping such a file returned {ok:true} and BOTH live copies were deleted. RED vs the
+    //     narrow glob, GREEN once every .cache/*.md (minus machinery sidecars) is required.
+    const s8 = path.join(tmp, 's8'); seedProj676(s8, { state: 1, plan: 1, summary: 1, nodes: ['design.md', 'review.md', 'finalize.md', 't414.md'] });
+    const d8 = path.join(tmp, 'd8'); seedProj676(d8, { state: 1, plan: 1, summary: 1, nodes: ['design.md', 'finalize.md', 't414.md'] }); // drops review.md
+    const v8 = claim.verifyArchiveComplete(s8, d8);
+    assert(v8.ok === false && v8.missing.includes(path.join('.cache', 'review.md')),
+      '#676 src-rel: a dest dropping a FREE-FORM node-id evidence file (review.md) must refuse, got ' + JSON.stringify(v8));
+
+    // (9) FAITHFUL full copy with free-form + role-named node evidence → PASS (proves no false-refuse:
+    //     copyDir is recursive, so a genuine archive carries every one).
+    const s9 = path.join(tmp, 's9'); seedProj676(s9, { state: 1, plan: 1, summary: 1, nodes: ['planner.md', 'code-reviewer.md', 'security-reviewer.md', 'n1.md', 'parity-anchor.md'] });
+    const d9 = path.join(tmp, 'd9'); seedProj676(d9, { state: 1, plan: 1, summary: 1, nodes: ['planner.md', 'code-reviewer.md', 'security-reviewer.md', 'n1.md', 'parity-anchor.md'] });
+    const v9 = claim.verifyArchiveComplete(s9, d9);
+    assert(v9.ok === true && v9.missing.length === 0,
+      '#676 src-rel: a faithful copy with free-form/role-named node evidence must pass (no false-refuse), got ' + JSON.stringify(v9));
+
+    // (10) SIDECAR denylist — a dropped fixed-name finalize/machinery sub-step artifact (not per-node
+    //      gate evidence) must NOT refuse, so the gate stays scoped to genuine evidence loss.
+    const s10 = path.join(tmp, 's10'); seedProj676(s10, { state: 1, plan: 1, nodes: ['design.md'] });
+    fs.writeFileSync(path.join(s10, '.cache', 'final-validation.md'), 'verdict: pass\n');
+    fs.writeFileSync(path.join(s10, '.cache', 'doc-updater.md'), 'no docs\n');
+    const d10 = path.join(tmp, 'd10'); seedProj676(d10, { state: 1, plan: 1, nodes: ['design.md'] }); // drops both sidecars, keeps design.md
+    const v10 = claim.verifyArchiveComplete(s10, d10);
+    assert(v10.ok === true && v10.missing.length === 0,
+      '#676 src-rel: dropping a fixed-name machinery sidecar (final-validation.md / doc-updater.md) must NOT refuse, got ' + JSON.stringify(v10));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // Part B — END-TO-END refuse + SURVIVE via a linked worktree (extends the #426 pattern): a linked-
+  // run archive whose completeness gate refuses leaves BOTH live copies in place. The anchor path (a
+  // state-less source) drives the identical verify-before-delete ordering a source-relative loss takes.
+  const gtmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-676-e2e-')));
+  const gkwRoot = gtmp + '.kw';
+  let wtPath;
+  try {
+    initGitRepo(gtmp);
+    fs.mkdirSync(gkwRoot, { recursive: true });
+    wtPath = path.join(gkwRoot, 'issue-676e');
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-676e', '--', wtPath, 'HEAD'], { cwd: gtmp, encoding: 'utf8' });
+    const badProj = path.join(wtPath, 'kaola-workflow', 'issue-676bad');
+    seedProj676(badProj, { plan: 1 }); // no workflow-state.md → anchor refuses
+    const r7 = claim.archiveProjectDir(wtPath, 'issue-676bad', 'closed', undefined, {});
+    assert(r7 && r7.archive_incomplete === true && Array.isArray(r7.missing) && r7.missing.includes('workflow-state.md'),
+      '#676 src-rel e2e: a state-less linked-run source must refuse (anchor missing), got ' + JSON.stringify(r7));
+    assert(fs.existsSync(badProj),
+      '#676 src-rel e2e: the live source folder must SURVIVE an incomplete archive (verify runs before delete)');
+  } finally {
+    try { if (wtPath) spawnSync('git', ['-C', gtmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(gtmp, { recursive: true, force: true });
+    fs.rmSync(gkwRoot, { recursive: true, force: true });
+  }
+  console.log('testArchiveCompleteSourceRelative676: PASSED');
 }
 
 // ---------------------------------------------------------------------------

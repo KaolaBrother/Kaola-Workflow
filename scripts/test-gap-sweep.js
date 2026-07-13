@@ -484,6 +484,74 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T12 (#675): a scan invoked AFTER the project has been archived (no active kaola-workflow/<project>/
+// dir, only kaola-workflow/archive/<project>/) must refuse project_archived — it must NOT recreate a
+// stray active .cache/ tree, and it must NOT overwrite the archived run-gaps.json.
+// ---------------------------------------------------------------------------
+const fix12 = makeFixture('proj-t12-unused'); // borrow tmpdir mgmt; we build the archive layout manually
+try {
+  // Discard the active fixture the helper made — this test needs NO active dir at all.
+  fs.rmSync(path.join(fix12.root, 'kaola-workflow', 'proj-t12-unused'), { recursive: true, force: true });
+
+  const project12 = 'proj-t12';
+  const archiveCacheDir = path.join(fix12.root, 'kaola-workflow', 'archive', project12, '.cache');
+  fs.mkdirSync(archiveCacheDir, { recursive: true });
+  const archivedArtifact = {
+    project: project12,
+    sweptClasses: [{ reasonClass: 'in_run_repair', sample: 'n2', count: 1 }],
+  };
+  const archivedRunGapsPath = path.join(archiveCacheDir, 'run-gaps.json');
+  fs.writeFileSync(archivedRunGapsPath, JSON.stringify(archivedArtifact, null, 2) + '\n', 'utf8');
+
+  // (12.1) default output path (no --output) — must refuse and must NOT recreate the active dir.
+  const r12a = run(fix12.root, ['--project', project12, '--json']);
+  assert(r12a.exitCode !== 0, 'T12.1: scanner exits non-zero when the project is archived');
+  assert(r12a.jsonOut !== null, 'T12.1: JSON output parseable on refuse');
+  if (r12a.jsonOut) {
+    assert(r12a.jsonOut.result === 'refuse', 'T12.1: result = refuse, got ' + r12a.jsonOut.result);
+    assert(r12a.jsonOut.reason === 'project_archived', 'T12.1: reason = project_archived, got ' + r12a.jsonOut.reason);
+  }
+  const activeDir12 = path.join(fix12.root, 'kaola-workflow', project12);
+  assert(!fs.existsSync(activeDir12), 'T12.1: a stray active kaola-workflow/' + project12 + '/ dir must NOT be recreated');
+
+  // (12.2) explicit --output pointing directly at the archived run-gaps.json — must refuse and must
+  // NOT clobber the archived artifact's sweptClasses.
+  const r12b = run(fix12.root, [
+    '--project', project12, '--json',
+    '--output', path.join('kaola-workflow', 'archive', project12, '.cache', 'run-gaps.json'),
+  ]);
+  assert(r12b.exitCode !== 0, 'T12.2: scanner exits non-zero with an explicit --output at the archive');
+  if (r12b.jsonOut) {
+    assert(r12b.jsonOut.result === 'refuse', 'T12.2: result = refuse, got ' + r12b.jsonOut.result);
+    assert(r12b.jsonOut.reason === 'project_archived', 'T12.2: reason = project_archived, got ' + r12b.jsonOut.reason);
+  }
+  const preserved = JSON.parse(fs.readFileSync(archivedRunGapsPath, 'utf8'));
+  assert(Array.isArray(preserved.sweptClasses) && preserved.sweptClasses.length === 1,
+    'T12.2: the archived run-gaps.json must be untouched (still 1 swept class), got: ' + JSON.stringify(preserved.sweptClasses));
+  assert(preserved.sweptClasses[0] && preserved.sweptClasses[0].reasonClass === 'in_run_repair' && preserved.sweptClasses[0].sample === 'n2',
+    'T12.2: the archived run-gaps.json content must be byte-preserved, got: ' + JSON.stringify(preserved.sweptClasses));
+} finally {
+  try { fs.rmSync(fix12.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T13 (#675): a project that was NEVER claimed (no active dir, no archive dir) is unaffected by the
+// project_archived refusal — the original vacuous-empty-scan behavior is preserved for a genuinely
+// new project name (out of scope for #675: only the archived case must refuse).
+// ---------------------------------------------------------------------------
+const fix13Root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gap-sweep-'));
+try {
+  const r13 = run(fix13Root, ['--project', 'proj-t13-never-claimed', '--json']);
+  assert(r13.exitCode === 0, 'T13: a never-claimed project (no active, no archive) still scans vacuously, got exit ' + r13.exitCode);
+  if (r13.jsonOut) {
+    assert(r13.jsonOut.result === 'swept', 'T13: result = swept for a never-claimed project');
+    assert(Array.isArray(r13.jsonOut.sweptClasses) && r13.jsonOut.sweptClasses.length === 0, 'T13: sweptClasses empty');
+  }
+} finally {
+  try { fs.rmSync(fix13Root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

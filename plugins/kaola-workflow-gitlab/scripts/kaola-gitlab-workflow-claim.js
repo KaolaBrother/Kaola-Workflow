@@ -1738,8 +1738,11 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     dest = path.join(archiveBase, project + (suffix || ''));
     if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
     copyDir(src, dest);
-    // (c) verify archive completeness before any deletion.
-    const v = verifyArchiveComplete(dest, ['workflow-state.md']);
+    // (c) verify archive completeness before any deletion. #676: SOURCE-RELATIVE — every evidence
+    // file that exists in the live SOURCE folder must survive into the copied DEST; a lossy copy
+    // that dropped the frozen plan / finalization summary / a per-node .cache gate-evidence file
+    // refuses here, before either live copy is deleted (see verifyArchiveComplete).
+    const v = verifyArchiveComplete(src, dest);
     if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, dest };
     // (d) delete BOTH live copies — only after copy+verify confirmed.
     fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
@@ -1751,7 +1754,10 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
       } catch (_) {}
     }
   } else {
-    // in-place run: existing renameSync path unchanged.
+    // in-place run: existing renameSync path unchanged. #676: no completeness gate needed here —
+    // an atomic rename relocates the WHOLE live folder, so the archive dest is byte-identical to
+    // the former source and no evidence file can be dropped (the source-relative loss the gate
+    // catches only happens on the copy+verify linked-run path above).
     const archiveBase = path.join(root, 'kaola-workflow', 'archive');
     fs.mkdirSync(archiveBase, { recursive: true });
     dest = path.join(archiveBase, project + (suffix || ''));
@@ -2087,6 +2093,29 @@ function cmdFinalize() {
     }
   }
   const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
+  // #676: receipt honesty — a lossy archive copy (verifyArchiveComplete refused BEFORE deleting
+  // the live copy/copies because the DEST dropped an evidence file the live SOURCE held) must halt
+  // finalize here, before any downstream side effect (roadmap source removal, issue close,
+  // claim-label removal). Without this, cmdFinalize would fabricate a status:'closed' receipt while
+  // archived:false/archive_incomplete:true sat right beside it, and would still close the issue /
+  // remove the roadmap source for a run whose archive copy silently lost gate evidence. The live
+  // folder(s) already survived (that is the whole point of the pre-deletion gate); this just
+  // refuses to lie about it.
+  if (result.archive_incomplete === true) {
+    output({
+      result: 'refuse',
+      reason: 'archive_incomplete',
+      project: args.project,
+      missing: result.missing,
+      dest: result.dest,
+      reasoning: 'the archive copy dropped evidence the live project still held (' +
+        (Array.isArray(result.missing) ? result.missing.join(', ') : 'unknown') +
+        '); the live project folder was left in place — no roadmap/issue/label side effect was ' +
+        'performed. Re-run finalize so the archive faithfully preserves every workflow-plan.md / ' +
+        'workflow-state.md / finalization-summary.md / .cache/n*-*.md file the source contains.'
+    }, 1);
+    return;
+  }
   // #426: resolve main/linked roots in cmdFinalize scope for backstop + removeWorktree + anchored_root.
   let cmdFinalizeMainRoot, cmdFinalizeLinkedRoot;
   try {
@@ -2945,12 +2974,63 @@ function copyDir(src, dest) {
   }
 }
 
-// #426: verify that a freshly-copied archive is complete before deleting the live source.
-function verifyArchiveComplete(dest, expectedFiles) {
+// #676: the evidence files whose silent loss during archiving would drop finalization / per-node
+// gate evidence. Enumerate the ones that ACTUALLY EXIST in the live SOURCE folder — this is the
+// SOURCE-RELATIVE completeness set. A minimal project (only workflow-state.md) yields just that; a
+// full adaptive run yields the frozen workflow-plan.md + workflow-state.md + finalization-summary.md
+// + EVERY per-node .cache/*.md gate-evidence file; a fast run additionally may carry fast-summary.md.
+// Nothing the source never had is ever demanded, so the gate can never break a minimal fixture — it
+// only fires when a copy genuinely dropped a file the source held.
+//
+// A node id is free-form [A-Za-z0-9_-]+ (sanitizeNodeId), NOT an n<digits>-<slug> grammar, so real
+// gate evidence is named design.md / review.md / finalize.md / t414.md / parity-anchor.md /
+// planner.md / code-reviewer.md / tdd-guide.md / security-reviewer.md / n1.md / … — a name-shape glob
+// silently misses ALL of these. Enumerate EVERY .cache/*.md and subtract only the fixed-name finalize
+// / machinery sub-step sidecars below (which are NOT per-node gate evidence). Over-inclusion is
+// fail-closed-safe because copyDir is fully recursive — a faithful archive already carries every
+// .cache/*.md the source held, so requiring extra can never false-refuse a genuine copy. Non-.md
+// artifacts (run-gaps.json, chain-receipt.json, barrier-*/dispatch/provenance/running-set) are not
+// gate evidence and are excluded by the .md filter.
+const ARCHIVE_CACHE_SIDECAR_MD = new Set([
+  'final-validation.md',   // finalize validation-gate evidence (column-0 verdict: pass); archiveProjectDir normalizes it by name
+  'run-gaps-manual.md',    // manual gap-sweep annotations sidecar
+  'selection-evidence.md', // issue-selection evidence sidecar
+  'doc-docking.md',        // finalize Documentation-Docking sub-step (DOCKED/BLOCKED)
+  'doc-updater.md',        // finalize doc-updater sub-step output
+]);
+function listSourceEvidenceFiles(srcDir) {
+  const rels = [];
+  for (const f of ['workflow-plan.md', 'workflow-state.md', 'finalization-summary.md', 'fast-summary.md']) {
+    if (fs.existsSync(path.join(srcDir, f))) rels.push(f);
+  }
+  let cacheEntries = [];
+  try { cacheEntries = fs.readdirSync(path.join(srcDir, '.cache')); } catch (_) { cacheEntries = []; }
+  for (const name of cacheEntries) {
+    if (name.endsWith('.md') && !ARCHIVE_CACHE_SIDECAR_MD.has(name)) rels.push(path.join('.cache', name));
+  }
+  return rels;
+}
+
+// #426/#676: verify a freshly-COPIED archive preserved every evidence file the live SOURCE held,
+// BEFORE either live copy is deleted. SOURCE-RELATIVE (see listSourceEvidenceFiles): `srcDir` is
+// the live folder, `destDir` the copied archive. Returns { ok, missing } where `missing` lists the
+// source-present relative paths absent from dest (a lossy copy). Only the copy+verify linked-run
+// path calls this; the in-place renameSync path relocates the whole dir atomically and cannot drop
+// anything, so it is trivially complete and does not call this.
+//
+// workflow-state.md is additionally required UNCONDITIONALLY as the archive's identity anchor:
+// archiveProjectDir only ever runs for a claimed project (which always writes workflow-state.md at
+// claim time), and an archived folder lacking it is unusable. This is NOT the rejected absolute
+// evidence floor — plan / summary / fast-summary / node-evidence stay strictly source-relative —
+// it is the single #426 archive-integrity invariant (a state-less source is malformed and must not
+// be deleted before its archive is proven to carry the state file).
+function verifyArchiveComplete(srcDir, destDir) {
+  if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'] };
+  const required = new Set(listSourceEvidenceFiles(srcDir));
+  required.add('workflow-state.md');
   const missing = [];
-  if (!fs.existsSync(dest)) return { ok: false, missing: ['<dest>'] };
-  for (const f of expectedFiles) {
-    if (!fs.existsSync(path.join(dest, f))) missing.push(f);
+  for (const rel of required) {
+    if (!fs.existsSync(path.join(destDir, rel))) missing.push(rel);
   }
   return { ok: missing.length === 0, missing };
 }
@@ -3369,5 +3449,6 @@ module.exports = {
   watchMergeRequests,
   worktreePathFor,
   verifyImplPublished,
+  verifyArchiveComplete,
   cmdVerifySink
 };
