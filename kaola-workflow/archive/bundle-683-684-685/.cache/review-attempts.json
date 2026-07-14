@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "plan_hash": "e6e7a66b4915e1658db397af012c05dab180acda30f2d27961166d1c0907e4d3",
+  "attempts": [
+    {
+      "attempt_id": "n2-review:1",
+      "ordinal": 1,
+      "plan_hash": "e6e7a66b4915e1658db397af012c05dab180acda30f2d27961166d1c0907e4d3",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-fix\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-fix"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "e4d6ac4bd703d085e27a8581b2a3c3127c6c8b2b335a2b85f63e54f6ab00c516",
+      "candidate_digest": "41f992943d591482cb894738c94321850c2b81d08d1b12255ce2a478d0b9b071",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "f086e43862b8"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "f086e43862b8",
+          "receipt_sha256": "d64295f61fcddc1836847ae0e06bd7f47f4d7d65955d1c30bc0f3c78f4539ac5",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-review f086e43862b8\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-fix e5791320d595\n\nfinding: id=N2R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the `(ledgerStatuses || {})` fallback in proveRebindAdmissible degrades to PRE-FIX admit semantics (every lookup undefined => member non-complete => writer attributable) if a future caller omits the ctx field or the plan carries no Node Ledger — unreachable today (single call site :4934 always threads proofLedger from the integrity-guarded initialPlan); a fail-closed default (refuse attribution when the ledger is absent) is the stricter posture — file as follow-up\nfinding: id=N2R2 scope=in_scope action=document status=open severity=low fix_role=none rationale=the quantifier `.some(members, status !== 'complete')` admits an owner writer while its fan-out gate is only PARTIALLY non-complete; no reachable mixed complete/pending state constructible today (collective fold moves members together; the (3b) would_orphan_in_progress guard fences mid-vote repairs) and every non-complete member must still re-review the post-absorption tree before finalize; the clause is a strict narrowing of base in every state — record the invariant-dependence in D-683-01 so a future per-member-fold change re-examines this quantifier\n\n# Gate review — R7 + R8 delta over base 16561216\n\n## The R7 fix — read, attacked, executed\n\n**Predicate:** `proveRebindAdmissible` (adaptive-node.js:4646-4650) now admits a writer into `repairWriters(X)`\nonly when its selecting gate has some ledger-non-complete member — a PURE ADDITIONAL CONJUNCT on the base\nfilter. Every state the new predicate admits was admitted at base, so the delta cannot introduce a new fail-open;\nit can only convert former P3b admits into `candidate_delta_unattributed` refusals. No pre-existing typed refusal\nrenamed/removed/re-routed.\n\n**Attack 1 — soundness both directions (EXECUTED):** re-ran n10's ORIGINAL attack driver (real CLI subprocesses,\nreal frozen plan):\n- FIXED worktree: `ATTACK REFUSED at repair: candidate_delta_unattributed paths=[\"ax.js\"] rebindLen=0` — the exact\n  escape dies at the repair, no rebind record.\n- copy with ONLY the R7 clause reverted to a tautology: full escape reproduces — `ESCAPE CONFIRMED: finalize opened\n  with ax.js@v3`, `ga:2 outcome=pass consumed_by=null` while `gb:2` absorbed the rogue move. Independently\n  reproduces the RED on base semantics AND proves the single clause is load-bearing.\n- LEGITIMATE seven-step: N11 drives it in-flow (asserts `repair gb:1/wb` absorbs `ax.js@wa` via a LIVE P3b while\n  `ledger(ga)==='pending'`); the #683 E2E recovers to finalize with a byte-identical plan_hash — both green.\n  Strict narrowing confirmed, not a blanket P3b ban.\n\n**Attack 2 — staleness / manipulability / quantifier:** `proofLedger` (:4881) is a hoist of the identical\n`readLedgerStatuses(initialPlan)` the unique-maximal proof already made; `initialPlan` read once at :4808 inside\nthe guard prologue's mutual exclusion — no new staleness surface. Forging owner gate `pending` when discharged\nrequires hand-editing the ledger, which also schedules the re-review it claims (self-consistent; hand-editing\ndurable state is outside the threat model). Forging `complete` when folded → refuse (fail-closed). Missing/empty\nledger degrades to base admit via `|| {}` — unreachable today (N2R1). The `.some` fan-out quantifier: every\npartially-complete construction is closed by the collective fold or the (3b) would_orphan_in_progress guard, and\nthe clause is strictly tighter than base in all states (N2R2).\n\n**Attack 3 — mutation-kill of N11 (EXECUTED):** full suite on the reverted copy → EXACTLY 2 failures, both N11\n(the escape assertion got `result:\"ok\"`, the base laundering payload; and the zero-durable-mutation assertion);\n2154/2156 green. Double result: N11 is a genuine single-line killer, AND the base↔fixed behavioral delta across\nthe entire 2156-assertion surface is ONLY the R7 escape — strongest possible evidence every pre-existing refusal\nkeeps exact semantics.\n\n## R8 — per-fold-site killers (EXECUTED)\n\n- Site A disabled (journal-driven fold, `if (repairAttempt)` :5044): 21 failures = N684-6 (`evidenceRemoved=[]` —\n  the `completedJournalGates`-fed purge at :5208 is load-bearing) + R21/R22/R23/R24. ZERO N684-5/N11 → N684-6\n  single-site attributable. CONFIRMS the R9 explanation: R21-R24 genuinely kill site A in the full suite (the\n  n11 replica simply never contained them) — verified by execution.\n- Site B disabled (#664 ledger-fanout :5086): exactly 8 failures, all #664 + #665 R2; N684-5 AND N684-6 green →\n  site B independently killed, N684-6 not spuriously dependent on it.\n- N684-6 pins current behavior (clean suite green); no production fold code changed in the delta.\n\n## Breaker, ports, chains, hygiene\n\n- Five-consumed-repairs breaker (STEP 6, :4867-4873) untouched, still above every rebind proof/mutation; STEP-5\n  consumption-resume untouched, appends no rebind.\n- `edition-sync.js --check` → 10 ports, 24 mirrors, 27 byte-identical groups, exit 0; all 3 port diffs' added\n  lines md5-identical to canonical.\n- 4 adaptive-schema.js copies one sha256 (05e001ace225…), untouched.\n- Chains: implementer `fourchain.out` FOURCHAIN_EXIT=0, mtime postdates all sources; my spot-checks: clean\n  `test-adaptive-node.js` → 2156 assertions, 0 FAIL; walkthrough passed.\n- Write-set = exactly the 5 declared files, unchanged after my runs.\n\n## Verdict\nWent looking for the sixth hole; did not find one. The executed escape refuses with zero mutation; the reverted\ncopy proves both the RED and the single-line load-bearing claim; the base↔fixed suite delta is exactly N11; both\nfold sites have independent single-site killers; ports/schema/chains in order. The two findings are fail-closed\nhardening/doc notes, non-blocking. PASS.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=N2R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the `(ledgerStatuses || {})` fallback in proveRebindAdmissible degrades to PRE-FIX admit semantics (every lookup undefined => member non-complete => writer attributable) if a future caller omits the ctx field or the plan carries no Node Ledger — unreachable today (single call site :4934 always threads proofLedger from the integrity-guarded initialPlan); a fail-closed default (refuse attribution when the ledger is absent) is the stricter posture — file as follow-up",
+          "id": "N2R1",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "open",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "the"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=N2R2 scope=in_scope action=document status=open severity=low fix_role=none rationale=the quantifier `.some(members, status !== 'complete')` admits an owner writer while its fan-out gate is only PARTIALLY non-complete; no reachable mixed complete/pending state constructible today (collective fold moves members together; the (3b) would_orphan_in_progress guard fences mid-vote repairs) and every non-complete member must still re-review the post-absorption tree before finalize; the clause is a strict narrowing of base in every state — record the invariant-dependence in D-683-01 so a future per-member-fold change re-examines this quantifier",
+          "id": "N2R2",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "open",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "the",
+          "!": "="
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "N2R1",
+          "id": "N2R1",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "open",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=N2R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the `(ledgerStatuses || {})` fallback in proveRebindAdmissible degrades to PRE-FIX admit semantics (every lookup undefined => member non-complete => writer attributable) if a future caller omits the ctx field or the plan carries no Node Ledger — unreachable today (single call site :4934 always threads proofLedger from the integrity-guarded initialPlan); a fail-closed default (refuse attribution when the ledger is absent) is the stricter posture — file as follow-up"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "N2R2",
+          "id": "N2R2",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "open",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=N2R2 scope=in_scope action=document status=open severity=low fix_role=none rationale=the quantifier `.some(members, status !== 'complete')` admits an owner writer while its fan-out gate is only PARTIALLY non-complete; no reachable mixed complete/pending state constructible today (collective fold moves members together; the (3b) would_orphan_in_progress guard fences mid-vote repairs) and every non-complete member must still re-review the post-absorption tree before finalize; the clause is a strict narrowing of base in every state — record the invariant-dependence in D-683-01 so a future per-member-fold change re-examines this quantifier"
+        }
+      ],
+      "producer_bindings": {
+        "n1-fix": {
+          "baseline": "e5791320d5956d680f9e87ed2252b07ee3da264c",
+          "anchored_ref": "e5791320d5956d680f9e87ed2252b07ee3da264c",
+          "open_token": "16561216bc14f57db9f2943f9b79c5522591afd4",
+          "generation": "e5791320d595",
+          "ref": "refs/kaola-workflow/barrier/bundle-683-684-685/n1-fix"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-adversary:1",
+      "ordinal": 1,
+      "plan_hash": "e6e7a66b4915e1658db397af012c05dab180acda30f2d27961166d1c0907e4d3",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-review\"],\"members\":[\"n3-adversary\"]}",
+        "kind": "sequence",
+        "id": "n3-adversary",
+        "origin": [
+          "n2-review"
+        ],
+        "members": [
+          "n3-adversary"
+        ]
+      },
+      "transaction_key": "59083e746f702d365c5d2486f81d86f1a5e7f84231ea4b04ecfe85a276f4a7e8",
+      "candidate_digest": "41f992943d591482cb894738c94321850c2b81d08d1b12255ce2a478d0b9b071",
+      "generations": [
+        {
+          "member": "n3-adversary",
+          "nonce": "63515a1a3587"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n3-adversary",
+          "generation": "63515a1a3587",
+          "receipt_sha256": "f472b5d7dc3a1234255e86e312844af4292054ec3d6665ad4a152cbe1aba7267",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n3-adversary 63515a1a3587\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-fix e5791320d595\n\nfinding: id=N3R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the R7 predicate `(a.logical_gate.members||[]).some(m => ledgerStatuses[m] !== 'complete')` treats EVERY non-complete status as \"owner gate will re-review\", including `n/a` — a pruned gate that never re-reviews AND (unlike in_progress) is not caught by would_orphan_in_progress at :5110. Unreachable today (the sole n/a ledger writer is selector-arm pruning foldSelectorArms :1854; a gate with a repair record sits in a SELECTED arm; selectors resolve once before arms run; unselected-arm gates never open so hold no repair record; reopen/repair fold only GATE_ROLES never a selector). Stricter fail-closed predicate: `∈ {'pending','in_progress'}`. Same character as N2R2 — record in D-683-01 so a future selector×repair change re-examines it.\n\n# Adversarial re-attack — R7 fix + sixth-hole hunt\n\n## Priority 3 — R7 refutation re-confirmed (EXECUTED, three drivers)\n- n10's original `attack-p3b-temporal.js`: `repair gb:2/wb WITH ax@v3` => `repair_requires_replan /\n  candidate_delta_unattributed paths=[\"ax.js\"]`, ATTACK REFUSED, exit 0.\n- `escape-r7.js`: escape => candidate_delta_unattributed, `gb:2.rebind.length=0 refMoved=false`, FIXED — ZERO\n  durable mutation. The LEGIT co-repair on the way in works: `repair gb:1/wb => ok` (LIVE P3b, ledger(ga)=pending),\n  `ga:2=ok ledger(ga)=complete`.\n- Full suite: adaptive-node tests passed (2156 assertions), exit 0.\n\n## Priority 1 — temporal edge cases (EXECUTED, three-gate chain)\nBuilt `seed→{wa,wb,wc}→{ga|wa,gb|wb,gc|wc}→finalize`. gb:1 absorbs ax@v2 via LIVE P3b (ga pending); fence lifts;\nga+gb re-pass to complete, gc re-fails (gc:2). Moved ax→v3 out-of-band and tried to launder through the STILL-OPEN\nthird gate: `repair gc:2/wc WITH ax@v3 => candidate_delta_unattributed paths=[\"ax.js\"]` — REFUSED (predicate reads\nga=complete, gb=complete at repair entry, so wa ∉ repairWriters). 1(a)/1(b) subsumed — ga re-reviews the current\ntree at its own close (never a stale value); a re-failing owner gate stays a blocker fenced by reviewJournalBlocker.\n\n## Priority 2 — `.some` fanout quantifier (defense-in-depth verified)\n`.some(!=='complete')` is true iff the gate is not fully discharged → a partial state still means the gate WILL\nre-review (aggregate needs all members' receipts on one candidate, else finalize is fenced). Independently, the\npredicate at :4931 is PURE (only sets pendingRebind :4949); performRebind :5125 sits AFTER would_orphan_in_progress\n:5107. A partial fanout leaves an in_progress member that the all-complete group-fold :5098 skips → orphan →\nrefuse BEFORE any durable byte. Could not construct a mutating partial-fanout admit.\n\n## Priority 4 — new-axis hunt\n(a) crash-resume STEP-5 hoist :4845 short-circuits BEFORE the rebind proof, performs NO new rebind. (b)\nledger/digest instant consistency: proofLedger :4881 and the tree digest :4894 are read within one repair-node\ninvocation under the guard prologue's project-lock mutual exclusion — no concurrent mutation. (c) `|| {}` fallback\ndegrades to pre-fix admit only when the ledger is absent — unreachable (a frozen journal plan always carries a Node\nLedger). The one genuine divergence: `n/a` status (N3R1) — admitted as \"will re-review\" though an n/a gate is\npruned and never re-reviews and escapes the orphan guard — but provably unreachable today (traced above).\nEmpirically: a verdict gate cannot self-skip to any status (closing g1 with n/a evidence => refuse, ledger stays\nin_progress).\n\n## Verdict\nNOT-REFUTED (confidence high). Attacked priorities 1-4 with executed drivers; every escape (2-gate original,\nescape-r7, N11, 3-gate chain) refused with candidate_delta_unattributed and zero durable mutation; the legitimate\nco-repair recovers; the only predicate-breadth divergence (n/a) is provably unreachable — filed non-blocking\n(N3R1), not a sixth hole. No executed path drives an unreviewed change to finalize. No repo file left modified.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=N3R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the R7 predicate `(a.logical_gate.members||[]).some(m => ledgerStatuses[m] !== 'complete')` treats EVERY non-complete status as \"owner gate will re-review\", including `n/a` — a pruned gate that never re-reviews AND (unlike in_progress) is not caught by would_orphan_in_progress at :5110. Unreachable today (the sole n/a ledger writer is selector-arm pruning foldSelectorArms :1854; a gate with a repair record sits in a SELECTED arm; selectors resolve once before arms run; unselected-arm gates never open so hold no repair record; reopen/repair fold only GATE_ROLES never a selector). Stricter fail-closed predicate: `∈ {'pending','in_progress'}`. Same character as N2R2 — record in D-683-01 so a future selector×repair change re-examines it.",
+          "id": "N3R1",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "open",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "the",
+          "!": "="
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "N3R1",
+          "id": "N3R1",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "open",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=N3R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the R7 predicate `(a.logical_gate.members||[]).some(m => ledgerStatuses[m] !== 'complete')` treats EVERY non-complete status as \"owner gate will re-review\", including `n/a` — a pruned gate that never re-reviews AND (unlike in_progress) is not caught by would_orphan_in_progress at :5110. Unreachable today (the sole n/a ledger writer is selector-arm pruning foldSelectorArms :1854; a gate with a repair record sits in a SELECTED arm; selectors resolve once before arms run; unselected-arm gates never open so hold no repair record; reopen/repair fold only GATE_ROLES never a selector). Stricter fail-closed predicate: `∈ {'pending','in_progress'}`. Same character as N2R2 — record in D-683-01 so a future selector×repair change re-examines it."
+        }
+      ],
+      "producer_bindings": {
+        "n1-fix": {
+          "baseline": "e5791320d5956d680f9e87ed2252b07ee3da264c",
+          "anchored_ref": "e5791320d5956d680f9e87ed2252b07ee3da264c",
+          "open_token": "16561216bc14f57db9f2943f9b79c5522591afd4",
+          "generation": "e5791320d595",
+          "ref": "refs/kaola-workflow/barrier/bundle-683-684-685/n1-fix"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "consumed_by": null
+    }
+  ]
+}

@@ -1,5 +1,0 @@
-issue: #683
-title: fix(adaptive): simultaneous failed gates dead-end repair — sibling repair-node hits would_orphan_in_progress then candidate_digest_changed; only whole-plan discard recovers (post-#682)
-status: open
-workflow_project: —
-next_step: Post-ship adversarial audit 2026-07-14 executed E2E at HEAD 0290824c: two gates failing on one candidate wedge repair — first repair-node consumes A and reopens its writer, the sibling attempt then refuses would_orphan_in_progress, and after the writer's fix lands candidate_digest_changed (whole-tree binding) forces repair_requires_replan; openers stay review_attempt_unresolved forever, only plan discard recovers. Also folds the crash-retry digest wedge (same root cause). Fix (L): make the agent-selected sibling repair provable post-repair (producer-slice binding / same-generation sibling consumption / explicit re-bind transaction), keep all refusals typed + fail-closed, RED-first CLI E2E; adaptive-node GENERATED via sync:editions + four-chain. Full body on GitHub #683.

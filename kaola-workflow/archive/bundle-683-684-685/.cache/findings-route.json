@@ -1,0 +1,15 @@
+[
+  {
+    "source_node": "n3-adversary",
+    "finding_id": "N3R1",
+    "id": "N3R1",
+    "scope": "in_scope",
+    "action": "follow_up",
+    "status": "open",
+    "severity": "low",
+    "ownership_candidates": [],
+    "owning_node": null,
+    "fix_role": "none",
+    "raw": "id=N3R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=the R7 predicate `(a.logical_gate.members||[]).some(m => ledgerStatuses[m] !== 'complete')` treats EVERY non-complete status as \"owner gate will re-review\", including `n/a` — a pruned gate that never re-reviews AND (unlike in_progress) is not caught by would_orphan_in_progress at :5110. Unreachable today (the sole n/a ledger writer is selector-arm pruning foldSelectorArms :1854; a gate with a repair record sits in a SELECTED arm; selectors resolve once before arms run; unselected-arm gates never open so hold no repair record; reopen/repair fold only GATE_ROLES never a selector). Stricter fail-closed predicate: `∈ {'pending','in_progress'}`. Same character as N2R2 — record in D-683-01 so a future selector×repair change re-examines it."
+  }
+]
