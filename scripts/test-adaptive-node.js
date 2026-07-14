@@ -15579,6 +15579,72 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // N11 — P3b TEMPORAL SOUNDNESS. `repair.selected_writer` is set once and never cleared, so a spent
+  // repair (its gate already RE-PASSED and gone `complete`) must NOT keep laundering later out-of-band
+  // movements of that owner's declared path into an unrelated gate's rebind. This drives the exact
+  // temporal escape end-to-end: ga & gb rejoin only at finalize (ga does NOT post-dominate gb); ga:1 is
+  // repaired via wa and RE-PASSES at ax@v2 (ga -> complete); ax.js is then moved OUT OF BAND to v3 (a
+  // value NO gate ever reviewed); repairing gb:2 via wb must NOT absorb ax@v3 off ga:1's now-discharged
+  // repair. It must refuse candidate_delta_unattributed with ZERO durable mutation. The LEGITIMATE
+  // co-repair (repair gb:1 while ga is still folded-pending) is exercised on the way in and must still
+  // succeed — so the fix is a strict narrowing, not a blanket ban on P3b.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    const { R, P, nonceFor, ledger683, attempt683, refSha683 } = w;
+
+    // repair ga:1 (P3a: bx unchanged); wa fixes ax->v2; close. ga does NOT reopen (gb:1 still fences it).
+    assert(R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]).result === 'ok',
+      '#683 N11: setup — the first repair (ga:1/wa) succeeds via P3a');
+    fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
+    fs.writeFileSync(path.join(w.cacheDir, 'wa.md'),
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nGREEN: t_wa passes 4/4\n');
+    R(['close-node', '--node-id', 'wa', ...P]);
+    assert(ledger683('ga') === 'pending',
+      '#683 N11: setup — ga stays FOLDED-PENDING while gb:1 is unresolved (its repair is still LIVE)');
+
+    // The LEGITIMATE co-repair: gb:1 via wb absorbs the CHANGED ax.js (v1->v2) via P3b — sound ONLY
+    // because ga is still folded-pending and MUST re-review ax@v2. This is the strict-narrowing witness.
+    const liveRepair = R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...P]);
+    assert(liveRepair.result === 'ok'
+      && JSON.stringify((attempt683('gb:1').rebind[0].absorbed || []).map(a => a.path + '@' + a.owner))
+        === JSON.stringify(['ax.js@wa']),
+      '#683 N11: the LEGITIMATE co-repair (gb:1 while ga folded-pending) STILL absorbs ax.js via a LIVE P3b');
+    fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// wb v2 (fixed)\n');
+    fs.writeFileSync(path.join(w.cacheDir, 'wb.md'),
+      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nGREEN: t_wb passes 3/3\n');
+    R(['close-node', '--node-id', 'wb', ...P]);
+
+    // Both gates reopen. ga PASSES on ax@v2 and goes COMPLETE (its repair is now DISCHARGED); gb FAILS
+    // again on bx@v2, minting a fresh blocker gb:2.
+    R(['orient', ...P]);
+    let rr = R(['open-ready', ...P]);
+    const nonceReopen = id => ((rr.opened || []).find(n => n.id === id) || {}).nonce;
+    R(['record-evidence', '--node-id', 'ga', '--stdin', ...P],
+      'evidence-binding: ga ' + nonceReopen('ga') + '\nverdict: pass\nfindings_blocking: 0\n');
+    R(['record-evidence', '--node-id', 'gb', '--stdin', ...P],
+      'evidence-binding: gb ' + nonceReopen('gb') + '\nverdict: fail\nfindings_blocking: 1\n\n'
+      + '## Findings\n\n| id | scope | action | status | severity | file | fix_role |\n'
+      + '| --- | --- | --- | --- | --- | --- | --- |\n'
+      + '| F1 | in_scope | fix | open | blocking | bx.js | tdd-guide |\n');
+    R(['close-node', '--node-id', 'ga', ...P]);
+    const cgb2 = R(['close-node', '--node-id', 'gb', ...P]);
+    assert(ledger683('ga') === 'complete' && cgb2.attempt_id === 'gb:2',
+      '#683 N11: setup — ga RE-PASSES to complete (repair discharged); gb re-fails as a fresh blocker gb:2');
+
+    // The escape: move ax.js OUT OF BAND to a value no gate ever reviewed.
+    fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// ax v3 (ROGUE — no gate has ever reviewed this)\n');
+    const beforeWb = refSha683('wb');
+    const escape = R(['repair-node', '--attempt-id', 'gb:2', '--node-id', 'wb', ...P]);
+    assert(escape.result === 'repair_requires_replan' && escape.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(escape.paths) === JSON.stringify(['ax.js']),
+      '#683 N11: a rogue ax@v3 CANNOT be laundered off ga:1\'s DISCHARGED repair — refuses '
+      + 'candidate_delta_unattributed naming ax.js, got ' + JSON.stringify(escape));
+    assert((attempt683('gb:2').rebind || []).length === 0 && refSha683('wb') === beforeWb,
+      '#683 N11: the refused escape leaves ZERO durable mutation — no rebind record, the ref is unmoved');
+  }
+
+  // -------------------------------------------------------------------------
   // N1 — an UNDECLARED path (declared by NO node) changed since the attempt. Partition 3 is
   // byte-exact with NO waiver, ever: this is the rogue-edit vector the whole-tree digest caught,
   // and it must still be caught at full strength.
@@ -16372,6 +16438,97 @@ function rtHarness(initialFiles, opts) {
     const settledAttempt = journalAfter.attempts.find(a => a.attempt_id === closeReview.attempt_id);
     assert(settledAttempt && settledAttempt.consumed_by === 'impl' && settledAttempt.repair.settled === true,
       '#664 (real journal): the repaired attempt is durably consumed by the selected writer');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ===========================================================================
+// N684-6 — the PAIRED fixture that gives the JOURNAL-DRIVEN fold site (adaptive-node.js ~:5031-5052)
+// its OWN single-mutation killer. In N684-5 that site is MUTUALLY REDUNDANT with the legacy #664
+// ledger-fanout site (~:5073-5090): both fold the SAME av-a/av-b group and both purge the SAME two
+// receipts, so disabling either alone leaves every N684-5 assertion green. The two sites are NOT
+// equivalent, though: only the journal-driven site can attribute a COMPLETED **singleton** gate (a
+// code-reviewer, not a fan-out) to this exact candidate+writer via its recorded PASS attempt, and only
+// it therefore purges that singleton's stale pass receipt (the `completedJournalGates` purge at :5195,
+// whose input set is computed EXCLUSIVELY by :5031-5052). The ledger-fanout site touches only
+// adversarial-verifier fan-out receipts, so it can never cover this purge. A sequence-only shape
+// isolates it: impl -> g_pass (PASSES, complete) -> g_fail (FAILS, folds) -> finalize. Structural
+// post-domination (:5071-5072) still folds BOTH gates back to pending regardless of the journal site,
+// so the KILLER lives on the receipt purge, not on gatesReset. Disabling ONLY :5031-5052 empties
+// completedJournalGates and g_pass.md survives -> the evidenceRemoved assertion goes RED, with the #664
+// fanout fixture and N684-5 untouched (proving the killer is single-site).
+// ===========================================================================
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-6-singleton-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684g');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| impl | complete | |', '| g_pass | in_progress | |',
+      '| g_fail | pending | |', '| finalize | pending | |',
+    ], [
+      '| impl | tdd-guide | — | scripts/impl684g.js | 1 | sequence |',
+      '| g_pass | code-reviewer | impl | — | 1 | sequence |',
+      '| g_fail | code-reviewer | g_pass | — | 1 | sequence |',
+      '| finalize | finalize | g_fail | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    const writerIdentity = { baseline: 'i'.repeat(40), anchored_ref: 'i'.repeat(40),
+      open_token: 'open-impl684g', generation: 'i'.repeat(12),
+      ref: 'refs/kaola-workflow/barrier/issue-684g/impl' };
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-impl'), 'i'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-g_pass'), 'p'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'g_pass.md'),
+      'evidence-binding: g_pass ' + 'p'.repeat(12) + '\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+      { id: 'g_pass', role: 'code-reviewer', kind: 'read' },
+    ] }, null, 2));
+    const common = { planPath, project: 'issue-684g',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => 'f'.repeat(64),
+      captureWriterBarrierIdentity: id => id === 'impl' ? writerIdentity : null };
+
+    // g_pass — a SINGLETON code-reviewer — PASSES on this candidate, recording a durable PASS attempt
+    // bound to impl. This is the receipt only the journal-driven site can attribute + purge.
+    const closePass = runCloseNode({ ...common, nodeId: 'g_pass' });
+    assert(closePass.result === 'ok' && !closePass.provisional && readLedgerStatuses(fs.readFileSync(planPath, 'utf8')).g_pass === 'complete',
+      'N684-6: setup — the singleton g_pass certifies PASS and goes complete, got ' + JSON.stringify(closePass));
+
+    // g_fail opens (hand-advanced) and settles FAIL — the blocker the repair consumes.
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const opened = spliceLedgerNode(plan, 'g_fail', 'in_progress', { allowFrom: ['pending'] });
+    assert(opened.changed, 'N684-6: setup — g_fail transitions to in_progress');
+    fs.writeFileSync(planPath, opened.content);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-g_fail'), 'q'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'g_fail.md'),
+      'evidence-binding: g_fail ' + 'q'.repeat(12) + '\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+      { id: 'g_fail', role: 'code-reviewer', kind: 'read' },
+    ] }, null, 2));
+    const closeFail = runCloseNode({ ...common, nodeId: 'g_fail' });
+    assert(closeFail.result === 'review_failed' && closeFail.lifecycle_settled === true,
+      'N684-6: setup — g_fail settles FAIL with a durable attempt, got ' + JSON.stringify(closeFail));
+
+    const repaired = runRepairNode({ ...common, nodeId: 'impl', attemptId: closeFail.attempt_id });
+    assert(repaired.result === 'ok' && repaired.baselineReused === true,
+      'N684-6: repair-node folds the sequence chain through the REAL journal-gated path, got ' + JSON.stringify(repaired));
+    // Structural post-domination folds BOTH gates regardless of the journal site — NOT the killer.
+    assert(repaired.gatesReset.includes('g_pass') && repaired.gatesReset.includes('g_fail'),
+      'N684-6: both post-dominating gates fold back to pending, got gatesReset=' + JSON.stringify(repaired.gatesReset));
+    // THE SINGLE-SITE KILLER: g_pass's stale PASS receipt is purged ONLY via completedJournalGates,
+    // whose membership is computed EXCLUSIVELY by the journal-driven fold site (:5031-5052). The
+    // ledger-fanout site (:5073-5090) touches no singleton receipt, so this assertion goes RED iff the
+    // journal-driven site is disabled — a killer no other fixture supplies.
+    assert(repaired.evidenceRemoved.includes('g_pass.md'),
+      'N684-6: the stale singleton PASS receipt g_pass.md is purged (journal-driven completedJournalGates '
+      + 'site is load-bearing), got evidenceRemoved=' + JSON.stringify(repaired.evidenceRemoved));
+    assert(!repaired.evidenceRemoved.includes('g_fail.md') && fs.existsSync(path.join(cacheDir, 'g_fail.md')),
+      'N684-6: the failed singleton\'s evidence is RETAINED as the repair brief, not purged');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 

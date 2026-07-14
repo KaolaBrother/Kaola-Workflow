@@ -4595,7 +4595,7 @@ function resolveRefSha(root, ref) {
 //
 // PURE: no fs, no git, no mutation. A failure is a typed reason and nothing else happens.
 function proveRebindAdmissible(ctx) {
-  const { attempt, attempts, nodes, nodeId, now, cand, foreign, declaredUnion } = ctx;
+  const { attempt, attempts, nodes, nodeId, now, cand, foreign, declaredUnion, ledgerStatuses } = ctx;
 
   // A legacy string-returning digest seam gives us no partition data at all — we cannot PROVE anything,
   // so we fail closed to the residual refusal rather than admit an unproven rebind.
@@ -4634,9 +4634,20 @@ function proveRebindAdmissible(ctx) {
   // so partition 2 is examined exhaustively. Paths added here can never satisfy P3a (they differ from the
   // candidate by construction), so they demand P3b attribution plus the disjointness clause, and they are
   // absorbed into the record like any other — the record stays honest.
+  // TEMPORAL SOUNDNESS OF P3b. `repair.selected_writer` is set once and NEVER cleared, so the mere
+  // EXISTENCE of a past repair on another gate is not evidence that the moved path will be re-reviewed:
+  // once that gate has RE-PASSED and gone `complete`, its fold is DISCHARGED and it re-reviews nothing.
+  // Attributing a later, out-of-band movement of the owner's path to such a spent repair launders an
+  // unreviewed blob to the sink. P3b may therefore only cite a repair whose selecting gate is CURRENTLY
+  // LIVE — still folded-to-pending (not `complete`) — so its imminent re-review actually covers the
+  // absorbed content. The legitimate co-repair flow is unaffected: while a sibling gate is still fenced
+  // (its own attempt unresolved) its post-dominators cannot reopen, so the owner gate stays folded and
+  // its writer stays attributable. The ground-truth folded-state is the ledger status of the gate's
+  // members (a gate folds ALL its members to `pending` and re-passes them ALL to `complete` together).
   const repairWriters = new Set((attempts || [])
     .filter(a => a && a.repair && a.repair.selected_writer != null
-      && a.logical_gate && a.logical_gate.key !== attempt.logical_gate.key)
+      && a.logical_gate && a.logical_gate.key !== attempt.logical_gate.key
+      && (a.logical_gate.members || []).some(m => (ledgerStatuses || {})[m] !== 'complete'))
     .map(a => a.repair.selected_writer));
   const candidateDelta = [...(declaredUnion || [])].filter(p => !slicePaths.has(p)
     && (now.declared[p] || null) !== (cand.declared[p] || null));
@@ -4868,10 +4879,11 @@ function runRepairNode(opts) {
       return { result: 'refuse', reason: 'repair_writer_mismatch', attempt_id: attemptId };
     }
     const proofNodes = parseNodesFromContent(initialPlan);
+    const proofLedger = readLedgerStatuses(initialPlan);
     let proof = { ok: true, producer_slice: [nodeId] };
     if (!repairAlreadySelected) {
       proof = uniqueMaximalReviewProducer(proofNodes, repairAttempt.logical_gate.members, nodeId,
-        readLedgerStatuses(initialPlan));
+        proofLedger);
       if (!proof.ok) return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
     }
     // ---- STEP 10: the current candidate TRIPLE (hoisted above the reconcile, which decides crash
@@ -4920,6 +4932,7 @@ function runRepairNode(opts) {
       const proofOut = proveRebindAdmissible({
         attempt: repairAttempt, attempts: repairJournalState.journal.attempts,
         nodes: proofNodes, nodeId, writerPaths, now, cand, foreign, declaredUnion,
+        ledgerStatuses: proofLedger,
       });
       if (!proofOut.ok) {
         return proofOut.reason === 'rebind_limit_reached'

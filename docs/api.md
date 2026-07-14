@@ -1343,9 +1343,12 @@ is sorted and unique, and `owning_node` is populated only when exactly one candi
 `.cache/findings-route.json` is a regenerable projection of the highest-ordinal authoritative
 attempt for the source gate; it is never journal authority and never chooses among multiple owners.
 
-The shared atomic replace helper fsyncs the temporary file before rename. It does not fsync the
-parent directory afterward; that is the pre-existing deferred R17 durability follow-up and was not
-changed by D-682-01.
+The shared atomic replace helper fsyncs the temporary file before rename, then fsyncs the parent
+directory after the rename so a settled durable-state write cannot revert to its pre-rename directory
+entry after power loss (the R17 durability follow-up deferred by D-682-01, closed by #685 — see
+D-683-01). The directory fsync is platform fail-soft: a directory that cannot be opened or fsynced
+degrades silently and never turns a previously-accepted write into a refusal, and never swallows a real
+rename or ENOSPC error.
 
 ### Script: `kaola-workflow-next-action.js`
 
