@@ -97,6 +97,104 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// --- writeFileAtomicReplace parent-directory fsync ORDERING (#685 / R17) ----
+// Node's require('fs') is a process-wide singleton, so patching fs.<method> here is observed by the
+// production function's own `const fs = require('fs')` binding (same seam as test-adaptive-node.js's
+// T-595-orphan against acquireProjectLock in this same schema module). Every patched method is restored
+// in a `finally` so the spy never leaks into a later test in this process.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-atomic-dirfsync-'));
+  const parentDir = path.join(dir, 'sub');
+  const target = path.join(parentDir, 'workflow-state.md');
+  const calls = [];
+  const fdToPath = new Map();
+  const origOpenSync = fs.openSync;
+  const origFsyncSync = fs.fsyncSync;
+  const origRenameSync = fs.renameSync;
+  const origCloseSync = fs.closeSync;
+  fs.openSync = function (p, ...rest) {
+    const fd = origOpenSync.call(fs, p, ...rest);
+    fdToPath.set(fd, p);
+    calls.push({ fn: 'openSync', arg: p, fd });
+    return fd;
+  };
+  fs.fsyncSync = function (fd) {
+    calls.push({ fn: 'fsyncSync', arg: fdToPath.get(fd), fd });
+    return origFsyncSync.call(fs, fd);
+  };
+  fs.renameSync = function (a, b) {
+    calls.push({ fn: 'renameSync', arg: [a, b] });
+    return origRenameSync.call(fs, a, b);
+  };
+  fs.closeSync = function (fd) {
+    calls.push({ fn: 'closeSync', arg: fdToPath.get(fd), fd });
+    return origCloseSync.call(fs, fd);
+  };
+  let wrote;
+  try {
+    wrote = writeFileAtomicReplace(target, 'gamma');
+  } finally {
+    fs.openSync = origOpenSync;
+    fs.fsyncSync = origFsyncSync;
+    fs.renameSync = origRenameSync;
+    fs.closeSync = origCloseSync;
+  }
+  assert(wrote === true, '#685: write with the order-tracking spy in place still returns true');
+  const renameIdx = calls.findIndex(c => c.fn === 'renameSync');
+  assert(renameIdx !== -1, '#685: renameSync was called, got ' + JSON.stringify(calls));
+  const tmpFsyncIdx = calls.findIndex((c, i) => i < renameIdx && c.fn === 'fsyncSync');
+  assert(tmpFsyncIdx !== -1, '#685: the tmp-file fd is fsynced BEFORE renameSync (pre-existing #353 contract), got ' + JSON.stringify(calls));
+  // The parent directory must be opened AFTER the rename (never before — that would race the rename itself).
+  const dirOpenIdx = calls.findIndex((c, i) => i > renameIdx && c.fn === 'openSync' && c.arg === parentDir);
+  assert(dirOpenIdx !== -1, '#685: parent directory opened AFTER renameSync, got ' + JSON.stringify(calls));
+  const dirOpenFd = dirOpenIdx !== -1 ? calls[dirOpenIdx].fd : undefined;
+  const dirFsyncIdx = calls.findIndex((c, i) => i > dirOpenIdx && c.fn === 'fsyncSync' && c.fd === dirOpenFd);
+  assert(dirFsyncIdx !== -1,
+    '#685: the parent-directory fd is fsynced after open+rename — full required order is ' +
+    'fsyncSync(tmpFd) -> renameSync -> openSync(dir) -> fsyncSync(dirFd) -> closeSync(dirFd), got ' + JSON.stringify(calls));
+  const dirCloseIdx = calls.findIndex((c, i) => i > dirFsyncIdx && c.fn === 'closeSync' && c.fd === dirOpenFd);
+  assert(dirCloseIdx !== -1, '#685: the parent-directory fd is closed after its own fsync, got ' + JSON.stringify(calls));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// --- writeFileAtomicReplace platform fail-soft on the parent-directory fsync (#685) --
+// A directory open/fsync can be refused on some platforms/filesystems (Windows, EISDIR, EACCES, EINVAL).
+// That failure must degrade SILENTLY — never propagate, never turn a previously-accepted write into a
+// refusal. Fault-inject fs.openSync to throw ONLY when its path argument is the parent directory, leaving
+// the tmp-file openSync untouched, so the durable write itself still has to succeed around the fault.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-atomic-failsoft-'));
+  const parentDir = path.join(dir, 'sub');
+  const target = path.join(parentDir, 'workflow-state.md');
+  const origOpenSync = fs.openSync;
+
+  function patchOpenSyncToFaultOnDir(code) {
+    fs.openSync = function (p, ...rest) {
+      if (p === parentDir) {
+        const err = new Error('#685 fault injection: simulated ' + code + ' opening the parent directory');
+        err.code = code;
+        throw err;
+      }
+      return origOpenSync.call(fs, p, ...rest);
+    };
+  }
+
+  let wrote1, threw1 = false;
+  patchOpenSyncToFaultOnDir('EISDIR');
+  try { wrote1 = writeFileAtomicReplace(target, 'delta'); } catch (_) { threw1 = true; } finally { fs.openSync = origOpenSync; }
+  assert(threw1 === false, '#685: a directory-open failure during the fsync step must NOT propagate (fail-soft)');
+  assert(wrote1 === true, '#685: the write still completes and returns its normal true contract despite the fsync failure');
+  assert(fs.readFileSync(target, 'utf8') === 'delta', '#685: content is durably written even when parent-dir fsync is unsupported');
+
+  // Fail-soft must degrade EVERY call, not just a one-shot exemption (no wedge / no refusal loop).
+  let wrote2, threw2 = false;
+  patchOpenSyncToFaultOnDir('EACCES');
+  try { wrote2 = writeFileAtomicReplace(target, 'epsilon'); } catch (_) { threw2 = true; } finally { fs.openSync = origOpenSync; }
+  assert(threw2 === false && wrote2 === true, '#685: fail-soft degrades every call, not just the first');
+  assert(fs.readFileSync(target, 'utf8') === 'epsilon', '#685: content is durably written on the second fail-soft call too');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // --- #398.1 assertSafeBranchArg (THROW at creation sites) / #398.2 / #403.8 --
 {
   const { assertSafeBranchArg, assertNoNewline, classifyWorktreeError } = require('./kaola-workflow-claim.js');

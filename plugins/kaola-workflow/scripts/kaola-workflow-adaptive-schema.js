@@ -357,6 +357,18 @@ const TEST_THRASH_LIMIT = 3;
 // loop only wastes work; it can never land an unverified merge). Byte-identical ×4 with TEST_THRASH_LIMIT.
 const MERGE_CONFLICT_REPAIR_LIMIT = 3;
 
+// The review-repair circuit breaker: a logical gate admits at most this many CONSUMED repairs before
+// repair-node refuses `repair_limit_reached`. Promoted from a bare literal so the breaker's tightness is
+// checkable in ONE place. Same value, same `consumed >= LIMIT` comparison — zero behavior change.
+const REVIEW_REPAIR_LIMIT = 5;
+// The companion cap on a single attempt's append-only `rebind` ledger. A rebind re-anchors the selected
+// writer's barrier baseline onto a synthetic tree that is byte-identical to the old baseline on the
+// writer's declared paths (so its reviewed diff is provably unchanged) and agrees with the current tree
+// everywhere else (so a proven-attributed sibling write stops poisoning this writer's barrier). Rebinds
+// are only ever authorized by ANOTHER gate's recorded repair or by pre-existing sibling content, so this
+// cap is a defensive belt over an already-bounded quantity. Byte-identical ×4 with the limits above.
+const REVIEW_REBIND_LIMIT = 5;
+
 // #579: single staleness constant for the lane liveness marker. A claim_ts newer than
 // this threshold (from the current wall-clock) could be a live co-tenant — classified
 // 'ambiguous' (ask). Older (or absent) → 'stale' (resumable leftover / backward compat).
@@ -681,6 +693,61 @@ function canonicalLogicalGateIdentity(input) {
   };
 }
 
+// A tree-entry identity as the review candidate records it: '<6-digit octal mode> <40-hex sha>'. The MODE
+// is load-bearing, not decoration — git records the exec bit, the symlink flag and the gitlink flag in the
+// mode ALONE (a symlink's blob is its target-path bytes, so a symlink and a plain file holding that same
+// text share one blob sha). A sha-only identity is therefore a WEAKER measuring stick than the whole-tree
+// digest, the residue digest, the re-anchor safety assertion and the barrier — all of which see the mode —
+// and anything the stick cannot see falls in no partition of the rebind proof and is silently waived.
+const CANONICAL_TREE_ENTRY_RE = /^[0-7]{6} [0-9a-f]{40}$/i;
+
+// A canonical blob map: a plain object whose keys are sorted repo-relative paths and whose values are
+// tree-entry identities. Canonical form is what makes a byte-comparison against a freshly computed map sound.
+function isCanonicalBlobMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  const sorted = keys.slice().sort();
+  if (JSON.stringify(keys) !== JSON.stringify(sorted)) return false;
+  return keys.every(k => k && typeof value[k] === 'string' && CANONICAL_TREE_ENTRY_RE.test(value[k]));
+}
+
+// A writer-identity tuple as recorded in producer_bindings (and in a rebind record's overlay). The
+// baseline IS the anchored ref and the generation IS its 12-char prefix — a tampered pair cannot pass.
+function isWriterIdentityTuple(identity) {
+  return !!identity && typeof identity === 'object' && !Array.isArray(identity)
+    && ['baseline', 'anchored_ref', 'open_token', 'generation', 'ref']
+      .every(k => typeof identity[k] === 'string' && identity[k] !== '')
+    && identity.baseline === identity.anchored_ref
+    && identity.generation === identity.baseline.slice(0, 12);
+}
+
+// The non-aborted rebind records of an attempt, in array order (which the chain check pins to the dense
+// generation order). An aborted record is an inert crash artifact: it never moved a ref and never binds.
+function nonAbortedRebinds(attempt) {
+  return (attempt && Array.isArray(attempt.rebind) ? attempt.rebind : []).filter(r => r && r.aborted !== true);
+}
+
+// THE single accessor for "what candidate is this attempt bound to RIGHT NOW". The attempt's own
+// candidate_digest / candidate_declared are IMMUTABLE forever (transaction_key hashes the digest into the
+// attempt identity); a settled rebind record supplies an append-only OVERLAY that moves the binding
+// without rewriting one byte of history.
+function effectiveCandidate(attempt) {
+  const settled = nonAbortedRebinds(attempt).filter(r => r.settled === true);
+  const last = settled.length ? settled[settled.length - 1] : null;
+  return last
+    ? { digest: last.candidate_digest, declared: last.candidate_declared }
+    : { digest: attempt && attempt.candidate_digest, declared: (attempt && attempt.candidate_declared) || {} };
+}
+
+// The same overlay rule for the writer's barrier identity: after a rebind moved the writer's baseline to
+// the synthetic re-anchored commit, the EFFECTIVE binding is the one the rebind recorded.
+function effectiveProducerBinding(attempt, writer) {
+  const settled = nonAbortedRebinds(attempt).filter(r => r.settled === true
+    && r.producer_bindings && r.producer_bindings[writer]);
+  if (settled.length) return settled[settled.length - 1].producer_bindings[writer];
+  return (attempt && attempt.producer_bindings) ? attempt.producer_bindings[writer] : undefined;
+}
+
 // Pure, fail-closed structural validation for the authoritative review journal. Runtime code may
 // perform additional plan-relative proofs, but no caller is allowed to accept malformed durable state.
 function validateReviewJournal(journal, expectedPlanHash) {
@@ -708,8 +775,9 @@ function validateReviewJournal(journal, expectedPlanHash) {
       return refuseJournal('review_journal_malformed', 'attempt must be an object');
     }
     const requiredAttemptFields = ['attempt_id', 'ordinal', 'plan_hash', 'logical_gate', 'transaction_key',
-      'candidate_digest', 'generations', 'settlement_command', 'outcome', 'reason', 'receipts', 'findings',
-      'route_candidates', 'lifecycle_settled', 'repair', 'consumed_by'];
+      'candidate_digest', 'candidate_declared', 'candidate_residue_digest', 'generations',
+      'settlement_command', 'outcome', 'reason', 'receipts', 'findings',
+      'route_candidates', 'lifecycle_settled', 'repair', 'rebind', 'consumed_by'];
     const missingAttemptFields = requiredAttemptFields.filter(k => !Object.prototype.hasOwnProperty.call(attempt, k));
     if (missingAttemptFields.length) return refuseJournal('review_journal_malformed', 'missing attempt fields: ' + missingAttemptFields.join(', '));
     if (typeof attempt.attempt_id !== 'string' || !attempt.attempt_id) return refuseJournal('review_journal_malformed', 'attempt_id is required');
@@ -719,8 +787,15 @@ function validateReviewJournal(journal, expectedPlanHash) {
       return refuseJournal('review_journal_plan_hash_mismatch');
     }
     if (typeof attempt.transaction_key !== 'string' || !/^[0-9a-f]{64}$/i.test(attempt.transaction_key)
-      || typeof attempt.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(attempt.candidate_digest)) {
-      return refuseJournal('review_journal_malformed', 'transaction_key/candidate_digest must be 64 hexadecimal characters');
+      || typeof attempt.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(attempt.candidate_digest)
+      || typeof attempt.candidate_residue_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(attempt.candidate_residue_digest)) {
+      return refuseJournal('review_journal_malformed', 'transaction_key/candidate_digest/candidate_residue_digest must be 64 hexadecimal characters');
+    }
+    // The candidate's DECLARED-PATH entry map: every path of the candidate tree that lies in the union of
+    // every plan node's declared write set. Canonical form (sorted keys, '<mode> <sha>' values) so a
+    // byte-comparison against a freshly computed map is meaningful. Bounded by the plan, never the repo.
+    if (!isCanonicalBlobMap(attempt.candidate_declared)) {
+      return refuseJournal('review_journal_malformed', 'candidate_declared must be a canonical {path: "<mode> <sha>"} map with sorted keys');
     }
     if (txKeys.has(attempt.transaction_key)) return refuseJournal('review_journal_duplicate_transaction_key');
     txKeys.add(attempt.transaction_key);
@@ -864,12 +939,84 @@ function validateReviewJournal(journal, expectedPlanHash) {
         return refuseJournal('review_journal_malformed', 'producer_bindings must be an object');
       }
       for (const [producer, identity] of Object.entries(attempt.producer_bindings)) {
-        if (!producer || !identity || typeof identity !== 'object' || Array.isArray(identity)
-          || !['baseline', 'anchored_ref', 'open_token', 'generation', 'ref']
-            .every(k => typeof identity[k] === 'string' && identity[k] !== '')
-          || identity.baseline !== identity.anchored_ref
-          || identity.generation !== identity.baseline.slice(0, 12)) {
+        if (!producer || !isWriterIdentityTuple(identity)) {
           return refuseJournal('review_journal_writer_identity_malformed');
+        }
+      }
+    }
+    // The append-only REBIND ledger. Each record moves the selected writer's barrier baseline from
+    // `base_before` to a synthetic `base_after` that keeps the writer's declared paths byte-identical to
+    // the old baseline (so its reviewed diff is unchanged) while absorbing a proven-attributed sibling
+    // delta. History is never rewritten: the attempt's own candidate_digest / candidate_declared /
+    // transaction_key / producer_bindings stay immutable, and the records chain base-to-base so a forged
+    // or reordered ledger cannot smuggle in an unproven baseline.
+    if (!Array.isArray(attempt.rebind)) {
+      return refuseJournal('review_journal_rebind_malformed', 'rebind must be an array');
+    }
+    if (attempt.rebind.length > REVIEW_REBIND_LIMIT) {
+      return refuseJournal('review_journal_rebind_malformed', 'rebind ledger exceeds REVIEW_REBIND_LIMIT');
+    }
+    for (const record of attempt.rebind) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)
+        || !Number.isInteger(record.generation) || record.generation < 1
+        || typeof record.base_before !== 'string' || !/^[0-9a-f]{40}$/i.test(record.base_before)
+        || typeof record.base_after !== 'string' || !/^[0-9a-f]{40}$/i.test(record.base_after)
+        || typeof record.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(record.candidate_digest)
+        || !isCanonicalBlobMap(record.candidate_declared)
+        || !record.producer_bindings || typeof record.producer_bindings !== 'object' || Array.isArray(record.producer_bindings)
+        || !Object.entries(record.producer_bindings).every(([p, id]) => p && isWriterIdentityTuple(id))
+        || !Array.isArray(record.absorbed)
+        || !record.absorbed.every(a => a && typeof a === 'object' && !Array.isArray(a)
+          && typeof a.path === 'string' && a.path
+          && (a.from_blob === null || (typeof a.from_blob === 'string' && CANONICAL_TREE_ENTRY_RE.test(a.from_blob)))
+          && (a.to_blob === null || (typeof a.to_blob === 'string' && CANONICAL_TREE_ENTRY_RE.test(a.to_blob)))
+          && typeof a.owner === 'string' && a.owner)
+        || JSON.stringify(record.absorbed.map(a => a.path)) !== JSON.stringify(record.absorbed.map(a => a.path).slice().sort())
+        || !Array.isArray(record.attributed_to)
+        || !record.attributed_to.every(id => typeof id === 'string' && id)
+        || JSON.stringify(record.attributed_to) !== JSON.stringify(record.attributed_to.slice().sort())
+        || typeof record.settled !== 'boolean' || typeof record.aborted !== 'boolean'
+        || (record.aborted === true && record.settled === true)) {
+        return refuseJournal('review_journal_rebind_malformed', 'rebind record shape invalid');
+      }
+    }
+    if (attempt.rebind.length) {
+      const selectedForRebind = attempt.repair && attempt.repair.selected_writer;
+      if (!Object.prototype.hasOwnProperty.call(attempt, 'producer_bindings') || !selectedForRebind) {
+        return refuseJournal('review_journal_rebind_chain_invalid', 'a rebind requires producer_bindings and a selected repair writer');
+      }
+      if (attempt.outcome === 'pass') {
+        return refuseJournal('review_journal_rebind_chain_invalid', 'a passing attempt can never carry a rebind');
+      }
+      const chain = nonAbortedRebinds(attempt);
+      if (chain.some((r, i) => r.generation !== i + 1)) {
+        return refuseJournal('review_journal_rebind_chain_invalid', 'non-aborted rebind generations must be dense 1..N in order');
+      }
+      const origin = attempt.producer_bindings[selectedForRebind];
+      if (!origin) {
+        return refuseJournal('review_journal_rebind_chain_invalid', 'the selected repair writer has no producer binding to rebind');
+      }
+      let expectedBase = origin.baseline;
+      for (const record of chain) {
+        if (record.base_before !== expectedBase) {
+          return refuseJournal('review_journal_rebind_chain_invalid', 'rebind base_before must continue the recorded chain');
+        }
+        const overlay = record.producer_bindings[selectedForRebind];
+        if (!overlay || overlay.baseline !== record.base_after) {
+          return refuseJournal('review_journal_rebind_chain_invalid', 'rebind overlay must bind the selected writer to base_after');
+        }
+        expectedBase = record.base_after;
+      }
+      // An aborted record is inert (its ref write never happened), so it must be anchored at the base
+      // that was effective where it sits — it can never claim to have moved the chain forward.
+      let effectiveAt = origin.baseline;
+      for (const record of attempt.rebind) {
+        if (record.aborted === true) {
+          if (record.base_before !== effectiveAt) {
+            return refuseJournal('review_journal_rebind_chain_invalid', 'an aborted rebind must be anchored at the effective base');
+          }
+        } else {
+          effectiveAt = record.base_after;
         }
       }
     }
@@ -1186,6 +1333,23 @@ function writeFileAtomicReplace(filePath, content) {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} }
     try { fs.unlinkSync(tmp); } catch (_) {}
     throw err;
+  }
+  // #685 (R17): fsync the PARENT DIRECTORY after the rename settles — on POSIX filesystems a rename's
+  // directory-entry update is not itself durable until the containing directory is fsynced, so without
+  // this a settled write can still revert to the pre-rename entry after power loss even though the tmp
+  // file's own contents were fsynced above. Node has no dedicated "fsync a directory" API, so this opens
+  // the directory read-only, fsyncs that fd, and closes it. Platform fail-soft is a HARD requirement:
+  // some platforms/filesystems refuse to open or fsync a directory (Windows, EISDIR/EACCES/EINVAL) —
+  // degrade silently to the pre-#685 behavior rather than turning a previously-accepted write into a
+  // refusal; nothing in this block may rethrow or affect the return value.
+  let dirFd;
+  try {
+    dirFd = fs.openSync(dir, 'r');
+    fs.fsyncSync(dirFd);
+  } catch (_) {
+    // fail-soft: directory fsync unsupported/denied here — the rename above already succeeded.
+  } finally {
+    if (dirFd !== undefined) { try { fs.closeSync(dirFd); } catch (_) {} }
   }
   return true;
 }
@@ -1538,6 +1702,8 @@ module.exports = {
   LOOP_CAP,
   TEST_THRASH_LIMIT,
   MERGE_CONFLICT_REPAIR_LIMIT,
+  REVIEW_REPAIR_LIMIT,
+  REVIEW_REBIND_LIMIT,
   MAX_NODES,
   OPTIMIZE_ITER_CAP,
   OPTIMIZE_WALLCLOCK_CAP,
@@ -1569,6 +1735,11 @@ module.exports = {
   evaluateEffectiveVerdict,
   canonicalLogicalGateIdentity,
   validateReviewJournal,
+  isCanonicalBlobMap,
+  isWriterIdentityTuple,
+  nonAbortedRebinds,
+  effectiveCandidate,
+  effectiveProducerBinding,
   DELEGATION_OUTCOME_DEFAULT,
   DELEGATION_OUTCOME_VOCABULARY,
   parseDelegationOutcome,

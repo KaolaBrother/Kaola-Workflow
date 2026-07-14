@@ -12566,14 +12566,49 @@ function testAdaptiveVerdictCheck() {
         candidate_digest: validCandidateDigest, generations: validGenerations,
       })).digest('hex'),
       settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
+      // #683: the candidate PARTITION — the declared-path blob map + the residue address that let a
+      // repair prove, per path, that a sibling writer's delta is attributable instead of discarding the
+      // whole plan. Plus the append-only `rebind` ledger (empty until a rebind is proven).
+      candidate_declared: {}, candidate_residue_digest: 'e'.repeat(64),
       receipts: [{ node_id: 'review', generation: 'nonce12345678', body: validBody,
         receipt_sha256: validCrypto.createHash('sha256').update(validBody).digest('hex'),
         effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
       findings: [], route_candidates: [], lifecycle_settled: true,
-      repair: { selected_writer: null, settled: null }, consumed_by: null,
+      repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null,
     };
     assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash, attempts: [validAttempt] }, journalHash).ok === true,
       'validateReviewJournal: settled unresolved failure is structurally valid and remains fenceable');
+    // #683 schema teeth: the rebind ledger is shape-checked and CHAIN-checked, and a passing attempt can
+    // never carry one. A forged/reordered ledger cannot smuggle in an unproven baseline.
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...validAttempt, rebind: 'not-an-array' }] }, journalHash).reason === 'review_journal_rebind_malformed',
+      'validateReviewJournal: a non-array rebind ledger fails closed');
+    const validIdentity683 = { baseline: 'a'.repeat(40), anchored_ref: 'a'.repeat(40),
+      open_token: 'tok', generation: 'a'.repeat(12), ref: 'refs/kaola-workflow/barrier/p/writer' };
+    const rebound683 = { baseline: 'b'.repeat(40), anchored_ref: 'b'.repeat(40),
+      open_token: 'tok', generation: 'b'.repeat(12), ref: 'refs/kaola-workflow/barrier/p/writer' };
+    const rebindRecord683 = { generation: 1, base_before: 'a'.repeat(40), base_after: 'b'.repeat(40),
+      candidate_digest: 'c'.repeat(64), candidate_declared: {}, producer_bindings: { writer: rebound683 },
+      absorbed: [], attributed_to: [], settled: true, aborted: false };
+    const reboundAttempt683 = { ...validAttempt, producer_bindings: { writer: validIdentity683 },
+      repair: { selected_writer: 'writer', settled: false }, rebind: [rebindRecord683] };
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [reboundAttempt683] }, journalHash).ok === true,
+      'validateReviewJournal: a well-chained rebind ledger is structurally valid');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...reboundAttempt683, rebind: [{ ...rebindRecord683, base_before: 'f'.repeat(40) }] }] }, journalHash)
+      .reason === 'review_journal_rebind_chain_invalid',
+      'validateReviewJournal: a rebind whose base_before does not continue the recorded chain fails closed');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...reboundAttempt683, repair: { selected_writer: null, settled: null } }] }, journalHash)
+      .reason === 'review_journal_rebind_chain_invalid',
+      'validateReviewJournal: a rebind without a durably selected repair writer fails closed');
+    assert(schema.effectiveCandidate(reboundAttempt683).digest === 'c'.repeat(64)
+      && schema.effectiveCandidate(validAttempt).digest === validCandidateDigest
+      && schema.effectiveProducerBinding(reboundAttempt683, 'writer').baseline === 'b'.repeat(40),
+      'effectiveCandidate/effectiveProducerBinding: a settled rebind OVERLAYS the immutable attempt-time binding');
+    assert(schema.REVIEW_REPAIR_LIMIT === 5 && schema.REVIEW_REBIND_LIMIT === 5,
+      'REVIEW_REPAIR_LIMIT/REVIEW_REBIND_LIMIT: the review-repair circuit breaker is single-sourced at 5');
     assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
       attempts: [{ ...validAttempt, outcome: 'pass', reason: null }] }, journalHash).reason === 'review_journal_outcome_mismatch',
       'validateReviewJournal: sequence outcome/reason must match the exact effective receipt body');

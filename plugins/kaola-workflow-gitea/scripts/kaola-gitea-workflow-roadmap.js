@@ -167,6 +167,23 @@ function writeFileAtomicReplace(filePath, content) {
     try { fs.unlinkSync(tmp); } catch (_) {}
     throw err;
   }
+  // #685 (R17): fsync the PARENT DIRECTORY after the rename settles — on POSIX filesystems a rename's
+  // directory-entry update is not itself durable until the containing directory is fsynced, so without
+  // this a settled write can still revert to the pre-rename entry after power loss even though the tmp
+  // file's own contents were fsynced above. Node has no dedicated "fsync a directory" API, so this opens
+  // the directory read-only, fsyncs that fd, and closes it. Platform fail-soft is a HARD requirement:
+  // some platforms/filesystems refuse to open or fsync a directory (Windows, EISDIR/EACCES/EINVAL) —
+  // degrade silently to the pre-#685 behavior rather than turning a previously-accepted write into a
+  // refusal; nothing in this block may rethrow or affect the return value.
+  let dirFd;
+  try {
+    dirFd = fs.openSync(dir, 'r');
+    fs.fsyncSync(dirFd);
+  } catch (_) {
+    // fail-soft: directory fsync unsupported/denied here — the rename above already succeeded.
+  } finally {
+    if (dirFd !== undefined) { try { fs.closeSync(dirFd); } catch (_) {} }
+  }
   return true;
 }
 

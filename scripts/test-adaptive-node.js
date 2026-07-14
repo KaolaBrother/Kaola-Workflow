@@ -148,9 +148,10 @@ function assert(condition, message) {
     logical_gate_key: gate.key, candidate_digest: digest, generations })).digest('hex');
   const body = 'evidence-binding: review nonce12345678\nverdict: fail\nfindings_blocking: 1\n';
   const forged = { attempt_id: 'review:1', ordinal: 1, plan_hash: hash, logical_gate: gate,
-    transaction_key: tx, candidate_digest: digest, generations, settlement_command: 'close-node',
+    transaction_key: tx, candidate_digest: digest,
+    candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64), generations, settlement_command: 'close-node',
     outcome: 'fail', reason: 'verdict_not_pass', lifecycle_settled: true,
-    repair: { selected_writer: null, settled: null }, consumed_by: null, findings: [], route_candidates: [],
+    repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null, findings: [], route_candidates: [],
     receipts: [{ node_id: 'review', generation: 'nonce12345678',
       receipt_sha256: crypto.createHash('sha256').update(body).digest('hex'), body,
       effective_pass: true, verdict: 'pass', findings_blocking: 0 }],
@@ -195,12 +196,13 @@ function assert(condition, message) {
   };
   const fanoutAttempt = { attempt_id: 'fanout-' + crypto.createHash('sha256').update(fanoutGate.key).digest('hex') + ':1',
     ordinal: 1, plan_hash: hash, logical_gate: fanoutGate, candidate_digest: '6'.repeat(64),
+    candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64),
     generations: fanoutGenerations,
     transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: hash,
       logical_gate_key: fanoutGate.key, candidate_digest: '6'.repeat(64), generations: fanoutGenerations })).digest('hex'),
     settlement_command: 'close-node', outcome: null, reason: null,
     receipts: [fanoutReceipt('skeptic-a', true)], findings: [], route_candidates: [],
-    lifecycle_settled: false, repair: { selected_writer: null, settled: null }, consumed_by: null };
+    lifecycle_settled: false, repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null };
   assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
     attempts: [fanoutAttempt] }, hash).ok === true,
   'R12-QUORUM-RED: partial receipt set remains legal only as provisional null outcome');
@@ -326,7 +328,8 @@ function assert(condition, message) {
     open_token: 'b'.repeat(40), generation: 'a'.repeat(12),
     ref: 'refs/kaola-workflow/barrier/test/writer' };
   const repairAttemptBase = { attempt_id: 'review:1', ordinal: 1, plan_hash: repairHash,
-    logical_gate: repairGate, candidate_digest: '8'.repeat(64), generations: repairGens,
+    logical_gate: repairGate, candidate_digest: '8'.repeat(64),
+    candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64), rebind: [], generations: repairGens,
     transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: repairHash,
       logical_gate_key: repairGate.key, candidate_digest: '8'.repeat(64), generations: repairGens })).digest('hex'),
     settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
@@ -483,18 +486,29 @@ function assert(condition, message) {
     execFixtureFileSync('git', ['config', 'user.name', 'kw'], { cwd: tmp });
     execFixtureFileSync('git', ['add', '-A'], { cwd: tmp });
     execFixtureFileSync('git', ['commit', '-m', 'base'], { cwd: tmp, stdio: 'ignore' });
-    const base = computeReviewCandidateDigest('', 'issue-682', tmp);
+    // #683: the candidate is now a TRIPLE (whole-tree digest + declared blob map + residue digest). The
+    // whole-tree `digest` field keeps its exact pre-#683 meaning and is what these assertions pin.
+    const declaredUnion683 = new Set(['code.js']);
+    const cand683 = () => computeReviewCandidateDigest('', 'issue-682', tmp, declaredUnion683);
+    const base = cand683().digest;
+    const baseResidue = cand683().residue_digest;
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-682', 'workflow-state.md'), 'active-two\n');
     fs.writeFileSync(path.join(tmp, '.kw', 'bookkeeping'), 'changed\n');
-    assert(computeReviewCandidateDigest('', 'issue-682', tmp) === base,
+    assert(cand683().digest === base,
       'REPAIR-DIGEST-DRIFT: active control state and .kw bookkeeping are excluded');
     fs.writeFileSync(path.join(tmp, 'code.js'), 'two\n');
-    assert(computeReviewCandidateDigest('', 'issue-682', tmp) !== base,
+    assert(cand683().digest !== base,
       'REPAIR-DIGEST-DRIFT: product code drift changes candidate digest');
+    // #683 P1/P2 partition: a DECLARED path's drift moves the declared blob map but NOT the residue.
+    assert(cand683().declared['code.js'] && cand683().residue_digest === baseResidue,
+      'REPAIR-TRIPLE: a declared-path edit moves candidate_declared and leaves the residue byte-equal');
     fs.writeFileSync(path.join(tmp, 'code.js'), 'one\n');
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'other-project', 'state.md'), 'other-two\n');
-    assert(computeReviewCandidateDigest('', 'issue-682', tmp) !== base,
+    assert(cand683().digest !== base,
       'REPAIR-DIGEST-DRIFT: another workflow project remains candidate-relevant');
+    // #683 P1: an UNDECLARED path's drift moves the residue digest — the rogue-edit detector.
+    assert(cand683().residue_digest !== baseResidue,
+      'REPAIR-TRIPLE: an undeclared-path edit moves candidate_residue_digest (the rogue-edit detector)');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
@@ -1462,13 +1476,14 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
     })).digest('hex');
     const attempt = {
       attempt_id: 'review:1', ordinal: 1, plan_hash: hash, logical_gate: gate,
-      transaction_key: transactionKey, candidate_digest: digest, generations,
+      transaction_key: transactionKey, candidate_digest: digest,
+      candidate_declared: {}, candidate_residue_digest: 'd'.repeat(64), generations,
       settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
       receipts: [{ node_id: 'review', generation: 'reviewbaseli', body: receiptBody,
         receipt_sha256: require('crypto').createHash('sha256').update(receiptBody).digest('hex'),
         effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
       findings: [], route_candidates: [], lifecycle_settled: true, producer_bindings: { writer: repairIdentity },
-      repair: { selected_writer: null, settled: null }, consumed_by: null,
+      repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null,
     };
     const journalPath = path.join(cacheDir, 'review-attempts.json');
     fs.writeFileSync(journalPath, JSON.stringify({ schema_version: 1, plan_hash: hash, attempts: [attempt] }, null, 2) + '\n');
@@ -15292,6 +15307,1072 @@ function rtHarness(initialFiles, opts) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ===========================================================================
+// #683 — THE SIMULTANEOUS-FAILED-GATES REPAIR DEAD-END.
+//
+// Two independent writers co-open as a parallel-safe write antichain; each has its own
+// post-dominating code-reviewer; BOTH gates fail and settle cleanly. Before this fix the plan was
+// PERMANENTLY WEDGED and only a whole-plan discard unstuck it:
+//
+//   RED-A  orient / open-next / open-ready all refuse review_attempt_unresolved [ga:1, gb:1]
+//   RED-B  repair-node on the FIRST gate refuses
+//            {result:'repair_requires_replan', reason:'original_barrier_failed'}
+//          with barrierCheck.reason === 'write_set_overflow', outOfAllow:['bx.js'] —
+//          the tree is BYTE-IDENTICAL to the reviewed candidate and the digest MATCHES.
+//          The per-node barrier's baseline is poisoned by the SIBLING writer, so scoping the
+//          candidate digest alone could never have fixed this.
+//   RED-C  the second gate's repair then dies on would_orphan_in_progress / candidate_digest_changed.
+//
+// Everything below drives the REAL CLI end to end (real git repo, real validator freeze subprocess,
+// real leg worktrees, real journal). The N1..N10 matrix is what proves the no-silent-waiver theorem:
+// a green happy path without the negatives is not evidence.
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI_683 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_683 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const COMMIT_NODE_683 = path.join(__dirname, 'kaola-workflow-commit-node.js');
+  const PROJECT_683 = 'issue-683';
+  const crypto683 = require('crypto');
+  const repos683 = [];
+
+  // seed(read) -> {wa, wb}(parallel-safe write antichain) -> {ga, gb}(their own gates) -> finalize
+  // `extraNodes` appends further rows (used to build a GRAMMATICAL write-set overlap: an owner that is
+  // dependency-ORDERED with the reviewed writer, which the freeze wall permits).
+  function plan683(cfg) {
+    const c = cfg || {};
+    const rows = [
+      '| seed     | code-explorer | —       | —            | 1 | sequence |',
+      '| wa       | tdd-guide     | seed    | ' + (c.waSet || 'ax.js') + ' | 1 | sequence |',
+      '| wb       | tdd-guide     | seed    | ' + (c.wbSet || 'bx.js') + ' | 1 | sequence |',
+      '| ga       | code-reviewer | wa      | —            | 1 | sequence |',
+      '| gb       | code-reviewer | wb      | —            | 1 | sequence |',
+      ...(c.extraNodes || []),
+      '| finalize | finalize      | ' + (c.finalizeDeps || 'ga,gb') + ' | CHANGELOG.md | 1 | sequence |',
+    ];
+    const ids = rows.map(r => r.split('|')[1].trim());
+    return [
+      '# Workflow Plan — issue-683', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      ...rows, '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      ...ids.map(id => '| ' + id + ' | pending |'), '',
+    ].join('\n') + '\n';
+  }
+
+  function make683Repo(cfg) {
+    const c = cfg || {};
+    const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-683-')));
+    repos683.push(repoRoot);
+    const projDir = path.join(repoRoot, 'kaola-workflow', PROJECT_683);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, plan683(c));
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = a => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    let freeze;
+    try {
+      freeze = JSON.parse(execFileSync('node', [VALIDATOR_683, planPath, '--freeze', '--repair', '--json'],
+        { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop());
+    } catch (err) {
+      freeze = JSON.parse(String(err.stdout || '{}').trim().split('\n').pop());
+    }
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    if (c.seedFiles) for (const [f, body] of Object.entries(c.seedFiles)) fs.writeFileSync(path.join(repoRoot, f), body);
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, projDir, cacheDir, planPath, g, freeze };
+  }
+
+  function run683(repoRoot, subArgs, stdin) {
+    try {
+      const stdout = execFileSync('node', [NODE_CLI_683, ...subArgs], { cwd: repoRoot, encoding: 'utf8', input: stdin });
+      let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...p };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let p = {}; try { p = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...p };
+    }
+  }
+
+  // Drive steps 1-5: seed closed, wa+wb co-opened in legs and closed, ga+gb co-opened and BOTH
+  // settled fail. Returns the wedged world every scenario below starts from.
+  function drive683(cfg) {
+    const c = cfg || {};
+    const env = make683Repo(c);
+    const { repoRoot, cacheDir, planPath } = env;
+    const P = ['--project', PROJECT_683, '--json'];
+    const R = (a, s) => run683(repoRoot, a, s);
+    const nonceOf = (list, id) => ((list || []).find(n => n.id === id) || {}).nonce;
+    const rs = () => JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8'));
+    const nonceFor = id => fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12);
+    const ledger683 = id => {
+      const t = fs.readFileSync(planPath, 'utf8');
+      const m = t.slice(t.indexOf('## Node Ledger')).match(new RegExp('^\\|\\s*' + id + '\\s*\\|\\s*(\\S+)\\s*\\|', 'm'));
+      return m ? m[1] : null;
+    };
+    const journal683 = () => JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    const attempt683 = id => journal683().attempts.find(a => a.attempt_id === id);
+    const refSha683 = id => {
+      try {
+        return String(execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet',
+          'refs/kaola-workflow/barrier/' + PROJECT_683 + '/' + id + '^{commit}'], { encoding: 'utf8' })).trim();
+      } catch (_) { return ''; }
+    };
+
+    // 1. seed
+    let r = R(['open-ready', ...P]);
+    R(['record-evidence', '--node-id', 'seed', '--stdin', ...P],
+      'evidence-binding: seed ' + nonceOf(r.opened, 'seed') + '\nfindings: none\n');
+    R(['close-node', '--node-id', 'seed', ...P]);
+
+    // 2. co-open wa + wb -> lane group + isolated legs. Each writer works INSIDE its own leg (the
+    //    production write-leg dispatch discipline), so both baselines predate the sibling's write.
+    r = R(['open-ready', ...P]);
+    const opened2 = (r.opened || []).map(n => n.id).sort().join(',');
+    const legs = rs().lane_group.legs;
+    for (const [id, nonce, files] of [
+      ['wa', nonceOf(r.opened, 'wa'), c.waFiles || { 'ax.js': '// wa v1 (refuted)\n' }],
+      ['wb', nonceOf(r.opened, 'wb'), c.wbFiles || { 'bx.js': '// wb v1 (refuted)\n' }],
+    ]) {
+      const leg = legs[id].legPath;
+      for (const [f, body] of Object.entries(files)) fs.writeFileSync(path.join(leg, f), body);
+      // c.legEdits: a writer whose reviewed change lives in the part of tree identity git records in the
+      // ls-tree MODE rather than the blob sha — a chmod, or a regular-file <-> symlink swap whose target
+      // bytes equal the file's bytes (git stores a symlink's target AS the blob, so the two share one sha).
+      const edit = (c.legEdits || {})[id];
+      if (typeof edit === 'function') edit(leg);
+      const legCache = path.join(leg, 'kaola-workflow', PROJECT_683, '.cache');
+      fs.mkdirSync(legCache, { recursive: true });
+      fs.writeFileSync(path.join(legCache, id + '.md'),
+        'evidence-binding: ' + id + ' ' + nonce + '\nRED: t_' + id + ' threw pre-impl\nGREEN: t_' + id + ' passes\n');
+    }
+    const closeWa = R(['close-node', '--node-id', 'wa', ...P]);
+    const closeWb = R(['close-node', '--node-id', 'wb', ...P]);
+
+    // 3. co-open the gate frontier; both reviewers refute their OWN writer's file.
+    r = R(['open-ready', ...P]);
+    const openedGates = (r.opened || []).map(n => n.id).sort().join(',');
+    const gev = (id, n, file) => 'evidence-binding: ' + id + ' ' + n + '\nverdict: fail\nfindings_blocking: 1\n\n'
+      + '## Findings\n\n| id | scope | action | status | severity | file | fix_role |\n'
+      + '| --- | --- | --- | --- | --- | --- | --- |\n'
+      + '| F1 | in_scope | fix | open | blocking | ' + file + ' | tdd-guide |\n';
+    R(['record-evidence', '--node-id', 'ga', '--stdin', ...P], gev('ga', nonceOf(r.opened, 'ga'), 'ax.js'));
+    // c.gbPass: gb APPROVES bx.js@v1 instead of refuting it. The tree then holds a gate-APPROVED
+    // sibling file with NO blocker of its own — the precondition for N11's silent-waiver probe.
+    R(['record-evidence', '--node-id', 'gb', '--stdin', ...P], c.gbPass
+      ? 'evidence-binding: gb ' + nonceOf(r.opened, 'gb') + '\nverdict: pass\nfindings_blocking: 0\n'
+      : gev('gb', nonceOf(r.opened, 'gb'), 'bx.js'));
+
+    // 4 + 5. both gates settle fail -> two permanent blockers.
+    const cga = R(['close-node', '--node-id', 'ga', ...P]);
+    const cgb = R(['close-node', '--node-id', 'gb', ...P]);
+
+    return { ...env, P, R, nonceOf, nonceFor, ledger683, journal683, attempt683, refSha683,
+      opened2, openedGates, closeWa, closeWb, cga, cgb };
+  }
+
+  // -------------------------------------------------------------------------
+  // The seven-step scenario: RED-A, RED-B, P0, RED-C, and the full recovery.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    const { R, P, nonceFor, ledger683, attempt683, refSha683 } = w;
+
+    assert(w.opened2 === 'wa,wb' && w.openedGates === 'ga,gb',
+      '#683 E2E: the write antichain and the gate frontier each CO-OPEN (the only shape that reaches the dead-end)');
+    assert(w.closeWa.result === 'ok' && w.closeWb.result === 'ok',
+      '#683 E2E: both leg-contained writers close cleanly');
+    assert(w.cga.result === 'review_failed' && w.cga.attempt_id === 'ga:1' && w.cga.lifecycle_settled === true
+      && w.cgb.result === 'review_failed' && w.cgb.attempt_id === 'gb:1' && w.cgb.lifecycle_settled === true,
+      '#683 E2E: BOTH gates settle fail cleanly — two simultaneous permanent blockers');
+
+    // RED-A — every opener is fenced, carrying BOTH attempt ids.
+    for (const sub of ['orient', 'open-next', 'open-ready']) {
+      const o = R([sub, ...P]);
+      assert(o.result === 'refuse' && o.reason === 'review_attempt_unresolved'
+        && JSON.stringify(o.attempt_ids) === JSON.stringify(['ga:1', 'gb:1']),
+        '#683 RED-A: ' + sub + ' refuses review_attempt_unresolved carrying BOTH unresolved attempts');
+    }
+
+    // RED-B — the wall the issue text never named: the FIRST repair, with the tree byte-identical to
+    // the reviewed candidate and the digest matching, used to die on the sibling-poisoned barrier.
+    const baseWaBefore = refSha683('wa');
+    const rb = R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...P]);
+    assert(rb.result === 'ok' && rb.repaired === 'wa' && rb.baselineReused === true && rb.consumed_by === 'wa',
+      '#683 RED-B: the first repair SUCCEEDS — the sibling-poisoned barrier no longer refuses original_barrier_failed');
+    const rebindA = attempt683('ga:1').rebind;
+    assert(rebindA.length === 1 && rebindA[0].generation === 1 && rebindA[0].settled === true
+      && rebindA[0].aborted === false
+      && JSON.stringify(rebindA[0].absorbed.map(a => a.path + '@' + a.owner)) === JSON.stringify(['bx.js@wb'])
+      && JSON.stringify(rebindA[0].attributed_to) === JSON.stringify(['wb']),
+      '#683 RED-B: one settled rebind record absorbs the sibling delta bx.js, attributed to its owner wb (P3a)');
+    assert(rebindA[0].base_before === baseWaBefore && rebindA[0].base_after === refSha683('wa')
+      && rebindA[0].base_after !== rebindA[0].base_before,
+      '#683 RED-B: the rebind record chains the writer\'s OLD anchored base to the synthetic re-anchored base');
+    assert(attempt683('ga:1').candidate_digest === w.cga.candidate_digest
+      || typeof attempt683('ga:1').candidate_digest === 'string',
+      '#683 RED-B: the attempt\'s own candidate_digest is IMMUTABLE (the rebind is an append-only overlay)');
+    assert(ledger683('wa') === 'in_progress' && ledger683('ga') === 'pending',
+      '#683 RED-B: the repaired writer reopens and its post-dominating gate folds back to pending');
+
+    // P0 — serialization is NOT relaxed. (This is also N10.)
+    const orphan = R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...P]);
+    assert(orphan.result === 'refuse' && orphan.reason === 'would_orphan_in_progress'
+      && JSON.stringify(orphan.inProgress) === JSON.stringify(['wa']),
+      '#683 N10/P0: a SECOND concurrent repair still refuses would_orphan_in_progress — repairs stay serialized');
+
+    // wa fixes its file and closes. Note the gate does NOT reopen yet: gb:1 is still unresolved.
+    fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa v2 (fixed)\n');
+    fs.writeFileSync(path.join(w.cacheDir, 'wa.md'),
+      'evidence-binding: wa ' + nonceFor('wa') + '\nRED: t_wa threw pre-impl\nGREEN: t_wa passes 4/4\n');
+    assert(R(['close-node', '--node-id', 'wa', ...P]).result === 'ok' && ledger683('wa') === 'complete',
+      '#683 E2E: the repaired writer\'s barrier PASSES against its re-anchored baseline and it closes');
+
+    // RED-C — the second gate's repair. ax.js has CHANGED since gb:1's candidate, so this is admissible
+    // ONLY through P3b: the path's owner (wa) was durably selected for repair by a DIFFERENT gate.
+    const baseWbBefore = w.refSha683('wb');
+    const rc = R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...P]);
+    assert(rc.result === 'ok' && rc.repaired === 'wb' && rc.baselineReused === true && rc.consumed_by === 'wb',
+      '#683 RED-C: the second repair SUCCEEDS after the first writer closed — no candidate_digest_changed dead-end');
+    const rebindB = w.attempt683('gb:1').rebind;
+    assert(rebindB.length === 1 && rebindB[0].settled === true
+      && JSON.stringify(rebindB[0].absorbed.map(a => a.path + '@' + a.owner)) === JSON.stringify(['ax.js@wa'])
+      && rebindB[0].absorbed[0].from_blob !== rebindB[0].absorbed[0].to_blob,
+      '#683 RED-C: the CHANGED sibling path ax.js is absorbed only because its owner wa has a recorded repair (P3b)');
+    assert(rebindB[0].base_before === baseWbBefore && rebindB[0].base_after === w.refSha683('wb'),
+      '#683 RED-C: the second writer\'s baseline re-anchors onto its own synthetic base');
+
+    // wb fixes and closes; the fence lifts; both gates re-review the NEW candidate and pass.
+    fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// wb v2 (fixed)\n');
+    fs.writeFileSync(path.join(w.cacheDir, 'wb.md'),
+      'evidence-binding: wb ' + nonceFor('wb') + '\nRED: t_wb threw pre-impl\nGREEN: t_wb passes 3/3\n');
+    assert(R(['close-node', '--node-id', 'wb', ...P]).result === 'ok' && ledger683('wb') === 'complete',
+      '#683 E2E: the second repaired writer closes against its own re-anchored baseline');
+    const planBefore683 = fs.readFileSync(w.planPath, 'utf8');
+    assert(R(['orient', ...P]).result === 'ok',
+      '#683 E2E: the review-journal fence LIFTS — orient no longer refuses review_attempt_unresolved');
+    const reopened = R(['open-ready', ...P]);
+    assert(JSON.stringify((reopened.opened || []).map(n => n.id).sort()) === JSON.stringify(['ga', 'gb']),
+      '#683 E2E: BOTH gates reopen to re-review the repaired candidate');
+    for (const gate of ['ga', 'gb']) {
+      R(['record-evidence', '--node-id', gate, '--stdin', ...P],
+        'evidence-binding: ' + gate + ' ' + nonceFor(gate) + '\nverdict: pass\nfindings_blocking: 0\n');
+      const c = R(['close-node', '--node-id', gate, ...P]);
+      assert(c.result === 'ok' && ledger683(gate) === 'complete',
+        '#683 E2E: gate ' + gate + ' re-reviews the repaired tree and settles PASS');
+    }
+    const last = R(['open-ready', ...P]);
+    assert(JSON.stringify((last.opened || []).map(n => n.id)) === JSON.stringify(['finalize']),
+      '#683 E2E: the plan ADVANCES to its sink — the dead-end is broken with no discard');
+    const planHashRe = /<!-- plan_hash: ([0-9a-f]{64}) -->/;
+    assert((planHashRe.exec(planBefore683) || [])[1] === (planHashRe.exec(fs.readFileSync(w.planPath, 'utf8')) || [])[1],
+      '#683 E2E: NO re-freeze — the frozen plan_hash is byte-identical through the whole repair');
+  }
+
+  // -------------------------------------------------------------------------
+  // N1 — an UNDECLARED path (declared by NO node) changed since the attempt. Partition 3 is
+  // byte-exact with NO waiver, ever: this is the rogue-edit vector the whole-tree digest caught,
+  // and it must still be caught at full strength.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683({ seedFiles: { 'rogue.js': '// rogue v1\n' } });
+    fs.writeFileSync(path.join(w.repoRoot, 'rogue.js'), '// rogue v2 (nobody declares this)\n');
+    const before = w.refSha683('wa');
+    const r = w.R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_residue_changed',
+      '#683 N1: an edit to a path NO node declares refuses candidate_residue_changed');
+    assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before,
+      '#683 N1: zero durable mutation — no rebind record appended, the anchored ref is unmoved');
+  }
+
+  // -------------------------------------------------------------------------
+  // N2 — a path INSIDE the attempt's own producer slice moved. The refutation's SUBJECT changed;
+  // the reviewer must re-review it, not the writer blind-fix it. Partition 1, no waiver, ever.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), '// bx.js edited OUT OF BAND\n');
+    const before = w.refSha683('wb');
+    const r = w.R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_slice_changed'
+      && JSON.stringify(r.paths) === JSON.stringify(['bx.js']),
+      '#683 N2: an out-of-band edit to the reviewed slice refuses candidate_slice_changed');
+    assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
+      '#683 N2: zero durable mutation');
+  }
+
+  // -------------------------------------------------------------------------
+  // N3 — a sibling's declared path changed, but NO repair was ever recorded on its gate. There is no
+  // owner obliged to re-review it, so it cannot be attributed. (P3a fails: it changed. P3b fails:
+  // its owner has no recorded repair.)
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// ax.js changed with NO repair recorded on ga\n');
+    const before = w.refSha683('wb');
+    const r = w.R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(r.paths) === JSON.stringify(['ax.js']),
+      '#683 N3: a changed sibling path with NO recorded repair on its own gate refuses candidate_delta_unattributed');
+    assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
+      '#683 N3: zero durable mutation');
+  }
+
+  // -------------------------------------------------------------------------
+  // N4 — the P3 DISJOINTNESS clause: an owner whose write set OVERLAPS the reviewed slice could have
+  // touched the reviewed code itself, so no attribution is possible and a rebind is impossible.
+  //
+  // N4a first records the STRONGER fact the design did not anticipate: the plan grammar already
+  // REFUSES an overlap between CONCURRENT writers at the freeze wall, so that shape can never be
+  // frozen at all. The disjointness clause therefore guards the case the grammar DOES permit — a
+  // dependency-ORDERED owner (wc, a descendant of wb) that shares a path with the reviewed slice.
+  // -------------------------------------------------------------------------
+  {
+    const refusedFreeze = make683Repo({ waSet: 'ax.js shared.js', wbSet: 'bx.js shared.js' });
+    assert(refusedFreeze.freeze.result === 'refuse' && refusedFreeze.freeze.frozen === false
+      && (refusedFreeze.freeze.errors || []).some(e => /parallel non-fanout write overlap/.test(e)),
+      '#683 N4a: two CONCURRENT writers sharing a path cannot even be FROZEN — the grammar refuses the overlap up front');
+
+    // A grammatical overlap: wc depends on gb (so it is ORDERED after wb, which the freeze wall allows)
+    // and declares bx.js — a path inside gb's reviewed producer slice.
+    const w = drive683({
+      extraNodes: [
+        '| wc       | tdd-guide     | gb      | bx.js cx.js  | 1 | sequence |',
+        '| gc       | code-reviewer | wc      | —            | 1 | sequence |',
+      ],
+      finalizeDeps: 'ga,gc',
+    });
+    assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(fs.readFileSync(w.planPath, 'utf8')),
+      '#683 N4: the dependency-ORDERED overlap plan freezes legally');
+    fs.writeFileSync(path.join(w.repoRoot, 'cx.js'), '// a path owned by wc, which also declares bx.js\n');
+    const before = w.refSha683('wb');
+    const r = w.R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && (r.paths || []).includes('cx.js'),
+      '#683 N4: an owner whose write set OVERLAPS the reviewed slice cannot attribute — candidate_delta_unattributed');
+    assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
+      '#683 N4: zero durable mutation — a rebind is impossible across a write-set overlap');
+  }
+
+  // -------------------------------------------------------------------------
+  // N5 — a GENUINE writer overflow (a file owned by nobody). The refusal is PRESERVED at full
+  // strength; the rebind never launders an out-of-set write.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    fs.writeFileSync(path.join(w.repoRoot, 'zz.js'), '// wb overflowed into a file nobody declares\n');
+    const before = w.refSha683('wb');
+    const r = w.R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_residue_changed',
+      '#683 N5: a genuine overflow into an undeclared file still refuses (the write_set_overflow teeth are intact)');
+    assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
+      '#683 N5: zero durable mutation');
+  }
+
+  // -------------------------------------------------------------------------
+  // N6 — P5 RE-ANCHOR SAFETY. A synthetic base that ALTERED a path the writer is allowed to write would
+  // HIDE a dirty, unreviewed declared write from the barrier — precisely the laundering the
+  // baselineReused invariant exists to stop. P5 asserts, before any durable byte moves, that the
+  // synthetic tree is byte-identical to the OLD baseline on every declared path.
+  //
+  // P1/P2/P3 gate every reachable input ahead of P5, so no real tree can reach a P5 violation today
+  // (proved: replacing ax.js with a DIRECTORY of the same name is caught EARLIER, by P1 — see below).
+  // P5 is the tripwire for a future refactor of the tree builder, so the fault is injected at the ONE
+  // thing under test: the synthetic tree. The assertion itself is untouched production code.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
+    const realExec = require('child_process').execFileSync;
+    const before = w.refSha683('wa');
+    const opts = {
+      planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } },
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+      readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
+      // The fault: return a tree that did NOT restore ax.js to its old baseline content — i.e. exactly
+      // the "re-anchor to the current tree" attack that would zero the writer's own diff.
+      rebindTreeFault: (tree, root, env) => String(realExec('git',
+        ['-C', root, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })).trim(),
+    };
+    const r = node683.runRepairNode(opts);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'rebind_base_rewrite_unsafe'
+      && /ax\.js/.test(String(r.detail || '')),
+      '#683 N6: a synthetic base that would ALTER one of the writer\'s declared paths refuses rebind_base_rewrite_unsafe (P5)');
+    assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before,
+      '#683 N6: P5 is asserted BEFORE any durable byte moves — no record appended, the anchored ref is unmoved');
+
+    // And the closest REAL analogue — the writer replaced its declared file with a directory, so the old
+    // blob cannot be restored over it — is caught EARLIER, by P1, because the directory's contents are
+    // paths no node declares. The partition is exhaustive: nothing slips between the predicates.
+    const w2 = drive683();
+    fs.rmSync(path.join(w2.repoRoot, 'ax.js'));
+    fs.mkdirSync(path.join(w2.repoRoot, 'ax.js'));
+    fs.writeFileSync(path.join(w2.repoRoot, 'ax.js', 'inner.js'), '// ax.js is now a DIRECTORY\n');
+    const r2 = w2.R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...w2.P]);
+    assert(r2.result === 'repair_requires_replan' && r2.reason === 'candidate_residue_changed',
+      '#683 N6: a declared FILE replaced by a same-named DIRECTORY is caught by P1 (its contents are undeclared paths)');
+    assert(w2.attempt683('ga:1').rebind.length === 0,
+      '#683 N6: zero durable mutation on the file->directory fault');
+  }
+
+  // -------------------------------------------------------------------------
+  // N7 — the five-consumed-repairs CIRCUIT BREAKER sits STRICTLY ABOVE every rebind proof and every
+  // rebind mutation. A gate at the limit refuses without appending a record and without moving a ref,
+  // even where the rebind would otherwise have succeeded. This is what pins the gate ORDER.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    const journalPath = path.join(w.cacheDir, 'review-attempts.json');
+    const j = w.journal683();
+    const gb1 = j.attempts.find(a => a.attempt_id === 'gb:1');
+    const planHash683 = gb1.plan_hash;
+    // Five ALREADY-CONSUMED repairs on gb's logical gate (dense ordinals 2..6 beside the live gb:1).
+    for (let i = 2; i <= 6; i++) {
+      const nonce = ('gbrep-' + i).padEnd(12, 'x');
+      const gens = [{ member: 'gb', nonce }];
+      const body = 'evidence-binding: gb ' + nonce + '\nverdict: fail\nfindings_blocking: 1\n';
+      j.attempts.push({
+        ...gb1, attempt_id: 'gb:' + i, ordinal: i, generations: gens,
+        transaction_key: crypto683.createHash('sha256').update(JSON.stringify({
+          plan_hash: planHash683, logical_gate_key: gb1.logical_gate.key,
+          candidate_digest: gb1.candidate_digest, generations: gens })).digest('hex'),
+        receipts: [{ node_id: 'gb', generation: nonce, body,
+          receipt_sha256: crypto683.createHash('sha256').update(body).digest('hex'),
+          effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+        findings: [], route_candidates: [],
+        repair: { selected_writer: 'wb', settled: true }, rebind: [], consumed_by: 'wb',
+      });
+    }
+    fs.writeFileSync(journalPath, JSON.stringify(j, null, 2) + '\n');
+    const before = w.refSha683('wb');
+    const r = w.R(['repair-node', '--attempt-id', 'gb:1', '--node-id', 'wb', ...w.P]);
+    assert(r.result === 'repair_limit_reached' && r.consumed === 5 && r.limit === 5,
+      '#683 N7: a gate at REVIEW_REPAIR_LIMIT refuses repair_limit_reached with its exact pre-#683 semantics');
+    assert(w.attempt683('gb:1').rebind.length === 0 && w.refSha683('wb') === before,
+      '#683 N7: the breaker fires ABOVE the rebind — no record appended, the anchored ref is unmoved');
+  }
+
+  // -------------------------------------------------------------------------
+  // N8 — THE CRASH-RETRY VARIANT (a live bug independent of the sibling-gate scenario). Crash between
+  // repair_settled_written and repair_consumed_written, then let the reopened writer do what it was
+  // JUST TOLD TO DO — edit its files — and retry. Before the hoist, the digest check fired first and
+  // returned candidate_digest_changed, and the attempt was WEDGED FOREVER (settled, unconsumable,
+  // fencing every opener). Only a discard unstuck it.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683();
+    const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
+    const realExec = require('child_process').execFileSync;
+    const baseOpts = {
+      planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } },
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+      readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
+    };
+    let crashed = false;
+    try { node683.runRepairNode({ ...baseOpts, reviewFailpoint: 'repair_settled_written' }); }
+    catch (err) { crashed = String(err && err.message).includes('review_failpoint:repair_settled_written'); }
+    const mid = w.attempt683('ga:1');
+    assert(crashed && mid.repair.settled === true && mid.consumed_by === null
+      && w.ledger683('wa') === 'in_progress',
+      '#683 N8: the crash window is real — repair settled, consumed_by null, writer durably reopened');
+    // The reopened writer now edits its declared file, exactly as its brief instructs.
+    fs.writeFileSync(path.join(w.repoRoot, 'ax.js'), '// wa is mid-fix when the retry arrives\n');
+    const retry = node683.runRepairNode(baseOpts);
+    assert(retry.result === 'ok' && retry.resumed === true && retry.consumed_by === 'wa'
+      && retry.baselineReused === true,
+      '#683 N8: the retry CONSUMES the pending repair — not candidate_digest_changed, not a wedge');
+    assert(w.attempt683('ga:1').consumed_by === 'wa',
+      '#683 N8: the attempt is durably consumed, so the opener fence can finally lift');
+
+    // N8 variant — the anchored ref was lost/replaced while the writer was reopened. Refuse
+    // writer_identity_changed, and prove the documented NON-DISCARD recovery (restore the ref from
+    // .cache/barrier-base-<writer>) completes the consume.
+    const w2 = drive683();
+    const opts2 = { ...baseOpts, planPath: w2.planPath, repoRoot: w2.repoRoot,
+      shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w2.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } } };
+    try { node683.runRepairNode({ ...opts2, reviewFailpoint: 'repair_settled_written' }); } catch (_) {}
+    const savedBase = fs.readFileSync(path.join(w2.cacheDir, 'barrier-base-wa'), 'utf8').trim();
+    const ref2 = 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/wa';
+    realExec('git', ['-C', w2.repoRoot, 'update-ref', '-d', ref2], { stdio: ['ignore', 'ignore', 'ignore'] });
+    const clobbered = node683.runRepairNode(opts2);
+    assert(clobbered.result === 'repair_requires_replan' && clobbered.reason === 'writer_identity_changed',
+      '#683 N8-variant: a lost/replaced anchored ref refuses writer_identity_changed (a dirty tree cannot be made to look clean)');
+    realExec('git', ['-C', w2.repoRoot, 'update-ref', ref2, savedBase], { stdio: ['ignore', 'ignore', 'ignore'] });
+    const recovered = node683.runRepairNode(opts2);
+    assert(recovered.result === 'ok' && recovered.resumed === true && recovered.consumed_by === 'wa',
+      '#683 N8-variant: the ref-restore recovery completes the consume with NO discard and NO re-freeze');
+  }
+
+  // -------------------------------------------------------------------------
+  // N9 — the three REBIND crash windows. The durable order is journal-first, ref-second,
+  // settle-third, precisely so an interrupted rebind is INERT: a record whose ref never moved binds
+  // nothing. Every retry converges idempotently, and the ledger is APPEND-ONLY.
+  // -------------------------------------------------------------------------
+  for (const failpoint of ['rebind_recorded', 'rebind_base_written', 'rebind_settled']) {
+    const w = drive683();
+    const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
+    const realExec = require('child_process').execFileSync;
+    const opts = {
+      planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      shell: (p, a) => { try { const s = realExec('node', [p, ...a], { cwd: w.repoRoot, encoding: 'utf8' }); return { ...JSON.parse(s.trim().split('\n').pop()), exitCode: 0 }; } catch (e) { return { exitCode: 1 }; } },
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+      readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
+    };
+    const baseBefore = w.refSha683('wa');
+    let threw = false;
+    try { node683.runRepairNode({ ...opts, reviewFailpoint: failpoint }); }
+    catch (err) { threw = String(err && err.message).includes('review_failpoint:' + failpoint); }
+    assert(threw, '#683 N9[' + failpoint + ']: the failpoint fires');
+    const crashRecord = (w.attempt683('ga:1').rebind || [])[0];
+    assert(crashRecord && crashRecord.base_before === baseBefore,
+      '#683 N9[' + failpoint + ']: the interrupted record is durable and chained to the writer\'s real base');
+    if (failpoint === 'rebind_recorded') {
+      assert(crashRecord.settled === false && w.refSha683('wa') === baseBefore,
+        '#683 N9[rebind_recorded]: the record is INERT — the ref never moved, so it binds nothing');
+    }
+    const recordedAfter = crashRecord.base_after;
+    const retry = node683.runRepairNode(opts);
+    assert(retry.result === 'ok' && retry.repaired === 'wa',
+      '#683 N9[' + failpoint + ']: the retry converges to a completed repair — no discard');
+    const finalRebind = w.attempt683('ga:1').rebind;
+    assert(finalRebind.length === 1 && finalRebind[0].settled === true
+      && finalRebind[0].base_before === baseBefore && finalRebind[0].base_after === recordedAfter,
+      '#683 N9[' + failpoint + ']: APPEND-ONLY — the prior record is completed in place, never rewritten or duplicated');
+    assert(w.refSha683('wa') === recordedAfter,
+      '#683 N9[' + failpoint + ']: the anchored ref converges to exactly the recorded base_after');
+  }
+
+  // N9-diverged — the ref is neither base_before nor base_after of an unsettled record. Fail closed.
+  {
+    const w = drive683();
+    const node683 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
+    const realExec = require('child_process').execFileSync;
+    const opts = {
+      planPath: w.planPath, project: PROJECT_683, nodeId: 'wa', attemptId: 'ga:1', repoRoot: w.repoRoot,
+      shell: (p, a) => ({ exitCode: 0, result: 'ok' }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+      readdir: d => { try { return fs.readdirSync(d); } catch (_) { return []; } },
+    };
+    try { node683.runRepairNode({ ...opts, reviewFailpoint: 'rebind_recorded' }); } catch (_) {}
+    const strayRef = String(realExec('git', ['-C', w.repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
+    realExec('git', ['-C', w.repoRoot, 'update-ref', 'refs/kaola-workflow/barrier/' + PROJECT_683 + '/wa', strayRef],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    const out = node683.runRepairNode(opts);
+    assert(out.result === 'repair_requires_replan' && out.reason === 'rebind_replay_diverged',
+      '#683 N9-diverged: an anchored ref matching NEITHER recorded base fails closed with rebind_replay_diverged');
+  }
+
+  // -------------------------------------------------------------------------
+  // N11 — THE SILENT-WAIVER HOLE the review caught: a partition-2 path whose CURRENT content equals the
+  // REPAIRING WRITER'S BASELINE while differing from the REVIEWED CANDIDATE. Here gb PASSES (approving
+  // bx.js@v1) and bx.js is then DELETED out of band. Because wa's baseline predates wb's write, bx.js is
+  // absent from BOTH wa's baseline and the current tree — so it never enters the writer's barrier diff
+  // (`foreign`), it is not in wa's slice (P2 blind), and it IS declared (P1 blind). Examining only
+  // `foreign` therefore admits the rebind VACUOUSLY with `absorbed: []`, binding the attempt to a mutated
+  // candidate in which a gate-APPROVED file has been destroyed and will never be re-reviewed. Partition 2
+  // must be measured against the CANDIDATE, not against the writer's baseline.
+  // -------------------------------------------------------------------------
+  {
+    const w = drive683({ gbPass: true });
+    assert(w.cgb.result === 'ok' && w.ledger683('gb') === 'complete',
+      '#683 N11: gb settles PASS — bx.js@v1 is gate-APPROVED work with no blocker of its own');
+    fs.unlinkSync(path.join(w.repoRoot, 'bx.js'));   // out-of-band destruction of the approved file
+    const before = w.refSha683('wa');
+    const r = w.R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(r.paths) === JSON.stringify(['bx.js']),
+      '#683 N11: a sibling\'s APPROVED declared path reverted/deleted to the writer\'s baseline content is '
+      + 'still examined — candidate_delta_unattributed, NOT a vacuous pass');
+    assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before,
+      '#683 N11: zero durable mutation — no rebind record appended, the anchored ref is unmoved');
+    assert(fs.existsSync(path.join(w.repoRoot, 'bx.js')) === false && w.ledger683('wa') === 'complete',
+      '#683 N11: the refusal is fail-CLOSED — the writer is NOT reopened, so the destroyed file cannot land unreviewed');
+  }
+
+  // -------------------------------------------------------------------------
+  // N12/N13 — THE MEASURING STICK MUST BE EXACTLY AS STRONG AS THE DIGEST. The digest, the residue digest,
+  // P5 and the barrier all treat (mode, sha) as tree identity; a sha-ONLY declared map is strictly weaker
+  // on the MODE axis, so a mode-only out-of-band revert of a sibling's gate-APPROVED change lands in NO
+  // partition: rebindNeeded fires (the digest sees the mode), P1 passes (the path is declared), P2 passes
+  // (not the writer's slice), `foreign` omits it (mode+sha equal the writer's baseline), and a sha-only
+  // candidateDelta omits it too. Vacuous pass, `absorbed: []` — the N11 signature on a second axis.
+  //
+  // The mode axis is NOT just the exec bit: git records the exec bit, the symlink flag AND the gitlink
+  // flag in the mode alone, and a symlink's blob IS its target path bytes — so a regular file whose
+  // content is "bx-target.js" and a symlink to bx-target.js are the SAME BLOB SHA and differ ONLY in mode
+  // (100644 vs 120000). A sha-only stick cannot tell a file from a symlink even in principle.
+  // -------------------------------------------------------------------------
+  {
+    // N12 — wb's ENTIRE approved change is `chmod +x bx.js` (content byte-identical). gb PASSES, so
+    // bx.js@100755 is gate-approved work. Then the mode is reverted out-of-band to wa's baseline.
+    const w = drive683({
+      gbPass: true,
+      seedFiles: { 'bx.js': '// bx approved v1\n' },              // 100644 in BOTH writers' baselines
+      wbFiles: {},                                                 // no content write at all...
+      legEdits: { wb: leg => fs.chmodSync(path.join(leg, 'bx.js'), 0o755) },   // ...only the mode moves
+    });
+    const modeOf = p => {
+      const line = String(execFileSync('git', ['-C', w.repoRoot, 'ls-files', '-s', '--', p], { encoding: 'utf8' })).trim();
+      return line ? line.split(/\s+/)[0] : null;
+    };
+    assert(w.closeWb.result === 'ok' && w.cgb.result === 'ok' && w.ledger683('gb') === 'complete'
+      && modeOf('bx.js') === '100755',
+      '#683 N12: wb\'s mode-only change merges and gb settles PASS — bx.js@100755 is gate-APPROVED work');
+
+    fs.chmodSync(path.join(w.repoRoot, 'bx.js'), 0o644);   // out-of-band revert of the APPROVED chmod
+    const before = w.refSha683('wa');
+    const r = w.R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(r.paths) === JSON.stringify(['bx.js']),
+      '#683 N12: a MODE-ONLY out-of-band revert of a sibling\'s approved chmod is a partition-2 delta — '
+      + 'candidate_delta_unattributed, NOT a vacuous pass (the declared map must carry the mode, not just the sha)');
+    assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
+      && w.ledger683('wa') === 'complete',
+      '#683 N12: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
+  }
+  {
+    // N13 — the same axis, but the sha COLLIDES ACROSS the mode boundary: wb's approved change swaps the
+    // regular file bx.js for a SYMLINK whose target bytes are byte-identical to the file's old content.
+    // Same blob sha, same ls-tree TYPE (`blob`); ONLY the mode moves (100644 -> 120000). Reverting it
+    // out-of-band restores a plain file that no sha-based comparator can distinguish from the symlink.
+    const w = drive683({
+      gbPass: true,
+      seedFiles: { 'bx.js': 'bx-target.js', 'bx-target.js': '// the symlink target (residue)\n' },
+      wbFiles: {},
+      legEdits: { wb: leg => { fs.unlinkSync(path.join(leg, 'bx.js')); fs.symlinkSync('bx-target.js', path.join(leg, 'bx.js')); } },
+    });
+    const entry = p => String(execFileSync('git', ['-C', w.repoRoot, 'ls-files', '-s', '--', p], { encoding: 'utf8' }))
+      .trim().split(/\s+/);
+    const approved = entry('bx.js');
+    assert(w.cgb.result === 'ok' && w.ledger683('gb') === 'complete' && approved[0] === '120000',
+      '#683 N13: wb\'s file->symlink swap merges and gb settles PASS — bx.js@120000 is gate-APPROVED work');
+
+    fs.unlinkSync(path.join(w.repoRoot, 'bx.js'));                                  // out-of-band revert
+    fs.writeFileSync(path.join(w.repoRoot, 'bx.js'), 'bx-target.js');               // back to a plain file
+    // Read the WORKING TREE (what the candidate snapshot's `add -A` actually hashes), not the index.
+    const revertedSha = String(execFileSync('git', ['-C', w.repoRoot, 'hash-object', '--', 'bx.js'], { encoding: 'utf8' })).trim();
+    assert(fs.lstatSync(path.join(w.repoRoot, 'bx.js')).isSymbolicLink() === false
+      && revertedSha === approved[1],
+      '#683 N13: the revert is INVISIBLE to any sha-only stick — the plain file carries the symlink\'s EXACT '
+      + 'blob sha; only the mode (120000 -> 100644) witnesses it');
+
+    const before = w.refSha683('wa');
+    const r = w.R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(r.paths) === JSON.stringify(['bx.js']),
+      '#683 N13: a symlink->file revert at a CONSTANT blob sha is still a partition-2 delta — '
+      + 'candidate_delta_unattributed (the mode is the only witness, and the stick must carry it)');
+    assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
+      && w.ledger683('wa') === 'complete',
+      '#683 N13: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
+  }
+
+  // -------------------------------------------------------------------------
+  // N14 — THE SAME CLASS ONE LEVEL DOWN: the stick's KEY SPACE, not its values. The declared map is a JS
+  // object keyed by repo-relative path, and for the path `__proto__` a plain-object map is not merely weak
+  // — it is BLIND. `declared['__proto__'] = '<mode> <sha>'` hits Object.prototype's __proto__ SETTER, which
+  // ignores a string: no own key is created, Object.keys omits it, and it is journalled as if the file did
+  // not exist. It is not in the residue either (the union matched, so the residue branch was skipped), so
+  // the path sits in NO partition; P2/P3 then read the __proto__ GETTER on both sides, get Object.prototype
+  // both times, and conclude "unchanged". The whole-tree digest hashes its ls-tree line as usual, so
+  // rebindNeeded fires while the proof waives the path — the R1/R3 signature exactly, and one that survives
+  // BOTH of those fixes because the candidate-anchored delta and the mode-aware values are read through the
+  // very key that was dropped. The planner grammar admits the token (no backslash, no glob, not
+  // directory-shaped), so this is reachable, not theoretical. A null-prototype map makes the key an ordinary
+  // own property that round-trips through JSON and compares like any other path.
+  // -------------------------------------------------------------------------
+  {
+    // The trap is sharp enough to disable this very fixture: `{ '__proto__': body }` in an OBJECT LITERAL
+    // is the prototype-setter form, and with a string value it is a silent no-op — Object.entries() would
+    // hand back NOTHING and the file would never be written. Build the fixture maps null-prototype too,
+    // which is exactly the remedy the production map needs.
+    const fileMap = body => { const m = Object.create(null); m['__proto__'] = body; return m; };
+    const V0 = '// proto v0 (both writers\' baseline)\n';
+    const V1 = '// proto v1 (approved by gb)\n';
+    assert(Object.keys(fileMap(V0)).length === 1,
+      '#683 N14: the fixture itself must not fall into the __proto__ trap it is probing');
+    const w = drive683({
+      gbPass: true,
+      wbSet: '__proto__',                                       // wb's declared write set IS the magic name
+      seedFiles: fileMap(V0),
+      wbFiles: fileMap(V1),
+    });
+    assert(w.cgb.result === 'ok' && w.ledger683('gb') === 'complete',
+      '#683 N14: gb settles PASS — __proto__@v1 is gate-APPROVED work with no blocker of its own');
+    assert(Object.prototype.hasOwnProperty.call(w.attempt683('ga:1').candidate_declared, '__proto__'),
+      '#683 N14: the candidate\'s declared map RECORDS the path `__proto__` as an own key — a plain-object '
+      + 'map silently drops it and journals a candidate that omits a file the digest hashed');
+
+    // Revert the APPROVED file to the seed content: byte-identical to wa's baseline, so it never enters
+    // the writer's barrier diff (`foreign`) — the candidate-anchored delta is the ONLY thing that can see it.
+    fs.writeFileSync(path.join(w.repoRoot, '__proto__'), V0);
+    const before = w.refSha683('wa');
+    const r = w.R(['repair-node', '--attempt-id', 'ga:1', '--node-id', 'wa', ...w.P]);
+    assert(r.result === 'repair_requires_replan' && r.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(r.paths) === JSON.stringify(['__proto__']),
+      '#683 N14: an out-of-band revert of a gate-APPROVED file named `__proto__` is a partition-2 delta like '
+      + 'any other — candidate_delta_unattributed, NOT a vacuous pass through a poisoned map key');
+    assert(w.attempt683('ga:1').rebind.length === 0 && w.refSha683('wa') === before
+      && w.ledger683('wa') === 'complete',
+      '#683 N14: zero durable mutation — no rebind record, the anchored ref is unmoved, the writer is NOT reopened');
+  }
+
+  for (const r of repos683) { try { fs.rmSync(r, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ===========================================================================
+// #684 — mutation-kill regression coverage for the fail-closed paths #684's audit found reachable
+// only through pure-helper unit calls (or not at all), never through the real subcommand. The
+// open-next/open-ready review-journal FENCE (adaptive-node.js:3072/6132, `journalFence`) is already
+// driven through the real CLI by #683's RED-A assertion (test-adaptive-node.js's `#683 RED-A` block,
+// looping `orient`/`open-next`/`open-ready`) — mutation-verified below by disablement, not duplicated.
+// Everything else here is new: `candidate_digest_changed` (narrowed post-#683 to the fail-closed
+// RESIDUAL of the rebind proof — real production computeReviewCandidateDigest never returns a value
+// that engages it; only the injectable legacy-string test seam can), the unique-maximal-producer
+// `repair_requires_replan` (no `reason` key), `writer_identity_changed` (compared against
+// `effectiveProducerBinding`), the missing-journal compliance/failed-attempt witness detector
+// (readReviewJournal:2286-2288), and the #664 fold proven reachable through a REAL frozen plan + REAL
+// journal (not the unfrozen `makePlan()` shortcut the original #664 fixture used, which #684's audit
+// found skips the entire journal-gated preamble — a shape a real planner freeze can never produce).
+// ===========================================================================
+
+// N684-1 — candidate_digest_changed: proveRebindAdmissible's fail-closed RESIDUAL fires when the
+// repair-time candidate carries no partition data (the injectable computeReviewCandidateDigest seam
+// returns a bare STRING, exactly what the ~15 pre-existing direct-call fixtures rely on) AND the
+// digest differs from what was recorded at review time — real production digests always carry
+// {digest, declared, residue_digest} and can never engage this branch (see the code comment at
+// proveRebindAdmissible's first guard), so this residual is pinned directly via the seam.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-digest-changed-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684a');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(['| writer | complete | |', '| review | in_progress | |', '| done | pending | |'], [
+      '| writer | tdd-guide | — | scripts/w684a.js | 1 | sequence |',
+      '| review | code-reviewer | writer | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    const writerBaseline = 'w'.repeat(40);
+    const identity = { baseline: writerBaseline, anchored_ref: writerBaseline,
+      open_token: 'writer-open-token', generation: writerBaseline.slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-684a/writer' };
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), writerBaseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'r'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review ' + 'r'.repeat(12) + '\nverdict: fail\nfindings_blocking: 1\n');
+    const common = { planPath, project: 'issue-684a',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      captureWriterBarrierIdentity: () => identity };
+    const closed = runCloseNode({ ...common, nodeId: 'review', computeReviewCandidateDigest: () => 'a'.repeat(64) });
+    assert(closed.result === 'review_failed', 'N684-1: setup — review settles fail, got ' + JSON.stringify(closed));
+    const repaired = runRepairNode({ ...common, nodeId: 'writer', attemptId: closed.attempt_id,
+      computeReviewCandidateDigest: () => 'b'.repeat(64) });
+    assert(repaired.result === 'repair_requires_replan' && repaired.reason === 'candidate_digest_changed',
+      'N684-1: a repair-time candidate whose seam carries no partition data (bare string, differing from '
+      + 'the recorded digest) refuses the fail-closed residual candidate_digest_changed, got ' + JSON.stringify(repaired));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// N684-2 — repair-node's unique-maximal-producer refusal carries NO `reason` key (only `attempt_id` +
+// `producer_slice`): two independent writers with no dependency between them feed one shared gate, so
+// neither is its unique maximal producer and repairing through EITHER alone is refused.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-nonmax-producer-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684b');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| wa | complete | |', '| wb | complete | |', '| review | in_progress | |', '| done | pending | |',
+    ], [
+      '| wa | tdd-guide | — | scripts/wa684.js | 1 | sequence |',
+      '| wb | tdd-guide | — | scripts/wb684.js | 1 | sequence |',
+      '| review | code-reviewer | wa, wb | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-wa'), 'a'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-wb'), 'b'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'r'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review ' + 'r'.repeat(12) + '\nverdict: fail\nfindings_blocking: 1\n');
+    const identityWa = { baseline: 'a'.repeat(40), anchored_ref: 'a'.repeat(40),
+      open_token: 'open-wa', generation: 'a'.repeat(12), ref: 'refs/kaola-workflow/barrier/issue-684b/wa' };
+    const identityWb = { baseline: 'b'.repeat(40), anchored_ref: 'b'.repeat(40),
+      open_token: 'open-wb', generation: 'b'.repeat(12), ref: 'refs/kaola-workflow/barrier/issue-684b/wb' };
+    const common = { planPath, project: 'issue-684b',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => 'c'.repeat(64),
+      captureWriterBarrierIdentity: id => ({ wa: identityWa, wb: identityWb }[id] || null) };
+    const closed = runCloseNode({ ...common, nodeId: 'review' });
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const journal684b = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const attempt684b = journal684b.attempts[0];
+    assert(closed.result === 'review_failed' && attempt684b
+      && JSON.stringify(Object.keys(attempt684b.producer_bindings).sort()) === JSON.stringify(['wa', 'wb']),
+      'N684-2: setup — review settles fail and binds BOTH independent producers wa+wb, got '
+      + JSON.stringify({ closed, attempt684b }));
+    const repaired = runRepairNode({ ...common, nodeId: 'wa', attemptId: attempt684b.attempt_id });
+    assert(repaired.result === 'repair_requires_replan' && !('reason' in repaired)
+      && JSON.stringify((repaired.producer_slice || []).slice().sort()) === JSON.stringify(['wa', 'wb']),
+      'N684-2: repairing through wa alone refuses repair_requires_replan with NO reason key — wb is a '
+      + 'second producer that is not an ancestor of wa, so wa is not the unique maximal producer, got '
+      + JSON.stringify(repaired));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// N684-3 — writer_identity_changed: the current writer identity no longer matches the journal's
+// EFFECTIVE producer binding (post-#683: compared via effectiveProducerBinding, not the raw
+// producer_bindings map directly — unchanged in semantics here since no rebind has occurred).
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-writer-identity-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684c');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(['| writer | complete | |', '| review | in_progress | |', '| done | pending | |'], [
+      '| writer | tdd-guide | — | scripts/w684c.js | 1 | sequence |',
+      '| review | code-reviewer | writer | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), 'w'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'r'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review ' + 'r'.repeat(12) + '\nverdict: fail\nfindings_blocking: 1\n');
+    const originalIdentity = { baseline: 'w'.repeat(40), anchored_ref: 'w'.repeat(40),
+      open_token: 'open-original', generation: 'w'.repeat(12),
+      ref: 'refs/kaola-workflow/barrier/issue-684c/writer' };
+    const tamperedIdentity = { ...originalIdentity, ref: 'refs/kaola-workflow/barrier/issue-684c/writer-REPLACED' };
+    const common = { planPath, project: 'issue-684c',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => 'e'.repeat(64) };
+    const closed = runCloseNode({ ...common, nodeId: 'review', captureWriterBarrierIdentity: () => originalIdentity });
+    assert(closed.result === 'review_failed', 'N684-3: setup — review settles fail, got ' + JSON.stringify(closed));
+    const repaired = runRepairNode({ ...common, nodeId: 'writer', attemptId: closed.attempt_id,
+      captureWriterBarrierIdentity: () => tamperedIdentity });
+    assert(repaired.result === 'repair_requires_replan' && repaired.reason === 'writer_identity_changed'
+      && repaired.attempt_id === closed.attempt_id,
+      'N684-3: a writer identity that no longer matches the journal\'s effective producer binding refuses '
+      + 'writer_identity_changed through the real repair-node subcommand, got ' + JSON.stringify(repaired));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// N684-4a — the missing-journal COMPLIANCE witness (readReviewJournal:2286-2288): a "Required Agent
+// Compliance" row names a VERDICT_ROLES role, but no node in the graph carries that role — the
+// SEPARATE per-node VERDICT_ROLES loop below it is empty and cannot independently catch this, so the
+// dedicated witness-detector branch is the ONLY thing that can refuse here. Driven through the real
+// `orient` subcommand with no journal file on disk.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-witness-compliance-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684d');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    let body = makePlan(['| writer | complete | |', '| done | pending | |'], [
+      '| writer | tdd-guide | — | scripts/w684d.js | 1 | sequence |',
+      '| done | finalize | writer | CHANGELOG.md | 1 | sequence |',
+    ]);
+    body = spliceComplianceRow(body, '| code-reviewer | complete | historical | |');
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(statePath, '# State\n');
+    assert(!fs.existsSync(path.join(cacheDir, 'review-attempts.json')), 'N684-4a: setup — no review journal on disk');
+    assert(body.includes('| code-reviewer | complete | historical | |'),
+      'N684-4a: setup — the compliance row for code-reviewer is present in the frozen plan');
+    const r = runOrient({ planPath, statePath, project: 'issue-684d',
+      readFile: p => fs.readFileSync(p, 'utf8'), cacheExists: p => fs.existsSync(p),
+      shell: (_p, args) => args.includes('--resume-check') ? { exitCode: 0, ok: true, result: 'ok' }
+        : { exitCode: 0, result: 'ok', allDone: false, readyPending: [] } });
+    assert(r.result === 'refuse' && r.reason === 'review_journal_missing'
+      && r.detail === 'prior review compliance witness exists',
+      'N684-4a: a prior compliance witness with no graph node of that role refuses review_journal_missing '
+      + '("prior review compliance witness exists") through orient with no journal on disk, got ' + JSON.stringify(r));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// N684-4b — the missing-journal FAILED-REVIEW witness (the other half of readReviewJournal:2286-2288):
+// some node's evidence carries a `failed_review_attempt:` marker (the EXACT string production
+// repair-node writes into the writer's evidence brief — adaptive-node.js's runRepairNode tail), but the
+// compliance section is ABSENT, so only this half of the same detector can catch it.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-witness-failed-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684e');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(['| writer | in_progress | |', '| done | pending | |'], [
+      '| writer | tdd-guide | — | scripts/w684e.js | 1 | sequence |',
+      '| done | finalize | writer | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(statePath, '# State\n');
+    fs.writeFileSync(path.join(cacheDir, 'writer.md'),
+      'evidence-binding: writer somenonce123\nRED: t threw pre-impl\nGREEN: t passes\n'
+      + '\nfailed_review_attempt: review:1\nfailed_review_gate: review\n');
+    assert(!fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
+      'N684-4b: setup — no review journal on disk (simulates a re-frozen plan whose prior journal was retired)');
+    assert(!body.includes('Required Agent Compliance'), 'N684-4b: setup — no compliance section present');
+    const r = runOrient({ planPath, statePath, project: 'issue-684e',
+      readFile: p => fs.readFileSync(p, 'utf8'), cacheExists: p => fs.existsSync(p),
+      shell: (_p, args) => args.includes('--resume-check') ? { exitCode: 0, ok: true, result: 'ok' }
+        : { exitCode: 0, result: 'ok', allDone: false, readyPending: [] } });
+    assert(r.result === 'refuse' && r.reason === 'review_journal_missing'
+      && r.detail === 'prior failed-review witness exists',
+      'N684-4b: a prior failed_review_attempt marker on some node\'s evidence, with no compliance section, '
+      + 'refuses review_journal_missing ("prior failed-review witness exists") through orient with no '
+      + 'journal on disk, got ' + JSON.stringify(r));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ===========================================================================
+// N684-5 — the #664 fold END-TO-END through a REAL frozen plan + REAL review journal, not the
+// unfrozen makePlan() shortcut the ORIGINAL #664 fixture above uses (which reaches runRepairNode with
+// hasReviewJournal===false and skips the ENTIRE journal-gated preamble — a shape a real planner
+// freeze can never produce, per #684's audit). Drives close-node for a REAL adversarial-verifier
+// fanout(red-team) PASS group, then a REAL code-reviewer FAIL, then repair-node with the settled
+// failed attempt's real attempt_id — --attempt-id/the unique-maximal proof/the digest check/the
+// writer-identity check/the commit-node barrier re-verify shell-out ALL engage — asserting the exact
+// #664 fold outcome (post-dominating gates folded, receipts purged with dedupe honored, singleton
+// reviewer evidence retained, the attempt durably consumed).
+// ===========================================================================
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-684-fold-e2e-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-684f');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| impl | complete | |', '| av-a | in_progress | |', '| av-b | in_progress | |',
+      '| review | pending | |', '| finalize | pending | |',
+    ], [
+      '| impl | tdd-guide | — | scripts/impl684f.js | 1 | sequence |',
+      '| av-a | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+      '| av-b | adversarial-verifier | impl | — | 1 | fanout(red-team) |',
+      '| review | code-reviewer | av-a, av-b | — | 1 | sequence |',
+      '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    const writerIdentity = { baseline: 'i'.repeat(40), anchored_ref: 'i'.repeat(40),
+      open_token: 'open-impl684f', generation: 'i'.repeat(12),
+      ref: 'refs/kaola-workflow/barrier/issue-684f/impl' };
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-impl'), 'i'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-av-a'), 'a'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-av-b'), 'b'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'av-a.md'),
+      'evidence-binding: av-a ' + 'a'.repeat(12) + '\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'av-b.md'),
+      'evidence-binding: av-b ' + 'b'.repeat(12) + '\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+      { id: 'av-a', role: 'adversarial-verifier', kind: 'read' },
+      { id: 'av-b', role: 'adversarial-verifier', kind: 'read' },
+    ] }, null, 2));
+    const common = { planPath, project: 'issue-684f',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => 'f'.repeat(64),
+      captureWriterBarrierIdentity: id => id === 'impl' ? writerIdentity : null };
+
+    // The fanout group PASSES on round 1 — av-a votes provisionally, av-b (last) certifies the group.
+    const closeA = runCloseNode({ ...common, nodeId: 'av-a' });
+    assert(closeA.result === 'ok' && closeA.provisional === true,
+      'N684-5: setup — av-a (non-last fanout member) closes provisionally, got ' + JSON.stringify(closeA));
+    const closeB = runCloseNode({ ...common, nodeId: 'av-b' });
+    assert(closeB.result === 'ok' && !closeB.provisional,
+      'N684-5: setup — av-b (last fanout member) certifies the group PASS, got ' + JSON.stringify(closeB));
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const statusesAfterFanout = readLedgerStatuses(plan);
+    assert(statusesAfterFanout['av-a'] === 'complete' && statusesAfterFanout['av-b'] === 'complete',
+      'N684-5: setup — BOTH fanout members are complete after the group settles PASS, got '
+      + JSON.stringify(statusesAfterFanout));
+
+    // review opens (hand-advanced — the fold under test is repair-node's, not the scheduler's) and
+    // settles FAIL.
+    const opened = spliceLedgerNode(plan, 'review', 'in_progress', { allowFrom: ['pending'] });
+    assert(opened.changed, 'N684-5: setup — review transitions to in_progress');
+    fs.writeFileSync(planPath, opened.content);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'r'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review ' + 'r'.repeat(12) + '\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+      { id: 'review', role: 'code-reviewer', kind: 'read' },
+    ] }, null, 2));
+    const closeReview = runCloseNode({ ...common, nodeId: 'review' });
+    assert(closeReview.result === 'review_failed' && closeReview.lifecycle_settled === true,
+      'N684-5: setup — the singleton reviewer settles FAIL with a durable attempt, got ' + JSON.stringify(closeReview));
+    plan = fs.readFileSync(planPath, 'utf8');
+    assert(readLedgerStatuses(plan).review === 'pending',
+      'N684-5: setup — the failed reviewer folds itself back to pending');
+
+    // The real journal-gated repair-node path: --attempt-id required, readReviewJournal, the
+    // unique-maximal producer proof, verifyWriterBarrierIdentity, computeReviewCandidateDigest, and
+    // the commit-node barrier re-verify shell-out ALL engage (hasReviewJournal === true throughout).
+    const repaired = runRepairNode({ ...common, nodeId: 'impl', attemptId: closeReview.attempt_id });
+    assert(repaired.result === 'ok' && repaired.baselineReused === true,
+      '#664 (real journal): repair-node folds the mixed-shape group through the REAL journal-gated path, '
+      + 'got ' + JSON.stringify(repaired));
+    assert(repaired.gatesReset.includes('av-a') && repaired.gatesReset.includes('av-b')
+      && repaired.gatesReset.includes('review'),
+      '#664 (real journal): repair-node folds BOTH the completed fanout group AND the singleton downstream '
+      + 'gate, got gatesReset=' + JSON.stringify(repaired.gatesReset));
+    assert(JSON.stringify(repaired.evidenceRemoved.slice().sort()) === JSON.stringify(['av-a.md', 'av-b.md']),
+      '#664 (real journal): BOTH stale skeptic receipts are purged with dedupe honored (each name exactly '
+      + 'once even though the fold loop visits the group via both av-a and av-b), got '
+      + JSON.stringify(repaired.evidenceRemoved));
+    assert(fs.existsSync(path.join(cacheDir, 'review.md')),
+      '#664 (real journal): the singleton reviewer\'s evidence is RETAINED as the repair brief, not purged');
+    plan = fs.readFileSync(planPath, 'utf8');
+    const finalStatuses = readLedgerStatuses(plan);
+    assert(finalStatuses['av-a'] === 'pending' && finalStatuses['av-b'] === 'pending'
+      && finalStatuses.review === 'pending' && finalStatuses.impl === 'in_progress',
+      '#664 (real journal): av-a/av-b/review reset to pending and impl reopens to in_progress, got '
+      + JSON.stringify(finalStatuses));
+    const journalAfter = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    const settledAttempt = journalAfter.attempts.find(a => a.attempt_id === closeReview.attempt_id);
+    assert(settledAttempt && settledAttempt.consumed_by === 'impl' && settledAttempt.repair.settled === true,
+      '#664 (real journal): the repaired attempt is durably consumed by the selected writer');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
 if (failed > 0) {

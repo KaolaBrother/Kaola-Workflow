@@ -727,6 +727,19 @@ for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled
 for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
   assertIncludes('scripts/kaola-workflow-adaptive-schema.js', token);
 }
+// #683: the candidate-partition repair proof (P1-P5) + the append-only rebind ledger. These are the
+// fail-closed refusals that replace a whole-plan DISCARD when two gates fail simultaneously; a port that
+// silently drops one re-opens the dead-end.
+for (const token of ['candidate_residue_changed', 'candidate_slice_changed', 'candidate_delta_unattributed',
+  'rebind_base_rewrite_unsafe', 'rebind_limit_reached', 'rebind_replay_diverged',
+  'review_journal_schema_upgrade_required', 'effectiveProducerBinding', 'buildSyntheticBase',
+  'proveRebindAdmissible', 'reconcilePendingRebind', 'REVIEW_REPAIR_LIMIT']) {
+  assertIncludes('scripts/kaola-workflow-adaptive-node.js', token);
+}
+for (const token of ['candidate_declared', 'candidate_residue_digest', 'review_journal_rebind_malformed',
+  'review_journal_rebind_chain_invalid', 'REVIEW_REBIND_LIMIT', 'effectiveCandidate']) {
+  assertIncludes('scripts/kaola-workflow-adaptive-schema.js', token);
+}
 // #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
 // findings-route.json output + VERDICT_ROLES table must be present in the aggregators.
 assertIncludes('scripts/kaola-workflow-plan-validator.js', 'OPERATOR_HINT_REGISTRY');

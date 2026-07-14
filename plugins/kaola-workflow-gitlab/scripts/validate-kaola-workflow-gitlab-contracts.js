@@ -760,6 +760,19 @@ for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled
 for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
   assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', token);
 }
+// #683: the candidate-partition repair proof (P1-P5) + the append-only rebind ledger. These are the
+// fail-closed refusals that replace a whole-plan DISCARD when two gates fail simultaneously; a port that
+// silently drops one re-opens the dead-end.
+for (const token of ['candidate_residue_changed', 'candidate_slice_changed', 'candidate_delta_unattributed',
+  'rebind_base_rewrite_unsafe', 'rebind_limit_reached', 'rebind_replay_diverged',
+  'review_journal_schema_upgrade_required', 'effectiveProducerBinding', 'buildSyntheticBase',
+  'proveRebindAdmissible', 'reconcilePendingRebind', 'REVIEW_REPAIR_LIMIT']) {
+  assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-adaptive-node.js', token);
+}
+for (const token of ['candidate_declared', 'candidate_residue_digest', 'review_journal_rebind_malformed',
+  'review_journal_rebind_chain_invalid', 'REVIEW_REBIND_LIMIT', 'effectiveCandidate']) {
+  assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', token);
+}
 // #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
 // DEFINED via the kaola_script() resolver before its first use — undefined in a consumer install.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'kaola_script(){');
