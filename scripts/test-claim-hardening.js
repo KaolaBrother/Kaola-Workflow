@@ -2215,6 +2215,706 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// ---------------------------------------------------------------------------
+// #686: archive-time reap of dangling refs/kaola-workflow/barrier/<tag>/* refs (Behavior A).
+// archiveProjectDir is the convergence point for finalize-closed / discard-abandoned / the
+// active-folders backstop, so ONE insertion there must delete every barrier ref belonging to the
+// archived project. RED (pre-impl): the ref survives archiving. GREEN (post-impl): the ref is gone
+// AND the archive itself still succeeds; a reap failure must never throw or block the archive.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686 } = require('child_process');
+  const claim686 = require('./kaola-workflow-claim.js');
+  const GIT_ENV_686 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686 = (cwd, args) => execFS686('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686 });
+
+  // --- (a) archive-time reap deletes the project's barrier ref; archive itself still succeeds ---
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686-reap-')));
+    const project = 'issue-686reap';
+    try {
+      g686(tmp, ['init', '-b', 'main']);
+      g686(tmp, ['config', 'user.email', 't@t.com']);
+      g686(tmp, ['config', 'user.name', 'Test']);
+      g686(tmp, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
+      g686(tmp, ['add', 'README.md']);
+      g686(tmp, ['commit', '-m', 'init']);
+      const headSha = execFS686('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
+
+      const projDir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(projDir, { recursive: true });
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), 'status: in_progress\nissue_number: 68601\n');
+
+      const refName = 'refs/kaola-workflow/barrier/' + project + '/n1-test';
+      g686(tmp, ['update-ref', refName, headSha]);
+      const beforeReap = execFS686('git', ['-C', tmp, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
+      assert(beforeReap === refName, '#686 fixture: the barrier ref exists before archiving, got ' + JSON.stringify(beforeReap));
+
+      const result = claim686.archiveProjectDir(tmp, project, 'closed', undefined, {});
+      assert(result && result.archived === true, '#686: archiveProjectDir must still succeed with a barrier ref present, got ' + JSON.stringify(result));
+
+      const afterReap = execFS686('git', ['-C', tmp, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + project + '/'], { encoding: 'utf8', env: GIT_ENV_686 }).trim();
+      assert(afterReap === '', '#686: archive-time reap must delete every refs/kaola-workflow/barrier/<project>/* ref, got ' + JSON.stringify(afterReap));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // --- (b) FAIL-SOFT: a reap failure (no git repo at all) must not throw and must not block the archive ---
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686-failsoft-')));
+    const project = 'issue-686failsoft';
+    try {
+      // Deliberately NOT a git repo — `git for-each-ref` inside the reap will fail (fatal: not a git
+      // repository). archiveProjectDir must still complete via the plain fs.renameSync in-place path
+      // (which needs no git at all).
+      const projDir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(projDir, { recursive: true });
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), 'status: in_progress\nissue_number: 68602\n');
+
+      let threw = false, result;
+      try { result = claim686.archiveProjectDir(tmp, project, 'closed', undefined, {}); }
+      catch (_) { threw = true; }
+      assert(threw === false, '#686: a ref-reap failure (no git repo) must NOT throw out of archiveProjectDir');
+      assert(result && result.archived === true, '#686: the archive itself must still succeed despite the reap failure, got ' + JSON.stringify(result));
+      assert(result && fs.existsSync(result.dest), '#686: the archived folder must exist despite the reap failure, dest=' + (result && result.dest));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686: legacy `barrier-ref-sweep` subcommand (Behavior B) — reclaims refs/kaola-workflow/barrier/
+// <tag>/* refs left behind by projects archived BEFORE Behavior A shipped (or any path that bypassed
+// archiveProjectDir). KEEP = every ACTIVE kaola-workflow/<project>/ folder OR any project with a live
+// .cache/running-set.json; every other tag's refs are deleted. Mirrors the #680 orphan-baseline sweep
+// discipline: sanitizer collisions only ever ADD to KEEP (fail-safe under-reap), and the sweep is
+// scoped STRICTLY to refs/kaola-workflow/barrier/ — never leg-base/. RED (pre-impl): the subcommand
+// does not exist. GREEN (post-impl): active/running-set/collision tags survive; the orphaned
+// archived-project tag is swept; leg-base/ is untouched.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686b, spawnSync: spawnS686b } = require('child_process');
+  const CLAIM686 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686b = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686b = (cwd, args) => execFS686b('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686b });
+
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686-sweep-')));
+  try {
+    g686b(tmp, ['init', '-b', 'main']);
+    g686b(tmp, ['config', 'user.email', 't@t.com']);
+    g686b(tmp, ['config', 'user.name', 'Test']);
+    g686b(tmp, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
+    g686b(tmp, ['add', 'README.md']);
+    g686b(tmp, ['commit', '-m', 'init']);
+    const headSha = execFS686b('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
+
+    // ACTIVE project — folder present, non-terminal status → KEEP.
+    const activeProj = 'issue-686active';
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', activeProj), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', activeProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68611\n');
+    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + activeProj + '/n1', headSha]);
+
+    // ARCHIVED project — NO live folder at all (already archived pre-#686, ref left dangling) → DELETE.
+    const archivedProj = 'issue-686archived';
+    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + archivedProj + '/n1', headSha]);
+
+    // Sanitizer-COLLISION — "proj.a686" (active, sanitizes to "proj_a686") shares its sanitized tag
+    // with a (nonexistent-folder) "proj_a686". The collision must KEEP (fail-safe under-reap).
+    const collisionActive = 'proj.a686';
+    const collisionTag = 'proj_a686';
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', collisionActive), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', collisionActive, 'workflow-state.md'), 'status: in_progress\nissue_number: 68612\n');
+    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + collisionTag + '/n1', headSha]);
+
+    // RUNNING-SET project — folder present with a TERMINAL local status (would NOT be "active") but a
+    // live .cache/running-set.json → must still KEEP via the running-set signal alone.
+    const runningProj = 'issue-686running';
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', runningProj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', runningProj, 'workflow-state.md'), 'status: closed\nissue_number: 68613\n');
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', runningProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
+    g686b(tmp, ['update-ref', 'refs/kaola-workflow/barrier/' + runningProj + '/n1', headSha]);
+
+    // Scope guard — a leg-base ref (a SEPARATE namespace) must survive untouched (never barrier/).
+    g686b(tmp, ['update-ref', 'refs/kaola-workflow/leg-base/' + archivedProj + '/n1', headSha]);
+
+    const run = spawnS686b(process.execPath, [CLAIM686, 'barrier-ref-sweep', '--json'], {
+      cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out = {};
+    try { out = JSON.parse(String(run.stdout || '').trim().split('\n').pop()); } catch (_) {}
+
+    const listRefs = (prefix) => execFS686b('git', ['-C', tmp, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686b }).trim();
+
+    assert(run.status === 0, '#686 sweep: barrier-ref-sweep must exit 0, got status=' + run.status + ' stdout=' + run.stdout + ' stderr=' + run.stderr);
+    assert(out && Array.isArray(out.refsDeleted) && Array.isArray(out.tagsKept), '#686 sweep: --json summary must carry refsDeleted[]/tagsKept[], got ' + JSON.stringify(out));
+
+    assert(listRefs('refs/kaola-workflow/barrier/' + activeProj + '/') === 'refs/kaola-workflow/barrier/' + activeProj + '/n1',
+      "#686 sweep: an ACTIVE project's barrier ref must be KEPT");
+    assert(listRefs('refs/kaola-workflow/barrier/' + archivedProj + '/') === '',
+      "#686 sweep: an ARCHIVED (no-folder) project's barrier ref must be DELETED");
+    assert(listRefs('refs/kaola-workflow/barrier/' + collisionTag + '/') === 'refs/kaola-workflow/barrier/' + collisionTag + '/n1',
+      '#686 sweep: a sanitizer-collision tag shared with an active folder must be KEPT (under-reap-safe)');
+    assert(listRefs('refs/kaola-workflow/barrier/' + runningProj + '/') === 'refs/kaola-workflow/barrier/' + runningProj + '/n1',
+      '#686 sweep: a project with a live .cache/running-set.json must be KEPT even with a terminal local status');
+    assert(listRefs('refs/kaola-workflow/leg-base/' + archivedProj + '/') === 'refs/kaola-workflow/leg-base/' + archivedProj + '/n1',
+      '#686 sweep: leg-base/ refs are a SEPARATE namespace and must never be touched by barrier-ref-sweep');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R1, code-reviewer gate n2-review): over-reap of a LIVE project when barrier-ref-sweep
+// is invoked from a LINKED-WORKTREE cwd — the NORMAL orchestrator cwd for a run. The KEEP set was
+// built from `root` (getRoot() of the invoking cwd) alone, but refs/kaola-workflow/barrier/* refs
+// live in the shared git COMMON dir (enumerated/deleted with cwd: mainRoot) — while a LIVE claim's
+// kaola-workflow/<project>/ folder lives in the MAIN root, invisible from a sibling worktree's own
+// kaola-workflow/ dir. A sweep run from a linked worktree therefore reaped a live sibling project's
+// barrier ref — the gc-anchor whose baseline commit git gc can then prune, making the
+// barrier_base_mismatch ref-restore repair impossible. RED (pre-fix): a live sibling project (folder
+// + workflow-state.md + running .cache/running-set.json under the MAIN root only) is reaped when the
+// sweep runs with cwd = a linked worktree. GREEN (post-fix): the KEEP set is the UNION of the
+// `root`-universe and the `mainRoot`-universe, so the live sibling survives.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686c, spawnSync: spawnS686c } = require('child_process');
+  const CLAIM686c = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686c = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686c = (cwd, args) => execFS686c('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686c });
+
+  const mainRoot686c = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686c-main-')));
+  const kwRoot686c = mainRoot686c + '.kw';
+  try {
+    g686c(mainRoot686c, ['init', '-b', 'main']);
+    g686c(mainRoot686c, ['config', 'user.email', 't@t.com']);
+    g686c(mainRoot686c, ['config', 'user.name', 'Test']);
+    g686c(mainRoot686c, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot686c, 'README.md'), 'fixture\n');
+    g686c(mainRoot686c, ['add', 'README.md']);
+    g686c(mainRoot686c, ['commit', '-m', 'init']);
+    const headSha686c = execFS686c('git', ['-C', mainRoot686c, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
+
+    // Linked worktree — the invoking cwd for the sweep. Its OWN kaola-workflow/ dir never exists.
+    const wtPath686c = path.join(kwRoot686c, 'issue-686wtcwd');
+    fs.mkdirSync(kwRoot686c, { recursive: true });
+    g686c(mainRoot686c, ['worktree', 'add', '-b', 'workflow/issue-68621', '--', wtPath686c, 'HEAD']);
+
+    // LIVE sibling project — folder + workflow-state.md + a live running-set.json, but ONLY under the
+    // MAIN root (as a real claim's folder always is), never under the worktree's own kaola-workflow/.
+    const siblingProj = 'issue-686sibling';
+    fs.mkdirSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68621\n');
+    fs.writeFileSync(path.join(mainRoot686c, 'kaola-workflow', siblingProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
+    g686c(mainRoot686c, ['update-ref', 'refs/kaola-workflow/barrier/' + siblingProj + '/n1', headSha686c]);
+
+    const listRefs686c = (prefix) => execFS686c('git', ['-C', mainRoot686c, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686c }).trim();
+    const beforeSweep686c = listRefs686c('refs/kaola-workflow/barrier/' + siblingProj + '/');
+    assert(beforeSweep686c === 'refs/kaola-workflow/barrier/' + siblingProj + '/n1',
+      '#686 R1 fixture: the live sibling barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686c));
+
+    // Invoke the sweep with cwd = the LINKED WORKTREE — the normal orchestrator cwd for a run.
+    const run686c = spawnS686c(process.execPath, [CLAIM686c, 'barrier-ref-sweep', '--json'], {
+      cwd: wtPath686c, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out686c = {};
+    try { out686c = JSON.parse(String(run686c.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686c.status === 0, '#686 R1: barrier-ref-sweep must exit 0, got status=' + run686c.status + ' stdout=' + run686c.stdout + ' stderr=' + run686c.stderr);
+
+    const afterSweep686c = listRefs686c('refs/kaola-workflow/barrier/' + siblingProj + '/');
+    assert(afterSweep686c === 'refs/kaola-workflow/barrier/' + siblingProj + '/n1',
+      '#686 R1: a LIVE sibling project (folder in the MAIN root, invisible from the invoking worktree cwd) must be KEPT, not over-reaped, when the sweep runs from a linked-worktree cwd. tagsKept=' +
+      JSON.stringify(out686c.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686c.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686c.refsDeleted));
+    assert(Array.isArray(out686c.tagsKept) && out686c.tagsKept.includes(siblingProj),
+      '#686 R1: tagsKept must include the live sibling project tag, got ' + JSON.stringify(out686c.tagsKept));
+  } finally {
+    fs.rmSync(mainRoot686c, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot686c, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R4, n3-adversary attempt 1): the reachable claim-root universe is EVERY linked
+// worktree, not just {invoking root, mainRoot} (R1's fix closed only half the class). A claim from a
+// THIRD worktree w2 — neither the sweep's invoking cwd w1 nor mainRoot — writes its live folder +
+// running-set.json ONLY under w2, invisible to a sweep run from w1. RED (pre-fix): the w2-only live
+// project's barrier ref is DELETED when the sweep runs from w1. GREEN (post-fix): the keep-set scan
+// spans EVERY `git worktree list --porcelain` root (mainRoot + every linked worktree — legs included
+// for free), so the w2-only project survives. A genuinely dead (no-folder-anywhere) tag is still
+// reaped, proving the fix does not degrade into a blanket keep-everything.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686d, spawnSync: spawnS686d } = require('child_process');
+  const CLAIM686d = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686d = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686d = (cwd, args) => execFS686d('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686d });
+
+  const mainRoot686d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686d-main-')));
+  const kwRoot686d = mainRoot686d + '.kw';
+  try {
+    g686d(mainRoot686d, ['init', '-b', 'main']);
+    g686d(mainRoot686d, ['config', 'user.email', 't@t.com']);
+    g686d(mainRoot686d, ['config', 'user.name', 'Test']);
+    g686d(mainRoot686d, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot686d, 'README.md'), 'fixture\n');
+    g686d(mainRoot686d, ['add', 'README.md']);
+    g686d(mainRoot686d, ['commit', '-m', 'init']);
+    const headSha686d = execFS686d('git', ['-C', mainRoot686d, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
+
+    fs.mkdirSync(kwRoot686d, { recursive: true });
+    // w1 — the invoking cwd for the sweep. Its own kaola-workflow/ never exists.
+    const w1Path686d = path.join(kwRoot686d, 'issue-686w1');
+    g686d(mainRoot686d, ['worktree', 'add', '-b', 'workflow/issue-68631', '--', w1Path686d, 'HEAD']);
+    // w2 — a THIRD worktree (neither w1 nor mainRoot) holding the ONLY copy of the live project.
+    const w2Path686d = path.join(kwRoot686d, 'issue-686w2');
+    g686d(mainRoot686d, ['worktree', 'add', '-b', 'workflow/issue-68632', '--', w2Path686d, 'HEAD']);
+
+    const w2LiveProj = 'issue-686w2live';
+    fs.mkdirSync(path.join(w2Path686d, 'kaola-workflow', w2LiveProj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(w2Path686d, 'kaola-workflow', w2LiveProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68632\n');
+    fs.writeFileSync(path.join(w2Path686d, 'kaola-workflow', w2LiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
+    g686d(mainRoot686d, ['update-ref', 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1', headSha686d]);
+
+    // A genuinely DEAD project (no folder anywhere) — must still be reaped post-fix.
+    const deadProj686d = 'issue-686w2dead';
+    g686d(mainRoot686d, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686d + '/n1', headSha686d]);
+
+    const listRefs686d = (prefix) => execFS686d('git', ['-C', mainRoot686d, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686d }).trim();
+    const beforeSweep686d = listRefs686d('refs/kaola-workflow/barrier/' + w2LiveProj + '/');
+    assert(beforeSweep686d === 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1',
+      '#686 R4 fixture: the w2-only live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686d));
+
+    // Invoke the sweep with cwd = w1 — NEITHER the live project's own root NOR mainRoot.
+    const run686d = spawnS686d(process.execPath, [CLAIM686d, 'barrier-ref-sweep', '--json'], {
+      cwd: w1Path686d, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out686d = {};
+    try { out686d = JSON.parse(String(run686d.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686d.status === 0, '#686 R4: barrier-ref-sweep must exit 0, got status=' + run686d.status + ' stdout=' + run686d.stdout + ' stderr=' + run686d.stderr);
+
+    const afterSweep686d = listRefs686d('refs/kaola-workflow/barrier/' + w2LiveProj + '/');
+    assert(afterSweep686d === 'refs/kaola-workflow/barrier/' + w2LiveProj + '/n1',
+      '#686 R4: a LIVE project claimed in a THIRD worktree (neither the invoking root nor mainRoot) must be KEPT, not over-reaped. tagsKept=' +
+      JSON.stringify(out686d.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686d.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686d.refsDeleted));
+    assert(Array.isArray(out686d.tagsKept) && out686d.tagsKept.includes(w2LiveProj),
+      '#686 R4: tagsKept must include the w2-only live project tag, got ' + JSON.stringify(out686d.tagsKept));
+    assert(listRefs686d('refs/kaola-workflow/barrier/' + deadProj686d + '/') === '',
+      '#686 R4: a genuinely dead (no-folder-anywhere) tag must still be reaped — the fix must not degrade into keep-everything');
+  } finally {
+    fs.rmSync(mainRoot686d, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot686d, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R4 fail-closed): `git worktree list` itself failing (an unscannable worktree set)
+// must ABORT the sweep — delete NOTHING — rather than proceed on a partial keep universe. An
+// unknown worktree set means the sweep cannot prove any tag is dead. RED (pre-fix): the injection
+// hook does not exist yet, so forcing it is a no-op — the sweep proceeds normally and reaps the
+// dead tag anyway. GREEN (post-fix): the forced enumeration failure aborts before any
+// `update-ref -d` runs, so the dead tag's ref survives too (a safe over-keep, never an over-reap).
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686f, spawnSync: spawnS686f } = require('child_process');
+  const CLAIM686f = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686f = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686f = (cwd, args) => execFS686f('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686f });
+
+  const tmp686f = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686f-')));
+  try {
+    g686f(tmp686f, ['init', '-b', 'main']);
+    g686f(tmp686f, ['config', 'user.email', 't@t.com']);
+    g686f(tmp686f, ['config', 'user.name', 'Test']);
+    g686f(tmp686f, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp686f, 'README.md'), 'fixture\n');
+    g686f(tmp686f, ['add', 'README.md']);
+    g686f(tmp686f, ['commit', '-m', 'init']);
+    const headSha686f = execFS686f('git', ['-C', tmp686f, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
+
+    // A genuinely dead (no-folder-anywhere) tag — deleted in normal operation, but must SURVIVE
+    // when the worktree-list enumeration itself is forced to fail.
+    const deadProj686f = 'issue-686fdead';
+    g686f(tmp686f, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686f + '/n1', headSha686f]);
+
+    const run686f = spawnS686f(process.execPath, [CLAIM686f, 'barrier-ref-sweep', '--json'], {
+      cwd: tmp686f, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_BARRIER_WT_LIST_FAIL: '1' })
+    });
+    let out686f = {};
+    try { out686f = JSON.parse(String(run686f.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686f.status === 0, '#686 R4 fail-closed: barrier-ref-sweep must still exit 0 on a safe abort, got status=' + run686f.status + ' stdout=' + run686f.stdout + ' stderr=' + run686f.stderr);
+    assert(out686f && out686f.aborted === true,
+      '#686 R4 fail-closed: a forced `git worktree list` enumeration failure must set aborted:true, got ' + JSON.stringify(out686f));
+    assert(Array.isArray(out686f.refsDeleted) && out686f.refsDeleted.length === 0,
+      '#686 R4 fail-closed: an enumeration failure must delete NOTHING, got refsDeleted=' + JSON.stringify(out686f.refsDeleted));
+
+    const afterSweep686f = execFS686f('git', ['-C', tmp686f, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + deadProj686f + '/'], { encoding: 'utf8', env: GIT_ENV_686f }).trim();
+    assert(afterSweep686f === 'refs/kaola-workflow/barrier/' + deadProj686f + '/n1',
+      '#686 R4 fail-closed: even a genuinely dead tag must SURVIVE an enumeration-failure abort (delete nothing beats delete-the-wrong-thing), got ' + JSON.stringify(afterSweep686f));
+  } finally {
+    fs.rmSync(tmp686f, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R5, n3-adversary attempt 1): case-insensitive-FS tag/dirent mismatch. A wrong-case
+// --record-base anchors barrier ref tag `Issue-9` while the live folder dirent is `issue-9` — on a
+// case-insensitive filesystem the two paths are the SAME inode, but the ref tag is recorded EXACTLY
+// as given (plan-validator.js projTag = basename AS GIVEN), so `keep` (built as `issue-9` from
+// readActiveFolders) does not exact-match the enumerated ref tag `Issue-9` → over-reap. FIX: the
+// sweep's keep membership check is CASE-FOLDED (fail-safe — only ever ADDS keeps, never removes
+// one). This test constructs the tag/folder case divergence directly so it is deterministic
+// regardless of the host FS's own case-sensitivity.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686e, spawnSync: spawnS686e } = require('child_process');
+  const CLAIM686e = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686e = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686e = (cwd, args) => execFS686e('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686e });
+
+  const tmp686e = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686e-')));
+  try {
+    g686e(tmp686e, ['init', '-b', 'main']);
+    g686e(tmp686e, ['config', 'user.email', 't@t.com']);
+    g686e(tmp686e, ['config', 'user.name', 'Test']);
+    g686e(tmp686e, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp686e, 'README.md'), 'fixture\n');
+    g686e(tmp686e, ['add', 'README.md']);
+    g686e(tmp686e, ['commit', '-m', 'init']);
+    const headSha686e = execFS686e('git', ['-C', tmp686e, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
+
+    // Live folder dirent: lowercase `issue-9`.
+    const liveProj686e = 'issue-9';
+    fs.mkdirSync(path.join(tmp686e, 'kaola-workflow', liveProj686e), { recursive: true });
+    fs.writeFileSync(path.join(tmp686e, 'kaola-workflow', liveProj686e, 'workflow-state.md'), 'status: in_progress\nissue_number: 6869\n');
+    // Ref tag anchored with the WRONG case, as a real --record-base from a wrong-case path would.
+    const wrongCaseTag686e = 'Issue-9';
+    g686e(tmp686e, ['update-ref', 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/n1', headSha686e]);
+
+    const run686e = spawnS686e(process.execPath, [CLAIM686e, 'barrier-ref-sweep', '--json'], {
+      cwd: tmp686e, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out686e = {};
+    try { out686e = JSON.parse(String(run686e.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686e.status === 0, '#686 R5: barrier-ref-sweep must exit 0, got status=' + run686e.status + ' stdout=' + run686e.stdout + ' stderr=' + run686e.stderr);
+
+    const afterSweep686e = execFS686e('git', ['-C', tmp686e, 'for-each-ref', '--format=%(refname)', 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/'], { encoding: 'utf8', env: GIT_ENV_686e }).trim();
+    assert(afterSweep686e === 'refs/kaola-workflow/barrier/' + wrongCaseTag686e + '/n1',
+      '#686 R5: a wrong-case ref tag (`Issue-9`) whose live folder dirent differs only in case (`issue-9`) must be KEPT under case-folded comparison, got ' + JSON.stringify(afterSweep686e) +
+      ' tagsKept=' + JSON.stringify(out686e.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686e.tagsDeleted));
+    assert(Array.isArray(out686e.tagsKept) && out686e.tagsKept.includes(wrongCaseTag686e),
+      '#686 R5: tagsKept must include the wrong-case tag, got ' + JSON.stringify(out686e.tagsKept));
+  } finally {
+    fs.rmSync(tmp686e, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R6, n3-adversary attempt 2): a worktree path containing a literal EMBEDDED NEWLINE.
+// `git worktree add` accepts such a path (APFS allows it); plain `--porcelain` (no -z) uses a bare
+// LF as the field/record terminator, so the path is emitted RAW across two physical lines — the
+// old `split('\n')` + `indexOf('worktree ')` parse captures only the first physical line (a
+// nonexistent prefix), silently dropping the rest of the path. That makes the newline-worktree root
+// unscannable, so a LIVE claim rooted there is invisible to the keep-set scan and its barrier ref is
+// over-reaped. FIX: `--porcelain -z` (NUL-separated) emits the path byte-exact between NULs,
+// unambiguous regardless of embedded LFs.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686g, spawnSync: spawnS686g } = require('child_process');
+  const CLAIM686g = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686g = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686g = (cwd, args) => execFS686g('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686g });
+
+  const mainRoot686g = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686g-main-')));
+  // #690 (n2 finding, test hygiene): declared ABOVE the try (not `const` inside it) so the finally
+  // below can always reach it and clean it up, even if an assertion throws before or after this
+  // SIBLING scratch worktree dir (outside mainRoot686g) is created.
+  let nlPath686g;
+  try {
+    g686g(mainRoot686g, ['init', '-b', 'main']);
+    g686g(mainRoot686g, ['config', 'user.email', 't@t.com']);
+    g686g(mainRoot686g, ['config', 'user.name', 'Test']);
+    g686g(mainRoot686g, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot686g, 'README.md'), 'fixture\n');
+    g686g(mainRoot686g, ['add', 'README.md']);
+    g686g(mainRoot686g, ['commit', '-m', 'init']);
+    const headSha686g = execFS686g('git', ['-C', mainRoot686g, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
+
+    // A worktree path whose final path SEGMENT contains a literal embedded newline.
+    nlPath686g = mainRoot686g + '-wt-a' + '\n' + 'wt-b';
+    g686g(mainRoot686g, ['worktree', 'add', '-b', 'workflow/issue-686nl', '--', nlPath686g, 'HEAD']);
+    assert(fs.existsSync(nlPath686g), '#686 R6 fixture: the embedded-newline worktree path must exist on disk, got path=' + JSON.stringify(nlPath686g));
+
+    // A LIVE project rooted ONLY inside the newline-path worktree.
+    const nlLiveProj = 'issue-686nllive';
+    fs.mkdirSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68641\n');
+    fs.writeFileSync(path.join(nlPath686g, 'kaola-workflow', nlLiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
+    g686g(mainRoot686g, ['update-ref', 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1', headSha686g]);
+
+    const listRefs686g = (prefix) => execFS686g('git', ['-C', mainRoot686g, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686g }).trim();
+    const beforeSweep686g = listRefs686g('refs/kaola-workflow/barrier/' + nlLiveProj + '/');
+    assert(beforeSweep686g === 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1',
+      '#686 R6 fixture: the embedded-newline-worktree live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686g));
+
+    const run686g = spawnS686g(process.execPath, [CLAIM686g, 'barrier-ref-sweep', '--json'], {
+      cwd: mainRoot686g, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out686g = {};
+    try { out686g = JSON.parse(String(run686g.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686g.status === 0, '#686 R6: barrier-ref-sweep must exit 0, got status=' + run686g.status + ' stdout=' + run686g.stdout + ' stderr=' + run686g.stderr);
+
+    const afterSweep686g = listRefs686g('refs/kaola-workflow/barrier/' + nlLiveProj + '/');
+    assert(afterSweep686g === 'refs/kaola-workflow/barrier/' + nlLiveProj + '/n1',
+      '#686 R6: a LIVE project rooted in a worktree whose path contains an embedded newline must be KEPT, not over-reaped by an LF-split porcelain misparse. tagsKept=' +
+      JSON.stringify(out686g.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686g.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686g.refsDeleted));
+    assert(Array.isArray(out686g.tagsKept) && out686g.tagsKept.includes(nlLiveProj),
+      '#686 R6: tagsKept must include the embedded-newline-worktree live project tag, got ' + JSON.stringify(out686g.tagsKept));
+  } finally {
+    // #690 fix: nlPath686g is a SIBLING worktree dir living OUTSIDE mainRoot686g, so deleting
+    // mainRoot686g alone leaked it (n2 finding, filed as #690) — remove it independently first.
+    if (nlPath686g) { try { fs.rmSync(nlPath686g, { recursive: true, force: true }); } catch (_) {} }
+    fs.rmSync(mainRoot686g, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R7, n3-adversary attempt 2): a worktree path with a meaningful TRAILING SPACE.
+// `git worktree add` accepts such a path; plain `--porcelain` emits it verbatim (the trailing space
+// is part of the path, not terminator padding) — but the old parse's `.trim()` on the extracted
+// field strips it, resolving to a DIFFERENT, nonexistent root. That makes the trailing-space
+// worktree unscannable, so a LIVE claim rooted there is invisible and its barrier ref is over-reaped.
+// Distinct flaw from R6 (the `.trim()`, not the LF split) but the SAME fix locus and fix.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686h, spawnSync: spawnS686h } = require('child_process');
+  const CLAIM686h = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686h = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686h = (cwd, args) => execFS686h('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686h });
+
+  const mainRoot686h = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686h-main-')));
+  try {
+    g686h(mainRoot686h, ['init', '-b', 'main']);
+    g686h(mainRoot686h, ['config', 'user.email', 't@t.com']);
+    g686h(mainRoot686h, ['config', 'user.name', 'Test']);
+    g686h(mainRoot686h, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot686h, 'README.md'), 'fixture\n');
+    g686h(mainRoot686h, ['add', 'README.md']);
+    g686h(mainRoot686h, ['commit', '-m', 'init']);
+    const headSha686h = execFS686h('git', ['-C', mainRoot686h, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
+
+    // A worktree path with a meaningful trailing space.
+    const trailPath686h = path.join(mainRoot686h + '.kw', 'issue-686trail ');
+    fs.mkdirSync(mainRoot686h + '.kw', { recursive: true });
+    g686h(mainRoot686h, ['worktree', 'add', '-b', 'workflow/issue-686trail', '--', trailPath686h, 'HEAD']);
+    assert(fs.existsSync(trailPath686h), '#686 R7 fixture: the trailing-space worktree path must exist on disk, got path=' + JSON.stringify(trailPath686h));
+
+    // A LIVE project rooted ONLY inside the trailing-space worktree.
+    const trailLiveProj = 'issue-686traillive';
+    fs.mkdirSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, 'workflow-state.md'), 'status: in_progress\nissue_number: 68642\n');
+    fs.writeFileSync(path.join(trailPath686h, 'kaola-workflow', trailLiveProj, '.cache', 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }));
+    g686h(mainRoot686h, ['update-ref', 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1', headSha686h]);
+
+    const listRefs686h = (prefix) => execFS686h('git', ['-C', mainRoot686h, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686h }).trim();
+    const beforeSweep686h = listRefs686h('refs/kaola-workflow/barrier/' + trailLiveProj + '/');
+    assert(beforeSweep686h === 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1',
+      '#686 R7 fixture: the trailing-space-worktree live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686h));
+
+    const run686h = spawnS686h(process.execPath, [CLAIM686h, 'barrier-ref-sweep', '--json'], {
+      cwd: mainRoot686h, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out686h = {};
+    try { out686h = JSON.parse(String(run686h.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686h.status === 0, '#686 R7: barrier-ref-sweep must exit 0, got status=' + run686h.status + ' stdout=' + run686h.stdout + ' stderr=' + run686h.stderr);
+
+    const afterSweep686h = listRefs686h('refs/kaola-workflow/barrier/' + trailLiveProj + '/');
+    assert(afterSweep686h === 'refs/kaola-workflow/barrier/' + trailLiveProj + '/n1',
+      '#686 R7: a LIVE project rooted in a worktree whose path has a trailing space must be KEPT, not over-reaped by a `.trim()`-corrupted porcelain misparse. tagsKept=' +
+      JSON.stringify(out686h.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686h.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686h.refsDeleted));
+    assert(Array.isArray(out686h.tagsKept) && out686h.tagsKept.includes(trailLiveProj),
+      '#686 R7: tagsKept must include the trailing-space-worktree live project tag, got ' + JSON.stringify(out686h.tagsKept));
+  } finally {
+    fs.rmSync(mainRoot686h + '.kw', { recursive: true, force: true });
+    fs.rmSync(mainRoot686h, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R8a, n3-adversary attempt 3): a present-but-UNREADABLE workflow-state.md (EACCES via
+// chmod 000) silently drops its folder's ONLY keep signal. readActiveFolders (shared,
+// active-folders.js) swallows the per-folder fs.readFileSync throw with a bare `continue`
+// (active-folders.js:246), so a live SEQUENCE-run project — no .cache/running-set.json, the common
+// case, and this fixture's shape — has no OTHER keep signal and its barrier gc-anchor gets reaped
+// even though the state file's mere presence is liveness evidence the sweep cannot disprove. A
+// genuinely dead (no-folder-anywhere) tag must still be reaped alongside it — the fix must not
+// degrade into keep-everything.
+// ---------------------------------------------------------------------------
+{
+  const isRoot686i = typeof process.getuid === 'function' && process.getuid() === 0;
+  if (isRoot686i) {
+    console.error('SKIP #686 R8a: running as root — chmod 000 is not enforced, skipping the unreadable-state-file regression');
+  } else {
+    const { execFileSync: execFS686i, spawnSync: spawnS686i } = require('child_process');
+    const CLAIM686i = path.join(__dirname, 'kaola-workflow-claim.js');
+    const GIT_ENV_686i = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+    });
+    const g686i = (cwd, args) => execFS686i('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686i });
+
+    const mainRoot686i = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686i-main-')));
+    // Declared ABOVE the try (test hygiene, per #690) so the finally can always restore perms and
+    // clean up even if an assertion throws mid-test.
+    let stateFile686i;
+    try {
+      g686i(mainRoot686i, ['init', '-b', 'main']);
+      g686i(mainRoot686i, ['config', 'user.email', 't@t.com']);
+      g686i(mainRoot686i, ['config', 'user.name', 'Test']);
+      g686i(mainRoot686i, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(mainRoot686i, 'README.md'), 'fixture\n');
+      g686i(mainRoot686i, ['add', 'README.md']);
+      g686i(mainRoot686i, ['commit', '-m', 'init']);
+      const headSha686i = execFS686i('git', ['-C', mainRoot686i, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
+
+      // A LIVE SEQUENCE-run project: workflow-state.md present but UNREADABLE (chmod 000), and
+      // deliberately NO .cache/running-set.json — the state file is its SOLE keep signal.
+      const liveProj686i = 'issue-686chmodlive';
+      fs.mkdirSync(path.join(mainRoot686i, 'kaola-workflow', liveProj686i), { recursive: true });
+      stateFile686i = path.join(mainRoot686i, 'kaola-workflow', liveProj686i, 'workflow-state.md');
+      fs.writeFileSync(stateFile686i, 'status: in_progress\nissue_number: 68643\n');
+      fs.chmodSync(stateFile686i, 0o000);
+      g686i(mainRoot686i, ['update-ref', 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1', headSha686i]);
+
+      // A genuinely DEAD project (no folder at all) — must still be reaped, not swept into a
+      // blanket keep-everything by this fix.
+      const deadProj686i = 'issue-686chmoddead';
+      g686i(mainRoot686i, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686i + '/n1', headSha686i]);
+
+      const listRefs686i = (prefix) => execFS686i('git', ['-C', mainRoot686i, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686i }).trim();
+      const beforeSweep686i = listRefs686i('refs/kaola-workflow/barrier/' + liveProj686i + '/');
+      assert(beforeSweep686i === 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1',
+        '#686 R8a fixture: the chmod-000-state-file live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686i));
+
+      const run686i = spawnS686i(process.execPath, [CLAIM686i, 'barrier-ref-sweep', '--json'], {
+        cwd: mainRoot686i, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+      });
+      let out686i = {};
+      try { out686i = JSON.parse(String(run686i.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(run686i.status === 0, '#686 R8a: barrier-ref-sweep must exit 0, got status=' + run686i.status + ' stdout=' + run686i.stdout + ' stderr=' + run686i.stderr);
+
+      const afterSweep686i = listRefs686i('refs/kaola-workflow/barrier/' + liveProj686i + '/');
+      assert(afterSweep686i === 'refs/kaola-workflow/barrier/' + liveProj686i + '/n1',
+        '#686 R8a: a LIVE project whose workflow-state.md exists but is UNREADABLE (chmod 000 / EACCES) must be KEPT — present-but-unreadable is unprovable-dead liveness evidence, not a reason to reap. tagsKept=' +
+        JSON.stringify(out686i.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686i.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686i.refsDeleted));
+      assert(Array.isArray(out686i.tagsKept) && out686i.tagsKept.includes(liveProj686i),
+        '#686 R8a: tagsKept must include the chmod-000-state-file live project tag, got ' + JSON.stringify(out686i.tagsKept));
+      assert(listRefs686i('refs/kaola-workflow/barrier/' + deadProj686i + '/') === '',
+        '#686 R8a: a genuinely dead (no-folder-anywhere) tag must still be reaped even with the unreadable-state-file keep pass added — must not degrade into keep-everything');
+    } finally {
+      if (stateFile686i) { try { fs.chmodSync(stateFile686i, 0o644); } catch (_) {} }
+      fs.rmSync(mainRoot686i, { recursive: true, force: true });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #686 REPAIR (R8b, n3-adversary attempt 3): workflow-state.md is itself a DIRECTORY (EISDIR) — a
+// distinct fault shape from R8a's EACCES, but the SAME swallow-and-drop mechanism in
+// readActiveFolders (a bare `continue` on ANY fs.readFileSync throw) and the SAME sweep-local fix.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync: execFS686j, spawnSync: spawnS686j } = require('child_process');
+  const CLAIM686j = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_686j = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g686j = (cwd, args) => execFS686j('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_686j });
+
+  const mainRoot686j = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-686j-main-')));
+  try {
+    g686j(mainRoot686j, ['init', '-b', 'main']);
+    g686j(mainRoot686j, ['config', 'user.email', 't@t.com']);
+    g686j(mainRoot686j, ['config', 'user.name', 'Test']);
+    g686j(mainRoot686j, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot686j, 'README.md'), 'fixture\n');
+    g686j(mainRoot686j, ['add', 'README.md']);
+    g686j(mainRoot686j, ['commit', '-m', 'init']);
+    const headSha686j = execFS686j('git', ['-C', mainRoot686j, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
+
+    // A LIVE SEQUENCE-run project: workflow-state.md is a DIRECTORY (EISDIR), and deliberately no
+    // .cache/running-set.json — the state file is its SOLE keep signal.
+    const liveProj686j = 'issue-686eisdirlive';
+    fs.mkdirSync(path.join(mainRoot686j, 'kaola-workflow', liveProj686j, 'workflow-state.md'), { recursive: true });
+    g686j(mainRoot686j, ['update-ref', 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1', headSha686j]);
+
+    // A genuinely DEAD project (no folder at all) — must still be reaped.
+    const deadProj686j = 'issue-686eisdirdead';
+    g686j(mainRoot686j, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj686j + '/n1', headSha686j]);
+
+    const listRefs686j = (prefix) => execFS686j('git', ['-C', mainRoot686j, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_686j }).trim();
+    const beforeSweep686j = listRefs686j('refs/kaola-workflow/barrier/' + liveProj686j + '/');
+    assert(beforeSweep686j === 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1',
+      '#686 R8b fixture: the EISDIR-state-file live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep686j));
+
+    const run686j = spawnS686j(process.execPath, [CLAIM686j, 'barrier-ref-sweep', '--json'], {
+      cwd: mainRoot686j, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    let out686j = {};
+    try { out686j = JSON.parse(String(run686j.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert(run686j.status === 0, '#686 R8b: barrier-ref-sweep must exit 0, got status=' + run686j.status + ' stdout=' + run686j.stdout + ' stderr=' + run686j.stderr);
+
+    const afterSweep686j = listRefs686j('refs/kaola-workflow/barrier/' + liveProj686j + '/');
+    assert(afterSweep686j === 'refs/kaola-workflow/barrier/' + liveProj686j + '/n1',
+      '#686 R8b: a LIVE project whose workflow-state.md is itself a DIRECTORY (EISDIR) must be KEPT, not over-reaped. tagsKept=' +
+      JSON.stringify(out686j.tagsKept) + ' tagsDeleted=' + JSON.stringify(out686j.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out686j.refsDeleted));
+    assert(Array.isArray(out686j.tagsKept) && out686j.tagsKept.includes(liveProj686j),
+      '#686 R8b: tagsKept must include the EISDIR-state-file live project tag, got ' + JSON.stringify(out686j.tagsKept));
+    assert(listRefs686j('refs/kaola-workflow/barrier/' + deadProj686j + '/') === '',
+      '#686 R8b: a genuinely dead (no-folder-anywhere) tag must still be reaped even with the unreadable-state-file keep pass added — must not degrade into keep-everything');
+  } finally {
+    fs.rmSync(mainRoot686j, { recursive: true, force: true });
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -1682,6 +1682,18 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
   return { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled, roadmap_removed_by_root: roadmapByRoot, roadmap_residue: residue };
 }
 
+// #686: shared barrier-ref tag sanitizer — MUST mirror the projectTag computation adaptive-node.js /
+// plan-validator.js use to anchor `refs/kaola-workflow/barrier/<tag>/<node>`
+// (`path.basename(<projectDir>).replace(/[^A-Za-z0-9_-]/g, '_')`) so a ref this reaps/sweeps is
+// EXACTLY the ref the barrier machinery anchored. Confirmed (grep across the whole tree) that
+// `refs/kaola-workflow/` carries exactly two ref namespaces: `barrier/<tag>/<node>` (the barrier
+// anchor this file reaps/sweeps) and `leg-base/<project>/<node>` (leg provisioning/teardown — a
+// SEPARATE namespace, never touched here). `barrier-base-*` is only a `.cache/` FILE-name prefix
+// (the local baseline snapshot), never a ref namespace.
+function sanitizeBarrierTag(name) {
+  return String(name).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
@@ -1775,6 +1787,28 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
     fs.renameSync(src, dest);
   }
+  // #686: archive-time reap of dangling refs/kaola-workflow/barrier/<tag>/* refs for THIS project.
+  // archiveProjectDir is the convergence point for finalize-closed, discard-abandoned, and the
+  // active-folders backstop, so this ONE insertion covers every archive path. Placed AFTER the live
+  // copy is gone — both the isLinkedRun copy+verify+delete branch and the in-place renameSync branch
+  // above have already completed — so a still-open barrier check against the live folder can never
+  // race a reaped ref. FAIL-SOFT is correctness-critical: the evidence files are already archived by
+  // this point, so a ref-delete (or even the enumeration) failing must NEVER throw, block, or roll
+  // back finalize — swallow everything. Runs against the resolved MAIN root (mainRoot, already
+  // computed above for the archive-destination logic; barrier refs are shared common refs so either
+  // root works, but mainRoot is preferred since it is always resolved for a linked run).
+  try {
+    const barrierTag = sanitizeBarrierTag(project);
+    const reapRoot = mainRoot || root;
+    const prefix = 'refs/kaola-workflow/barrier/' + barrierTag + '/';
+    const listed = execFileSync('git', ['for-each-ref', '--format=%(refname)', prefix],
+      { cwd: reapRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    for (const refName of listed.split('\n').map(s => s.trim()).filter(Boolean)) {
+      try {
+        execFileSync('git', ['update-ref', '-d', refName], { cwd: reapRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch (_) { /* fail-soft: a single ref-delete failure must not abort the reap or the archive */ }
+    }
+  } catch (_) { /* fail-soft: archiving must never be blocked/rolled back by a ref-reap failure */ }
   let roadmapSourceRemoved = 'absent';
   let roadmapRegenerated = 'skipped';
   // #328: accumulate removed sources for bundle path (plural array)
@@ -3209,6 +3243,228 @@ function cmdAuditLabels() {
   output({ stale, count: stale.length });
 }
 
+// #686 R4: enumerate EVERY worktree of the repo rooted at `mainRoot` via `git worktree list
+// --porcelain` (the shared common dir lists every linked worktree regardless of which one invokes
+// it) — the main checkout, every `.kw/worktrees/<project>` linked run, and every leg under
+// `.kw/legs/<project>/<node>` (legs are real `git worktree add` checkouts, covered for free). This
+// is the FULL reachable claim-root universe: a live claim's kaola-workflow/<project>/ folder can
+// live under ANY one of these roots, never more than one. Returns { ok:true, roots:[...] }
+// (path.resolve'd, one entry per `worktree ` line) on success, or { ok:false } if the `git worktree
+// list` invocation itself throws — the CALLER fails closed on ok:false (see sweepBarrierRefs below):
+// an unscannable worktree set means no tag can be proven dead, so nothing may be deleted.
+// KAOLA_WORKFLOW_FORCE_BARRIER_WT_LIST_FAIL=1 is a [TEST ONLY] seam to deterministically exercise
+// that fail-closed path. Never set in production; it only makes the probe we already run throw.
+//
+// #686 R6/R7 (n3-adversary attempt 2): plain `--porcelain` uses a bare LF as both the field AND
+// record terminator, so it cannot round-trip a worktree path that itself contains an LF (R6 — the
+// path is emitted RAW across two physical lines, corrupting the split) or a path with meaningful
+// trailing whitespace (R7 — indistinguishable from terminator padding, so a `.trim()` on the
+// extracted field silently eats part of the path). Both turn a LIVE worktree root into a wrong,
+// nonexistent path, making that root unscannable and its live claim invisible to the keep-set scan.
+// FIX: `--porcelain -z` (git 2.36+; confirmed supported on this machine's 2.54.0) terminates every
+// field AND every record with NUL instead of LF, so a path may contain ANY byte — including LF or
+// trailing spaces — and is still emitted byte-exact between NULs, unambiguous to parse. Split on
+// NUL, take fields whose prefix is the literal `worktree `, and slice off ONLY that prefix with NO
+// `.trim()` — the remaining bytes up to the NUL ARE the path, verbatim (trimming would reintroduce
+// R7 for a real trailing-space path). Record boundaries (a blank field between worktrees) are
+// harmless to ignore since we only ever look for `worktree `-prefixed fields.
+//
+// Deliberately NOT added: a "parsed root must exist on disk ⇒ abort" backstop. With this -z parse,
+// R6/R7 paths now parse CORRECTLY (the real path exists and is scanned) — a nonexistent-on-disk
+// parsed root under -z means a genuinely prunable worktree (its directory was deleted out from
+// under git without `worktree prune`/`remove`), which is a BENIGN case whose claims are legitimately
+// dead. Aborting the whole sweep on that would spuriously block reaping in an ordinary, safe
+// situation — the fail-closed posture belongs on "the enumeration itself failed" (already handled
+// below), not on "one enumerated path happens not to exist" (handled per-root, fail-soft, by the
+// caller's scan already tolerating an empty/unreadable root).
+function listBarrierSweepWorktreeRoots(mainRoot) {
+  let out;
+  try {
+    if (process.env.KAOLA_WORKFLOW_FORCE_BARRIER_WT_LIST_FAIL === '1') {
+      throw new Error('forced git worktree list probe failure [TEST ONLY]');
+    }
+    out = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'],
+      { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) {
+    return { ok: false, roots: [] };
+  }
+  const roots = [];
+  for (const field of String(out || '').split('\0')) {
+    if (field.indexOf('worktree ') !== 0) continue;
+    roots.push(path.resolve(field.slice('worktree '.length)));
+  }
+  return { ok: true, roots };
+}
+
+// #686: legacy keep-set sweep — reclaims refs/kaola-workflow/barrier/<tag>/* refs left behind by
+// projects archived BEFORE the #686 archive-time reap shipped (or by any path that ever bypassed
+// archiveProjectDir). Scoped STRICTLY to the `barrier/` prefix — never `leg-base/` (a separate ref
+// namespace owned by leg provisioning/teardown) and never `barrier-base/` (that is only a `.cache/`
+// FILE-name prefix, not a ref namespace at all — confirmed by grepping the whole tree).
+//
+// KEEP set = sanitizeBarrierTag(project) for every ACTIVE kaola-workflow/<project>/ folder
+// (readActiveFolders — reused, not re-implemented) UNION sanitizeBarrierTag(project) for every
+// kaola-workflow/<project>/ folder — active or not — carrying a live .cache/running-set.json. The
+// active-folder probe is called with excludeClosedIssues:false so this purely-local ref sweep never
+// depends on a forge (`tea`) round-trip: a network fault must never turn into an over-reap, so
+// "cannot be probed ⇒ KEEP" degrades here to "never probes" — folder presence + local status is the
+// whole signal.
+//
+// #686 R1 (superseded by R4 below): the original fix scanned the UNION of `root` (the invoking
+// cwd's own repo root) and `mainRoot` (resolveMainRoot(root) — the shared git-common-dir owner).
+// That closed HALF the class: a claim made from some OTHER linked worktree (or a `.kw/legs/`
+// provisioning leg) writes its live folder under THAT root alone, invisible to both `root` and
+// `mainRoot`.
+//
+// #686 R4 (n3-adversary attempt 1): the reachable claim-root universe is EVERY linked worktree, not
+// just {root, mainRoot} — there is no lane/cwd fence on `claim`, so a real claim from any worktree
+// cwd anchors its folder + barrier refs there. scanRoots is now the FULL `git worktree list
+// --porcelain` set (listBarrierSweepWorktreeRoots, rooted at mainRoot) — a strict superset of
+// {root, mainRoot} that covers both for free (root and mainRoot are themselves always worktrees of
+// the repo). FAIL-CLOSED on enumeration failure: if the worktree-list probe itself throws, the whole
+// sweep aborts BEFORE any ref is touched — stricter than the sweep's general fail-soft below, and
+// deliberately so: the sweep's entire job is safe deletion, and an unscanned worktree set means it
+// cannot prove any tag is dead.
+//
+// A fault reading a SINGLE root's readActiveFolders/running-set scan (e.g. an unreadable
+// kaola-workflow/ dir on one worktree) is handled by the OUTER fail-soft below, NOT swallowed
+// per-root: the keep set is built to completion BEFORE any ref is enumerated or deleted, so a
+// mid-build exception aborts the WHOLE sweep with zero deletions issued — the conservative
+// "keep everything" choice, not "this root contributes nothing" (which would risk deleting a tag
+// whose only liveness evidence lived in the unreadable root). Chosen because correctness (axiom 1)
+// outranks completing a partial sweep.
+//
+// #686 R5 (n3-adversary attempt 1): on a case-insensitive filesystem (macOS default), a wrong-case
+// `--record-base` path anchors a barrier ref tag in a different case than the live folder's actual
+// dirent (projTag is recorded EXACTLY as given, plan-validator.js — never case-normalized), so an
+// exact-case keep lookup misses it. The keep membership check below is CASE-FOLDED — a tag is kept
+// if it matches a keep-set entry under case-folding — which only ever ADDS matches (fail-safe
+// under-reap on every FS, case-sensitive or not). The archive-time reap (archiveProjectDir) is
+// exact-tag-scoped to ONE already-known project name at archive time (no cross-tag keep/delete
+// decision at all), so it is out of scope for this case-fold — confirmed by inspection above.
+//
+// #686 R8 (n3-adversary attempt 3): readActiveFolders (shared, active-folders.js) treats a
+// workflow-state.md that EXISTS but whose fs.readFileSync throws (EACCES via chmod, EISDIR because
+// the path is actually a directory, or any other read fault) as a per-folder parse failure and
+// silently `continue`s past it (active-folders.js:246) — that folder never makes it into the active
+// set at all. For a SEQUENCE run (no .cache/running-set.json — the common case; signal (b) below is
+// then empty), the dropped folder has NO other keep signal, so its barrier gc-anchor gets reaped even
+// though the state file's mere PRESENCE is liveness evidence this sweep cannot disprove. That
+// contradicts this sweep's own "cannot prove dead ⇒ keep" discipline, which today binds only at
+// DIRECTORY granularity (the R4 fail-closed enumeration abort above) and not at file granularity.
+// FIX (tighten-only, sweep-local — readActiveFolders' shared continue-on-parse-fault semantics are
+// UNCHANGED, since other #353 consumers depend on them): an independent pass (c) below walks the same
+// per-scanRoot project-folder listing as (b) and adds a project's tag to keep whenever its
+// workflow-state.md exists but cannot be read — never when the state file is simply absent (that
+// folder carries no liveness evidence at all and is correctly left out, i.e. correctly reapable).
+// Only ever ADDS to keep — fail-safe under-reap, mirroring the R5 case-fold and #680 discipline below.
+//
+// Mirrors the #680 orphan-baseline sweep discipline (adaptive-node.js runReconcileRunningSet):
+//   (1) sanitizer collisions (and now case-folding) only ever ADD to KEEP — fail-safe under-reap,
+//       never over-reap;
+//   (2) any tag whose ownership survives EITHER keep-pass in ANY worktree root is kept — ambiguity
+//       resolves to KEEP;
+//   (3) fail-soft — any error (other than the R4 enumeration fail-closed above) aborts the sweep
+//       silently (never throw; whatever ref deletes already executed before the fault stand — an
+//       already-issued `git update-ref -d` cannot be undone, and re-throwing would only turn a
+//       partial cleanup into a crash).
+function sweepBarrierRefs(root) {
+  const summary = { result: 'ok', refsDeleted: [], tagsKept: [], tagsDeleted: [] };
+  try {
+    const mainRoot = resolveMainRoot(root) || root;
+    const keep = new Set();
+
+    // #686 R4: FAIL-CLOSED on an unscannable worktree set — abort before touching a single ref.
+    const wtList = listBarrierSweepWorktreeRoots(mainRoot);
+    if (!wtList.ok) {
+      summary.aborted = true;
+      summary.reason = 'worktree_enum_failed';
+      return summary;
+    }
+    // Union with `root`/`mainRoot` defensively (git worktree list always includes both in practice —
+    // both are worktrees of the very repo mainRoot was derived from — but the union costs nothing
+    // and removes any dependency on that always-true assumption). Set dedupes a plain repo (no
+    // worktree split) down to one scan.
+    const scanRoots = Array.from(new Set([...wtList.roots, path.resolve(root), path.resolve(mainRoot)]));
+
+    for (const scanRoot of scanRoots) {
+      // (a) active-folder KEEP set (fs+local-status only — no forge round-trip).
+      const active = readActiveFolders(scanRoot, { excludeClosedIssues: false });
+      for (const f of active) keep.add(sanitizeBarrierTag(f.project));
+
+      // (b) live running-set.json KEEP — an independent OR signal. Walks EVERY project folder (not
+      // just the active-status ones) so a folder caught mid status-transition with a live running set
+      // is still protected.
+      const workflowDir = path.join(scanRoot, 'kaola-workflow');
+      let entries = [];
+      try { entries = fs.readdirSync(workflowDir, { withFileTypes: true }); } catch (_) { entries = []; }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name === 'archive' || entry.name.startsWith('.') || !isSafeName(entry.name)) continue;
+        if (fs.existsSync(path.join(workflowDir, entry.name, '.cache', 'running-set.json'))) {
+          keep.add(sanitizeBarrierTag(entry.name));
+        }
+      }
+
+      // (c) #686 R8: present-but-UNREADABLE workflow-state.md KEEP — an independent pass over the
+      // SAME entries listing as (b). readActiveFolders drops (never re-implemented here — see the
+      // R8 doc paragraph above) a folder whose state file exists but fails to read; that folder's
+      // ONLY liveness evidence is otherwise lost. A project dir with NO workflow-state.md at all is
+      // deliberately skipped here (no liveness evidence — correctly reapable).
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name === 'archive' || entry.name.startsWith('.') || !isSafeName(entry.name)) continue;
+        const stateFile = path.join(workflowDir, entry.name, 'workflow-state.md');
+        if (!fs.existsSync(stateFile)) continue;
+        try {
+          fs.readFileSync(stateFile, 'utf8');
+          // readable — already covered (or correctly excluded) by pass (a) above.
+        } catch (_) {
+          keep.add(sanitizeBarrierTag(entry.name));
+        }
+      }
+    }
+    // #686 R5: case-folded lookup set — built ALONGSIDE (never replacing) `keep`, so tagsKept still
+    // reports the tag's real discovered case while the membership test below ignores case entirely.
+    const keepLower = new Set(Array.from(keep, s => s.toLowerCase()));
+
+    // Enumerate every refs/kaola-workflow/barrier/<tag>/* ref, grouped by <tag>.
+    const prefix = 'refs/kaola-workflow/barrier/';
+    let listed = '';
+    try {
+      listed = execFileSync('git', ['for-each-ref', '--format=%(refname)', prefix],
+        { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (_) { listed = ''; }
+    const byTag = new Map();
+    for (const refName of listed.split('\n').map(s => s.trim()).filter(Boolean)) {
+      const rest = refName.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      if (slash < 0) continue;
+      const tag = rest.slice(0, slash);
+      if (!byTag.has(tag)) byTag.set(tag, []);
+      byTag.get(tag).push(refName);
+    }
+
+    for (const [tag, refs] of byTag.entries()) {
+      if (keepLower.has(tag.toLowerCase())) { summary.tagsKept.push(tag); continue; }
+      for (const refName of refs) {
+        try {
+          execFileSync('git', ['update-ref', '-d', refName], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+          summary.refsDeleted.push(refName);
+        } catch (_) { /* fail-soft: a single ref-delete failure must not abort the sweep */ }
+      }
+      summary.tagsDeleted.push(tag);
+    }
+  } catch (_) {
+    // fail-soft: any error aborts the sweep silently — never throw.
+    summary.aborted = true;
+  }
+  return summary;
+}
+
+function cmdBarrierRefSweep() {
+  const root = getRoot();
+  output(sweepBarrierRefs(root));
+}
+
 function cmdRepairLabels() {
   const args = parseArgs(process.argv.slice(3));
   if (OFFLINE) { output({ dry_run: false, offline: true, removed: [], failed: [] }); return; }
@@ -3356,7 +3612,7 @@ function cmdLegacyWorktreeCleanup() {
   }
 }
 
-const USAGE = 'usage: kaola-gitea-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|watch-pr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>\n'
+const USAGE = 'usage: kaola-gitea-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|watch-pr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels|barrier-ref-sweep>\n'
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--pr-number N]\n'
   + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr|pr] [--workflow-path adaptive|full|fast]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
@@ -3400,6 +3656,7 @@ function main() {
   if (sub === 'legacy-worktree-cleanup') return cmdLegacyWorktreeCleanup();
   if (sub === 'audit-labels') return cmdAuditLabels();
   if (sub === 'repair-labels') return cmdRepairLabels();
+  if (sub === 'barrier-ref-sweep') return cmdBarrierRefSweep();
   throw new Error('unknown subcommand: ' + sub);
 }
 
@@ -3454,5 +3711,10 @@ module.exports = {
   worktreePathFor,
   verifyImplPublished,
   verifyArchiveComplete,
-  cmdVerifySink
+  cmdVerifySink,
+  // #686: barrier-ref archive-time reap (sanitizeBarrierTag) + the legacy keep-set sweep
+  // (sweepBarrierRefs, cmdBarrierRefSweep) — exported for direct unit coverage.
+  sanitizeBarrierTag,
+  sweepBarrierRefs,
+  cmdBarrierRefSweep
 };

@@ -598,6 +598,36 @@ review verdict, per-task outcome) are transient inputs, not durable state fields
 #459 contract validators forbid a contractor dispatch from returning to any migrated
 surface.
 
+## Barrier Ref Lifecycle (issue #686)
+
+Each writer/reviewer node anchors its barrier baseline under a git ref so `git gc` cannot prune the
+baseline commit while the node's window is open. `refs/kaola-workflow/` carries three ref namespaces, each
+with its own lifecycle:
+
+| Namespace | Anchored | Dropped / reaped |
+|---|---|---|
+| `refs/kaola-workflow/barrier/<sanitize(project)>/<node>` | per-node/writer baseline, at open by `--record-base` | on pass by the window-locked `--drop-base` (D-424-01), **and at archive + by the one-shot `barrier-ref-sweep`** (#686) |
+| `refs/kaola-workflow/barrier-base/<sanitize(group_id)>` | lane-group baseline, at group open | when the last member passes the group barrier, or on reconcile rollback — NOT touched by #686 |
+| `refs/kaola-workflow/leg-base/<project>/<node>` | leg baseline, at leg provisioning | torn down with the leg — NOT touched by #686 |
+
+(The `.cache/barrier-base-<sanitize>` **file** is a baseline snapshot on disk; it is distinct from the
+`refs/kaola-workflow/barrier-base/` group-ref namespace above.)
+
+**Reap at archive.** `archiveProjectDir` — the single convergence point for finalize-closed,
+discard-abandoned, and the active-folders backstop — deletes this project's own
+`refs/kaola-workflow/barrier/<tag>/*` refs after the archive is verified. The reap is **fail-soft**: a
+ref-delete failure can never throw, block, or roll back the archive (the evidence is already archived); a
+missed ref is left for the legacy sweep.
+
+**Legacy sweep.** `kaola-workflow-claim.js barrier-ref-sweep` is a one-shot collector for pre-#686 stranded
+refs. It keeps every ref whose tag belongs to a live project — determined across **every** worktree root
+(`git worktree list --porcelain -z`, byte-exact) by three signals: an active-folder tag (network-free), a
+live `.cache/running-set.json`, or a project whose `workflow-state.md` exists-but-unreadable
+(unprovable-dead ⇒ keep). It is ADD-only on collisions (fail-safe under-reap), scoped strictly to
+`barrier/<tag>/*`, and fails closed (deletes nothing) if the worktree set cannot be enumerated. See
+[D-686-01](decisions/D-686-01.md) for the full keep-signal discipline and the documented out-of-band
+residual limitations (#691).
+
 ## Generated Mirrors
 
 - `kaola-workflow/ROADMAP.md` is generated from
