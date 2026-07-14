@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "plan_hash": "dc42ce24b7ca586a7c318f51c751f8028489c2ef81db84879c4c1e8ded9a878c",
+  "attempts": [
+    {
+      "attempt_id": "n2-full-integration-review:1",
+      "ordinal": 1,
+      "plan_hash": "dc42ce24b7ca586a7c318f51c751f8028489c2ef81db84879c4c1e8ded9a878c",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-routing-integration\"],\"members\":[\"n2-full-integration-review\"]}",
+        "kind": "sequence",
+        "id": "n2-full-integration-review",
+        "origin": [
+          "n1-routing-integration"
+        ],
+        "members": [
+          "n2-full-integration-review"
+        ]
+      },
+      "transaction_key": "0dad8fe9c6fcc457e223969c49ba3d429ee5e6d952a2db201cc932c9546c5cef",
+      "candidate_digest": "40435ea3d2e4610e2775f0f83d3e1ed327f543584185e4eccb195c03284fd940",
+      "generations": [
+        {
+          "member": "n2-full-integration-review",
+          "nonce": "1f179658c2f9"
+        }
+      ],
+      "settlement_command": "close-node",
+      "outcome": "fail",
+      "reason": "unresolved_in_scope_fix",
+      "receipts": [
+        {
+          "node_id": "n2-full-integration-review",
+          "generation": "1f179658c2f9",
+          "receipt_sha256": "7543d3e3a81e1f594174f73d5e78091558b1af40281239ac484bb0325e2a350d",
+          "effective_pass": false,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-full-integration-review 1f179658c2f9\n\nverdict: pass\nfindings_blocking: 0\nfinding: id=R1 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide file=scripts/kaola-workflow-adaptive-node.js rationale=fanout-provisional-close-skips-compliance-and-provenance\n\n# Code review — issue #682 full integration\n\n## Findings\n\n### CRITICAL\n\nNone.\n\n### HIGH\n\nR1 — Non-last fan-out review receipts bypass required close bookkeeping.\n\n- Location: `scripts/kaola-workflow-adaptive-node.js:2186-2194` changes the member's ledger state to `complete`, removes it from the running set, and returns `provisional: true` from `prepareReviewClose`.\n- Bypass: that return prevents the ordinary `close-node` transaction from appending Required Agent Compliance and close provenance at `scripts/kaola-workflow-adaptive-node.js:6476-6492`. The equivalent early return from `close-and-open-next` at `scripts/kaola-workflow-adaptive-node.js:3264-3268` likewise precedes that command's normal bookkeeping.\n- Impact: a successful two-member adversarial fan-out leaves its first verifier marked complete without a `subagent-invoked` attestation, close timing, or provenance entry. This silently weakens the workflow's audit trail; downstream compliance validation checks rows that exist but does not require one row per completed fan-out member.\n- Reproduction: closing two passing fan-out members with `runCloseNode` returned a provisional success for the first and a normal success for the second. The settled plan contained only the second verifier's compliance row and close provenance.\n- Missing coverage: the pass-settlement case at `scripts/test-adaptive-node.js:1247-1280` verifies the provisional result, journal outcome, and lifecycle settlement but never asserts compliance or provenance for both members. The other provisional fan-out cases at `scripts/test-adaptive-node.js:501-600` have the same coverage gap.\n- Required repair: keep provisional lifecycle semantics while running an idempotent bookkeeping transaction for every completed member, shared by both public close commands. Add regression tests proving exactly one compliance row and one close-provenance entry per member across ordinary execution, retries, and the relevant crash seams.\n\n### MEDIUM\n\nNone.\n\n### LOW\n\nNone.\n\n## Verdict\n\nWARNING. No CRITICAL findings were found, so the adaptive review verdict is `pass` with `findings_blocking: 0` under the role contract. R1 is nevertheless an unresolved `scope=in_scope action=fix status=open` finding and therefore mechanically blocks Finalization until repaired and re-reviewed.\n\nNo other blocking findings were found.\n\n## Scope and semantic audit\n\n- Reviewed the complete `5d749661` base-to-candidate change set. The candidate contains the approved issue #682 prose, runtime, schema, tests, generated routing surfaces, and the generator skeleton completion.\n- Confirmed `templates/routing/plan-run.skeleton.md` is the single source for the six plan-run surfaces and all six generated outputs are byte-identical to approved candidate `07f1532a`.\n- Confirmed all six next-routing surfaces remain byte-identical to base `5d749661`.\n- Confirmed the approved public prose and decision/card artifacts are byte-identical to `07f1532a`, including the exact manual-gap line.\n- Re-audited review-journal validation, canonical logical gate identities, strict sequence/fan-out settlement, retry ordinals, agent-selected unique-max writer proof, candidate/barrier binding, crash recovery, opener fences, and the five-repair logical-gate budget. Apart from R1's skipped close bookkeeping, the implementation follows the frozen protocol and does not introduce an automatic owner/repair strategy or a second routing state machine.\n- Confirmed all four adaptive schema copies are byte-identical.\n- Independently reconstructed the pre-fix `07f1532a` state and observed the generator check fail on exactly the six plan-run command/skill surfaces, preserving genuine RED evidence for the skeleton fix.\n\n## Validation evidence\n\n- `node scripts/generate-routing-surfaces.js --check` — pass; all 12 generated surfaces match.\n- `node scripts/test-generate-routing-surfaces.js` — pass; 33 assertions.\n- `node scripts/test-route-reachability.js` — pass; 578 assertions.\n- `node scripts/test-agent-profile-parity.js` — pass; 96 assertions.\n- `node scripts/edition-sync.js --check` — pass; 10 forge ports, 24 mirrors, 27 byte-identity groups.\n- `node scripts/test-edition-sync.js` — pass; 41 assertions.\n- `node scripts/validate-script-sync.js` — pass.\n- Root Claude, root Codex, GitLab, and Gitea validators — pass.\n- `node scripts/test-adaptive-node.js` — pass; 2030 assertions.\n- `node scripts/simulate-workflow-walkthrough.js` — pass.\n- `node --check` for all four adaptive-node runtime copies — pass.\n- `git diff --check 5d749661` — pass.\n\nPer the frozen node brief, the four-chain `npm test` was not run here; node n3 owns that final full-suite validation.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-full-integration-review",
+          "raw": "id=R1 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide file=scripts/kaola-workflow-adaptive-node.js rationale=fanout-provisional-close-skips-compliance-and-provenance",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "tdd-guide",
+          "file": "scripts/kaola-workflow-adaptive-node.js",
+          "rationale": "fanout-provisional-close-skips-compliance-and-provenance"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-full-integration-review",
+          "finding_id": "R1",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "file": "scripts/kaola-workflow-adaptive-node.js",
+          "ownership_candidates": [
+            "n1-routing-integration"
+          ],
+          "owning_node": "n1-routing-integration",
+          "fix_role": "tdd-guide",
+          "raw": "id=R1 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide file=scripts/kaola-workflow-adaptive-node.js rationale=fanout-provisional-close-skips-compliance-and-provenance"
+        }
+      ],
+      "producer_bindings": {
+        "n1-routing-integration": {
+          "baseline": "cd37ab2c55e36a7873af0f16c6386b5d12e5554a",
+          "anchored_ref": "cd37ab2c55e36a7873af0f16c6386b5d12e5554a",
+          "open_token": "5d749661578e630e451557debcdc51ed972ecc51",
+          "generation": "cd37ab2c55e3",
+          "ref": "refs/kaola-workflow/barrier/issue-682/n1-routing-integration"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": "n1-routing-integration",
+        "settled": true
+      },
+      "consumed_by": "n1-routing-integration"
+    },
+    {
+      "attempt_id": "n2-full-integration-review:2",
+      "ordinal": 2,
+      "plan_hash": "dc42ce24b7ca586a7c318f51c751f8028489c2ef81db84879c4c1e8ded9a878c",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-routing-integration\"],\"members\":[\"n2-full-integration-review\"]}",
+        "kind": "sequence",
+        "id": "n2-full-integration-review",
+        "origin": [
+          "n1-routing-integration"
+        ],
+        "members": [
+          "n2-full-integration-review"
+        ]
+      },
+      "transaction_key": "bc35e0216ae82ef9c38cfd4f308be6ed810c86ed32b1556752b0ff683f2ee1aa",
+      "candidate_digest": "3ba6a599d03ff7b70d34feda0ee6f71b999273b9916caa79b1cb3e1244b034ba",
+      "generations": [
+        {
+          "member": "n2-full-integration-review",
+          "nonce": "5d73c678366d"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-full-integration-review",
+          "generation": "5d73c678366d",
+          "receipt_sha256": "1a4e6e486a80e9a22288b8c6af2d8844bd19b6ff072ad978fb187566aaf1f95c",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-full-integration-review 5d73c678366d\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-routing-integration cd37ab2c55e3\nexecution_mode: main-session-inline-user-directed\n\n# Full integration re-review\n\nNo blocking or non-blocking findings remain. This was an explicit user-directed inline self-review,\nnot an independent delegated verdict. Confidence rests on the reproduced R1 counterexample, the\nnew crash/retry regression matrix, full focused suites, and direct base-to-candidate inspection.\n\n## R1 disposition\n\n- The original finding was reproduced before implementation for both public close commands under\n  ordinary retry and a simulated crash immediately after provisional plan persistence.\n- `prepareReviewClose` retains provisional fan-out settlement semantics but now commits the same\n  close compliance and replay-safe sidecars used by ordinary closes before running-set removal.\n- Plan/compliance is durable first. Close timing is appended only for a currently open generation;\n  close provenance is deduplicated by `(event, nodeId, nonce)`. A retry completes a missing prefix\n  without creating duplicates.\n- Bound bare-role review rows distinguish two same-role fan-out members by evidence binding, while\n  legacy unbound rows preserve the old role-level idempotency behavior.\n\n## Whole-candidate review\n\n- The issue-682 journal/repair behavior remains agent-shaped: the journal supplies authoritative\n  history, proofs, recovery, and the five-repair gate bound; it never selects an owner or rewrites\n  the DAG. No scheduler state, automatic strategy, second state machine, or R17 fsync change exists.\n- The canonical plan-run skeleton remains the single source for all six approved plan-run outputs;\n  `generate-routing-surfaces --check` reports all 12 surfaces byte-match, and next surfaces are\n  unchanged from the recovery base.\n- The only tracked changes beyond approved `07f1532a` are the canonical skeleton, four synchronized\n  adaptive-node runtimes, and the focused adaptive-node regressions. Approved public docs, ADR,\n  repair card, and changelog text were not duplicated or rewritten during recovery.\n- Root/Codex/GitLab/Gitea runtime parity, schema/profile parity, routing reachability, contract\n  validators, script sync, edition sync, and workflow walkthrough all pass.\n\n## Validation\n\n- `node scripts/test-adaptive-node.js`: pass, 2038 assertions.\n- `node scripts/test-generate-routing-surfaces.js`: pass, 33 assertions.\n- `node scripts/test-route-reachability.js`: pass, 578 assertions.\n- `node scripts/test-agent-profile-parity.js`: pass, 96 assertions.\n- `node scripts/test-edition-sync.js`: pass, 41 assertions.\n- `node scripts/simulate-workflow-walkthrough.js`: pass.\n- All four contract validators, `edition-sync --check`, `validate-script-sync`, four runtime syntax\n  checks, generator freshness, and `git diff --check 5d749661`: pass.\n- Full sequential four-chain `npm test` remains reserved for n3.\n"
+        }
+      ],
+      "findings": [],
+      "route_candidates": [],
+      "producer_bindings": {
+        "n1-routing-integration": {
+          "baseline": "cd37ab2c55e36a7873af0f16c6386b5d12e5554a",
+          "anchored_ref": "cd37ab2c55e36a7873af0f16c6386b5d12e5554a",
+          "open_token": "5d749661578e630e451557debcdc51ed972ecc51",
+          "generation": "cd37ab2c55e3",
+          "ref": "refs/kaola-workflow/barrier/issue-682/n1-routing-integration"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-full-candidate-falsifier:1",
+      "ordinal": 1,
+      "plan_hash": "dc42ce24b7ca586a7c318f51c751f8028489c2ef81db84879c4c1e8ded9a878c",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-full-integration-review\"],\"members\":[\"n3-full-candidate-falsifier\"]}",
+        "kind": "sequence",
+        "id": "n3-full-candidate-falsifier",
+        "origin": [
+          "n2-full-integration-review"
+        ],
+        "members": [
+          "n3-full-candidate-falsifier"
+        ]
+      },
+      "transaction_key": "d53618da413a0d605fb2b6cdac23ec5bbd3f05f4b59a756d90016415bf847b23",
+      "candidate_digest": "3ba6a599d03ff7b70d34feda0ee6f71b999273b9916caa79b1cb3e1244b034ba",
+      "generations": [
+        {
+          "member": "n3-full-candidate-falsifier",
+          "nonce": "0ecc2ee22756"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n3-full-candidate-falsifier",
+          "generation": "0ecc2ee22756",
+          "receipt_sha256": "becafb0053a6f46f9bc7f4822dd9df8dcf99113dde434a7575fb3d607990fc2f",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n3-full-candidate-falsifier 0ecc2ee22756\nverdict: pass\nupstream_read: n2-full-integration-review 5d73c678366d\nexecution_mode: main-session-inline-user-directed\n\n# Adversarial falsification — NOT REFUTED\n\nNo counterexample survived. This was explicit user-directed main-session adversarial self-checking,\nnot an independent delegated verifier. The verdict is grounded in destructive scratch mutations,\nthe full four-edition suite, journal inspection, and exact hash restoration.\n\n## Generator attacks\n\n- In an out-of-repo scratch copy, changed one generated GitHub plan-run command. `--check` failed\n  with surface drift; `--write` restored all six plan-run hashes exactly and left all six `next`\n  hashes unchanged.\n- Separately replaced `repair_limit_reached` in the canonical skeleton. `--check` failed on exactly\n  six plan-run surfaces. After generating the poisoned outputs, route reachability failed on the\n  missing repair token. Restoring the original skeleton and regenerating restored exact plan-run\n  and next hashes, and `--check` passed.\n\n## Repair/journal attacks\n\n- R25 exercises both public close commands, ordinary duplicate close, and a simulated crash after\n  provisional plan/compliance persistence. The same provisional result replays while compliance,\n  close timing, and nonce-bound provenance each occur exactly once.\n- The existing adaptive suite re-exercises sequence and fan-out fail-closed settlement, immutable\n  receipts/outcomes, unique-maximal writer proof, candidate/barrier binding, simultaneous failures,\n  opener fences, repair crash seams, independent logical-gate limits, and ordinal-stable cleanup.\n- Journal inspection found exactly two n2 logical-gate attempts: ordinal 1 is a settled failure with\n  one repair selected/settled/consumed by `n1-routing-integration`; ordinal 2 is a settled pass.\n  No unresolved attempt or unconsumed repair exists.\n- No automatic writer selection, scheduler repair state, DAG rewrite, second state machine, or R17\n  directory-fsync behavior was introduced.\n\n## Full validation\n\n- `npm test`: pass, sequential Claude → Codex → GitLab → Gitea chains, exit 0.\n- Claude chain includes adaptive-node 2038 assertions, route reachability 578, profile parity 96,\n  generator self-test 33, edition sync 41, contract validation, and the full workflow walkthrough.\n- Codex, GitLab, and Gitea contract and native/Codex walkthroughs all pass; every chain ends with\n  generated-surface freshness green.\n- Public docs, ADR, repair card, and changelog remain byte-identical to approved `07f1532a`; no\n  recovery prose was duplicated.\n- Gap sweep produced exactly `in_run_repair` sample `n2-full-integration-review` and\n  `manual:routing-surface-generator-drift` with sample `plan-run repair protocol outputs drifted\n  because templates/routing/plan-run.skeleton.md omitted the canonical repair section`.\n"
+        }
+      ],
+      "findings": [],
+      "route_candidates": [],
+      "producer_bindings": {
+        "n1-routing-integration": {
+          "baseline": "cd37ab2c55e36a7873af0f16c6386b5d12e5554a",
+          "anchored_ref": "cd37ab2c55e36a7873af0f16c6386b5d12e5554a",
+          "open_token": "5d749661578e630e451557debcdc51ed972ecc51",
+          "generation": "cd37ab2c55e3",
+          "ref": "refs/kaola-workflow/barrier/issue-682/n1-routing-integration"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "consumed_by": null
+    }
+  ]
+}

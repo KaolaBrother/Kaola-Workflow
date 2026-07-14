@@ -1,0 +1,15 @@
+{
+  "project": "issue-682",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-full-integration-review",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:routing-surface-generator-drift",
+      "sample": "plan-run repair protocol outputs drifted because templates/routing/plan-run.skeleton.md omitted the canonical repair section",
+      "count": 1
+    }
+  ]
+}

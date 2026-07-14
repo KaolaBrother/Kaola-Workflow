@@ -1,0 +1,9 @@
+{"node":"n1-routing-integration","event":"opened","ts":"2026-07-14T01:42:32.332Z"}
+{"node":"n1-routing-integration","event":"closed","ts":"2026-07-14T01:53:52.867Z"}
+{"node":"n2-full-integration-review","event":"opened","ts":"2026-07-14T01:53:53.521Z"}
+{"node":"n2-full-integration-review","event":"opened","ts":"2026-07-14T02:23:20.850Z"}
+{"node":"n2-full-integration-review","event":"closed","ts":"2026-07-14T02:27:56.677Z"}
+{"node":"n3-full-candidate-falsifier","event":"opened","ts":"2026-07-14T02:27:57.125Z"}
+{"node":"n3-full-candidate-falsifier","event":"closed","ts":"2026-07-14T02:39:18.907Z"}
+{"node":"n4-finalize-without-duplication","event":"opened","ts":"2026-07-14T02:39:19.369Z"}
+{"node":"n4-finalize-without-duplication","event":"closed","ts":"2026-07-14T02:39:55.636Z"}

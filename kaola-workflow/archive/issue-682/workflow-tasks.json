@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "dc42ce24b7ca586a7c318f51c751f8028489c2ef81db84879c4c1e8ded9a878c",
+  "tasks": [
+    {
+      "id": "n1-routing-integration",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-full-integration-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-full-candidate-falsifier",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize-without-duplication",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-14T02:39:55.751Z"
+}

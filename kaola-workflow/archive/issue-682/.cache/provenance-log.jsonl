@@ -1,0 +1,11 @@
+{"timestamp":"2026-07-14T01:42:32.332Z","event":"open","nodeId":"n1-routing-integration","nonce":"cd37ab2c55e3","by":"adaptive-node"}
+{"timestamp":"2026-07-14T01:53:52.867Z","event":"close","nodeId":"n1-routing-integration","nonce":"cd37ab2c55e3","by":"adaptive-node"}
+{"timestamp":"2026-07-14T01:53:53.521Z","event":"open","nodeId":"n2-full-integration-review","nonce":"1f179658c2f9","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:10:05.608Z","event":"repair-node","nodeId":"n1-routing-integration","nonce":null,"by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:23:20.851Z","event":"open","nodeId":"n2-full-integration-review","nonce":"5d73c678366d","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:27:36.865Z","event":"revert-overflow","nodeId":"n2-full-integration-review","nonce":"5d73c678366d","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:27:56.678Z","event":"close","nodeId":"n2-full-integration-review","nonce":"5d73c678366d","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:27:57.125Z","event":"open","nodeId":"n3-full-candidate-falsifier","nonce":"0ecc2ee22756","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:39:18.908Z","event":"close","nodeId":"n3-full-candidate-falsifier","nonce":"0ecc2ee22756","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:39:19.369Z","event":"open","nodeId":"n4-finalize-without-duplication","nonce":"8e056feb02f5","by":"adaptive-node"}
+{"timestamp":"2026-07-14T02:39:55.637Z","event":"close","nodeId":"n4-finalize-without-duplication","nonce":"8e056feb02f5","by":"adaptive-node"}
