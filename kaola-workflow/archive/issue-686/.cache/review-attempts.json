@@ -1,0 +1,1320 @@
+{
+  "schema_version": 1,
+  "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+  "attempts": [
+    {
+      "attempt_id": "n2-review:1",
+      "ordinal": 1,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-reap-sweep\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-reap-sweep"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "6e681034d0e53c458ba170c638ff2397be05b687da73f4298f021df1c82975ba",
+      "candidate_digest": "b9b2c610031ae59e34892be22cb369f729bba5aa29802c52c40f7c3d23d8d5eb",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 cd413168b10ffa7256dcb942ccae47921d89c59d",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 c34daf48323e897f0f7c46eb69d355e82ceab463",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 e20ce26c823a6d1e32cfdef59e9079d00630adbb",
+        "scripts/kaola-workflow-claim.js": "100644 e20ce26c823a6d1e32cfdef59e9079d00630adbb",
+        "scripts/test-claim-hardening.js": "100644 daa78b99e46877c536acdae5e054eb84dd2ced4a"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "87f991a690b2"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "fail",
+      "reason": "verdict_not_pass",
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "87f991a690b2",
+          "receipt_sha256": "365877ad90c72a157b9a5b0efa46b97b4f6ef47eb80b95fe37b4154335f6d0ea",
+          "effective_pass": false,
+          "verdict": "fail",
+          "findings_blocking": 1,
+          "body": "evidence-binding: n2-review 87f991a690b2\nverdict: fail\nfindings_blocking: 1\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R1 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=sweepBarrierRefs builds its KEEP set from the invoking cwd's repo root but deletes refs from the shared mainRoot ref store — invoked from a linked-worktree cwd it over-reaps LIVE sibling projects (PoC-proven); fix: union the keep universes of root AND mainRoot (both readActiveFolders and the running-set walk, dedupe when equal), propagate x4, add a RED-first worktree-cwd test\nfinding: id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=archive-time reap has no sanitizer-collision guard (sweep does); unreachable for workflow-generated names (issue-N/bundle-* sanitize to identity) and colliding live tags already clobber each other inside the barrier machinery itself\nfinding: id=R3 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a live folder whose workflow-state.md is unreadable/unparseable drops out of the keep set unless a running-set.json exists; such a project is already invisible to every subsystem (documented pre-existing semantics in claim.js ~635)\n\n## Review: #686 archive-time barrier-ref reap + barrier-ref-sweep\n\nBLOCK on R1 (one open in-scope over-reap of a live project, PoC-proven, the design's named dangerous direction).\nEverything else holds: fail-soft scoping, ref-namespace scope (barrier/ only), archive-path coverage,\nnetwork-independence, collision under-reap, test mutation resistance, edition parity.\n\n### Attack 1 — FAIL-SOFT past the archive: PASS\nThe reap (claim.js:2041-2052) sits AFTER the archive block completes and before any return; every git call is\ninside the swallow (for-each-ref in the outer try, each update-ref -d in its own inner try/catch). A no-git-repo\narchive still returns {archived:true}; mainRoot-resolution failure degrades to reapRoot=root and is caught.\n\n### Attack 2 — NEVER over-reap: FAIL (R1)\nHolds: (a) ACTIVE kept, (b) running-set.json kept, (c) sanitizer collision ADDs to keep, (e) network-free\n(active-folders.js:253,260 — excludeClosedIssues:false skips prefetchIssueStates/issueIsClosed, no gh call).\nBLOCKING: sweepBarrierRefs (claim.js:3119, identical in all ports) builds workflowDir/active from `root`\n(getRoot()=cwd toplevel) but for-each-ref/update-ref -d run with cwd=mainRoot (shared ref store). Custom refs\nlive in the git COMMON dir; a live claim's folder lives in the MAIN root, invisible from a sibling worktree's\nkaola-workflow/. PoC (main root live proj-live-b + refs; sweep from a worktree cwd): deleted\nrefs/kaola-workflow/barrier/proj-live-b/n1 (a LIVE project's gc-anchor). Both keep signals are root-scoped, so\nthe running-set belt-and-suspenders misses the sibling too. Reachable: the orchestrator's cwd for a run IS the\nlinked worktree, and a mid-campaign legacy-ref cleanup from a session shell is the anticipated first use. Deleting\nthe gc-anchor lets git gc prune the live baseline commit, making the barrier_base_mismatch refusal's prescribed\nref-restore repair impossible. Fix: keep set = union of root AND mainRoot universes (readActiveFolders + running-set\nwalk over both, dedupe when equal); x4; RED-first worktree-cwd test.\n\n### Attack 3 — scope barrier/ only: PASS\nLive enumeration confirms only barrier/<tag>/<node> and leg-base/<project>/<node>; barrier-base-* is a .cache\nfilename, never a ref. Planted refs/kaola-workflow/barrier-x/n1 + leg-base/proj-gone/n1 both SURVIVE (trailing-slash\nfor-each-ref pattern matches on path boundary). Archive reap deletes only barrier/<that-tag>/*.\n\n### Attack 4 — reap covers every archive path: PASS\nAll archive paths converge on archiveProjectDir (cmdFinalize 2347, discard 2792, active-folders backstops 3454/3533,\nsink-merge 1288). The insertion is after BOTH the linked copy+verify+delete branch and the in-place renameSync\nbranch. The two early returns (source-missing 1941, archive_incomplete 2010) correctly bypass the reap (safe\ndirection).\n\n### Attack 5 — mutation-kill the tests: PASS\nSnapshot via cp (uncommitted diff), mutate, restore, cmp. Reap-prefix misdirect → 1 RED (reap test). keep.has→false\n→ 3 RED (active/collision/running-set KEPT). Restored byte-identical; 209 green. No vacuous tests.\n\n### Attack 6 — edition parity: PASS\nedition-sync.js --check green (10 ports, 24 mirrors, 27 byte-identical groups); validate-script-sync green; codex\nbyte-identical; gitlab/gitea carry the same logic — so R1 must be fixed in all four copies.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=R1 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=sweepBarrierRefs builds its KEEP set from the invoking cwd's repo root but deletes refs from the shared mainRoot ref store — invoked from a linked-worktree cwd it over-reaps LIVE sibling projects (PoC-proven); fix: union the keep universes of root AND mainRoot (both readActiveFolders and the running-set walk, dedupe when equal), propagate x4, add a RED-first worktree-cwd test",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "tdd-guide",
+          "rationale": "sweepBarrierRefs"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=archive-time reap has no sanitizer-collision guard (sweep does); unreachable for workflow-generated names (issue-N/bundle-* sanitize to identity) and colliding live tags already clobber each other inside the barrier machinery itself",
+          "id": "R2",
+          "scope": "pre_existing",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "archive-time"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R3 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a live folder whose workflow-state.md is unreadable/unparseable drops out of the keep set unless a running-set.json exists; such a project is already invisible to every subsystem (documented pre-existing semantics in claim.js ~635)",
+          "id": "R3",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "a"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "R1",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R1 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=sweepBarrierRefs builds its KEEP set from the invoking cwd's repo root but deletes refs from the shared mainRoot ref store — invoked from a linked-worktree cwd it over-reaps LIVE sibling projects (PoC-proven); fix: union the keep universes of root AND mainRoot (both readActiveFolders and the running-set walk, dedupe when equal), propagate x4, add a RED-first worktree-cwd test"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R2",
+          "id": "R2",
+          "scope": "pre_existing",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=archive-time reap has no sanitizer-collision guard (sweep does); unreachable for workflow-generated names (issue-N/bundle-* sanitize to identity) and colliding live tags already clobber each other inside the barrier machinery itself"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R3",
+          "id": "R3",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R3 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a live folder whose workflow-state.md is unreadable/unparseable drops out of the keep set unless a running-set.json exists; such a project is already invisible to every subsystem (documented pre-existing semantics in claim.js ~635)"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": "n1-reap-sweep",
+        "settled": true
+      },
+      "rebind": [],
+      "consumed_by": "n1-reap-sweep"
+    },
+    {
+      "attempt_id": "n2-review:2",
+      "ordinal": 2,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-reap-sweep\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-reap-sweep"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "3ea8fc8d2217e469ab34e24c181475f7d1e38bc9b67844b59e85f2f2b40688f3",
+      "candidate_digest": "9959a00c75113c72af0a01315501e47e8b8d5a1cb215b503ad4e1c249b3ef8ad",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 54ef180c2983335d5066d234cf2d01d59f994209",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 da00657781c3bcc2dcd9bfd525708feb9a09b37a",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 a4df025be149399ac2e6162a7168a2031ee42753",
+        "scripts/kaola-workflow-claim.js": "100644 a4df025be149399ac2e6162a7168a2031ee42753",
+        "scripts/test-claim-hardening.js": "100644 18119a08664d1690758665c4da756eb1196e3082"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "41fd131b08b7"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "41fd131b08b7",
+          "receipt_sha256": "1b734a8d3750e618beb226454bdd63a689a1a4f7c7fe8520174fcdc60073a0a8",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-review 41fd131b08b7\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=union-of-root-and-mainRoot keep-scan closes the worktree-cwd over-reap; PoC re-executed kept the live sibling AND still reaped the true orphan (discrimination intact); mutation-kill (revert union to [root]) reproduced exactly the 2 R1 assertions RED; restore cmp byte-identical; the union only ADDS to KEEP so it is structurally incapable of a new deletion; readActiveFolders accepts mainRoot cleanly + network-free; dedupe correct; fail-soft geometry preserved\nfinding: id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=archive-time reap has no sanitizer-collision guard; unreachable for workflow-generated names\nfinding: id=R3 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a live folder with unreadable workflow-state drops from keep unless running-set.json exists; pre-existing invisible-to-every-subsystem semantics\n\n# Re-review (attempt 2) — #686 n1-reap-sweep repair\n\n## V1 — R1 closed (executed independent PoC)\nFresh main repo + linked worktree; live sibling `issue-sib` (workflow-state in_progress + running-set.json) ONLY\nunder main root; plus a true orphan `issue-orphan` (no folder). Sweep with cwd=worktree →\n`{\"refsDeleted\":[\"refs/kaola-workflow/barrier/issue-orphan/n1\"],\"tagsKept\":[\"issue-sib\"],\"tagsDeleted\":[\"issue-orphan\"]}`\n— live sibling survived AND the true orphan still reaped (not a blanket keep-all). PASS.\n\n## V2 — mutation-kill the regression\nRevert ONLY the union (`scanRoots` → `[root]`) → 2 R1 assertions RED (`tagsDeleted=[\"issue-686sibling\"]`),\n211 passed — matches the pre-fix defect. Restore cmp byte-identical → 213 green. Test binds to the union. PASS.\n\n## V3 — no new over/under-reap from the union\nStructural: union only ADDS to KEEP; deletion set = enumerated − KEEP, so union can only SHRINK deletions —\ncannot introduce a new over-reap. Under-reap: a mainRoot-scanned keep = a genuinely live main-root project (the\nfix). Live claims always have a main-root folder (verified against the live issue-686 run). Orphans still reaped\nfrom a worktree cwd and when main root has no kaola-workflow/ dir (executed: no throw, orphan deleted).\nreadActiveFolders(scanRoot,{excludeClosedIssues:false}) accepts an explicit root (active-folders.js:230) and skips\nthe gh prefetch — network-free (ran without OFFLINE: exit 0, idempotent). Dedupe mainRoot===root → single walk;\na Set makes any path mismatch harmless. Fail-soft: keep-set built before all deletions in one try; a scan fault\naborts before any update-ref -d → under-reap, never over-reap. PASS.\n\n## V4 — prior guarantees intact\nAll earlier #686 blocks green in the 213 run (reap+archive-success, fail-soft no-git-repo, active keep,\narchived-no-folder delete, collision keep, running-set keep, leg-base scope guard). Test diff append-only;\narchiveProjectDir reap region unchanged. Walkthrough exit 0. PASS.\n\n## V5 — edition parity\nedition-sync.js --check green (10 ports, 24 mirrors, 27 byte-identical groups); validate-script-sync green; the\nscanRoots union line present once in each of the 4 copies; canonical == codex cmp byte-identical. PASS.\n\nAPPROVE — R1 genuinely closed (executed PoC), regression mutation-verified, union structurally safe, all prior\nguarantees + parity hold. (Loose comment prose at claim.js:3103 \"ONE root only\" vs the live both-presence is\ncosmetic; keep-if-seen-in-EITHER makes both-presence strictly safe — below reporting threshold, not filed.)\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=union-of-root-and-mainRoot keep-scan closes the worktree-cwd over-reap; PoC re-executed kept the live sibling AND still reaped the true orphan (discrimination intact); mutation-kill (revert union to [root]) reproduced exactly the 2 R1 assertions RED; restore cmp byte-identical; the union only ADDS to KEEP so it is structurally incapable of a new deletion; readActiveFolders accepts mainRoot cleanly + network-free; dedupe correct; fail-soft geometry preserved",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "high",
+          "fix_role": "none",
+          "rationale": "union-of-root-and-mainRoot"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=archive-time reap has no sanitizer-collision guard; unreachable for workflow-generated names",
+          "id": "R2",
+          "scope": "pre_existing",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "archive-time"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R3 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a live folder with unreadable workflow-state drops from keep unless running-set.json exists; pre-existing invisible-to-every-subsystem semantics",
+          "id": "R3",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "a"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "R1",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=union-of-root-and-mainRoot keep-scan closes the worktree-cwd over-reap; PoC re-executed kept the live sibling AND still reaped the true orphan (discrimination intact); mutation-kill (revert union to [root]) reproduced exactly the 2 R1 assertions RED; restore cmp byte-identical; the union only ADDS to KEEP so it is structurally incapable of a new deletion; readActiveFolders accepts mainRoot cleanly + network-free; dedupe correct; fail-soft geometry preserved"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R2",
+          "id": "R2",
+          "scope": "pre_existing",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R2 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=archive-time reap has no sanitizer-collision guard; unreachable for workflow-generated names"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R3",
+          "id": "R3",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R3 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a live folder with unreadable workflow-state drops from keep unless running-set.json exists; pre-existing invisible-to-every-subsystem semantics"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-adversary:1",
+      "ordinal": 1,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-review\"],\"members\":[\"n3-adversary\"]}",
+        "kind": "sequence",
+        "id": "n3-adversary",
+        "origin": [
+          "n2-review"
+        ],
+        "members": [
+          "n3-adversary"
+        ]
+      },
+      "transaction_key": "4cf6b28686705962fe55a85e2109f987283e43e717a738c285858a6d2d9c465d",
+      "candidate_digest": "9959a00c75113c72af0a01315501e47e8b8d5a1cb215b503ad4e1c249b3ef8ad",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 54ef180c2983335d5066d234cf2d01d59f994209",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 da00657781c3bcc2dcd9bfd525708feb9a09b37a",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 a4df025be149399ac2e6162a7168a2031ee42753",
+        "scripts/kaola-workflow-claim.js": "100644 a4df025be149399ac2e6162a7168a2031ee42753",
+        "scripts/test-claim-hardening.js": "100644 18119a08664d1690758665c4da756eb1196e3082"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n3-adversary",
+          "nonce": "4877b0b8fa5a"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "fail",
+      "reason": "verdict_not_pass",
+      "receipts": [
+        {
+          "node_id": "n3-adversary",
+          "generation": "4877b0b8fa5a",
+          "receipt_sha256": "9763c89973bb6d0fe86415cecd6f9f4e8dde01512c75e5a080a86e15d85106e9",
+          "effective_pass": false,
+          "verdict": "fail",
+          "findings_blocking": 2,
+          "body": "evidence-binding: n3-adversary 4877b0b8fa5a\nverdict: fail\nfindings_blocking: 2\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R4 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=keep-set universe {invoking root, mainRoot} is smaller than the reachable claim-root universe {ANY linked worktree root}; executed end-to-end with only shipped commands — claim from worktree w1 cwd + real record-base + sweep from main root deleted a LIVE claim's anchor, then git gc pruned the baseline commit (barrier_base_mismatch ref-restore now impossible); the R1 union closed only half the class (R1: sweep-from-worktree misses main-root claim; R4: sweep-from-main/other-worktree misses worktree claim); FIX: build both keep passes over ALL `git worktree list --porcelain` roots (legs under .kw/legs are worktrees too), or fail-closed abort when unscanned worktrees exist\nfinding: id=R5 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=case-insensitive-FS tag/dirent mismatch — a wrong-case --record-base path anchors tag `Issue-9` while the live folder dirent is `issue-9`; sweep reaped the live anchor (executed on macOS case-insensitive FS); FIX: case-insensitive keep comparison (only ADDS to KEEP → fail-safe under-reap on every FS)\nfinding: id=R6 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=confirms R2 by execution via REAL archiveProjectDir — archiving live-claimed `fix-v1.2` reaped LIVE `fix-v1_2` anchor; correction to R2: reachable via user-supplied --project names (isSafeName accepts dots/spaces/*), not only workflow-generated names; collision blast radius pre-exists at record time (shared projTag namespace); concur deferred\nfinding: id=R7 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=TOCTOU window (keep built claim.js:3143-3160 strictly before enumeration :3166, no lock in cmdBarrierRefSweep) — a claim+record-base landing inside the ms-scale window is reaped; realistic damage case subsumed by R4; document sweep-at-quiet-window posture\n\n# Adversarial gate — #686 reap/sweep (attempt 1)\n\n## Attack 1 — third-universe over-reap (EXECUTED, BROKE THE CLAIM)\nMain repo + linked worktrees w1, w2. Live `issue-w2live` (active state + running-set.json) ONLY in w2; ref\nrecorded from w2. Sweep from w1: refsDeleted includes `refs/kaola-workflow/barrier/issue-w2live/n1`,\ntagsDeleted:[\"issue-dead\",\"issue-w2live\"] — LIVE sibling-worktree project over-reaped. scanRoots=[root,mainRoot]\ncovers two universes; a live project in any OTHER worktree is invisible.\n\n## Attack 1b — reachability via supported commands only (EXECUTED, catastrophic end-state)\n1. `claim --project issue-777` cwd=worktree w1 → acquired; folder ONLY at w1/kaola-workflow/issue-777/, main root\n   has no kaola-workflow/ (no lane/cwd fence — cmdClaim/cmdStartup use getRoot()=cwd toplevel).\n2. real `plan-validator --record-base --node-id n1` → refs/kaola-workflow/barrier/issue-777/n1 anchored.\n3. `barrier-ref-sweep` from MAIN root → deletes issue-777 anchor (root==mainRoot dedupes to one universe; w1 invisible).\n4. `git gc --prune=now` → baseline commit GONE while w1/.cache/barrier-base-n1 still names it → ref-restore repair impossible.\nFalsifies n2's \"live claims always have a main-root folder\" (happy-path observation, not enforced). R4 is the mirror of R1.\n\n## Attack 2 — case-insensitive-FS tag/dirent mismatch (EXECUTED, broke it)\nmacOS case-insensitive FS. Live folder `issue-9`; real --record-base with wrong-case path `.../Issue-9/...` anchors\ntag `Issue-9` (projTag = basename AS GIVEN, plan-validator.js:2912). Sweep reaped `barrier/Issue-9/n1` (live).\nOff-nominal precondition → low; fix strictly fail-safe (case-insensitive keep only ADDs).\n\n## Attack 3 — archive-reap prefix boundary (EXECUTED, HELD)\nLive issue-68 + dying issue-6. Real archiveProjectDir(root,'issue-6') reaped only barrier/issue-6/n1;\nbarrier/issue-68/n1 SURVIVED. Trailing-slash for-each-ref matches on a path boundary — verified.\n\n## Attack 4 — sanitizer collision via user name (EXECUTED, confirms R2/R6)\nCLI accepts `--project fix-v1.2` (isSafeName rejects only / \\ NUL . ..). record-base for live fix-v1_2 anchored\nbarrier/fix-v1_2/n1; archiveProjectDir('fix-v1.2') reaped it. Reachable via user names; blast radius pre-exists at\nrecord time. Deferred (R6).\n\n## Attack 5 — hostile refnames / fail-open (EXECUTED, HELD)\ngit update-ref REFUSES `a b`/`a*b`/`a[b`/`a..b` tags; a malformed packed-refs entry is IGNORED by for-each-ref;\nsweep with it present deleted nothing wrong. Deletion uses exact refnames (no globbing); archive-reap pattern built\nfrom the [A-Za-z0-9_-]-restricted sanitized tag — no glob metachar can enter.\n\n## Attack 6 — concurrency (code-read, window subsumed)\nNo lock in cmdBarrierRefSweep; keep built before enumeration → ms-scale window (R7, subsumed by R4). Archive reap is\ntag-scoped to the dying project, fires after the live copy is gone — no cross-project hole (except R2/R6 collision).\n\n## Verdict\nREFUTED (high). Two executed over-reaps: R4 (supported-commands third-universe → live anchor deleted → baseline\ngc-pruned, repair impossible) + R5 (case-insensitive tag/dirent). R4's fix (all-worktree-roots keep scan,\nfail-closed on enumeration failure) closes R4+A1; a case-folded keep closes R5. No repo file modified.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R4 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=keep-set universe {invoking root, mainRoot} is smaller than the reachable claim-root universe {ANY linked worktree root}; executed end-to-end with only shipped commands — claim from worktree w1 cwd + real record-base + sweep from main root deleted a LIVE claim's anchor, then git gc pruned the baseline commit (barrier_base_mismatch ref-restore now impossible); the R1 union closed only half the class (R1: sweep-from-worktree misses main-root claim; R4: sweep-from-main/other-worktree misses worktree claim); FIX: build both keep passes over ALL `git worktree list --porcelain` roots (legs under .kw/legs are worktrees too), or fail-closed abort when unscanned worktrees exist",
+          "id": "R4",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "tdd-guide",
+          "rationale": "keep-set"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R5 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=case-insensitive-FS tag/dirent mismatch — a wrong-case --record-base path anchors tag `Issue-9` while the live folder dirent is `issue-9`; sweep reaped the live anchor (executed on macOS case-insensitive FS); FIX: case-insensitive keep comparison (only ADDS to KEEP → fail-safe under-reap on every FS)",
+          "id": "R5",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "low",
+          "fix_role": "tdd-guide",
+          "rationale": "case-insensitive-FS"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R6 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=confirms R2 by execution via REAL archiveProjectDir — archiving live-claimed `fix-v1.2` reaped LIVE `fix-v1_2` anchor; correction to R2: reachable via user-supplied --project names (isSafeName accepts dots/spaces/*), not only workflow-generated names; collision blast radius pre-exists at record time (shared projTag namespace); concur deferred",
+          "id": "R6",
+          "scope": "pre_existing",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "confirms"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R7 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=TOCTOU window (keep built claim.js:3143-3160 strictly before enumeration :3166, no lock in cmdBarrierRefSweep) — a claim+record-base landing inside the ms-scale window is reaped; realistic damage case subsumed by R4; document sweep-at-quiet-window posture",
+          "id": "R7",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "TOCTOU"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R4",
+          "id": "R4",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R4 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=keep-set universe {invoking root, mainRoot} is smaller than the reachable claim-root universe {ANY linked worktree root}; executed end-to-end with only shipped commands — claim from worktree w1 cwd + real record-base + sweep from main root deleted a LIVE claim's anchor, then git gc pruned the baseline commit (barrier_base_mismatch ref-restore now impossible); the R1 union closed only half the class (R1: sweep-from-worktree misses main-root claim; R4: sweep-from-main/other-worktree misses worktree claim); FIX: build both keep passes over ALL `git worktree list --porcelain` roots (legs under .kw/legs are worktrees too), or fail-closed abort when unscanned worktrees exist"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R5",
+          "id": "R5",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R5 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=case-insensitive-FS tag/dirent mismatch — a wrong-case --record-base path anchors tag `Issue-9` while the live folder dirent is `issue-9`; sweep reaped the live anchor (executed on macOS case-insensitive FS); FIX: case-insensitive keep comparison (only ADDS to KEEP → fail-safe under-reap on every FS)"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R6",
+          "id": "R6",
+          "scope": "pre_existing",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R6 scope=pre_existing action=document status=deferred severity=low fix_role=none rationale=confirms R2 by execution via REAL archiveProjectDir — archiving live-claimed `fix-v1.2` reaped LIVE `fix-v1_2` anchor; correction to R2: reachable via user-supplied --project names (isSafeName accepts dots/spaces/*), not only workflow-generated names; collision blast radius pre-exists at record time (shared projTag namespace); concur deferred"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R7",
+          "id": "R7",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R7 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=TOCTOU window (keep built claim.js:3143-3160 strictly before enumeration :3166, no lock in cmdBarrierRefSweep) — a claim+record-base landing inside the ms-scale window is reaped; realistic damage case subsumed by R4; document sweep-at-quiet-window posture"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": "n1-reap-sweep",
+        "settled": true
+      },
+      "rebind": [],
+      "consumed_by": "n1-reap-sweep"
+    },
+    {
+      "attempt_id": "n2-review:3",
+      "ordinal": 3,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-reap-sweep\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-reap-sweep"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "c9c4be9c9d4cc613c038a99c01d8ab85416252749e819930068b258adeefca0a",
+      "candidate_digest": "b9148a7b49bfe555eb78ed80bd5ffecadb7296eb640f4491450740f1855fa13b",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 cbea8487b9c575d4e690d764f53fc5bf9ef40581",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 2131ceeaa54f4e4c86e8b847506e271e918d8b05",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 ae8f5dec8ba381bc1fd97156dba5ee339fd46fca",
+        "scripts/kaola-workflow-claim.js": "100644 ae8f5dec8ba381bc1fd97156dba5ee339fd46fca",
+        "scripts/test-claim-hardening.js": "100644 1ff0d39e3d9edccd1d6d150ebd02f47d7081cf72"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "875d189fc5cc"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "875d189fc5cc",
+          "receipt_sha256": "9221eeaa23734cc7585daa7420f74bf4cd8969e3b299a64f8ac6202969d89c40",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-review 875d189fc5cc\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R4 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=third-worktree over-reap closed by full git-worktree-list scan union; PoC re-executed KEPT the third-worktree AND leg-worktree claims, dead tag still reaped, mutation M1 (revert scanRoots) killed by the targeted test\nfinding: id=R5 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=case-insensitive-FS tag/dirent mismatch closed by add-only case-folded keep membership (keepLower); PoC re-executed KEPT with real-case reporting, mutation M2 killed\nfinding: id=R6 scope=in_scope action=document status=resolved severity=low fix_role=none rationale=enum-failure fail-closed abort verified (deletes nothing, recovers next run, never fires spuriously on healthy/prunable-worktree repos); mutation M3 killed\nfinding: id=R7 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=stale worktree with surviving dir + abandoned folder keeps its tag until worktree cleanup runs — safe under-reap by design; existing cleanup paths converge it\n\n# n2-review re-review pass 3 — R4+R5 delta\n\n## R4 closed (executed PoC)\nmain + 3 linked worktrees (w1 invoker, w2 with the ONLY copy of live issue-w2live, a .kw/legs leg with the ONLY\ncopy of issue-leglive) + dead tag issue-dead. Sweep cwd=w1 → tagsKept=[\"issue-leglive\",\"issue-w2live\"] (both\nthird/leg-worktree claims survive), tagsDeleted=[\"issue-dead\"] (discrimination retained). scanRoots =\nunion(git worktree list, root, mainRoot) (claim.js:3182) is a strict superset of R1 → keep only grows, deletions\nonly shrink; no new over-reap surface.\n\n## Fail-closed on enum failure (executed)\nKAOLA_WORKFLOW_FORCE_BARRIER_WT_LIST_FAIL=1 → {\"aborted\":true,\"reason\":\"worktree_enum_failed\",\"refsDeleted\":[]},\ndead ref survived; abort at claim.js:3175-3179 BEFORE any keep-build/enumeration. Env unset next run → normal\nreap. No spurious abort on healthy / multi-worktree / prunable-stale-worktree repos.\n\n## R5 closed (executed)\nfolder issue-9 (lowercase dirent) + ref tag Issue-9 (wrong case) + genuinely-dead ISSUE-DEAD9 → tagsKept=[\"Issue-9\"],\ntagsDeleted=[\"ISSUE-DEAD9\"]. keepLower (claim.js:3202) built alongside keep, never replacing → add-only; ASCII-only\ntag alphabet rules out Unicode edge cases.\n\n## Mutation kills (all killed, cmp byte-identical restore)\nM1 scanRoots→[root,mainRoot]: R4 test RED (223 passed). M2 keepLower→exact: R5 test RED (223). M3 fail-closed\nabort→proceed: enum-fail test RED (222). Post-restore 225 green. Precisely scoped, not vacuous.\n\n## Wider-scan posture\nOver-reap impossible (superset → keep grows). Under-reap: a prunable worktree whose DIR is deleted contributes\nnothing (readActiveFolders []) → its tags correctly reaped; a stale worktree with a surviving abandoned folder\nkeeps its tag until cleanup (safe, R7). aborted:true summary shape breaks no consumer (only the 4 claim.js + test\nconsume the JSON).\n\n## Parity (executed)\nedition-sync.js --check green; validate-script-sync green; all 4 copies carry listBarrierSweepWorktreeRoots +\nkeepLower + worktree_enum_failed; canonical==codex cmp byte-identical; walkthrough passed; four-chain recorded in\nn1 evidence.\n\nAPPROVE — R4/R5 closed with executed proof, 3 mutations killed, fail-closed real, wider scan monotonically safer,\nbase+R1 not regressed (225/225), parity byte-verified ×4. Change gate passes.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=R4 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=third-worktree over-reap closed by full git-worktree-list scan union; PoC re-executed KEPT the third-worktree AND leg-worktree claims, dead tag still reaped, mutation M1 (revert scanRoots) killed by the targeted test",
+          "id": "R4",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "high",
+          "fix_role": "none",
+          "rationale": "third-worktree"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R5 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=case-insensitive-FS tag/dirent mismatch closed by add-only case-folded keep membership (keepLower); PoC re-executed KEPT with real-case reporting, mutation M2 killed",
+          "id": "R5",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "case-insensitive-FS"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R6 scope=in_scope action=document status=resolved severity=low fix_role=none rationale=enum-failure fail-closed abort verified (deletes nothing, recovers next run, never fires spuriously on healthy/prunable-worktree repos); mutation M3 killed",
+          "id": "R6",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "resolved",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "enum-failure"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R7 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=stale worktree with surviving dir + abandoned folder keeps its tag until worktree cleanup runs — safe under-reap by design; existing cleanup paths converge it",
+          "id": "R7",
+          "scope": "out_of_scope",
+          "action": "none",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "stale"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "R4",
+          "id": "R4",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R4 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=third-worktree over-reap closed by full git-worktree-list scan union; PoC re-executed KEPT the third-worktree AND leg-worktree claims, dead tag still reaped, mutation M1 (revert scanRoots) killed by the targeted test"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R5",
+          "id": "R5",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R5 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=case-insensitive-FS tag/dirent mismatch closed by add-only case-folded keep membership (keepLower); PoC re-executed KEPT with real-case reporting, mutation M2 killed"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R6",
+          "id": "R6",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "resolved",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R6 scope=in_scope action=document status=resolved severity=low fix_role=none rationale=enum-failure fail-closed abort verified (deletes nothing, recovers next run, never fires spuriously on healthy/prunable-worktree repos); mutation M3 killed"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R7",
+          "id": "R7",
+          "scope": "out_of_scope",
+          "action": "none",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R7 scope=out_of_scope action=none status=deferred severity=low fix_role=none rationale=stale worktree with surviving dir + abandoned folder keeps its tag until worktree cleanup runs — safe under-reap by design; existing cleanup paths converge it"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-adversary:2",
+      "ordinal": 2,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-review\"],\"members\":[\"n3-adversary\"]}",
+        "kind": "sequence",
+        "id": "n3-adversary",
+        "origin": [
+          "n2-review"
+        ],
+        "members": [
+          "n3-adversary"
+        ]
+      },
+      "transaction_key": "da6c7414256b73dd142d814d0157143e5ac65f4cb460bb30a58b6c7604a73504",
+      "candidate_digest": "b9148a7b49bfe555eb78ed80bd5ffecadb7296eb640f4491450740f1855fa13b",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 cbea8487b9c575d4e690d764f53fc5bf9ef40581",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 2131ceeaa54f4e4c86e8b847506e271e918d8b05",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 ae8f5dec8ba381bc1fd97156dba5ee339fd46fca",
+        "scripts/kaola-workflow-claim.js": "100644 ae8f5dec8ba381bc1fd97156dba5ee339fd46fca",
+        "scripts/test-claim-hardening.js": "100644 1ff0d39e3d9edccd1d6d150ebd02f47d7081cf72"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n3-adversary",
+          "nonce": "559efaf0bdc4"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "fail",
+      "reason": "verdict_not_pass",
+      "receipts": [
+        {
+          "node_id": "n3-adversary",
+          "generation": "559efaf0bdc4",
+          "receipt_sha256": "29bee9b6be64230ea2e4dc31caff022d14a04caed968650bda6f52bc356ea398",
+          "effective_pass": false,
+          "verdict": "fail",
+          "findings_blocking": 2,
+          "body": "evidence-binding: n3-adversary 559efaf0bdc4\nverdict: fail\nfindings_blocking: 2\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R6 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=porcelain LF-split parse corrupts an embedded-newline worktree path — a `git worktree add` path containing a literal \\n emits the path RAW across two physical lines; the split('\\n')+indexOf('worktree ') parse (claim.js:3122-3124) captures a nonexistent prefix and drops the remainder, so a live claim in that worktree (both keep signals) is silently over-reaped; breaches the fix's own \"unscannable ⇒ delete nothing\" invariant (mis-parseable output, yet deletion proceeded); FIX: parse `git worktree list --porcelain -z` byte-exact (NUL-separated; supported git 2.36+, confirmed on this 2.54.0)\nfinding: id=R7 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=.trim() strips trailing whitespace that is PART of the worktree path (claim.js:3124) — a trailing-space worktree path resolves to a nonexistent root → live claim invisible → over-reaped; distinct flaw from R6 (the trim, not the LF split), SAME fix locus; the `--porcelain -z` byte-exact parse closes both (do NOT .trim() a -z field)\nfinding: id=R8 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a worktree moved by plain `mv` without `git worktree repair` stays git-functional but `worktree list` reports the stale old path → over-reap; git's OWN registry (list/prune) is stale the identical way, so this is inherited git bookkeeping degradation, not a union defect; document the \"run git worktree repair after moving a worktree\" limitation in the ref-lifecycle docs (n4)\n\n# Adversarial re-attack (attempt 2) — #686 reap/sweep after R4+R5\n\n## T0/T2 — real adaptive geometry (surface 2): SURVIVED\nThis run's geometry: `git worktree list --porcelain` = {main root, .kw/worktrees/issue-686}; kaola-workflow/issue-686/\nactive in BOTH; refs in the shared common dir. No-delete replica from the issue-686 worktree root: wouldKeep=[\"issue-686\"],\nwouldDelete = 43 tags (all archived bundles/issues bundle-617-618 … issue-682). The sweep cannot reap this run's own\nlive anchors; legacy-reclaim purpose confirmed live. Also: main-root-only claim, third worktree, .kw/legs leg all kept.\n\n## T1b — embedded NEWLINE worktree path (surface 1): REFUTES (R6)\n`git worktree add` accepts a path with a literal \\n (APFS); `--porcelain` (no -z) emits it RAW across two lines\n(cat -ve verified). The split('\\n')+indexOf parse captures nonexistent prefix `…/t1/nl`, drops the remainder → a\nlive claim (status:active + running-set.json, BOTH signals) over-reaped: refsDeleted=[\"refs/kaola-workflow/barrier/issue-30/n1\"].\n\n## T1c — TRAILING SPACE worktree path (surface 1): REFUTES (R7)\n`git worktree add \"…/wt-trail \"` accepted; porcelain emits `worktree …/wt-trail ` (trailing space part of path,\ncat -ve verified); the .trim() strips it → nonexistent root → live claim invisible → refsDeleted=[\"…/issue-40/n1\"].\nDistinct flaw from R6; same fix locus. Repair for both: `--porcelain -z` byte-exact NUL-separated parse (probe\nconfirmed supported on git 2.54.0; available 2.36+).\n\nWeighting (honest): the workflow's own layout (.kw/worktrees/<project>, .kw/legs, isSafeName names) never produces\nsuch paths — only a user-placed clone/worktree with an embedded-newline or trailing-whitespace filesystem path.\nLikelihood very low; impact is the dangerous irreversible gc-anchor deletion (R4 severity class); both EXECUTED.\n\n## T6 — worktree moved by mv without git worktree repair (surfaces 1/5): over-reap, OUT-OF-SCOPE (R8)\nGit functional inside the moved worktree but `worktree list` reports the stale old path → live claim invisible →\nrefs deleted. Git's OWN bookkeeping is stale identically (git documents `worktree repair` as mandatory after manual\nmoves). Document, don't fix — the \"parsed-root-must-exist\" backstop would incidentally fence it but would spuriously\nabort on benign prunable-but-unpruned worktrees.\n\n## Surfaces that SURVIVED\nT3a maxBuffer: execFileSync THROWS ENOBUFS on overflow (never returns truncated) → catch → fail-closed abort.\nT3b locked/prunable worktrees: locked still enumerated+kept; prunable (dir deleted) lists but scans empty (claim\nfolder gone with the dir — nothing live). T3c forced enum fail: aborted:true, refsDeleted:[]. T7/T7b odd roots:\nnon-repo → throw → abort; .git dir → resolveMainRoot normalizes. T4 case-fold: sanitizeBarrierTag ASCII-only\n[A-Za-z0-9_-] (Turkish İ / Kelvin K / ß / é / CJK probed) → locale-independent toLowerCase exact; foreign tags fold\ntoward keep (under-reap). T5 symlink/trailing-slash/dedup: git records canonical realpath; Set dedup harmless.\n\n## Suite + parity: 225 assertions pass; 3 plugin editions byte-identical except forge comment rename-normalization.\n\n## Verdict\nREFUTED (high). Two executed in-scope over-reaps of live gc-anchors (R6 newline, R7 trailing-space) at\nclaim.js:3122-3124, one fix locus (`--porcelain -z` byte-exact, no .trim). All other surfaces survived. No repo\nfile modified; issue-686's 3 live anchors intact.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R6 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=porcelain LF-split parse corrupts an embedded-newline worktree path — a `git worktree add` path containing a literal \\n emits the path RAW across two physical lines; the split('\\n')+indexOf('worktree ') parse (claim.js:3122-3124) captures a nonexistent prefix and drops the remainder, so a live claim in that worktree (both keep signals) is silently over-reaped; breaches the fix's own \"unscannable ⇒ delete nothing\" invariant (mis-parseable output, yet deletion proceeded); FIX: parse `git worktree list --porcelain -z` byte-exact (NUL-separated; supported git 2.36+, confirmed on this 2.54.0)",
+          "id": "R6",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "fix_role": "tdd-guide",
+          "rationale": "porcelain"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R7 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=.trim() strips trailing whitespace that is PART of the worktree path (claim.js:3124) — a trailing-space worktree path resolves to a nonexistent root → live claim invisible → over-reaped; distinct flaw from R6 (the trim, not the LF split), SAME fix locus; the `--porcelain -z` byte-exact parse closes both (do NOT .trim() a -z field)",
+          "id": "R7",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "fix_role": "tdd-guide",
+          "rationale": ".trim()"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R8 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a worktree moved by plain `mv` without `git worktree repair` stays git-functional but `worktree list` reports the stale old path → over-reap; git's OWN registry (list/prune) is stale the identical way, so this is inherited git bookkeeping degradation, not a union defect; document the \"run git worktree repair after moving a worktree\" limitation in the ref-lifecycle docs (n4)",
+          "id": "R8",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "a"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R6",
+          "id": "R6",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R6 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=porcelain LF-split parse corrupts an embedded-newline worktree path — a `git worktree add` path containing a literal \\n emits the path RAW across two physical lines; the split('\\n')+indexOf('worktree ') parse (claim.js:3122-3124) captures a nonexistent prefix and drops the remainder, so a live claim in that worktree (both keep signals) is silently over-reaped; breaches the fix's own \"unscannable ⇒ delete nothing\" invariant (mis-parseable output, yet deletion proceeded); FIX: parse `git worktree list --porcelain -z` byte-exact (NUL-separated; supported git 2.36+, confirmed on this 2.54.0)"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R7",
+          "id": "R7",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R7 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=.trim() strips trailing whitespace that is PART of the worktree path (claim.js:3124) — a trailing-space worktree path resolves to a nonexistent root → live claim invisible → over-reaped; distinct flaw from R6 (the trim, not the LF split), SAME fix locus; the `--porcelain -z` byte-exact parse closes both (do NOT .trim() a -z field)"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R8",
+          "id": "R8",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R8 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=a worktree moved by plain `mv` without `git worktree repair` stays git-functional but `worktree list` reports the stale old path → over-reap; git's OWN registry (list/prune) is stale the identical way, so this is inherited git bookkeeping degradation, not a union defect; document the \"run git worktree repair after moving a worktree\" limitation in the ref-lifecycle docs (n4)"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": "n1-reap-sweep",
+        "settled": true
+      },
+      "rebind": [],
+      "consumed_by": "n1-reap-sweep"
+    },
+    {
+      "attempt_id": "n2-review:4",
+      "ordinal": 4,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-reap-sweep\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-reap-sweep"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "40ce4a805865b82bcf0bae80e6ee9669e8389d529f4aa465c5af0f15961eca2a",
+      "candidate_digest": "fe2251ee746c454f21e4cc7ed230e766aff53252d8e2f6a9aee6e8e5e4793a91",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 704b66b9b2981e761b0ea21e8015e6c1c499f898",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 689f90dec44a48162b0a23c5cb7d9496deacd250",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 da35984dd68b8fc7eee5960eadc757cbb0c22054",
+        "scripts/kaola-workflow-claim.js": "100644 da35984dd68b8fc7eee5960eadc757cbb0c22054",
+        "scripts/test-claim-hardening.js": "100644 228bf5a54ade4075489e9e3b803d678a8780a556"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "1b4450cdfb8a"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "1b4450cdfb8a",
+          "receipt_sha256": "8f8d4931b12fb3daeb597db552c57ce9289c13488e7c6fb9c253dd80a9794c5f",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-review 1b4450cdfb8a\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R6 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=CLOSED — re-executed in a fresh scratch repo: real `git worktree add` embedded-LF path, live claim rooted only there, sweep from main root → tagsKept=[\"issue-r6live\"], live ref intact, co-resident dead tag reaped; the `--porcelain -z` NUL-split parse (claim.js:3133-3150, no .trim) round-trips the path byte-exact; suite test mutation-killed (revert to plain --porcelain → R6 assertion RED)\nfinding: id=R7 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=CLOSED — re-executed: real `git worktree add \"…/wt-trail \"` trailing space, live claim, sweep → tagsKept=[\"issue-r7live\"], ref intact, dead tag reaped; path taken as bytes after `worktree ` with NO .trim() in all 4 copies; mutation-killed\nfinding: id=R8 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=mv-without-git-worktree-repair over-reap — git's own worktree list is stale identically; routed to n4-docs as a ref-lifecycle limitation note\nfinding: id=R9 scope=in_scope action=fix status=deferred filed=#690 severity=low fix_role=tdd-guide rationale=R6 test fixture leaks its embedded-newline worktree dir into os.tmpdir (finally cleans only mainRoot686g, not the sibling nlPath686g); test-only, no product impact, R6/R7 assertions unaffected; filed #690 with the exact one-line finally cleanup + hoist ready to apply — deferred (a 4th n1 repair cycle is disproportionate for a low test-hygiene leak per axiom 3)\n\n# n2-review (attempt 3) — R6+R7 fix (`--porcelain -z` parse)\n\n## R6 closed (executed)\nFresh scratch repo: real `git worktree add` at an embedded-newline path; live claim (in_progress + running-set.json)\nrooted ONLY there; sweep from main root → {\"refsDeleted\":[\"…/issue-dead/n1\"],\"tagsKept\":[\"issue-r6live\"],\n\"tagsDeleted\":[\"issue-dead\"]} — live ref survived AND dead tag reaped same pass.\n\n## R7 closed (executed)\n`git worktree add \"…/wt-trail \"` (trailing space), live claim rooted only there → tagsKept=[\"issue-r7live\"], ref\nintact, dead tag reaped.\n\n## -z parse correctness (read + executed)\nlistBarrierSweepWorktreeRoots (claim.js:3133-3150): `git worktree list --porcelain -z`, split on \\0, keep fields\nwith exact prefix `worktree `, take slice('worktree '.length) with NO .trim(). Record-boundary empty fields + non-\nworktree attribute fields (HEAD/branch/prunable) fail the prefix test → skipped; no spurious empty root. Happy path\nexecuted: 4-root repo, sweep from a linked worktree → all 4 tags kept (every root enumerated across record\nboundaries), dead tag reaped.\n\n## No nonexistent-root abort (executed, decision held)\nPrunable worktree (dir rm -rf'd, not pruned): still listed with a prunable attr; sweep from main → no abort, prunable\nroot contributed nothing, live main-root claim kept, dead tag reaped. The deliberate omission of a \"root must exist ⇒\nabort\" backstop held (correct: under -z a nonexistent parsed root genuinely means a prunable worktree; aborting would\nspuriously block safe reaping).\n\n## Mutation-kill (executed)\nSnapshot to scratchpad, revert ONLY the parse (drop -z, restore split('\\n')/.trim()): 4 failures (the R6/R7\nassertions, refsDeleted showing the real over-reap), 231 passed. Restore cmp byte-identical → 235 green. Load-bearing.\n\n## No regression (executed)\n235 assertions green (225 prior + 10 new). Forced-enum-THROW fail-closed re-executed: aborted:true, dead tag intact.\nWalkthrough passed.\n\n## Edition parity (executed)\nedition-sync.js --check green; validate-script-sync green; all 4 copies carry the identical `'--porcelain','-z'` +\ntrim-free NUL-split loop. Two pre-existing plain --porcelain call sites (worktreeRegistered :595, listWorkflowWorktrees\n:2894) are out of scope and non-destructive (idempotence probe / read-only listing).\n\nPASS — R6/R7 closed (executed, mutation-killed, parity ×4), happy-path + fail-closed + prunable postures intact, no\nregression. R9 (test-hygiene tmpdir leak) deferred + filed #690 (exact fix ready); R8 routed to docs.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=R6 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=CLOSED — re-executed in a fresh scratch repo: real `git worktree add` embedded-LF path, live claim rooted only there, sweep from main root → tagsKept=[\"issue-r6live\"], live ref intact, co-resident dead tag reaped; the `--porcelain -z` NUL-split parse (claim.js:3133-3150, no .trim) round-trips the path byte-exact; suite test mutation-killed (revert to plain --porcelain → R6 assertion RED)",
+          "id": "R6",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "medium",
+          "fix_role": "none",
+          "rationale": "CLOSED",
+          "tagskept": "[\"issue-r6live\"],"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R7 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=CLOSED — re-executed: real `git worktree add \"…/wt-trail \"` trailing space, live claim, sweep → tagsKept=[\"issue-r7live\"], ref intact, dead tag reaped; path taken as bytes after `worktree ` with NO .trim() in all 4 copies; mutation-killed",
+          "id": "R7",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "medium",
+          "fix_role": "none",
+          "rationale": "CLOSED",
+          "tagskept": "[\"issue-r7live\"],"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R8 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=mv-without-git-worktree-repair over-reap — git's own worktree list is stale identically; routed to n4-docs as a ref-lifecycle limitation note",
+          "id": "R8",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "mv-without-git-worktree-repair"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R9 scope=in_scope action=fix status=deferred filed=#690 severity=low fix_role=tdd-guide rationale=R6 test fixture leaks its embedded-newline worktree dir into os.tmpdir (finally cleans only mainRoot686g, not the sibling nlPath686g); test-only, no product impact, R6/R7 assertions unaffected; filed #690 with the exact one-line finally cleanup + hoist ready to apply — deferred (a 4th n1 repair cycle is disproportionate for a low test-hygiene leak per axiom 3)",
+          "id": "R9",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "deferred",
+          "filed": "#690",
+          "severity": "low",
+          "fix_role": "tdd-guide",
+          "rationale": "R6"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "R6",
+          "id": "R6",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R6 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=CLOSED — re-executed in a fresh scratch repo: real `git worktree add` embedded-LF path, live claim rooted only there, sweep from main root → tagsKept=[\"issue-r6live\"], live ref intact, co-resident dead tag reaped; the `--porcelain -z` NUL-split parse (claim.js:3133-3150, no .trim) round-trips the path byte-exact; suite test mutation-killed (revert to plain --porcelain → R6 assertion RED)"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R7",
+          "id": "R7",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R7 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=CLOSED — re-executed: real `git worktree add \"…/wt-trail \"` trailing space, live claim, sweep → tagsKept=[\"issue-r7live\"], ref intact, dead tag reaped; path taken as bytes after `worktree ` with NO .trim() in all 4 copies; mutation-killed"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R8",
+          "id": "R8",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R8 scope=out_of_scope action=document status=deferred severity=low fix_role=none rationale=mv-without-git-worktree-repair over-reap — git's own worktree list is stale identically; routed to n4-docs as a ref-lifecycle limitation note"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R9",
+          "id": "R9",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R9 scope=in_scope action=fix status=deferred filed=#690 severity=low fix_role=tdd-guide rationale=R6 test fixture leaks its embedded-newline worktree dir into os.tmpdir (finally cleans only mainRoot686g, not the sibling nlPath686g); test-only, no product impact, R6/R7 assertions unaffected; filed #690 with the exact one-line finally cleanup + hoist ready to apply — deferred (a 4th n1 repair cycle is disproportionate for a low test-hygiene leak per axiom 3)"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-adversary:3",
+      "ordinal": 3,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-review\"],\"members\":[\"n3-adversary\"]}",
+        "kind": "sequence",
+        "id": "n3-adversary",
+        "origin": [
+          "n2-review"
+        ],
+        "members": [
+          "n3-adversary"
+        ]
+      },
+      "transaction_key": "80c2b06cac1b2154e605c6ac8aaa108c0b5073fc2ba141cdae45b595e524db30",
+      "candidate_digest": "fe2251ee746c454f21e4cc7ed230e766aff53252d8e2f6a9aee6e8e5e4793a91",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 704b66b9b2981e761b0ea21e8015e6c1c499f898",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 689f90dec44a48162b0a23c5cb7d9496deacd250",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 da35984dd68b8fc7eee5960eadc757cbb0c22054",
+        "scripts/kaola-workflow-claim.js": "100644 da35984dd68b8fc7eee5960eadc757cbb0c22054",
+        "scripts/test-claim-hardening.js": "100644 228bf5a54ade4075489e9e3b803d678a8780a556"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n3-adversary",
+          "nonce": "a3c5bdadf39c"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "fail",
+      "reason": "verdict_not_pass",
+      "receipts": [
+        {
+          "node_id": "n3-adversary",
+          "generation": "a3c5bdadf39c",
+          "receipt_sha256": "8ecc347dc1ebdc3690ed72430b555d49b07e071185160d1da04672a7ee7adffd",
+          "effective_pass": false,
+          "verdict": "fail",
+          "findings_blocking": 1,
+          "body": "evidence-binding: n3-adversary a3c5bdadf39c\nverdict: fail\nfindings_blocking: 1\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R8 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=per-FOLDER unreadable workflow-state.md (EACCES chmod-000 or EISDIR) is swallowed inside readActiveFolders (active-folders.js:246 catch→continue), so a live project with no running-set.json (a SEQUENCE run — the common case, confirmed this very run has no running-set.json) drops its SOLE keep signal per-folder and the sweep reaps its live barrier gc-anchor; contradicts the sweep's OWN documented \"cannot prove dead ⇒ keep/abort\" posture (claim.js:3182-3188) which currently binds only at DIRECTORY granularity (chmod-000 on kaola-workflow/ aborts — repoD executed {aborted:true}, both refs survived — but chmod-000 on ONE state file silently drops that folder); EXECUTED: repoA reaped barrier/issue-13/n1 (chmod 000 state file), repoE reaped barrier/issue-50/n1 (state file is a DIRECTORY / EISDIR); FIX tighten-only + sweep-local: in sweepBarrierRefs treat a folder whose workflow-state.md EXISTS but cannot be read as KEEP (unprovable-dead ⇒ keep); do NOT alter shared readActiveFolders semantics (other #353 consumers are read-only). Reachability requires out-of-band FS damage (no shipped flow makes an unreadable state file — writeState is atomic-replace), hence not high, but the impact is the dangerous irreversible direction and it is strictly less exotic than the accepted R6/R7.\n\nfinding: id=R9 scope=in_scope action=fix status=deferred filed=#690 severity=low fix_role=tdd-guide rationale=R6 fixture tmpdir leak (n2 finding), filed with the exact fix ready\n\n# Adversarial gate — #686 reap/sweep (attempt 3, post R6/R7)\n\n## Surface 1 — keep SIGNAL (REFUTATION, R8)\n12-state matrix (repoA/repoE), each a live ref. KEPT correctly: in_progress, unknown-status, claimed, bundle,\nrunning-set-only, empty-state-file(→unknown). REAPED correctly: status:released (cmdRelease archives via\narchiveProjectDir → legacy residue), status:closed (mid-archive stamped window, terminal), folder-no-state-no-rs\n(no liveness evidence; state file precedes any ref by construction), dot-dir + symlinked-dir (invisible to the\nENTIRE workflow, can never be claimed → never acquire refs). REAPED WRONGLY (R8): issue-13 state file chmod 000\n(EACCES) → refsDeleted includes barrier/issue-13/n1; issue-50 state file is a DIRECTORY (EISDIR) →\nbarrier/issue-50/n1 deleted. Mechanism: parseStateFile's only throw is fs.readFileSync (active-folders.js:196),\ncaught per-folder with continue (:246), so present-but-unreadable evidence → tag silently dropped. Directory-\ngranularity abort (chmod-000 on kaola-workflow/ → readdirSync throw → aborted:true, repoD both refs survived)\ndoes NOT extend to file granularity. Sequence runs have NO running-set.json → signal (a) is the sole keeper, no\nredundancy.\n\n## Surface 2 — tag vs sanitize(folder): CLOSED\nRef tag = sanitizeBarrierTag(basename(dirname(planPath))) (plan-validator.js:2911) = the folder basename, same\ninput the keep set sanitizes (shared sanitizeBarrierTag, claim.js:1934). Bundle bundle-683-684-685 kept (repoA);\nreal repo: barrier/issue-686/{n1,n2,n3} tag == folder; 16 historical bundle tags == folder names. Case mismatch\ncovered by keepLower (repoC folder Issue-20 / tag issue-20 → kept).\n\n## Surface 3 — running-set walk path: CLOSED\nWalk <scanRoot>/kaola-workflow/*/.cache/running-set.json; writers place it at dirname(planPath)/.cache. Real repo:\nlistBarrierSweepWorktreeRoots(mainRoot) = [main, .kw/worktrees/issue-686]; live folder under BOTH roots (dual\nsignal-a); keep sim kept exactly issue-686 (3 refs), 43 archived tags WOULD DELETE. Legs enumerated for free.\n\n## Surface 4 — archive-reap collateral: CLOSED\nReal archiveProjectDir (repoB): archiving issue-68 deleted only barrier/issue-68/{n1,n2}; issue-686/* and\nleg-base/issue-68/n1 survived; bundle-683 left bundle-683-684/* intact (path-component-bounded for-each-ref).\nTwo concurrent archives reaped exactly their own tags, zero cross-talk, fail-soft intact.\n\n## Surface 5 — deletion refname edges + TOCTOU: CLOSED\nMulti-slash node components kept/deleted correctly; naked tag-level ref (no node) skipped (indexOf('/')<0);\nrefnames cannot carry LF/space (git-check-ref-format); tags [A-Za-z0-9_-] only. Forced enum failure → aborted;\nnon-repo cwd → aborted. TOCTOU: keep-build precedes enumeration in one 81ms process; ref creation trails\nfolder+state by the multi-process claim→freeze→open pipeline (seconds); a ref visible at enumerate implies its\nfolder existed at scan; the reverse race resolves to KEEP (under-reap).\n\n## Verdict\nREFUTED (high). One executed third-class over-reap: R8 (present-but-unreadable state file → live gc-anchor\nreaped), contradicting the code's own \"cannot prove dead ⇒ keep\" discipline at file granularity. Universe\n(all-worktrees), parse (NUL-exact), tag derivation, running-set path, archive-reap scoping, deletion, TOCTOU all\nattacked and held. Fix is tighten-only + sweep-local. No repo file modified; real repo ref count unchanged (258).\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R8 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=per-FOLDER unreadable workflow-state.md (EACCES chmod-000 or EISDIR) is swallowed inside readActiveFolders (active-folders.js:246 catch→continue), so a live project with no running-set.json (a SEQUENCE run — the common case, confirmed this very run has no running-set.json) drops its SOLE keep signal per-folder and the sweep reaps its live barrier gc-anchor; contradicts the sweep's OWN documented \"cannot prove dead ⇒ keep/abort\" posture (claim.js:3182-3188) which currently binds only at DIRECTORY granularity (chmod-000 on kaola-workflow/ aborts — repoD executed {aborted:true}, both refs survived — but chmod-000 on ONE state file silently drops that folder); EXECUTED: repoA reaped barrier/issue-13/n1 (chmod 000 state file), repoE reaped barrier/issue-50/n1 (state file is a DIRECTORY / EISDIR); FIX tighten-only + sweep-local: in sweepBarrierRefs treat a folder whose workflow-state.md EXISTS but cannot be read as KEEP (unprovable-dead ⇒ keep); do NOT alter shared readActiveFolders semantics (other #353 consumers are read-only). Reachability requires out-of-band FS damage (no shipped flow makes an unreadable state file — writeState is atomic-replace), hence not high, but the impact is the dangerous irreversible direction and it is strictly less exotic than the accepted R6/R7.",
+          "id": "R8",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "fix_role": "tdd-guide",
+          "rationale": "per-FOLDER"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R9 scope=in_scope action=fix status=deferred filed=#690 severity=low fix_role=tdd-guide rationale=R6 fixture tmpdir leak (n2 finding), filed with the exact fix ready",
+          "id": "R9",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "deferred",
+          "filed": "#690",
+          "severity": "low",
+          "fix_role": "tdd-guide",
+          "rationale": "R6"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R8",
+          "id": "R8",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R8 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=per-FOLDER unreadable workflow-state.md (EACCES chmod-000 or EISDIR) is swallowed inside readActiveFolders (active-folders.js:246 catch→continue), so a live project with no running-set.json (a SEQUENCE run — the common case, confirmed this very run has no running-set.json) drops its SOLE keep signal per-folder and the sweep reaps its live barrier gc-anchor; contradicts the sweep's OWN documented \"cannot prove dead ⇒ keep/abort\" posture (claim.js:3182-3188) which currently binds only at DIRECTORY granularity (chmod-000 on kaola-workflow/ aborts — repoD executed {aborted:true}, both refs survived — but chmod-000 on ONE state file silently drops that folder); EXECUTED: repoA reaped barrier/issue-13/n1 (chmod 000 state file), repoE reaped barrier/issue-50/n1 (state file is a DIRECTORY / EISDIR); FIX tighten-only + sweep-local: in sweepBarrierRefs treat a folder whose workflow-state.md EXISTS but cannot be read as KEEP (unprovable-dead ⇒ keep); do NOT alter shared readActiveFolders semantics (other #353 consumers are read-only). Reachability requires out-of-band FS damage (no shipped flow makes an unreadable state file — writeState is atomic-replace), hence not high, but the impact is the dangerous irreversible direction and it is strictly less exotic than the accepted R6/R7."
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R9",
+          "id": "R9",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R9 scope=in_scope action=fix status=deferred filed=#690 severity=low fix_role=tdd-guide rationale=R6 fixture tmpdir leak (n2 finding), filed with the exact fix ready"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": "n1-reap-sweep",
+        "settled": true
+      },
+      "rebind": [],
+      "consumed_by": "n1-reap-sweep"
+    },
+    {
+      "attempt_id": "n2-review:5",
+      "ordinal": 5,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-reap-sweep\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-reap-sweep"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "fd462b9a88d56eb6abb58dde6a928abb92b09b3ab9bd827a8c3aadd8d45028a8",
+      "candidate_digest": "9935d53a0bf7516f149f383004e9b5693ab19ee5724ca881930139f4d5045414",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 2fbd489ac6689b3fe57c3856d8163a0c1c146a92",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 8339334952ad0e9d59f60940706f44a61be012cc",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 120f0442e3e7bbe7787e087c9503291173035383",
+        "scripts/kaola-workflow-claim.js": "100644 120f0442e3e7bbe7787e087c9503291173035383",
+        "scripts/test-claim-hardening.js": "100644 7849bc054831df6d003d94acc2ce80395a21f758"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "0d5689b3e4c9"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "0d5689b3e4c9",
+          "receipt_sha256": "1c4ecd631aa1a953dd04a4a92ee386c18e5ca9e5c3496a11bad01c36b2387ae9",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-review 0d5689b3e4c9\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R8 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=present-but-unreadable workflow-state.md (EACCES chmod-000 + EISDIR) now KEPT via sweep-local keep-pass (c) at claim.js:3264-3277; cross-root repro executed (both live anchors survived), mutation-kill proven (neutralize keep.add → exactly the 4 R8 assertions RED, 241 passed), not keep-everything (dead-no-folder + empty-folder still reaped), sweep-local (shared active-folders.js untouched), parity ×4\nfinding: id=R9 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=#690 discharged in-run — nlPath686g hoisted above the R6 try, finally removes the sibling worktree dir (guarded by `if (nlPath686g)`); executed: today's runs leave tmpdir clean, stale pre-fix leak removed; close #690\nfinding: id=R10 scope=pre_existing action=follow_up status=deferred filed=#691 severity=low fix_role=none rationale=chmod-000 project DIRECTORY variant still reaped (existsSync returns false on EACCES-through-parent, so keep-pass (c) skips it); pre-dates the R8 delta, narrower + more exotic (self-inflicted chmod-000 on a live project dir, no shipped flow produces it); filed #691 with the exact statSync-ENOENT-vs-fault fix; narrows not widens under R8\n\n# n2-review re-review (attempt 4) — R8 fix + #690 discharge\n\n## 1. R8 closed (executed, cross-root)\nFresh scratch repo, live projects in a LINKED worktree, sweep from the MAIN root: (a) EACCES chmod-000 state file,\nno running-set.json → tagsKept includes issue-eacceslive, ref survived; (b) EISDIR (state file is a directory) →\nissue-eisdirlive kept. In-suite R8a (root-skip guarded via getuid) + R8b green in 245. Fix at claim.js:3264-3277:\nexistsSync distinguishes present-vs-absent, readFileSync throw → keep.add; success adds nothing.\n\n## 2. Not keep-everything (executed)\nSame single sweep: issue-deadnofolder (no folder) REAPED; issue-emptyfolder (dir, no state file) REAPED\n(existsSync false → continue, no false keep). R8a/R8b each also assert their co-located dead tag reaped.\n\n## 3. Sweep-local (verified)\ngit diff = exactly the 5 declared files; shared active-folders.js UNTOUCHED in every edition. Pass (c) reuses the\nsame `entries` listing as pass (b) (no extra readdirSync), identical entry guards, only effect is keep.add\n(additive-only); a readFileSync throw is the catch body → cannot trip the outer whole-sweep abort.\n\n## 4. Mutation-kill (executed)\nNeutralize the pass (c) keep.add (line 3274) → RED with EXACTLY the 4 R8 assertions failing (241 passed), mutated\nsweep reaped both live anchors. Restore cmp byte-identical → 245 green; canonical↔codex cmp identical.\n\n## 5. #690 discharged (executed)\n`let nlPath686g;` hoisted at test-claim-hardening.js:2663 above the try (2664); finally (2705-2708) references it\nguarded by `if (nlPath686g)` — in scope, no ReferenceError. tmpdir forensics: one STALE pre-fix leak\n(mtime 2026-07-14T21:00Z) existed; today's runs created zero new; removed the stale, re-ran → 245 green, tmpdir\nclean. Leak closed → close #690.\n\n## 6. No regression (executed)\n245 assertions green (run 4×). All prior markers present: R1 ×4, R4 ×9, R5 ×3, R6 ×5, R7 ×5, enum-fail seam,\narchive reap ×10, fail-soft ×4, collision ×11, running-set keep ×14, leg-base ×6.\n\n## 7. Edition parity (executed)\nedition-sync.js --check green (10 ports, 24 mirrors, 27 byte-identical groups); validate-script-sync OK; keep-pass\n(c) `#686 R8` present ×2 in all 4 copies; canonical↔codex cmp byte-identical.\n\n## Residual (R10, non-blocking, filed #691)\nA chmod-000 project DIRECTORY (unprobeable through the unsearchable parent) is still reaped — executed\n(tagsDeleted=[\"issue-dirlocked\"]). existsSync returns false on EACCES-through-parent, so keep-pass (c) skips it.\nNOT the R8 finding (both R8 shapes closed + mutation-killed); pre-dates the delta; narrows under it. Fix\n(statSync ENOENT-vs-fault distinction) filed #691.\n\nAPPROVE — R8 closed (executed, mutation-killed, not keep-all), #690 discharged (executed), zero regressions across\n245, parity ×4. Change gate passes.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=R8 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=present-but-unreadable workflow-state.md (EACCES chmod-000 + EISDIR) now KEPT via sweep-local keep-pass (c) at claim.js:3264-3277; cross-root repro executed (both live anchors survived), mutation-kill proven (neutralize keep.add → exactly the 4 R8 assertions RED, 241 passed), not keep-everything (dead-no-folder + empty-folder still reaped), sweep-local (shared active-folders.js untouched), parity ×4",
+          "id": "R8",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "high",
+          "fix_role": "none",
+          "rationale": "present-but-unreadable"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R9 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=#690 discharged in-run — nlPath686g hoisted above the R6 try, finally removes the sibling worktree dir (guarded by `if (nlPath686g)`); executed: today's runs leave tmpdir clean, stale pre-fix leak removed; close #690",
+          "id": "R9",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "#690"
+        },
+        {
+          "source_node": "n2-review",
+          "raw": "id=R10 scope=pre_existing action=follow_up status=deferred filed=#691 severity=low fix_role=none rationale=chmod-000 project DIRECTORY variant still reaped (existsSync returns false on EACCES-through-parent, so keep-pass (c) skips it); pre-dates the R8 delta, narrower + more exotic (self-inflicted chmod-000 on a live project dir, no shipped flow produces it); filed #691 with the exact statSync-ENOENT-vs-fault fix; narrows not widens under R8",
+          "id": "R10",
+          "scope": "pre_existing",
+          "action": "follow_up",
+          "status": "deferred",
+          "filed": "#691",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "chmod-000"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "R8",
+          "id": "R8",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R8 scope=in_scope action=fix status=resolved severity=high fix_role=none rationale=present-but-unreadable workflow-state.md (EACCES chmod-000 + EISDIR) now KEPT via sweep-local keep-pass (c) at claim.js:3264-3277; cross-root repro executed (both live anchors survived), mutation-kill proven (neutralize keep.add → exactly the 4 R8 assertions RED, 241 passed), not keep-everything (dead-no-folder + empty-folder still reaped), sweep-local (shared active-folders.js untouched), parity ×4"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R9",
+          "id": "R9",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R9 scope=in_scope action=fix status=resolved severity=low fix_role=none rationale=#690 discharged in-run — nlPath686g hoisted above the R6 try, finally removes the sibling worktree dir (guarded by `if (nlPath686g)`); executed: today's runs leave tmpdir clean, stale pre-fix leak removed; close #690"
+        },
+        {
+          "source_node": "n2-review",
+          "finding_id": "R10",
+          "id": "R10",
+          "scope": "pre_existing",
+          "action": "follow_up",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R10 scope=pre_existing action=follow_up status=deferred filed=#691 severity=low fix_role=none rationale=chmod-000 project DIRECTORY variant still reaped (existsSync returns false on EACCES-through-parent, so keep-pass (c) skips it); pre-dates the R8 delta, narrower + more exotic (self-inflicted chmod-000 on a live project dir, no shipped flow produces it); filed #691 with the exact statSync-ENOENT-vs-fault fix; narrows not widens under R8"
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-adversary:4",
+      "ordinal": 4,
+      "plan_hash": "aaba91234453b6b5375604a9e7f3960a0409e1624b4d03d6bd34540c23437f7f",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-review\"],\"members\":[\"n3-adversary\"]}",
+        "kind": "sequence",
+        "id": "n3-adversary",
+        "origin": [
+          "n2-review"
+        ],
+        "members": [
+          "n3-adversary"
+        ]
+      },
+      "transaction_key": "363bc7e1dc6546200e08c70e988e7ca0705abc6b7db10ad4787f5270b5ce1a37",
+      "candidate_digest": "9935d53a0bf7516f149f383004e9b5693ab19ee5724ca881930139f4d5045414",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f0d8878b2fe744d46c76de282b63532e0c72892",
+        "docs/workflow-state-contract.md": "100644 f8b531316d70ec0eb97b88d562cc87f63e38856d",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 2fbd489ac6689b3fe57c3856d8163a0c1c146a92",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 8339334952ad0e9d59f60940706f44a61be012cc",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 120f0442e3e7bbe7787e087c9503291173035383",
+        "scripts/kaola-workflow-claim.js": "100644 120f0442e3e7bbe7787e087c9503291173035383",
+        "scripts/test-claim-hardening.js": "100644 7849bc054831df6d003d94acc2ce80395a21f758"
+      },
+      "candidate_residue_digest": "4fcaa30ce8a6aa93f872371dceb640982b8eb5f1b2db1e0d691da77d1cc678a6",
+      "generations": [
+        {
+          "member": "n3-adversary",
+          "nonce": "81dab05a1c8d"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n3-adversary",
+          "generation": "81dab05a1c8d",
+          "receipt_sha256": "876e040c3b0709d7002ed269af010ece56d5df19b69fb5d025c859495b697d08",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n3-adversary 81dab05a1c8d\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-reap-sweep e725d95472fb\n\nfinding: id=R8 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=unreadable-state-file keep gap closed by keep-pass (c); re-attacked across the full lifecycle with real CLI flows, no reachable over-reap\nfinding: id=R10 scope=pre_existing action=follow_up status=deferred filed=#691 severity=low fix_role=none rationale=chmod-000 project DIRECTORY variant — self-inflicted, out-of-band, filed with the exact statSync-ENOENT fix\nfinding: id=R11 scope=out_of_scope action=document status=open severity=low fix_role=none rationale=archive-reap sanitize-collision over-reap requires two hand-crafted aliasing --project names (issue.500 vs issue_500) that no shipped generator produces; the pre-existing ref keying already cross-breaks such runs before the reap; sweep side is collision-safe (keep-only). Document the limitation in D-686-01; candidate follow-up: refuse claim --project names that sanitize-collide with a live folder.\n\n# Adversarial gate — #686 reap/sweep FINAL pass (real-flow reachability)\n\n## Surface 1 — lifecycle states with no keep signal: CLOSED (real CLI drives)\nReal startup/claim/--record-base drives: P0 post-claim pre-plan (folder+state, no refs) — nothing to reap. P1\npost-record-base SEQUENCE run (NO running-set.json), swept from main AND worktree root → refs KEPT (signal (a)\nalone). Status matrix stamped in BOTH copies (active/in_progress/planning/paused/halted/escalated/consent_halt/\nunknown/Active/custom/empty) → ALL kept; readActiveFolders excludes only released/closed/abandoned and the only\nstatus writers are writeState ('active') + stampTerminalState (closed/abandoned, INSIDE archiveProjectDir) —\nno live-reachable status is excluded. 'released' has NO writer (cmdRelease archives in the same call). Empty\nstate file → unknown → KEPT. Crash-window (closed in main copy, active in worktree) → KEPT. Real bundle\n(startup --target-issues 201,202): folder==bundle_id==tag==bundle-201-202, kept. Real keep-open finalize:\nonly barrier/issue-102/* reaped, sibling byte-identical. Real repair cycle (--drop-base→sweep→--record-base→sweep):\nkept at every interleave. record-base cannot precede state (guard prologue refuses without workflow-state.md).\n\n## Surface 2 — concurrency without sabotage: CLOSED\nWorktree-cwd claim (R4 class) kept from main + foreign worktree; leg-root claim kept. Hammer: 212 sweeps from\n2 roots racing 6 real claims + record-bases + 1 concurrent discard → zero live-ref losses, FAIL=0. TOCTOU: whole\nsweep = 0.08s wall (interior gap smaller) vs 0.218s state-write→ref-create floor (real runs: minutes) → a ref\nold enough to enumerate has a state file ≥218ms old, visible to the scan that precedes the enum by <80ms.\nOrdering-closed. Worktree ADDED mid-sweep carries only a ref ≥218ms out (unseen); leg REMOVED takes its folder.\n\n## Surface 3 — archive-time reap boundary: CLOSED (+ R11)\nReal discard (release --project issue-1) with live issue-10/issue-101 → only barrier/issue-1/* reaped,\ncomponent-boundary confirmed. Real keep-open finalize → exact-tag reap only. NEW edge (R11, out-of-scope):\nclaim --project \"issue.500\" + \"issue_500\" both anchor barrier/issue_500/n1 (second record-base clobbers the first\n— pre-existing ref-keying alias yielding barrier_base_mismatch upstream); release --project issue.500 then deleted\nthe live sibling anchor. Requires hand-crafted aliasing names through bare cmdClaim; every shipped surface emits\nissue-N/bundle-N-M (sanitize fixed-points, cannot alias); upstream-broken. Sweep side collision-safe (dangling\nbarrier/issue_500/n9 KEPT while folder issue_500 lives).\n\n## Surface 4 — stale/missing keep signals: CLOSED\nArchived project's running-set.json travels into kaola-workflow/archive/ (whole-folder move) and the sweep skips\n`archive` → no stale keep for dead tags. Live sequence run without running-set.json protected by (a) alone\n(Surface 1 P1). Fail-closed: FORCE_BARRIER_WT_LIST_FAIL=1 with a dead dangling tag → aborted:true, zero deletions;\nnext normal sweep reaped exactly the dead issue-999, kept all live, left leg-base/* untouched.\n\n## What I could NOT find\nNo reachable lifecycle point where a live barrier ref exists while (a),(b),(c) all fail on every root: every\nshipped flow writes status:active before any ref can exist, never rewrites to terminal outside archiveProjectDir,\nnever deletes workflow-state.md, truncate-writes parse to a kept status. No timing window fits the ordering\n(0.08s vs 0.218s; 212-sweep hammer clean). No archive-reap cross-tag bleed with shipped names. Remaining\nover-reaps are exactly the accepted boundary (R8 fixed, R10 #691) plus R11 (hand-crafted names, upstream-broken).\nSuite: 245 assertions pass.\n\n## Verdict\nNOT-REFUTED (high). Surfaces 1-4 driven with real CLI flows in real git scratch repos; every reachable live state\nkeeps its refs; only accepted out-of-band-FS-damage edges (R8 fixed, R10 #691) + the out-of-scope hand-crafted-name\naliasing edge (R11, documented) remain. No repo file modified.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R8 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=unreadable-state-file keep gap closed by keep-pass (c); re-attacked across the full lifecycle with real CLI flows, no reachable over-reap",
+          "id": "R8",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "medium",
+          "fix_role": "none",
+          "rationale": "unreadable-state-file"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R10 scope=pre_existing action=follow_up status=deferred filed=#691 severity=low fix_role=none rationale=chmod-000 project DIRECTORY variant — self-inflicted, out-of-band, filed with the exact statSync-ENOENT fix",
+          "id": "R10",
+          "scope": "pre_existing",
+          "action": "follow_up",
+          "status": "deferred",
+          "filed": "#691",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "chmod-000"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R11 scope=out_of_scope action=document status=open severity=low fix_role=none rationale=archive-reap sanitize-collision over-reap requires two hand-crafted aliasing --project names (issue.500 vs issue_500) that no shipped generator produces; the pre-existing ref keying already cross-breaks such runs before the reap; sweep side is collision-safe (keep-only). Document the limitation in D-686-01; candidate follow-up: refuse claim --project names that sanitize-collide with a live folder.",
+          "id": "R11",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "open",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "archive-reap"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R8",
+          "id": "R8",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "resolved",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R8 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=unreadable-state-file keep gap closed by keep-pass (c); re-attacked across the full lifecycle with real CLI flows, no reachable over-reap"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R10",
+          "id": "R10",
+          "scope": "pre_existing",
+          "action": "follow_up",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R10 scope=pre_existing action=follow_up status=deferred filed=#691 severity=low fix_role=none rationale=chmod-000 project DIRECTORY variant — self-inflicted, out-of-band, filed with the exact statSync-ENOENT fix"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R11",
+          "id": "R11",
+          "scope": "out_of_scope",
+          "action": "document",
+          "status": "open",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R11 scope=out_of_scope action=document status=open severity=low fix_role=none rationale=archive-reap sanitize-collision over-reap requires two hand-crafted aliasing --project names (issue.500 vs issue_500) that no shipped generator produces; the pre-existing ref keying already cross-breaks such runs before the reap; sweep side is collision-safe (keep-only). Document the limitation in D-686-01; candidate follow-up: refuse claim --project names that sanitize-collide with a live folder."
+        }
+      ],
+      "producer_bindings": {
+        "n1-reap-sweep": {
+          "baseline": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "anchored_ref": "e725d95472fbac95f08f9165329f31de0b334ded",
+          "open_token": "4150b2948039c00b31e5bf47f9a6fe501a10ce02",
+          "generation": "e725d95472fb",
+          "ref": "refs/kaola-workflow/barrier/issue-686/n1-reap-sweep"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}
