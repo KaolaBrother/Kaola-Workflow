@@ -12533,6 +12533,118 @@ function testAdaptiveVerdictCheck() {
     assert(schema.unresolvedInScopeFixes(schema.parseNodeFindings('finding: id=R7 scope=In_Scope action=Fix status=Open\n')).length === 1,
       'unresolvedInScopeFixes: mixed-case scope/action/status still blocks (#289 fail-open fix)');
 
+    // Issue 682: the journal and every close/fan-out path share one normalized predicate.
+    let effective = schema.evaluateEffectiveVerdict('verdict: pass\n');
+    assert(effective.pass === true && effective.findings_blocking === 0 && effective.reason === null,
+      'evaluateEffectiveVerdict: absent blocking count normalizes to zero');
+    effective = schema.evaluateEffectiveVerdict('verdict: pass\nfindings_blocking: 0\nfinding: id=R8 scope=in_scope action=fix status=open file=scripts/a.js\n');
+    assert(effective.pass === false && effective.reason === 'unresolved_in_scope_fix' && effective.unresolved_fixes[0].file === 'scripts/a.js',
+      'evaluateEffectiveVerdict: unresolved canonical in-scope fix fails effective pass');
+
+    const logicalA = schema.canonicalLogicalGateIdentity({ kind: 'fanout', id: 'same-label', origin: ['review'], members: ['skeptic-b', 'skeptic-a'] });
+    const logicalB = schema.canonicalLogicalGateIdentity({ kind: 'fanout', id: 'other-label', origin: ['review'], members: ['skeptic-a', 'skeptic-b'] });
+    assert(logicalA.key === logicalB.key && logicalA.id !== logicalB.id,
+      'canonicalLogicalGateIdentity: resolved origin + sorted members are authoritative over label');
+
+    const journalHash = 'a'.repeat(64);
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash, attempts: [] }, journalHash).ok === true,
+      'validateReviewJournal: valid empty v1 journal accepted');
+    assert(schema.validateReviewJournal({ schema_version: 9, plan_hash: journalHash, attempts: [] }, journalHash).reason === 'review_journal_version_unsupported',
+      'validateReviewJournal: unsupported schema version fails closed');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: 'b'.repeat(64), attempts: [] }, journalHash).reason === 'review_journal_plan_hash_mismatch',
+      'validateReviewJournal: plan hash mismatch fails closed');
+    const validGate = schema.canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review', origin: ['writer'], members: ['review'] });
+    const validGenerations = [{ member: 'review', nonce: 'nonce12345678' }];
+    const validCandidateDigest = 'd'.repeat(64);
+    const validBody = 'evidence-binding: review nonce12345678\nverdict: fail\nfindings_blocking: 1\n';
+    const validCrypto = require('crypto');
+    const validAttempt = {
+      attempt_id: 'review:1', ordinal: 1, plan_hash: journalHash,
+      logical_gate: validGate, candidate_digest: validCandidateDigest, generations: validGenerations,
+      transaction_key: validCrypto.createHash('sha256').update(JSON.stringify({
+        plan_hash: journalHash, logical_gate_key: validGate.key,
+        candidate_digest: validCandidateDigest, generations: validGenerations,
+      })).digest('hex'),
+      settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
+      receipts: [{ node_id: 'review', generation: 'nonce12345678', body: validBody,
+        receipt_sha256: validCrypto.createHash('sha256').update(validBody).digest('hex'),
+        effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+      findings: [], route_candidates: [], lifecycle_settled: true,
+      repair: { selected_writer: null, settled: null }, consumed_by: null,
+    };
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash, attempts: [validAttempt] }, journalHash).ok === true,
+      'validateReviewJournal: settled unresolved failure is structurally valid and remains fenceable');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...validAttempt, outcome: 'pass', reason: null }] }, journalHash).reason === 'review_journal_outcome_mismatch',
+      'validateReviewJournal: sequence outcome/reason must match the exact effective receipt body');
+    const foreignBindingBody = 'evidence-binding: other nonce12345678\nverdict: fail\nfindings_blocking: 1\n';
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...validAttempt, receipts: [{ ...validAttempt.receipts[0], body: foreignBindingBody,
+        receipt_sha256: validCrypto.createHash('sha256').update(foreignBindingBody).digest('hex') }] }] }, journalHash)
+      .reason === 'review_journal_receipt_binding_mismatch',
+    'validateReviewJournal: receipt body must contain exactly its authoritative node/generation binding');
+    const fanoutGate = schema.canonicalLogicalGateIdentity({ kind: 'fanout', id: 'skeptics',
+      origin: ['review'], members: ['skeptic-a', 'skeptic-b', 'skeptic-c'] });
+    const fanoutGenerations = fanoutGate.members.map(member => ({ member, nonce: member + '-nonce' }));
+    const fanoutReceipt = (member, pass) => {
+      const body = 'evidence-binding: ' + member + ' ' + member + '-nonce\nverdict: '
+        + (pass ? 'pass' : 'fail') + '\nfindings_blocking: ' + (pass ? '0' : '1') + '\n';
+      return { node_id: member, generation: member + '-nonce', body,
+        receipt_sha256: validCrypto.createHash('sha256').update(body).digest('hex'),
+        effective_pass: pass, verdict: pass ? 'pass' : 'fail', findings_blocking: pass ? 0 : 1 };
+    };
+    const fanoutAttempt = { ...validAttempt, attempt_id: 'fanout:1', logical_gate: fanoutGate,
+      generations: fanoutGenerations,
+      transaction_key: validCrypto.createHash('sha256').update(JSON.stringify({
+        plan_hash: journalHash, logical_gate_key: fanoutGate.key,
+        candidate_digest: validCandidateDigest, generations: fanoutGenerations,
+      })).digest('hex'), receipts: [fanoutReceipt('skeptic-a', true)], outcome: null, reason: null,
+      lifecycle_settled: false };
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [fanoutAttempt] }, journalHash).ok === true,
+    'validateReviewJournal: partial fanout receipt set is legal only as a provisional null outcome');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...fanoutAttempt, outcome: 'pass' }] }, journalHash).reason === 'review_journal_fanout_quorum_mismatch',
+    'validateReviewJournal: non-null fanout outcome requires every exact member receipt');
+    const fullMajority = { ...fanoutAttempt, receipts: [fanoutReceipt('skeptic-a', true),
+      fanoutReceipt('skeptic-b', true), fanoutReceipt('skeptic-c', false)], outcome: 'pass', lifecycle_settled: true };
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [fullMajority] }, journalHash).ok === true,
+    'validateReviewJournal: full exact fanout quorum accepts its strict-majority-derived outcome');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [validAttempt, { ...validAttempt }] }, journalHash).reason === 'review_journal_duplicate_attempt_id',
+      'validateReviewJournal: duplicate attempt identity fails closed before mutation');
+    const routeFindingRaw = 'id=R-route scope=in_scope action=fix status=open severity=high file=scripts/shared.js fix_role=tdd-guide';
+    const routeFindingBody = 'evidence-binding: review nonce12345678\nverdict: fail\nfindings_blocking: 1\nfinding: ' + routeFindingRaw + '\n';
+    const routeFinding = { source_node: 'review', raw: routeFindingRaw, id: 'R-route', scope: 'in_scope',
+      action: 'fix', status: 'open', severity: 'high', file: 'scripts/shared.js', fix_role: 'tdd-guide' };
+    const routeBase = { source_node: 'review', finding_id: 'R-route', id: 'R-route', scope: 'in_scope',
+      action: 'fix', status: 'open', severity: 'high', file: 'scripts/shared.js', fix_role: 'tdd-guide',
+      raw: routeFindingRaw };
+    const findingAttempt = { ...validAttempt,
+      receipts: [{ node_id: 'review', generation: 'nonce12345678', body: routeFindingBody,
+        receipt_sha256: validCrypto.createHash('sha256').update(routeFindingBody).digest('hex'),
+        effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+      findings: [routeFinding], route_candidates: [{ ...routeBase, ownership_candidates: [], owning_node: null }] };
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [findingAttempt] }, journalHash).ok === true,
+      'validateReviewJournal: exact canonical finding plus zero-owner route is valid');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...findingAttempt, route_candidates: [{ ...routeBase,
+        ownership_candidates: ['writer'], owning_node: 'writer' }] }] }, journalHash).ok === true,
+      'validateReviewJournal: exact unique candidate must be selected');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...findingAttempt, route_candidates: [{ ...routeBase,
+        ownership_candidates: ['writer-a', 'writer-b'], owning_node: null }] }] }, journalHash).ok === true,
+      'validateReviewJournal: sorted multiple candidates preserve null owner');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...findingAttempt, findings: [42] }] }, journalHash).reason === 'review_journal_findings_mismatch',
+      'validateReviewJournal: malformed authoritative finding fails exact receipt-body validation');
+    assert(schema.validateReviewJournal({ schema_version: 1, plan_hash: journalHash,
+      attempts: [{ ...findingAttempt, route_candidates: [{ ...routeBase,
+        ownership_candidates: ['writer-b', 'writer-a'], owning_node: 'writer-a' }] }] }, journalHash).reason === 'review_journal_route_mismatch',
+      'validateReviewJournal: unsorted multi-owner route with selected owner fails closed');
+
     // verifyVerdictBlock pure (AC1): verdict:pass + unresolved in-scope fix -> ok:false
     r = planValidator.verifyVerdictBlock(
       mkVerdictPlan(baseNodes, allComplete),
@@ -14989,7 +15101,8 @@ function testGateEvidenceNonceRotation654() {
     const openWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
     const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
-      cwd: tmp, encoding: 'utf8', input: 'RED: writer failed before implementation\nGREEN: writer passes after implementation\n',
+      cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
+        + '\nRED: writer failed before implementation\nGREEN: writer passes after implementation\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(rec.status === 0, '#654 writer evidence records: ' + rec.stderr + rec.stdout);
@@ -14997,18 +15110,28 @@ function testGateEvidenceNonceRotation654() {
     assert(closeWriter.opened && closeWriter.opened.id === 'reviewer', '#654 reviewer opens after writer close');
     const firstReviewerNonce = closeWriter.opened.nonce;
     const blocking = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
-      cwd: tmp, encoding: 'utf8', input: 'verdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=repair\n',
+      cwd: tmp, encoding: 'utf8', input: 'evidence-binding: reviewer ' + firstReviewerNonce
+        + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=repair\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(blocking.status === 0, '#654 blocking reviewer evidence records');
-    const repair = json(runNode(adaptiveNodeScript, ['repair-node', '--project', project, '--node-id', 'writer', '--json'], tmp));
-    assert(repair.result === 'ok' && repair.gatesFolded.includes('reviewer'), '#654 repair folds reviewer');
+    const failedReview = runNode(adaptiveNodeScript, ['close-node', '--project', project, '--node-id', 'reviewer', '--json'], tmp);
+    assert(failedReview.status === 0, '#654 typed review_failed is a settled lifecycle outcome, not a tooling crash');
+    const failedReviewJson = JSON.parse(failedReview.stdout);
+    assert(failedReviewJson.result === 'review_failed' && failedReviewJson.attempt_id === 'reviewer:1',
+      '#654 reviewer failure settles one exact authoritative attempt');
+    const repair = json(runNode(adaptiveNodeScript, ['repair-node', '--project', project,
+      '--attempt-id', failedReviewJson.attempt_id, '--node-id', 'writer', '--json'], tmp));
+    assert(repair.result === 'ok' && repair.gatesReset.includes('reviewer'), '#654 repair keeps failed reviewer pending: ' + JSON.stringify(repair));
     const repairBrief = fs.readFileSync(path.join(projectDir, '.cache', 'reviewer.md'), 'utf8');
     assert(repairBrief.includes('verdict: fail') && repairBrief.includes('findings_blocking: 1'), '#654 repair retains reviewer brief');
+    const writerBrief = fs.readFileSync(path.join(projectDir, '.cache', 'writer.md'), 'utf8');
+    assert(writerBrief.includes('failed_review_attempt: reviewer:1'), '#654 reopened writer is seeded with exact failed-attempt brief');
 
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
     const repairedEvidence = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
-      cwd: tmp, encoding: 'utf8', input: 'RED: repair regression reproduced\nGREEN: repair regression passes\n',
+      cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
+        + '\nRED: repair regression reproduced\nGREEN: repair regression passes\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(repairedEvidence.status === 0, '#654 repaired writer evidence records');
@@ -15019,7 +15142,8 @@ function testGateEvidenceNonceRotation654() {
     assert(reseeded.startsWith('evidence-binding: reviewer ' + repairedClose.opened.nonce + '\n'), '#654 reopened dispatch nonce equals written binding');
     assert(!reseeded.includes('verdict: fail') && !reseeded.includes('findings_blocking: 1'), '#654 reopened reviewer has no stale blocking verdict');
     const passing = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
-      cwd: tmp, encoding: 'utf8', input: 'verdict: pass\nfindings_blocking: 0\n',
+      cwd: tmp, encoding: 'utf8', input: 'evidence-binding: reviewer ' + repairedClose.opened.nonce
+        + '\nverdict: pass\nfindings_blocking: 0\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(passing.status === 0, '#654 passing reviewer evidence records');

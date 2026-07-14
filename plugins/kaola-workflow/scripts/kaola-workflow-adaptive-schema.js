@@ -645,6 +645,253 @@ function unresolvedInScopeFixes(findings) {
     f.status !== 'resolved' && f.status !== 'deferred');
 }
 
+// One source of truth for every review settlement path. An absent blocking count is the
+// historical zero value used by the final verifier; malformed/unknown verdicts fail closed.
+function evaluateEffectiveVerdict(cacheText) {
+  const parsed = parseNodeVerdict(cacheText);
+  const findings = parseNodeFindings(cacheText);
+  const unresolved = unresolvedInScopeFixes(findings);
+  const normalizedBlocking = parsed.findings_blocking === null ? 0 : parsed.findings_blocking;
+  let reason = null;
+  if (parsed.verdict !== VERDICT_PASS) reason = 'verdict_not_pass';
+  else if (normalizedBlocking !== 0) reason = 'blocking_findings';
+  else if (unresolved.length !== 0) reason = 'unresolved_in_scope_fix';
+  return {
+    pass: reason === null,
+    verdict: parsed.verdict,
+    findings_blocking: normalizedBlocking,
+    unresolved_fixes: unresolved,
+    reason,
+  };
+}
+
+// Canonical logical-gate identity. Display labels remain useful operator metadata but never
+// participate in the key, so a reusable fan-out label cannot alias another resolved group.
+function canonicalLogicalGateIdentity(input) {
+  const value = input && typeof input === 'object' ? input : {};
+  const kind = value.kind === 'fanout' ? 'fanout' : 'sequence';
+  const origin = Array.from(new Set(Array.isArray(value.origin) ? value.origin.map(String) : [])).sort();
+  const members = Array.from(new Set(Array.isArray(value.members) ? value.members.map(String) : [])).sort();
+  return {
+    key: JSON.stringify({ kind, origin, members }),
+    kind,
+    id: value.id == null ? (members[0] || null) : String(value.id),
+    origin,
+    members,
+  };
+}
+
+// Pure, fail-closed structural validation for the authoritative review journal. Runtime code may
+// perform additional plan-relative proofs, but no caller is allowed to accept malformed durable state.
+function validateReviewJournal(journal, expectedPlanHash) {
+  const refuseJournal = (reason, detail) => ({ ok: false, reason, detail: detail || null });
+  if (!journal || typeof journal !== 'object' || Array.isArray(journal)) {
+    return refuseJournal('review_journal_malformed', 'journal must be an object');
+  }
+  if (journal.schema_version !== 1) {
+    return refuseJournal('review_journal_version_unsupported', 'schema_version must equal 1');
+  }
+  if (typeof journal.plan_hash !== 'string' || !/^[0-9a-f]{64}$/i.test(journal.plan_hash)) {
+    return refuseJournal('review_journal_malformed', 'plan_hash must be 64 hexadecimal characters');
+  }
+  if (expectedPlanHash && journal.plan_hash.toLowerCase() !== String(expectedPlanHash).toLowerCase()) {
+    return refuseJournal('review_journal_plan_hash_mismatch');
+  }
+  if (!Array.isArray(journal.attempts)) {
+    return refuseJournal('review_journal_malformed', 'attempts must be an array');
+  }
+  const ids = new Set();
+  const txKeys = new Set();
+  const ordinalKeys = new Set();
+  for (const attempt of journal.attempts) {
+    if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) {
+      return refuseJournal('review_journal_malformed', 'attempt must be an object');
+    }
+    const requiredAttemptFields = ['attempt_id', 'ordinal', 'plan_hash', 'logical_gate', 'transaction_key',
+      'candidate_digest', 'generations', 'settlement_command', 'outcome', 'reason', 'receipts', 'findings',
+      'route_candidates', 'lifecycle_settled', 'repair', 'consumed_by'];
+    const missingAttemptFields = requiredAttemptFields.filter(k => !Object.prototype.hasOwnProperty.call(attempt, k));
+    if (missingAttemptFields.length) return refuseJournal('review_journal_malformed', 'missing attempt fields: ' + missingAttemptFields.join(', '));
+    if (typeof attempt.attempt_id !== 'string' || !attempt.attempt_id) return refuseJournal('review_journal_malformed', 'attempt_id is required');
+    if (ids.has(attempt.attempt_id)) return refuseJournal('review_journal_duplicate_attempt_id');
+    ids.add(attempt.attempt_id);
+    if (typeof attempt.plan_hash !== 'string' || String(attempt.plan_hash).toLowerCase() !== journal.plan_hash.toLowerCase()) {
+      return refuseJournal('review_journal_plan_hash_mismatch');
+    }
+    if (typeof attempt.transaction_key !== 'string' || !/^[0-9a-f]{64}$/i.test(attempt.transaction_key)
+      || typeof attempt.candidate_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(attempt.candidate_digest)) {
+      return refuseJournal('review_journal_malformed', 'transaction_key/candidate_digest must be 64 hexadecimal characters');
+    }
+    if (txKeys.has(attempt.transaction_key)) return refuseJournal('review_journal_duplicate_transaction_key');
+    txKeys.add(attempt.transaction_key);
+    if (!attempt.logical_gate || typeof attempt.logical_gate !== 'object') return refuseJournal('review_journal_malformed', 'logical_gate required');
+    const canonical = canonicalLogicalGateIdentity(attempt.logical_gate);
+    if (attempt.logical_gate.key !== canonical.key || attempt.logical_gate.kind !== canonical.kind
+      || JSON.stringify(attempt.logical_gate.origin) !== JSON.stringify(canonical.origin)
+      || JSON.stringify(attempt.logical_gate.members) !== JSON.stringify(canonical.members)) {
+      return refuseJournal('review_journal_identity_mismatch');
+    }
+    if (!Number.isInteger(attempt.ordinal) || attempt.ordinal < 1) return refuseJournal('review_journal_malformed', 'ordinal must be a positive integer');
+    const ordinalKey = canonical.key + '\n' + attempt.ordinal;
+    if (ordinalKeys.has(ordinalKey)) return refuseJournal('review_journal_duplicate_ordinal');
+    ordinalKeys.add(ordinalKey);
+    if (!Array.isArray(attempt.generations) || attempt.generations.length !== canonical.members.length) {
+      return refuseJournal('review_journal_malformed', 'generations must cover every logical-gate member');
+    }
+    const generations = attempt.generations.map(g => ({ member: String(g && g.member), nonce: String(g && g.nonce) }))
+      .sort((a, b) => a.member.localeCompare(b.member));
+    if (generations.some(g => !g.member || !g.nonce)
+      || JSON.stringify(generations.map(g => g.member)) !== JSON.stringify(canonical.members)) {
+      return refuseJournal('review_journal_identity_mismatch');
+    }
+    const crypto = require('crypto');
+    const expectedTx = crypto.createHash('sha256').update(JSON.stringify({
+      plan_hash: journal.plan_hash, logical_gate_key: canonical.key,
+      candidate_digest: attempt.candidate_digest, generations,
+    })).digest('hex');
+    if (expectedTx !== attempt.transaction_key) return refuseJournal('review_journal_transaction_key_mismatch');
+    if (!['close-node', 'close-and-open-next'].includes(attempt.settlement_command)
+      || ![null, 'pass', 'fail'].includes(attempt.outcome)
+      || !(attempt.reason === null || typeof attempt.reason === 'string')
+      || typeof attempt.lifecycle_settled !== 'boolean'
+      || !Array.isArray(attempt.receipts) || !Array.isArray(attempt.findings) || !Array.isArray(attempt.route_candidates)
+      || !attempt.repair || typeof attempt.repair !== 'object') {
+      return refuseJournal('review_journal_malformed', 'attempt field types invalid');
+    }
+    const receiptMembers = new Set();
+    const generationByMember = new Map(generations.map(g => [g.member, g.nonce]));
+    for (const receipt of attempt.receipts) {
+      if (!receipt || typeof receipt.node_id !== 'string' || receiptMembers.has(receipt.node_id)
+        || !canonical.members.includes(receipt.node_id) || typeof receipt.generation !== 'string'
+        || receipt.generation !== generationByMember.get(receipt.node_id) || typeof receipt.body !== 'string'
+        || typeof receipt.receipt_sha256 !== 'string' || typeof receipt.effective_pass !== 'boolean'
+        || ![null, 'pass', 'fail'].includes(receipt.verdict)
+        || !Number.isInteger(receipt.findings_blocking) || receipt.findings_blocking < 0) {
+        return refuseJournal('review_journal_identity_mismatch');
+      }
+      receiptMembers.add(receipt.node_id);
+      const expectedReceipt = crypto.createHash('sha256').update(receipt.body).digest('hex');
+      if (receipt.receipt_sha256 !== expectedReceipt) return refuseJournal('review_journal_receipt_hash_mismatch');
+      const bindingLines = Array.from(receipt.body.matchAll(/^evidence-binding:[^\n]*$/gm));
+      const exactBinding = /^evidence-binding:[ \t]+([^ \t\n]+)[ \t]+([^ \t\n]+)[ \t]*$/.exec(
+        bindingLines.length === 1 ? bindingLines[0][0] : '');
+      if (!exactBinding || exactBinding[1] !== receipt.node_id
+        || exactBinding[2] !== receipt.generation) {
+        return refuseJournal('review_journal_receipt_binding_mismatch');
+      }
+      const evaluated = evaluateEffectiveVerdict(receipt.body);
+      if (receipt.effective_pass !== evaluated.pass || receipt.verdict !== evaluated.verdict
+        || receipt.findings_blocking !== evaluated.findings_blocking) {
+        return refuseJournal('review_journal_receipt_verdict_mismatch');
+      }
+    }
+    if ((canonical.kind === 'sequence' && attempt.receipts.length !== 1)
+      || attempt.receipts.length < 1 || attempt.receipts.length > canonical.members.length) {
+      return refuseJournal('review_journal_malformed', 'receipt cardinality invalid');
+    }
+    if (canonical.kind === 'sequence') {
+      const exact = evaluateEffectiveVerdict(attempt.receipts[0].body);
+      const expectedOutcome = exact.pass ? 'pass' : 'fail';
+      if (attempt.outcome !== expectedOutcome || attempt.reason !== exact.reason) {
+        return refuseJournal('review_journal_outcome_mismatch');
+      }
+    } else if (attempt.outcome !== null) {
+      if (attempt.receipts.length !== canonical.members.length) {
+        return refuseJournal('review_journal_fanout_quorum_mismatch');
+      }
+      const passCount = attempt.receipts.filter(receipt => evaluateEffectiveVerdict(receipt.body).pass).length;
+      const expectedOutcome = passCount > canonical.members.length / 2 ? 'pass' : 'fail';
+      const expectedReason = expectedOutcome === 'pass' ? null : 'fanout_refuted';
+      if (attempt.outcome !== expectedOutcome || attempt.reason !== expectedReason) {
+        return refuseJournal('review_journal_outcome_mismatch');
+      }
+    }
+    const canonicalize = value => {
+      if (Array.isArray(value)) return value.map(canonicalize);
+      if (!value || typeof value !== 'object') return value;
+      const out = {};
+      for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key]);
+      return out;
+    };
+    const sortedRows = rows => rows.map(canonicalize)
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const expectedFindings = [];
+    for (const receipt of attempt.receipts) {
+      for (const finding of parseNodeFindings(receipt.body).filter(f => f && f.id)) {
+        expectedFindings.push({ source_node: receipt.node_id, ...finding });
+      }
+    }
+    if (JSON.stringify(sortedRows(attempt.findings)) !== JSON.stringify(sortedRows(expectedFindings))) {
+      return refuseJournal('review_journal_findings_mismatch');
+    }
+    if (attempt.route_candidates.length !== expectedFindings.length) {
+      return refuseJournal('review_journal_route_mismatch', 'route cardinality must match canonical findings');
+    }
+    const remainingFindings = expectedFindings.slice();
+    const routeKeys = new Set(['source_node', 'finding_id', 'id', 'scope', 'action', 'status',
+      'severity', 'file', 'ownership_candidates', 'owning_node', 'fix_role', 'raw']);
+    for (const route of attempt.route_candidates) {
+      if (!route || typeof route !== 'object' || Array.isArray(route)
+        || Object.keys(route).some(key => !routeKeys.has(key))
+        || typeof route.source_node !== 'string' || typeof route.finding_id !== 'string'
+        || route.id !== route.finding_id || typeof route.raw !== 'string'
+        || !Array.isArray(route.ownership_candidates)
+        || route.ownership_candidates.some(id => typeof id !== 'string' || !id)) {
+        return refuseJournal('review_journal_route_mismatch');
+      }
+      const candidates = route.ownership_candidates;
+      const sortedUnique = Array.from(new Set(candidates)).sort();
+      if (JSON.stringify(candidates) !== JSON.stringify(sortedUnique)
+        || (candidates.length === 1 ? route.owning_node !== candidates[0] : route.owning_node !== null)) {
+        return refuseJournal('review_journal_route_mismatch');
+      }
+      const findingIndex = remainingFindings.findIndex(f => f.source_node === route.source_node
+        && f.id === route.finding_id && f.raw === route.raw);
+      if (findingIndex < 0) return refuseJournal('review_journal_route_mismatch');
+      const finding = remainingFindings.splice(findingIndex, 1)[0];
+      for (const key of ['scope', 'action', 'status', 'severity', 'file', 'fix_role']) {
+        const findingHas = Object.prototype.hasOwnProperty.call(finding, key);
+        const routeHas = Object.prototype.hasOwnProperty.call(route, key);
+        if (findingHas !== routeHas || (findingHas && route[key] !== finding[key])) {
+          return refuseJournal('review_journal_route_mismatch');
+        }
+      }
+    }
+    if (remainingFindings.length) return refuseJournal('review_journal_route_mismatch');
+    if (Object.prototype.hasOwnProperty.call(attempt, 'producer_bindings')) {
+      if (!attempt.producer_bindings || typeof attempt.producer_bindings !== 'object'
+        || Array.isArray(attempt.producer_bindings)) {
+        return refuseJournal('review_journal_malformed', 'producer_bindings must be an object');
+      }
+      for (const [producer, identity] of Object.entries(attempt.producer_bindings)) {
+        if (!producer || !identity || typeof identity !== 'object' || Array.isArray(identity)
+          || !['baseline', 'anchored_ref', 'open_token', 'generation', 'ref']
+            .every(k => typeof identity[k] === 'string' && identity[k] !== '')
+          || identity.baseline !== identity.anchored_ref
+          || identity.generation !== identity.baseline.slice(0, 12)) {
+          return refuseJournal('review_journal_writer_identity_malformed');
+        }
+      }
+    }
+    if ((attempt.outcome === null && (canonical.kind !== 'fanout' || attempt.lifecycle_settled || attempt.reason !== null))
+      || (attempt.outcome === 'pass' && attempt.reason !== null)
+      || (attempt.outcome === 'fail' && typeof attempt.reason !== 'string')
+      || (attempt.lifecycle_settled && attempt.outcome === null)) {
+      return refuseJournal('review_journal_illegal_transition');
+    }
+    const selected = attempt.repair.selected_writer;
+    const repairSettled = attempt.repair.settled;
+    if (!(selected === null || (typeof selected === 'string' && selected !== '')) || ![null, false, true].includes(repairSettled)
+      || (repairSettled !== null && selected === null)
+      || (attempt.consumed_by !== null && (typeof attempt.consumed_by !== 'string' || attempt.consumed_by === ''))
+      || (attempt.consumed_by !== null && (attempt.outcome !== 'fail' || repairSettled !== true || selected !== attempt.consumed_by))
+      || (attempt.outcome === 'pass' && (selected !== null || repairSettled !== null || attempt.consumed_by !== null))) {
+      return refuseJournal('review_journal_illegal_transition');
+    }
+  }
+  return { ok: true, journal };
+}
+
 // The Codex join protocol's typed DELEGATION OUTCOME — an OPTIONAL column-0 `delegation_outcome: <token>`
 // line a node's evidence may carry to record how its delegation resolved, replacing a free-text "it stalled
 // so I did it myself". Closed vocabulary; ABSENT ⇒ `completed` (back-compat: existing evidence has no such
@@ -1319,6 +1566,9 @@ module.exports = {
   FINDING_STATUS_VOCABULARY,
   parseNodeFindings,
   unresolvedInScopeFixes,
+  evaluateEffectiveVerdict,
+  canonicalLogicalGateIdentity,
+  validateReviewJournal,
   DELEGATION_OUTCOME_DEFAULT,
   DELEGATION_OUTCOME_VOCABULARY,
   parseDelegationOutcome,

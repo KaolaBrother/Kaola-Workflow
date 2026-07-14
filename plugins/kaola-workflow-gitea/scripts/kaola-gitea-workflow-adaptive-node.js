@@ -46,7 +46,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -62,7 +62,7 @@ const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSe
 //     NEVER `drop-base` (the D-424-01 laundering anti-pattern).
 //   - a crash-repair / reopen-writer situation references `repair-node` (the
 //     anti-laundering primitive that keeps the original baseline).
-//   - NO forge CLI token (`gh` / `glab` / `tea`) appears in any hint — the hints
+//   - No forge-specific CLI token appears in any hint — the hints
 //     name `node scripts/...` workflow commands only (the script NAME is
 //     forge-renamed by edition-sync; the hint text itself is forge-neutral).
 //
@@ -79,7 +79,7 @@ const ADAPTIVE_NODE_SCRIPT = 'node scripts/kaola-gitea-workflow-adaptive-node.js
 const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'write-halt', 'clear-halt',
-  'reopen-node', 'revert-overflow', 'repair-node', 'route-findings',
+  'reopen-node', 'revert-overflow', 'repair-node', 'route-findings', 'record-evidence',
   // #439: the speculative-read discard is a mutating lifecycle transaction (ledger reset + baseline
   // drop + running-set removal) and must run from the worktree like every other mutator.
   'discard-speculative',
@@ -843,9 +843,64 @@ function complianceRowExists(content, requirementCell, nodeId) {
   const rows = block.split('\n').filter(l => l.trim().startsWith('|'));
   for (const row of rows) {
     const cells = row.split('|').slice(1, -1).map(c => c.trim());
-    if (cells.length && cells[0] === requirementCell) return true;
+    if (!cells.length || cells[0] !== requirementCell) continue;
+    // code-reviewer/security-reviewer deliberately use a bare Requirement cell. Their evidence
+    // binding identifies the concrete node, so two same-role fan-out members each retain one row
+    // while a retry of either member remains idempotent. A legacy row with no binding remains the
+    // sole role-level witness for backward compatibility.
+    if ((requirementCell === 'code-reviewer' || requirementCell === 'security-reviewer') && nodeId) {
+      if (cells.some(cell => cell.includes('evidence-binding: ' + nodeId + ' '))) return true;
+      if (!cells.some(cell => cell.includes('evidence-binding: '))) return true;
+      continue;
+    }
+    return true;
   }
   return false;
+}
+
+function addCloseCompliance(planContent, nodeId, role, evidenceContent) {
+  const requirementCell = (role === 'code-reviewer' || role === 'security-reviewer')
+    ? role : role + ' (' + nodeId + ')';
+  if (complianceRowExists(planContent, requirementCell, nodeId)) return planContent;
+  const evidenceSummary = evidenceContent
+    ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
+  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+  return spliceComplianceRow(planContent,
+    '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
+}
+
+function appendCloseSidecarsOnce(opts, nodeId) {
+  const planPath = opts.planPath;
+  const readFile = opts.readFile;
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+
+  // A timing close is generation-idempotent: append only when the latest event for this node is
+  // an open (or when legacy state has no timing at all). A later reopen appends another `opened`,
+  // making the next legitimate close observable without duplicating retries of this close.
+  let timingState = null;
+  try {
+    const content = readFile(path.join(cacheDir, 'node-timings.jsonl'));
+    for (const line of String(content || '').split('\n')) {
+      let event; try { event = JSON.parse(line); } catch (_) { continue; }
+      if (!event || event.node !== nodeId) continue;
+      if (event.event === 'opened') timingState = 'open';
+      if (event.event === 'closed') timingState = 'closed';
+    }
+  } catch (_) { /* absent legacy timing is repaired by the append below */ }
+  if (timingState !== 'closed') appendNodeTiming(planPath, nodeId, 'closed');
+
+  // Provenance already carries the generation nonce, so that tuple is the natural idempotency key.
+  const nonce = readNonce(planPath, nodeId, readFile);
+  let provenancePresent = false;
+  try {
+    const content = readFile(path.join(cacheDir, 'provenance-log.jsonl'));
+    provenancePresent = String(content || '').split('\n').some(line => {
+      let event; try { event = JSON.parse(line); } catch (_) { return false; }
+      return event && event.event === 'close' && event.nodeId === nodeId
+        && (event.nonce || null) === (nonce || null);
+    });
+  } catch (_) { /* absent log is repaired by the append below */ }
+  if (!provenancePresent) appendProvenanceLog(planPath, 'close', nodeId, nonce);
 }
 
 // ---------------------------------------------------------------------------
@@ -1708,6 +1763,525 @@ function checkVerdictParse(role, evidence) {
   return { verdict_unparsed: true, verdictRaw: rawLast };
 }
 
+const REVIEW_JOURNAL_NAME = 'review-attempts.json';
+
+function planHashFromContent(content) {
+  const m = String(content || '').match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function nextReviewAttemptOrdinal(attempts, logicalGateKey) {
+  let max = 0;
+  for (const a of (Array.isArray(attempts) ? attempts : [])) {
+    if (a && a.logical_gate && a.logical_gate.key === logicalGateKey && Number.isInteger(a.ordinal)) {
+      max = Math.max(max, a.ordinal);
+    }
+  }
+  return max + 1;
+}
+
+function consumedReviewRepairs(attempts, logicalGateKey) {
+  return (Array.isArray(attempts) ? attempts : []).filter(a => a && a.outcome === 'fail'
+    && a.logical_gate && a.logical_gate.key === logicalGateKey
+    && a.repair && a.repair.settled === true && a.consumed_by != null).length;
+}
+
+function reviewJournalBlocker(journal) {
+  const blocked = (journal && Array.isArray(journal.attempts) ? journal.attempts : []).filter(a => a && (
+    a.lifecycle_settled === false
+    || (a.outcome === 'fail' && a.lifecycle_settled === true && a.consumed_by == null)
+    || (a.repair && a.repair.settled === false)
+  ));
+  if (!blocked.length) return null;
+  return {
+    reason: 'review_attempt_unresolved',
+    attempt_ids: blocked.map(a => a.attempt_id).sort(),
+    attempts: blocked,
+  };
+}
+
+function nodeWriteSetNonempty(node) {
+  const raw = node && (node.declared_write_set != null ? node.declared_write_set : node.writeSetRaw);
+  return raw != null && !['', '-', '—', 'none', 'n/a'].includes(String(raw).trim().toLowerCase());
+}
+
+function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerStatuses, preservedProducers) {
+  const byId = new Map((Array.isArray(nodes) ? nodes : []).map(n => [n.id, n]));
+  const ancestors = id => {
+    const out = new Set();
+    const q = [...(((byId.get(id) || {}).dependsOn) || [])];
+    while (q.length) {
+      const cur = q.shift();
+      if (out.has(cur)) continue;
+      out.add(cur);
+      q.push(...((((byId.get(cur) || {}).dependsOn) || [])));
+    }
+    return out;
+  };
+  const memberSets = (Array.isArray(gateMembers) ? gateMembers : []).map(ancestors);
+  let common = memberSets.length ? new Set(memberSets[0]) : new Set();
+  for (const set of memberSets.slice(1)) common = new Set([...common].filter(x => set.has(x)));
+  const staticProducers = [...common].filter(id => nodeWriteSetNonempty(byId.get(id))).sort();
+  const preserved = new Set(Array.isArray(preservedProducers) ? preservedProducers : []);
+  const producer_slice = [];
+  const invalid_producers = [];
+  for (const id of staticProducers) {
+    if (!ledgerStatuses) {
+      producer_slice.push(id);
+      continue;
+    }
+    const status = ledgerStatuses[id];
+    if (status === 'complete' || (status === 'in_progress' && preserved.has(id))) producer_slice.push(id);
+    else if (status !== 'n/a') invalid_producers.push(id);
+  }
+  const history_valid = invalid_producers.length === 0;
+  const selectedAncestors = ancestors(selectedWriter);
+  const ok = history_valid && producer_slice.includes(selectedWriter)
+    && producer_slice.every(id => id === selectedWriter || selectedAncestors.has(id));
+  return { ok, history_valid, invalid_producers, selected_writer: selectedWriter, producer_slice };
+}
+
+function foldSelectorArms(planContent, selectorCheck) {
+  if (!selectorCheck || selectorCheck.isSelector !== true) {
+    return { ok: true, content: planContent, transitions: [] };
+  }
+  if (selectorCheck.ok !== true || !Array.isArray(selectorCheck.armsToNa)) {
+    return { ok: false, reason: 'selector_invalid' };
+  }
+  let content = planContent;
+  const transitions = [];
+  for (const armId of selectorCheck.armsToNa) {
+    if (typeof armId !== 'string' || !armId) return { ok: false, reason: 'selector_invalid' };
+    const result = spliceLedgerNode(content, armId, 'n/a', { allowFrom: ['pending', 'in_progress'] });
+    if (!result.found || (!result.changed && !result.alreadyAtTarget)) {
+      return { ok: false, reason: 'selector_invalid' };
+    }
+    if (result.changed) content = result.content;
+    transitions.push(buildTransition(armId, 'n/a', 'selector-arm'));
+  }
+  return { ok: true, content, transitions };
+}
+
+// Capture every immutable component that identifies the writer's original open.  Repair must
+// compare this exact tuple before its first mutation; a passing barrier alone is insufficient
+// because a replaced base/ref pair can make a dirty tree appear clean.
+function captureWriterBarrierIdentity(opts, nodeId) {
+  const planPath = opts.planPath;
+  const safe = sanitizeNodeId(nodeId);
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const baseFile = path.join(cacheDir, 'barrier-base-' + safe);
+  const openFile = path.join(cacheDir, 'barrier-open-' + safe);
+  const projectTag = path.basename(path.dirname(path.resolve(planPath))).replace(/[^A-Za-z0-9_-]/g, '_') || 'plan';
+  const ref = 'refs/kaola-workflow/barrier/' + projectTag + '/' + safe;
+  let baseline = '';
+  let open_token = '';
+  let anchored_ref = '';
+  try { baseline = String(opts.readFile(baseFile) || '').trim(); } catch (_) {}
+  try { open_token = String(opts.readFile(openFile) || '').trim(); } catch (_) {}
+  try {
+    anchored_ref = opts.resolveBarrierRef
+      ? String(opts.resolveBarrierRef(ref, nodeId) || '').trim()
+      : String(execFileSync('git', ['-C', opts.repoRoot || getRoot(), 'rev-parse', '--verify', '--quiet', ref + '^{commit}'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) || '').trim();
+  } catch (_) {}
+  if (!baseline || !anchored_ref || !open_token || anchored_ref !== baseline) return null;
+  return { baseline, anchored_ref, open_token, generation: baseline.slice(0, 12), ref };
+}
+
+function verifyWriterBarrierIdentity(expected, current) {
+  if (!expected || !current) return false;
+  return ['baseline', 'anchored_ref', 'open_token', 'generation', 'ref']
+    .every(key => typeof expected[key] === 'string' && expected[key] !== '' && current[key] === expected[key]);
+}
+
+function computeReviewCandidateDigest(planPath, project, rootOverride) {
+  const fs = require('fs');
+  const os = require('os');
+  const crypto = require('crypto');
+  const root = rootOverride || getRoot();
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-index-'));
+  const index = path.join(tmpDir, 'index');
+  const env = { ...process.env, GIT_INDEX_FILE: index };
+  try {
+    execFileSync('git', ['-C', root, 'read-tree', 'HEAD'], { env, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
+    execFileSync('git', ['-C', root, 'add', '-A'], { env, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
+    const tree = String(execFileSync('git', ['-C', root, 'write-tree'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER })).trim();
+    const listing = String(execFileSync('git', ['-C', root, 'ls-tree', '-r', tree], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }));
+    const activePrefix = 'kaola-workflow/' + project + '/';
+    const lines = listing.split('\n').filter(Boolean).filter(line => {
+      const tab = line.indexOf('\t');
+      const file = tab >= 0 ? line.slice(tab + 1) : '';
+      return !file.startsWith(activePrefix) && !file.startsWith('.kw/') && !file.startsWith('.git/');
+    }).sort();
+    return crypto.createHash('sha256').update(lines.join('\n') + (lines.length ? '\n' : '')).digest('hex');
+  } catch (err) {
+    const e = new Error('candidate_digest_unavailable');
+    e.cause = err;
+    throw e;
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function logicalGateForNode(nodes, node) {
+  if (node && node.role === 'adversarial-verifier' && node.shape && node.shape.kind === 'fanout') {
+    try {
+      const { resolveAdversarialFanoutGroup } = require('./kaola-gitea-workflow-plan-validator');
+      const g = resolveAdversarialFanoutGroup(nodes, node);
+      if (g) return canonicalLogicalGateIdentity({ kind: 'fanout', id: g.group || node.shape.group, origin: g.origin || node.dependsOn, members: g.members });
+    } catch (_) {}
+  }
+  return canonicalLogicalGateIdentity({ kind: 'sequence', id: node.id, origin: node.dependsOn || [], members: [node.id] });
+}
+
+function reviewJournalRoutesMatchPlan(journal, nodes) {
+  const canonicalize = value => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (!value || typeof value !== 'object') return value;
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (value[key] !== undefined) out[key] = canonicalize(value[key]);
+    }
+    return out;
+  };
+  const rows = values => values.map(canonicalize)
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  for (const attempt of (journal.attempts || [])) {
+    const expected = [];
+    for (const receipt of (attempt.receipts || [])) {
+      const findings = parseNodeFindings(receipt.body).filter(f => f && f.id);
+      expected.push(...routeCanonicalFindings(findings, nodes, receipt.node_id));
+    }
+    if (JSON.stringify(rows(attempt.route_candidates || [])) !== JSON.stringify(rows(expected))) return false;
+  }
+  return true;
+}
+
+function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
+  const crypto = require('crypto');
+  const byId = new Map((nodes || []).map(node => [node.id, node]));
+  const ordinalsByGate = new Map();
+  for (const attempt of (journal.attempts || [])) {
+    let expectedGate = null;
+    for (const receipt of (attempt.receipts || [])) {
+      const source = byId.get(receipt.node_id);
+      if (!source || !VERDICT_ROLES.has(source.role)) {
+        return { ok: false, reason: 'review_journal_gate_identity_mismatch' };
+      }
+      const derived = logicalGateForNode(nodes, source);
+      if (!expectedGate) expectedGate = derived;
+      else if (derived.key !== expectedGate.key || derived.id !== expectedGate.id) {
+        return { ok: false, reason: 'review_journal_gate_identity_mismatch' };
+      }
+    }
+    if (!expectedGate || attempt.logical_gate.key !== expectedGate.key
+      || attempt.logical_gate.kind !== expectedGate.kind || attempt.logical_gate.id !== expectedGate.id
+      || JSON.stringify(attempt.logical_gate.origin) !== JSON.stringify(expectedGate.origin)
+      || JSON.stringify(attempt.logical_gate.members) !== JSON.stringify(expectedGate.members)) {
+      return { ok: false, reason: 'review_journal_gate_identity_mismatch' };
+    }
+    const prefix = expectedGate.kind === 'fanout'
+      ? 'fanout-' + crypto.createHash('sha256').update(expectedGate.key).digest('hex')
+      : String(expectedGate.id).replace(/[^A-Za-z0-9_-]/g, '_');
+    if (attempt.attempt_id !== prefix + ':' + attempt.ordinal) {
+      return { ok: false, reason: 'review_journal_attempt_identity_mismatch' };
+    }
+    const selectedWriter = attempt.repair && attempt.repair.selected_writer;
+    const consumedWriter = attempt.consumed_by;
+    const writer = selectedWriter || consumedWriter;
+    const hasProducerBindings = Object.prototype.hasOwnProperty.call(attempt, 'producer_bindings');
+    const bindingKeys = hasProducerBindings ? Object.keys(attempt.producer_bindings || {}).sort() : [];
+    // A settled historical attempt owns its immutable attempt-time producer proof. If a later gate
+    // legitimately reopens that producer, retain the older executed slice from its bindings. The
+    // actively repaired attempt remains narrower: only its proven selected writer may be nonterminal.
+    const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledgerStatuses,
+      writer ? [writer] : bindingKeys);
+    if (hasProducerBindings) {
+      if (!proof.history_valid || JSON.stringify(bindingKeys) !== JSON.stringify(proof.producer_slice)) {
+        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+      }
+    }
+    if (selectedWriter != null || consumedWriter != null) {
+      if (!writer || !byId.has(writer) || !nodeWriteSetNonempty(byId.get(writer)) || !proof.ok
+        || (consumedWriter != null && consumedWriter !== writer)) {
+        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+      }
+      // A repair may have been selected on an older attempt before producer_bindings became
+      // mandatory. Bind it to the immutable identity recorded by this logical gate's lineage;
+      // every available copy must agree, so a later receipt cannot launder a changed writer.
+      const identities = (journal.attempts || [])
+        .filter(other => other && other.logical_gate && other.logical_gate.key === expectedGate.key
+          && other.producer_bindings && other.producer_bindings[writer])
+        .map(other => other.producer_bindings[writer]);
+      const identityKey = identity => JSON.stringify([
+        identity.baseline, identity.anchored_ref, identity.open_token, identity.generation, identity.ref,
+      ]);
+      if (!identities.length || identities.some(identity => identityKey(identity) !== identityKey(identities[0]))) {
+        return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
+      }
+    }
+    if (!ordinalsByGate.has(expectedGate.key)) ordinalsByGate.set(expectedGate.key, []);
+    ordinalsByGate.get(expectedGate.key).push(attempt.ordinal);
+  }
+  for (const ordinals of ordinalsByGate.values()) {
+    ordinals.sort((a, b) => a - b);
+    if (ordinals.some((ordinal, index) => ordinal !== index + 1)) {
+      return { ok: false, reason: 'review_journal_attempt_identity_mismatch' };
+    }
+  }
+  return { ok: true };
+}
+
+function readReviewJournal(opts, planContent) {
+  const planHash = planHashFromContent(planContent);
+  if (!planHash) return { ok: true, legacy: true, plan_hash: null, journal: null };
+  const journalPath = path.join(path.dirname(opts.planPath), '.cache', REVIEW_JOURNAL_NAME);
+  const exists = opts.cacheExists ? opts.cacheExists(journalPath) : (() => { try { opts.readFile(journalPath); return true; } catch (_) { return false; } })();
+  if (!exists) {
+    const nodes = parseNodesFromContent(planContent);
+    const statuses = readLedgerStatuses(planContent);
+    const evidenceByNode = new Map();
+    for (const node of nodes) {
+      const evidencePath = path.join(path.dirname(opts.planPath), '.cache', node.id + '.md');
+      try { evidenceByNode.set(node.id, opts.readFile(evidencePath)); } catch (_) { evidenceByNode.set(node.id, ''); }
+    }
+    const complianceSection = locateSection(planContent, 'Required Agent Compliance');
+    const complianceBlock = complianceSection.start < 0 ? ''
+      : planContent.slice(complianceSection.start, complianceSection.next >= 0 ? complianceSection.next : undefined);
+    const priorCompliance = complianceBlock.split('\n').filter(line => line.trim().startsWith('|')).some(line => {
+      const requirement = (line.split('|').slice(1, -1)[0] || '').trim();
+      return [...VERDICT_ROLES].some(role => requirement === role || requirement.startsWith(role + ' ('));
+    });
+    const priorFailedAttempt = [...evidenceByNode.values()].some(evidence => /^failed_review_attempt:[ \t]*\S+/m.test(evidence));
+    if (priorCompliance || priorFailedAttempt) {
+      return { ok: false, reason: 'review_journal_missing', journalPath,
+        detail: priorCompliance ? 'prior review compliance witness exists' : 'prior failed-review witness exists' };
+    }
+    for (const node of nodes.filter(n => VERDICT_ROLES.has(n.role))) {
+        const evidence = evidenceByNode.get(node.id) || '';
+        const parsed = parseNodeVerdict(evidence);
+        const current = readNonce(opts.planPath, node.id, opts.readFile);
+        const binding = /^evidence-binding:[ \t]+[^ \t\n]+[ \t]+([^ \t\n]+)/m.exec(evidence);
+        const isLiveCurrentGeneration = opts.allowReviewJournalCreate
+          && current && binding && binding[1] === current
+          && statuses[node.id] === 'in_progress';
+        if (!isLiveCurrentGeneration && parsed.found
+          && (statuses[node.id] === 'complete' || (binding && binding[1] === current))) {
+          return { ok: false, reason: 'review_journal_missing', journalPath, node_id: node.id };
+        }
+    }
+    return { ok: true, plan_hash: planHash, journalPath, journal: { schema_version: 1, plan_hash: planHash, attempts: [] } };
+  }
+  let journal;
+  try { journal = JSON.parse(opts.readFile(journalPath)); }
+  catch (_) { return { ok: false, reason: 'review_journal_malformed', journalPath }; }
+  const valid = validateReviewJournal(journal, planHash);
+  if (!valid.ok) return { ok: false, reason: valid.reason, detail: valid.detail, journalPath };
+  const nodes = parseNodesFromContent(planContent);
+  const identity = reviewJournalIdentityMatchesPlan(journal, nodes, readLedgerStatuses(planContent));
+  if (!identity.ok) return { ok: false, reason: identity.reason, journalPath };
+  if (!reviewJournalRoutesMatchPlan(journal, nodes)) {
+    return { ok: false, reason: 'review_journal_route_mismatch', journalPath };
+  }
+  return { ok: true, plan_hash: planHash, journalPath, journal };
+}
+
+function writeReviewJournal(opts, state) {
+  const content = JSON.stringify(state.journal, null, 2) + '\n';
+  opts.writeFile(state.journalPath, content);
+}
+
+function reviewFailpoint(opts, name) {
+  if (typeof opts.reviewFailpoint === 'function') opts.reviewFailpoint(name);
+  if (opts.reviewFailpoint === name) throw new Error('review_failpoint:' + name);
+}
+
+function journalFence(opts, planContent) {
+  const state = readReviewJournal(opts, planContent);
+  if (!state.ok) return { result: 'refuse', reason: state.reason, detail: state.detail || null };
+  if (state.legacy) return null;
+  const blocker = reviewJournalBlocker(state.journal);
+  return blocker ? { result: 'refuse', reason: blocker.reason, attempt_ids: blocker.attempt_ids,
+    repair: blocker.attempts.some(a => a.lifecycle_settled === false)
+      ? 'retry the recorded settlement command' : 'repair-node --attempt-id <attempt> --node-id <agent-selected-writer>' } : null;
+}
+
+function beginReviewAttempt(opts, ctx) {
+  const crypto = require('crypto');
+  const creatingGeneration = readNonce(opts.planPath, ctx.nodeInfo.id, opts.readFile) || '';
+  const logicalGate = logicalGateForNode(ctx.nodes, ctx.nodeInfo);
+  const state = readReviewJournal({ ...opts, allowReviewJournalCreate: true,
+    creatingNodeId: ctx.nodeInfo.id, creatingGeneration, creatingMembers: logicalGate.members }, ctx.planContent);
+  if (!state.ok || state.legacy) return state;
+  let candidateDigest;
+  try { candidateDigest = opts.computeReviewCandidateDigest
+    ? opts.computeReviewCandidateDigest() : computeReviewCandidateDigest(opts.planPath, opts.project, opts.repoRoot); }
+  catch (_) { return { ok: false, reason: 'candidate_digest_unavailable' }; }
+  const generation = readNonce(opts.planPath, ctx.nodeInfo.id, opts.readFile) || '';
+  const generations = logicalGate.members.map(member => ({
+    member, nonce: readNonce(opts.planPath, member, opts.readFile) || '',
+  })).sort((a, b) => a.member.localeCompare(b.member));
+  const transactionKey = crypto.createHash('sha256').update(JSON.stringify({
+    plan_hash: state.plan_hash, logical_gate_key: logicalGate.key, candidate_digest: candidateDigest, generations,
+  })).digest('hex');
+  let attempt = state.journal.attempts.find(a => a.transaction_key === transactionKey);
+  const incompatibleUnsettled = state.journal.attempts.filter(a => a.lifecycle_settled === false
+    && a.logical_gate && a.logical_gate.key === logicalGate.key && a.transaction_key !== transactionKey);
+  if (!attempt && incompatibleUnsettled.length) {
+    return { ok: false, reason: 'review_attempt_unresolved',
+      attempt_ids: incompatibleUnsettled.map(a => a.attempt_id).sort() };
+  }
+  const effective = evaluateEffectiveVerdict(ctx.evidenceContent);
+  const receipt = { node_id: ctx.nodeInfo.id, generation,
+    receipt_sha256: crypto.createHash('sha256').update(String(ctx.evidenceContent || '')).digest('hex'),
+    effective_pass: effective.pass, verdict: effective.verdict,
+    findings_blocking: effective.findings_blocking, body: String(ctx.evidenceContent || '') };
+  const parsedFindings = parseNodeFindings(ctx.evidenceContent).filter(f => f && f.id);
+  if (!attempt) {
+    const ordinal = nextReviewAttemptOrdinal(state.journal.attempts, logicalGate.key);
+    const attemptPrefix = logicalGate.kind === 'fanout'
+      ? 'fanout-' + crypto.createHash('sha256').update(logicalGate.key).digest('hex')
+      : String(ctx.nodeInfo.id).replace(/[^A-Za-z0-9_-]/g, '_');
+    const producerHistory = uniqueMaximalReviewProducer(ctx.nodes, logicalGate.members, '',
+      readLedgerStatuses(ctx.planContent));
+    if (!producerHistory.history_valid) {
+      return { ok: false, reason: 'review_producer_history_invalid',
+        producer_slice: producerHistory.producer_slice, invalid_producers: producerHistory.invalid_producers };
+    }
+    const producerIds = producerHistory.producer_slice;
+    const producer_bindings = {};
+    for (const producerId of producerIds) {
+      const identity = opts.captureWriterBarrierIdentity
+        ? opts.captureWriterBarrierIdentity(producerId) : captureWriterBarrierIdentity(opts, producerId);
+      if (!identity) return { ok: false, reason: 'writer_identity_unavailable', node_id: producerId };
+      producer_bindings[producerId] = identity;
+    }
+    attempt = {
+      attempt_id: attemptPrefix + ':' + ordinal,
+      ordinal, plan_hash: state.plan_hash, logical_gate: logicalGate,
+      transaction_key: transactionKey, candidate_digest: candidateDigest, generations,
+      settlement_command: ctx.command,
+      outcome: logicalGate.kind === 'fanout' ? null : (effective.pass ? 'pass' : 'fail'),
+      reason: logicalGate.kind === 'fanout' ? null : effective.reason,
+      receipts: [receipt],
+      findings: parsedFindings.map(f => ({ source_node: ctx.nodeInfo.id, ...f })),
+      route_candidates: routeCanonicalFindings(parsedFindings, ctx.nodes, ctx.nodeInfo.id),
+      producer_bindings,
+      lifecycle_settled: false, repair: { selected_writer: null, settled: null }, consumed_by: null,
+    };
+    state.journal.attempts.push(attempt);
+    writeReviewJournal(opts, state);
+    reviewFailpoint(opts, 'attempt_written');
+  } else {
+    const idx = attempt.receipts.findIndex(r => r.node_id === ctx.nodeInfo.id);
+    if (attempt.lifecycle_settled === true) {
+      if (idx < 0 || attempt.receipts[idx].receipt_sha256 !== receipt.receipt_sha256) {
+        return { ok: false, reason: 'review_attempt_settled', attempt_id: attempt.attempt_id };
+      }
+      return { ok: true, state, attempt };
+    }
+    if (logicalGate.kind === 'fanout' && attempt.outcome !== null) {
+      if (idx < 0 || attempt.receipts[idx].body !== receipt.body) {
+        return { ok: false, reason: 'review_outcome_receipts_immutable', attempt_id: attempt.attempt_id };
+      }
+      return { ok: true, state, attempt };
+    }
+    if (idx >= 0) attempt.receipts[idx] = receipt; else attempt.receipts.push(receipt);
+    attempt.findings = (attempt.findings || []).filter(f => f.source_node !== ctx.nodeInfo.id)
+      .concat(parsedFindings.map(f => ({ source_node: ctx.nodeInfo.id, ...f })));
+    attempt.route_candidates = (attempt.route_candidates || []).filter(f => f.source_node !== ctx.nodeInfo.id)
+      .concat(routeCanonicalFindings(parsedFindings, ctx.nodes, ctx.nodeInfo.id));
+    if (logicalGate.kind === 'sequence') {
+      attempt.outcome = effective.pass ? 'pass' : 'fail';
+      attempt.reason = effective.reason;
+    }
+    writeReviewJournal(opts, state);
+  }
+  return { ok: true, state, attempt };
+}
+
+function markReviewAttemptSettled(opts, begun) {
+  if (!begun || !begun.attempt) return;
+  begun.attempt.lifecycle_settled = true;
+  writeReviewJournal(opts, begun.state);
+}
+
+function removeReviewMembersFromRunningSet(opts, memberIds) {
+  const runningSetPath = path.join(path.dirname(opts.planPath), '.cache', RUNNING_SET_NAME);
+  const running = readRunningSet(runningSetPath, opts.cacheExists, opts.readFile);
+  if (!running) return;
+  const members = new Set(memberIds);
+  const remaining = (running.nodes || []).filter(n => !members.has(n.id));
+  if (!remaining.length && opts.unlink) opts.unlink(runningSetPath);
+  else opts.writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
+}
+
+function prepareReviewClose(opts, ctx) {
+  if (!ctx.nodeInfo || !VERDICT_ROLES.has(ctx.nodeInfo.role) || !planHashFromContent(ctx.planContent)) return null;
+  const begun = beginReviewAttempt(opts, ctx);
+  if (!begun.ok) return { handled: true, result: { result: 'refuse', reason: begun.reason, detail: begun.detail || null } };
+  const attempt = begun.attempt;
+  const gate = attempt.logical_gate;
+  const statuses = readLedgerStatuses(opts.readFile(opts.planPath));
+  const failedResult = taskTransitions => ({ handled: true, result: { result: 'review_failed', reason: attempt.reason,
+    attempt_id: attempt.attempt_id, logical_gate: gate, lifecycle_settled: true,
+    repair: 'repair-node --attempt-id ' + attempt.attempt_id + ' --node-id <agent-selected-writer>',
+    taskTransitions } });
+
+  // Settlement is the terminal commit. After beginReviewAttempt has proved the retry carries the
+  // exact transaction and receipt, replay its result without re-entering fan-out aggregation or
+  // rewriting any durable surface.
+  if (attempt.outcome === 'fail' && attempt.lifecycle_settled === true) return failedResult([]);
+
+  if (gate.kind === 'fanout') {
+    // An aggregate outcome is the durable transition decision. A retry after the plan fold or
+    // running-set removal must roll that decision forward, never reclassify pending members as votes.
+    if (!(attempt.outcome === 'fail' && attempt.lifecycle_settled === false)) {
+      const otherMembers = gate.members.filter(id => id !== ctx.nodeInfo.id);
+      const last = otherMembers.every(id => ['complete', 'n/a'].includes(statuses[id]));
+      if (!last) {
+        let plan = opts.readFile(opts.planPath);
+        const closed = spliceLedgerNode(plan, ctx.nodeInfo.id, 'complete', { allowFrom: ['in_progress'] });
+        if (!closed.changed && !closed.alreadyAtTarget) return { handled: true, result: { result: 'refuse', reason: 'close_transition_disallowed', nodeId: ctx.nodeInfo.id } };
+        if (closed.changed) plan = closed.content;
+        plan = addCloseCompliance(plan, ctx.nodeInfo.id, ctx.nodeInfo.role, ctx.evidenceContent);
+        // Plan/compliance first, then replay-safe sidecars, then running-set removal. A crash after
+        // any prefix is completed by the unchanged retry without duplicating durable evidence.
+        opts.writeFile(opts.planPath, plan);
+        appendCloseSidecarsOnce(opts, ctx.nodeInfo.id);
+        removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
+        return { handled: true, result: { result: 'ok', closed: ctx.nodeInfo.id, provisional: true,
+          attempt_id: attempt.attempt_id, lifecycle_settled: false,
+          taskTransitions: [buildTransition(ctx.nodeInfo.id, 'complete', ctx.command)] } };
+      }
+      // Re-evaluate every exact stored body at settlement; cached verdict fields are audit data only.
+      const passCount = (attempt.receipts || []).filter(r => evaluateEffectiveVerdict(r.body).pass === true).length;
+      const aggregatePass = passCount > gate.members.length / 2 && gate.members.every(id => (attempt.receipts || []).some(r => r.node_id === id));
+      attempt.outcome = aggregatePass ? 'pass' : 'fail';
+      attempt.reason = aggregatePass ? null : 'fanout_refuted';
+      writeReviewJournal(opts, begun.state);
+      reviewFailpoint(opts, 'outcome_written');
+      if (aggregatePass) return { handled: false, begun };
+    }
+  } else if (attempt.outcome === 'pass') {
+    return { handled: false, begun };
+  }
+
+  let plan = opts.readFile(opts.planPath);
+  const folded = [];
+  for (const member of gate.members) {
+    const reset = spliceLedgerNode(plan, member, 'pending', { allowFrom: ['in_progress', 'complete'] });
+    if (reset.changed) { plan = reset.content; folded.push(member); }
+  }
+  opts.writeFile(opts.planPath, plan);
+  reviewFailpoint(opts, 'plan_folded');
+  removeReviewMembersFromRunningSet(opts, gate.members);
+  reviewFailpoint(opts, 'running_removed');
+  markReviewAttemptSettled(opts, begun);
+  reviewFailpoint(opts, 'settled_written');
+  return failedResult(folded.map(id => buildTransition(id, 'pending', 'review-failed')));
+}
+
 // ---------------------------------------------------------------------------
 // runOrient — READ-ONLY orient (no plan/ledger/state mutation; never calls writeFile).
 //
@@ -1737,6 +2311,24 @@ function runOrient(opts) {
         : 'no workflow-plan.md for ' + project
           + ' — author + freeze it via /kaola-workflow-adapt ' + project,
     };
+  }
+
+  let orientPlanContent = '';
+  try { orientPlanContent = readFile(planPath); } catch (_) {}
+  const orientJournal = readReviewJournal(opts, orientPlanContent);
+  if (!orientJournal.ok) return { result: 'refuse', reason: orientJournal.reason, detail: orientJournal.detail || null };
+  if (!orientJournal.legacy) {
+    const blocked = reviewJournalBlocker(orientJournal.journal);
+    if (blocked) {
+      const provisional = blocked.attempts.find(a => a.outcome === null);
+      const unsettled = blocked.attempts.find(a => a.lifecycle_settled === false && a.outcome !== null);
+      const repairing = blocked.attempts.find(a => a.repair && a.repair.settled === false);
+      return { result: 'refuse', reason: 'review_attempt_unresolved', attempt_ids: blocked.attempt_ids,
+        repair: provisional ? 'close remaining live members: ' + provisional.logical_gate.members.join(', ')
+          : unsettled ? 'retry ' + unsettled.settlement_command + ' for ' + unsettled.logical_gate.members.join(', ')
+          : repairing ? 'repair-node --attempt-id ' + repairing.attempt_id + ' --node-id ' + repairing.repair.selected_writer
+          : 'repair-node --attempt-id ' + blocked.attempts[0].attempt_id + ' --node-id <agent-selected-writer>' };
+    }
   }
 
   const resumeCheck = shell(validatorPath, [planPath, '--resume-check', '--json']);
@@ -2220,6 +2812,9 @@ function runOpenNext(opts) {
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['scheduler'] });
   if (guard) return guard;
 
+  const reviewFence = journalFence(opts, readFile(planPath));
+  if (reviewFence) return reviewFence;
+
   // Shell NEXT_ACTION.
   const nextAction = shell(nextActionPath, [planPath, '--json']);
 
@@ -2480,6 +3075,45 @@ function runRecordEvidence(opts) {
     };
   }
 
+  const recordReadFile0 = opts.readFile || require('fs').readFileSync;
+  let recordPlan = '';
+  try { recordPlan = recordReadFile0(planPath, 'utf8'); } catch (_) {}
+  if (planHashFromContent(recordPlan)) {
+    const status = readLedgerStatuses(recordPlan)[nodeId];
+    if (status !== 'in_progress') {
+      return { result: 'refuse', reason: 'evidence_generation_stale', nodeId,
+        detail: 'record-evidence is accepted only for the current in_progress generation' };
+    }
+    const supplied = String(stdinContent || '').match(/^evidence-binding:[ \t]+([^ \t\n]+)[ \t]+([^ \t\n]+)[ \t]*$/m);
+    const currentNonce = readNonce(planPath, nodeId, recordReadFile0);
+    if (!supplied) {
+      return { result: 'refuse', reason: 'evidence_generation_required', nodeId,
+        detail: 'hashed adaptive plans require evidence-binding: <node-id> <current-generation>' };
+    }
+    if (supplied && (supplied[1] !== nodeId || supplied[2] !== currentNonce)) {
+      return { result: 'refuse', reason: 'evidence_generation_stale', nodeId };
+    }
+    const journalPath = path.join(path.dirname(planPath), '.cache', REVIEW_JOURNAL_NAME);
+    const journalExists = opts.cacheExists ? opts.cacheExists(journalPath) : (() => {
+      try { recordReadFile0(journalPath, 'utf8'); return true; } catch (_) { return false; }
+    })();
+    if (journalExists) {
+      const journalState = readReviewJournal(opts, recordPlan);
+      if (!journalState.ok) {
+        return { result: 'refuse', reason: journalState.reason, detail: journalState.detail || null };
+      }
+      const immutableAttempt = journalState.journal && journalState.journal.attempts.find(attempt =>
+        attempt && attempt.logical_gate && attempt.logical_gate.kind === 'fanout'
+        && attempt.outcome !== null && attempt.lifecycle_settled === false
+        && Array.isArray(attempt.receipts) && attempt.receipts.some(receipt =>
+          receipt.node_id === nodeId && receipt.generation === currentNonce));
+      if (immutableAttempt) {
+        return { result: 'refuse', reason: 'review_outcome_receipts_immutable', nodeId,
+          attempt_id: immutableAttempt.attempt_id };
+      }
+    }
+  }
+
   const cacheDir = path.join(path.dirname(planPath), '.cache');
   const cachePath = path.join(cacheDir, nodeId + '.md');
 
@@ -2531,6 +3165,7 @@ function runCloseAndOpenNext(opts) {
   // from it after the close write so the next orient does not see an orphan multi-in_progress
   // mismatch (a serial close left the node in the set → reconcile-running-set no-ops `not_opening`).
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  let reviewBegun = null;
 
   // == UNIFIED GUARD PROLOGUE (D1) — matrix: halt-fence:yes / excl-batch:yes (#383d dedup
   //    lives in the body). NO integrity, NO excl-serial/excl-scheduler: close-and-open-next is the SERIAL close path and
@@ -2669,6 +3304,14 @@ function runCloseAndOpenNext(opts) {
     };
   }
 
+  // Selector validation is part of the close precondition. Compute the losing-arm fold without
+  // writing so an invalid selector cannot leave a completed review or provisional journal attempt.
+  const selectorCheck = barrierOut.selectorCheck || {};
+  const selectorValidation = foldSelectorArms(planContent, selectorCheck);
+  if (!selectorValidation.ok) {
+    return { result: 'refuse', reason: selectorValidation.reason, nodeId, selectorCheck };
+  }
+
   // #439 (D-419 Part 4): close-time speculative guard (mirror runCloseNode) — a speculative member
   // cannot commit to complete until its gate resolves (else its review pointer + discard handle are
   // lost). Fires only for a speculative:true member whose gate is not yet complete; never for a normal
@@ -2678,6 +3321,12 @@ function runCloseAndOpenNext(opts) {
     const specGuard = speculativeCloseGuard(nodeId, running439, readLedgerStatuses(readFile(planPath)));
     if (specGuard) return specGuard;
   }
+
+  const reviewPrepared = prepareReviewClose(opts, {
+    planContent, nodes, nodeInfo, evidenceContent, command: 'close-and-open-next',
+  });
+  if (reviewPrepared && reviewPrepared.handled) return reviewPrepared.result;
+  if (reviewPrepared) reviewBegun = reviewPrepared.begun;
 
   // -- (c) Close: spliceLedgerNode + compliance row ----------------------
   // Re-read plan (baseline call in open-next may have written it).
@@ -2703,44 +3352,21 @@ function runCloseAndOpenNext(opts) {
     currentPlan = closeResult.content;
   }
 
-  // Build compliance row.
-  // code-reviewer / security-reviewer → bare role string in Requirement cell.
-  const bareRoles = ['code-reviewer', 'security-reviewer'];
-  const requirementCell = bareRoles.includes(role)
-    ? role
-    : role + ' (' + nodeId + ')';
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent);
 
-  const evidenceSummary = evidenceContent
-    ? evidenceContent.split('\n')[0].slice(0, 80)
-    : 'evidence present';
+  const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
+  currentPlan = selectorFold.content;
 
-  // #338: role 'finalize' is the mandatory DAG sink — the plan-run contract says the MAIN
-  // SESSION performs its bookkeeping directly (no Agent dispatch), so certifying it as
-  // subagent-invoked would be false. Record the truthful execution mode instead. This row
-  // is NOT part of the delegation vocabulary checked by repair-state (a 'finalize (id)'
-  // requirement matches none of DELEGATION_CONTROLLED_REQUIREMENTS) and does not require
-  // codex-preflight (no dispatch happens).
-  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
-  const complianceRow = '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |';
-  // #384/#391c: spliceComplianceRow appends UNCONDITIONALLY, so the idempotent re-close paths (this
-  // node already complete via alreadyAtTarget — a serial close-and-open-next re-run, or the reconcile
-  // close-direction) would otherwise append a DUPLICATE `Required Agent Compliance` row each time.
-  // Guard the append: skip when a row for this Requirement cell already exists.
-  if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
-    currentPlan = spliceComplianceRow(currentPlan, complianceRow);
-  }
-
-  // Write the plan now (ledger + compliance — all non-state writes).
+  // Write the complete passing transition (gate + compliance + selector arms) before removing the
+  // running member or settling the journal. A crash here remains fenced by the unsettled attempt.
   writeFile(planPath, currentPlan);
+  if (selectorCheck.isSelector === true) reviewFailpoint(opts, 'selector_folded');
 
-  // #373: best-effort telemetry — the node closed.
-  appendNodeTiming(planPath, nodeId, 'closed');
-
-  // #424 (D-424-01 §5): provenance log entry — close event.
-  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+  appendCloseSidecarsOnce(opts, nodeId);
 
   // #317: the closed node → completed (every ok exit carries this).
   transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
+  transitions.push(...selectorFold.transitions);
 
   // #446 (D-446-01 Decision 3): a GATE node close auto-invokes route-findings — the routing
   // table (.cache/findings-route.json) is most valuable EXACTLY when a gate closes (findings
@@ -2785,31 +3411,15 @@ function runCloseAndOpenNext(opts) {
     }
   }
 
-  // -- (e) Selector routing (BEFORE fused advance) -----------------------
-  const selectorCheck = barrierOut.selectorCheck || {};
+  if (reviewBegun) markReviewAttemptSettled(opts, reviewBegun);
 
-  if (selectorCheck.isSelector === true) {
-    if (selectorCheck.ok === false) {
-      return {
-        result: 'refuse',
-        reason: 'selector_invalid',
-        nodeId,
-        selectorCheck,
-      };
-    }
-    // ok === true: write armsToNa.
-    const armsToNa = selectorCheck.armsToNa || [];
-    let planForSelector = readFile(planPath);
-    for (const armId of armsToNa) {
-      const armResult = spliceLedgerNode(planForSelector, armId, 'n/a', { allowFrom: ['pending', 'in_progress'] });
-      if (armResult.changed) {
-        planForSelector = armResult.content;
-      }
-      // #317: each armed-off select arm → n/a (UI maps n/a to completed).
-      transitions.push(buildTransition(armId, 'n/a', 'selector-arm'));
-    }
-    writeFile(planPath, planForSelector);
-    currentPlan = planForSelector;
+  // The close transaction is settled before the fused open. Another unresolved logical gate still
+  // suppresses successor exposure; the orchestrator repairs that exact attempt first.
+  const reviewOpenFence = journalFence(opts, readFile(planPath));
+  if (reviewOpenFence) {
+    return { result: 'ok', closed: nodeId, opened: null, allDone: false,
+      reason: reviewOpenFence.reason, attempt_ids: reviewOpenFence.attempt_ids,
+      taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
   // -- (d) Fused advance -------------------------------------------------
@@ -3321,6 +3931,9 @@ function runReopenNode(opts) {
   // complete|in_progress → pending; the orphan guard at (3b) tolerates it for the same reason).
   // #444: GATE_ROLES promoted to module-level const — no redefinition needed here.
 
+  const reopenFence = journalFence(opts, readFile(planPath));
+  if (reopenFence) return reopenFence;
+
   // (1) #383: a plan-repair reopen must never fight a live #377 scheduler fan-out (it would create an
   // orphan multi-in_progress ledger). Refuse scheduler_active over a live / opening running set.
   // (#594: the former sibling arm — refuse active_batch_exists over a live active-batch.json — is gone;
@@ -3678,9 +4291,65 @@ function runRevertOverflow(opts) {
 // The original barrier-base-{nodeId} is NEVER removed. commit-node is NEVER shelled.
 // ---------------------------------------------------------------------------
 function runRepairNode(opts) {
-  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir } = opts;
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir, attemptId } = opts;
 
   if (!nodeId) return { result: 'refuse', errors: ['--node-id required for repair-node'] };
+
+  const initialPlan = readFile(planPath);
+  const hasReviewJournal = !!planHashFromContent(initialPlan);
+  let repairJournalState = null;
+  let repairAttempt = null;
+  let repairAlreadySelected = false;
+  if (hasReviewJournal) {
+    if (!attemptId) return { result: 'refuse', errors: ['--attempt-id required for repair-node'] };
+    repairJournalState = readReviewJournal(opts, initialPlan);
+    if (!repairJournalState.ok) return { result: 'refuse', reason: repairJournalState.reason };
+    repairAttempt = repairJournalState.journal.attempts.find(a => a.attempt_id === attemptId);
+    if (!repairAttempt || repairAttempt.outcome !== 'fail' || repairAttempt.lifecycle_settled !== true) {
+      return { result: 'refuse', reason: 'review_attempt_not_repairable', attempt_id: attemptId };
+    }
+    if (repairAttempt.consumed_by != null) {
+      return repairAttempt.consumed_by === nodeId
+        ? { result: 'ok', repaired: nodeId, attempt_id: attemptId, baselineReused: true, idempotent: true }
+        : { result: 'refuse', reason: 'review_attempt_consumed', attempt_id: attemptId };
+    }
+    const consumed = consumedReviewRepairs(repairJournalState.journal.attempts, repairAttempt.logical_gate.key);
+    if (consumed >= 5) return { result: 'repair_limit_reached', attempt_id: attemptId, consumed, limit: 5 };
+
+    const persistedRepair = repairAttempt.repair;
+    repairAlreadySelected = !!(persistedRepair && persistedRepair.selected_writer != null);
+    if (repairAlreadySelected && persistedRepair.selected_writer !== nodeId) {
+      return { result: 'refuse', reason: 'repair_writer_mismatch', attempt_id: attemptId };
+    }
+    let proof = { ok: true, producer_slice: [nodeId] };
+    if (!repairAlreadySelected) {
+      const proofNodes = parseNodesFromContent(initialPlan);
+      proof = uniqueMaximalReviewProducer(proofNodes, repairAttempt.logical_gate.members, nodeId,
+        readLedgerStatuses(initialPlan));
+      if (!proof.ok) return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
+    }
+    const expectedIdentity = repairAttempt.producer_bindings && repairAttempt.producer_bindings[nodeId];
+    const currentIdentity = opts.captureWriterBarrierIdentity
+      ? opts.captureWriterBarrierIdentity(nodeId) : captureWriterBarrierIdentity(opts, nodeId);
+    if (!verifyWriterBarrierIdentity(expectedIdentity, currentIdentity)) {
+      return { result: 'repair_requires_replan', reason: 'writer_identity_changed',
+        attempt_id: attemptId, producer_slice: proof.producer_slice };
+    }
+    let currentDigest;
+    try { currentDigest = opts.computeReviewCandidateDigest
+      ? opts.computeReviewCandidateDigest() : computeReviewCandidateDigest(planPath, project, opts.repoRoot); }
+    catch (_) { return { result: 'repair_requires_replan', reason: 'candidate_digest_unavailable', producer_slice: proof.producer_slice } }
+    if (currentDigest !== repairAttempt.candidate_digest) {
+      return { result: 'repair_requires_replan', reason: 'candidate_digest_changed', producer_slice: proof.producer_slice };
+    }
+    const barrierProof = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
+    if (!barrierProof || barrierProof.exitCode !== 0 || barrierProof.result !== 'ok') {
+      return { result: 'repair_requires_replan', reason: 'original_barrier_failed', producer_slice: proof.producer_slice, barrierProof };
+    }
+    if (!repairAlreadySelected) {
+      repairAttempt.repair = { selected_writer: nodeId, settled: false };
+    }
+  }
 
   // (1) Refuse over a live running set. (#594: the former sibling arm — refuse active_batch_exists over
   // a live active-batch.json — is gone; that manifest has no producer left.)
@@ -3702,7 +4371,19 @@ function runRepairNode(opts) {
 
   // (2) Writer node must be COMPLETE — only a finished writer can be repair-reopened.
   const writerStatus = ledgerStatuses[nodeId];
-  if (writerStatus !== 'complete') {
+  const consumptionPending = !!(repairAttempt && repairAttempt.repair
+    && repairAttempt.repair.settled === true && repairAttempt.repair.selected_writer === nodeId
+    && repairAttempt.consumed_by == null);
+  if (consumptionPending && writerStatus === 'in_progress') {
+    repairAttempt.consumed_by = nodeId;
+    writeReviewJournal(opts, repairJournalState);
+    return { result: 'ok', repaired: nodeId, attempt_id: repairAttempt.attempt_id,
+      consumed_by: nodeId, baselineReused: true, resumed: true };
+  }
+  const repairResuming = !!(repairAttempt && repairAttempt.repair
+    && repairAttempt.repair.settled === false && repairAttempt.repair.selected_writer === nodeId);
+  const resumingReopenedWriter = repairResuming && writerStatus === 'in_progress';
+  if (writerStatus !== 'complete' && !resumingReopenedWriter) {
     return {
       result: 'refuse',
       reason: 'node_not_complete',
@@ -3718,7 +4399,7 @@ function runRepairNode(opts) {
     GATE_ROLES.has(n.role) &&
     ledgerStatuses[n.id] === 'in_progress'
   );
-  if (!downstreamGateInProgress) {
+  if (!downstreamGateInProgress && !repairAttempt) {
     return {
       result: 'refuse',
       reason: 'no_active_reviewer',
@@ -3753,6 +4434,32 @@ function runRepairNode(opts) {
   // Compute nodes through which ALL paths from nodeId to the sink pass (post-dominators).
   const pathsFromNodeToSink = desc;
   const gatesReset = [];
+  const completedJournalGates = new Set();
+  const latestJournalAttemptByGate = new Map();
+  const addGateReset = id => { if (!gatesReset.includes(id)) gatesReset.push(id); };
+  if (repairAttempt) {
+    const repairedBinding = repairAttempt.producer_bindings && repairAttempt.producer_bindings[nodeId];
+    for (const attempt of repairJournalState.journal.attempts) {
+      const bound = attempt.producer_bindings && attempt.producer_bindings[nodeId];
+      if (attempt.candidate_digest !== repairAttempt.candidate_digest
+        || !verifyWriterBarrierIdentity(repairedBinding, bound)) continue;
+      for (const memberId of attempt.logical_gate.members) {
+        const member = nodes.find(n => n.id === memberId);
+        if (!member || !GATE_ROLES.has(member.role) || !desc.has(memberId)) continue;
+        addGateReset(memberId);
+        // Physical journal order is not chronological: validated histories may be reordered.
+        // Cleanup follows the highest gate-local ordinal for this member, so an older pass can
+        // never delete a later live failure receipt merely by appearing later in the JSON array.
+        const latest = latestJournalAttemptByGate.get(memberId);
+        if (!latest || attempt.ordinal > latest.ordinal) {
+          latestJournalAttemptByGate.set(memberId, attempt);
+        }
+      }
+    }
+    for (const [memberId, attempt] of latestJournalAttemptByGate) {
+      if (attempt.outcome === 'pass') completedJournalGates.add(memberId);
+    }
+  }
   for (const did of pathsFromNodeToSink) {
     const dn = nodes.find(n => n.id === did);
     if (dn && GATE_ROLES.has(dn.role)) {
@@ -3771,7 +4478,7 @@ function runRepairNode(opts) {
       }
       // If the sink is not reachable when excluding `did`, it post-dominates.
       if (uniqueSink && !descWithoutGate.has(uniqueSink)) {
-        gatesReset.push(did);
+        addGateReset(did);
       } else if (dn.role === 'adversarial-verifier' && dn.shape && dn.shape.kind === 'fanout' && String(dn.cardinality) === '1') {
         // #664: an explicit skeptic group is an AND-joined collective gate. No individual
         // member post-dominates the writer in the simple path graph (a sibling member supplies
@@ -3786,7 +4493,7 @@ function runRepairNode(opts) {
           && group.members.every(id => desc.has(id))
           && group.members.every(id => ledgerStatuses[id] === 'complete')) {
           for (const memberId of group.members) {
-            if (!gatesReset.includes(memberId)) gatesReset.push(memberId);
+            addGateReset(memberId);
           }
         }
       }
@@ -3808,6 +4515,13 @@ function runRepairNode(opts) {
     };
   }
 
+  // The selected-writer marker is the first durable repair mutation, after every graph/digest/barrier,
+  // scheduler, ledger, and orphan proof has passed. A crash from here is resumed by the same attempt.
+  if (repairAttempt && !repairAlreadySelected && writerStatus === 'complete') {
+    writeReviewJournal(opts, repairJournalState);
+    reviewFailpoint(opts, 'repair_selected_written');
+  }
+
   // (4) Fold gates back to pending.
   const gatesFolded = [];
   for (const gid of gatesReset) {
@@ -3822,17 +4536,15 @@ function runRepairNode(opts) {
   for (const gid of gatesReset) {
     const bf = cacheBaseFile(gid);
     const present = cacheExists ? cacheExists(bf) : true;
-    if (present && typeof unlink === 'function') {
-      unlink(bf);
-      deletedDownstreamBaselines.push('barrier-base-' + String(gid).replace(/[^A-Za-z0-9_-]/g, '_'));
-    }
+    if (present && typeof unlink === 'function') deletedDownstreamBaselines.push('barrier-base-' + String(gid).replace(/[^A-Za-z0-9_-]/g, '_'));
   }
 
   // (4c) #664: purge the folded adversarial-verifier fan-out GROUP's own receipt(s) — a stale
   // COMPLETED skeptic vote must never silently satisfy a later --verdict-check on the writer's
-  // changed tree. Scoped to fan-out groups only: a singleton (non-fanout) gate-role's evidence
-  // (e.g. a code-reviewer's `verdict: fail` body) is deliberately RETAINED as the repair brief for
-  // the reopened writer — unchanged from before this fix. Mirrors reopen-node's (#349/#658) purge,
+  // changed tree. Fan-out receipts are always purged as a group; a completed singleton gate bound
+  // to this exact candidate/writer is also purged because its pass cannot certify the repaired tree.
+  // The target singleton failure body remains journal-authoritative and is copied into the writer's
+  // repair brief below. Mirrors reopen-node's (#349/#658) fan-out purge,
   // including its per-receipt-NAME dedupe (#665 R2): the validator keys fan-out groups by (label,
   // origin) — resolveAdversarialFanoutGroup — so two independent groups sharing a label at DIFFERENT
   // origins are two distinct receipt sets. A group-LABEL-only dedupe would purge only the first.
@@ -3844,7 +4556,6 @@ function runRepairNode(opts) {
     if (removedNames.has(name)) return;
     const ev = path.join(cacheDir, name);
     if ((knownPresent || (cacheExists ? cacheExists(ev) : false)) && typeof unlink === 'function') {
-      unlink(ev);
       evidenceRemoved.push(name);
       removedNames.add(name);
     }
@@ -3869,19 +4580,49 @@ function runRepairNode(opts) {
       }
     }
   }
+  for (const gid of completedJournalGates) removeEvidenceName(gid + '.md');
 
   // (5) Transition writer: complete→pending→in_progress.
-  const resetWriter = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
-  if (!resetWriter.changed) {
-    return { result: 'refuse', reason: 'ledger_splice_failed', nodeId, detail: 'could not reset writer to pending' };
+  if (!resumingReopenedWriter) {
+    const resetWriter = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
+    if (!resetWriter.changed) {
+      return { result: 'refuse', reason: 'ledger_splice_failed', nodeId, detail: 'could not reset writer to pending' };
+    }
+    planContent = resetWriter.content;
+
+    const reopenWriter = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
+    if (reopenWriter.changed) planContent = reopenWriter.content;
+
+    // (6) Persist the updated plan.
+    writeFile(planPath, planContent);
+    reviewFailpoint(opts, 'repair_plan_written');
   }
-  planContent = resetWriter.content;
 
-  const reopenWriter = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
-  if (reopenWriter.changed) planContent = reopenWriter.content;
+  // Downstream artifacts are removed only after their rows are durably pending and the selected
+  // writer is durably reopened. This makes a crash leave conservative stale files, never orphaned state.
+  if (typeof unlink === 'function') {
+    for (const name of deletedDownstreamBaselines) unlink(path.join(cacheDir, name));
+    for (const name of evidenceRemoved) unlink(path.join(cacheDir, name));
+  }
+  reviewFailpoint(opts, 'repair_artifacts_removed');
 
-  // (6) Persist the updated plan.
-  writeFile(planPath, planContent);
+  if (repairAttempt) {
+    const nonce = readNonce(planPath, nodeId, readFile) || '';
+    const writer = nodes.find(n => n.id === nodeId);
+    const seeded = seedEvidenceFile(planPath, nodeId, nonce, writer ? writer.role : 'implementer', true);
+    const evidencePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+    let evidence = '';
+    try { evidence = readFile(evidencePath); } catch (_) {}
+    const brief = '\nfailed_review_attempt: ' + repairAttempt.attempt_id + '\nfailed_review_gate: '
+      + repairAttempt.logical_gate.members.join(',') + '\n';
+    writeFile(evidencePath, evidence.replace(/\s*$/, '\n') + brief);
+    repairAttempt.repair.settled = true;
+    writeReviewJournal(opts, repairJournalState);
+    reviewFailpoint(opts, 'repair_settled_written');
+    repairAttempt.consumed_by = nodeId;
+    writeReviewJournal(opts, repairJournalState);
+    reviewFailpoint(opts, 'repair_consumed_written');
+  }
 
   // Provenance log entry for the repair.
   appendProvenanceLog(planPath, 'repair-node', nodeId, null);
@@ -3897,6 +4638,8 @@ function runRepairNode(opts) {
     evidenceRemoved,
     // The CRITICAL anti-laundering invariant: the original barrier-base is reused, NOT re-snapshotted.
     baselineReused: true,
+    resumed: resumingReopenedWriter || undefined,
+    ...(repairAttempt ? { attempt_id: repairAttempt.attempt_id, consumed_by: nodeId } : {}),
     taskTransitions: [
       ...gatesFolded.map(g => buildTransition(g, 'pending', 'repair-node')),
       buildTransition(nodeId, 'in_progress', 'repair-node'),
@@ -4774,6 +5517,9 @@ function runOpenReady(opts) {
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'] });
   if (guard) return guard;
 
+  const reviewFence = journalFence(opts, readFile(planPath));
+  if (reviewFence) return reviewFence;
+
   // Crash-safe precondition: an 'opening' running set (or any opening:true node) is an
   // interrupted open-ready — refuse with a reconcile pointer (never silently overwrite).
   const existing = readRunningSet(runningSetPath, cacheExists, readFile);
@@ -5618,6 +6364,7 @@ function runCloseNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
   const transitions = [];
+  let reviewBegun = null;
 
   // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / halt-fence:yes (NO coordination refusal:
   //    close-node closes one of its OWN live running-set members — it must not refuse over them). ==
@@ -5735,6 +6482,18 @@ function runCloseNode(opts) {
     };
   }
 
+  const selectorCheck = barrierOut.selectorCheck || {};
+  const selectorValidation = foldSelectorArms(planContent0, selectorCheck);
+  if (!selectorValidation.ok) {
+    return { result: 'refuse', reason: selectorValidation.reason, nodeId, selectorCheck };
+  }
+
+  const reviewPrepared = prepareReviewClose(opts, {
+    planContent: planContent0, nodes, nodeInfo, evidenceContent, command: 'close-node',
+  });
+  if (reviewPrepared && reviewPrepared.handled) return reviewPrepared.result;
+  if (reviewPrepared) reviewBegun = reviewPrepared.begun;
+
   // -- (c) Close: ledger row in_progress -> complete (same #348 guard as close-and-open-next).
   let currentPlan = readFile(planPath);
   const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
@@ -5746,37 +6505,16 @@ function runCloseNode(opts) {
   }
   if (closeResult.changed) currentPlan = closeResult.content;
 
-  // Compliance row (bare-role string for review roles; truthful mode for finalize).
-  const bareRoles = ['code-reviewer', 'security-reviewer'];
-  const requirementCell = bareRoles.includes(role) ? role : role + ' (' + nodeId + ')';
-  const evidenceSummary = evidenceContent ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
-  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
-  // #384/#391c: idempotent compliance append — skip a duplicate row on the alreadyAtTarget re-close.
-  if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
-    currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
-  }
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent);
+  const selectorFold = foldSelectorArms(currentPlan, selectorCheck);
+  currentPlan = selectorFold.content;
   writeFile(planPath, currentPlan);
-  appendNodeTiming(planPath, nodeId, 'closed');
-  // #424 (D-424-01 §5): provenance log entry — close event.
-  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+  if (selectorCheck.isSelector === true) reviewFailpoint(opts, 'selector_folded');
+  appendCloseSidecarsOnce(opts, nodeId);
   transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
+  transitions.push(...selectorFold.transitions);
 
-  // -- (d) Selector routing (mirror close-and-open-next: arm losing branches to n/a).
-  const selectorCheck = barrierOut.selectorCheck || {};
-  if (selectorCheck.isSelector === true) {
-    if (selectorCheck.ok === false) {
-      return { result: 'refuse', reason: 'selector_invalid', nodeId, selectorCheck };
-    }
-    let planForSelector = readFile(planPath);
-    for (const armId of (selectorCheck.armsToNa || [])) {
-      const armResult = spliceLedgerNode(planForSelector, armId, 'n/a', { allowFrom: ['pending', 'in_progress'] });
-      if (armResult.changed) planForSelector = armResult.content;
-      transitions.push(buildTransition(armId, 'n/a', 'selector-arm'));
-    }
-    writeFile(planPath, planForSelector);
-  }
-
-  // -- (e) Remove the closed node from the running set (delete the file if it empties).
+  // -- (d) Remove the closed node from the running set (delete the file if it empties).
   const running = readRunningSet(runningSetPath, cacheExists, readFile);
   if (running) {
     const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
@@ -5789,6 +6527,8 @@ function runCloseNode(opts) {
       writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
     }
   }
+
+  if (reviewBegun) markReviewAttemptSettled(opts, reviewBegun);
 
   // -- (f) Fused readiness recompute — return the newly-ready frontier (the loop opens it).
   const nextAction = shell(nextActionPath, [planPath, '--json']);
@@ -6689,10 +7429,12 @@ function parseFindingLine(line) {
 // nodes: which node's declared_write_set contains `file`? Returns that node id,
 // or null (the plan-repair signal: the finding concerns a file no node owns).
 // ---------------------------------------------------------------------------
-function resolveOwningNode(file, nodes) {
-  if (!file) return null;
+function resolveOwningNodes(file, nodes) {
+  if (!file) return [];
   let parseWriteSetCell = null;
   try { ({ parseWriteSetCell } = require('./kaola-gitea-workflow-classifier')); } catch (_) {}
+  const normalizedFile = String(file).replace(/\\/g, '/').replace(/^\.\//, '');
+  const matches = [];
   for (const n of nodes) {
     const raw = (n.declared_write_set != null ? n.declared_write_set : n.writeSetRaw);
     if (raw == null) continue;
@@ -6701,13 +7443,40 @@ function resolveOwningNode(file, nodes) {
       try { tokens = parseWriteSetCell(raw); } catch (_) { tokens = null; }
     }
     if (tokens) {
-      if (tokens.has ? tokens.has(file) : Array.from(tokens).includes(file)) return n.id;
+      const values = Array.from(tokens).map(x => String(x).replace(/\\/g, '/').replace(/^\.\//, ''));
+      if (values.includes(normalizedFile)) matches.push(n.id);
     } else {
-      const toks = String(raw).split(/[\s,]+/).filter(Boolean);
-      if (toks.includes(file)) return n.id;
+      const toks = String(raw).split(/[\s,]+/).filter(Boolean)
+        .map(x => x.replace(/\\/g, '/').replace(/^\.\//, ''));
+      if (toks.includes(normalizedFile)) matches.push(n.id);
     }
   }
-  return null;
+  return Array.from(new Set(matches)).sort();
+}
+
+function resolveOwningNode(file, nodes) {
+  const candidates = resolveOwningNodes(file, nodes);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function routeCanonicalFindings(findings, nodes, sourceNode) {
+  return (Array.isArray(findings) ? findings : []).filter(f => f && f.id).map(f => {
+    const ownership_candidates = resolveOwningNodes(f.file, nodes);
+    return {
+      source_node: sourceNode || null,
+      finding_id: f.id,
+      id: f.id,
+      scope: f.scope,
+      action: f.action,
+      status: f.status,
+      severity: f.severity,
+      file: f.file,
+      ownership_candidates,
+      owning_node: ownership_candidates.length === 1 ? ownership_candidates[0] : null,
+      fix_role: f.fix_role,
+      raw: f.raw,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -6752,22 +7521,40 @@ function runRouteFindings(opts, project) {
   try { planContent = readFile(planPath); } catch (_) { planContent = ''; }
   const nodes = parseNodesFromContent(planContent);
 
-  const findings = [];
-  for (const line of String(evidence).split('\n')) {
-    const parsed = parseFindingLine(line);
-    if (!parsed) continue;
-    // 4. write-set lookup → owning_node (or null = plan-repair signal).
-    const owning_node = resolveOwningNode(parsed.file, nodes);
-    // 5. fix_role precedence.
-    const fix_role = parsed.securityFlag ? 'security-reviewer'
-      : (owning_node ? 'implementer' : 'code-reviewer');
-    findings.push({
-      finding_id: parsed.finding_id,
-      file: parsed.file,
-      owning_node,
-      fix_role,
-      status: parsed.status,
-    });
+  let findings = [];
+  const journalState = readReviewJournal({ ...opts, planPath, readFile,
+    cacheExists: opts.cacheExists || ((p) => fs.existsSync(p)) }, planContent);
+  if (!journalState.ok) {
+    return { result: 'refuse', reason: journalState.reason, detail: journalState.detail || null };
+  }
+  const authoritativeAttempts = journalState.ok && journalState.journal
+    ? journalState.journal.attempts.filter(a => (a.receipts || []).some(r => r.node_id === nodeId))
+      .slice().sort((a, b) => a.ordinal - b.ordinal) : [];
+  if (authoritativeAttempts.length) {
+    findings = authoritativeAttempts[authoritativeAttempts.length - 1].route_candidates
+      .filter(r => r.source_node === nodeId);
+  } else {
+    const canonical = parseNodeFindings(evidence).filter(f => f && f.id);
+    if (canonical.length > 0) {
+    findings = routeCanonicalFindings(canonical, nodes, nodeId);
+    } else {
+      for (const line of String(evidence).split('\n')) {
+        const parsed = parseFindingLine(line);
+        if (!parsed) continue;
+        const ownership_candidates = resolveOwningNodes(parsed.file, nodes);
+        const owning_node = ownership_candidates.length === 1 ? ownership_candidates[0] : null;
+        const fix_role = parsed.securityFlag ? 'security-reviewer'
+          : (owning_node ? 'implementer' : 'code-reviewer');
+        findings.push({
+          finding_id: parsed.finding_id,
+          file: parsed.file,
+          ownership_candidates,
+          owning_node,
+          fix_role,
+          status: parsed.status,
+        });
+      }
+    }
   }
 
   // 7. write .cache/findings-route.json (array). Best-effort dir create.
@@ -6816,6 +7603,7 @@ function main() {
       '  close-and-open-next --project P --node-id N\n' +
       '  write-halt          --project P --node-id N --reason consent|security|test_thrash|merge_conflict\n' +
       '  reopen-node         --project P --node-id N\n' +
+      '  repair-node         --project P --attempt-id A --node-id N\n' +
       '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
       '\n' +
       '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n'
@@ -6828,6 +7616,7 @@ function main() {
   const projectIdx    = args.indexOf('--project');
   const nodeIdIdx     = args.indexOf('--node-id');
   const reasonIdx     = args.indexOf('--reason');
+  const attemptIdIdx  = args.indexOf('--attempt-id');
   const hasStdin      = args.includes('--stdin');
   const triageJsonIdx = args.indexOf('--triage-json');
   // #446 (D-446-01 Decisions 4-5): --summary collapses the routine FULL-JSON envelope to ONE line
@@ -6870,6 +7659,7 @@ function main() {
 
   const nodeId   = nodeIdIdx >= 0 ? args[nodeIdIdx + 1] : null;
   const reason   = reasonIdx >= 0 ? args[reasonIdx + 1] : null;
+  const attemptId = attemptIdIdx >= 0 ? args[attemptIdIdx + 1] : null;
   const maxIdx   = args.indexOf('--max');
   const maxArg   = maxIdx >= 0 ? parseInt(args[maxIdx + 1], 10) : null;
 
@@ -6930,7 +7720,7 @@ function main() {
   // posture (no worktree_path) and the exempt read-only / main→worktree-copy subcommands fall through.
   {
     const guardedMutation = SPLIT_GUARDED_SUBCOMMANDS.has(subcommand)
-      || (subcommand === 'record-evidence' && !args.includes('--verify'));
+      && !(subcommand === 'record-evidence' && args.includes('--verify'));
     if (guardedMutation && realRepoRoot === mainRoot) {
       const splitStatePath = path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md');
       let splitState = '';
@@ -6969,7 +7759,9 @@ function main() {
   // lock-free (byte-identical to pre-lock behavior; the serial single-orchestrator path acquires with
   // zero contention).
   let schedulerLock = null;
-  if (SPLIT_GUARDED_SUBCOMMANDS.has(subcommand)) {
+  const schedulerLockRequired = SPLIT_GUARDED_SUBCOMMANDS.has(subcommand)
+    && !(subcommand === 'record-evidence' && args.includes('--verify'));
+  if (schedulerLockRequired) {
     const lockPath = path.join(cacheDir, SCHEDULER_LOCK_NAME);
     schedulerLock = acquireProjectLock(lockPath, { subcommand });
     if (!schedulerLock.ok) {
@@ -7068,7 +7860,7 @@ function main() {
       const stdinContent = fs.readFileSync(0, 'utf8');
       result = runRecordEvidence({
         planPath, statePath, project, nodeId, stdinContent,
-        writeFile,
+        readFile, writeFile, cacheExists,
         mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
       });
     }
@@ -7129,7 +7921,7 @@ function main() {
       result = { result: 'refuse', errors: ['--node-id required for repair-node'] };
     } else {
       result = runRepairNode({
-        planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        planPath, project, nodeId, attemptId, shell, readFile, writeFile, cacheExists,
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
         // #665 R1: mirror reopen-node's dispatch — without readdir, a resumed LEGACY (role-prefix,
         // cardinality>1) adversarial-verifier fan-out's (4c) receipt purge branch is silently dead.
@@ -7277,6 +8069,16 @@ module.exports = {
   runRouteFindings,
   parseFindingLine,
   resolveOwningNode,
+  resolveOwningNodes,
+  routeCanonicalFindings,
+  reviewJournalBlocker,
+  readReviewJournal,
+  uniqueMaximalReviewProducer,
+  captureWriterBarrierIdentity,
+  verifyWriterBarrierIdentity,
+  nextReviewAttemptOrdinal,
+  consumedReviewRepairs,
+  computeReviewCandidateDigest,
   // #463 Slice 2 (LIVE since #542/D-542-01): per-leg `.kw` worktree provisioning primitives, exercised on
   // every disjoint-write co-open by default (no longer dormant); exported here for direct testing.
   resolveLegIsolation,

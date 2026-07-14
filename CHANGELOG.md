@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Adaptive review failures now form crash-safe, fail-closed transactions with agent-selected bounded repair — #682.** A plan-bound `.cache/review-attempts.json` journal records the effective verdict, exact sequence or fan-out gate identity, receipt generation, candidate digest, producer proof, lifecycle settlement, and repair consumption without becoming a scheduler or second workflow state machine. Failed gates return to `pending` without exposing successors; exact-member fan-out settles by strict majority; retries resume every durable close and repair seam idempotently; canonical findings preserve zero/one/multiple-owner routing without harness selection; repair requires the agent's attempt-bound unique-maximal writer plus unchanged-candidate and original-barrier proofs; sibling cleanup uses the greatest authoritative gate-local ordinal regardless of physical journal order; and each logical gate permits five consumed repairs before the sixth remains unresolved. Planner and operator guidance now favors independently verifiable semantic boundaries for high-risk persistence/concurrency work while preserving coherent large nodes and avoiding numeric size thresholds. The pre-existing lack of parent-directory fsync in the shared atomic-replace helper remains separately deferred.
+
 ### Documentation
 
 - **The Codex installation guide now configures long-poll subagent joins.** The recommended user-owned `~/.codex/config.toml` posture sets both the default and per-call maximum Multi-Agent V2 wait to Codex's one-hour ceiling, explicitly distinguishes a mailbox timeout from a subagent runtime deadline, requires repeated long waits without a Kaola-imposed total deadline while work is progressing, forbids status-only polling or interruption, explains how to merge existing TOML keys safely, and requires a fresh Codex session after the edit.

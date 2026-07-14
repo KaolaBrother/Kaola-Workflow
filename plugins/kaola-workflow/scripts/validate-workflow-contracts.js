@@ -719,6 +719,14 @@ assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'rever
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'repair-node'");
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'requires_redispatch');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'baselineReused');
+// Issue 682: authoritative review transaction and agent-selected direct repair contract.
+for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
+  'repair_requires_replan', 'repair_limit_reached', "'--attempt-id'", 'uniqueMaximalReviewProducer']) {
+  assertIncludes('scripts/kaola-workflow-adaptive-node.js', token);
+}
+for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
+  assertIncludes('scripts/kaola-workflow-adaptive-schema.js', token);
+}
 // #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
 // findings-route.json output + VERDICT_ROLES table must be present in the aggregators.
 assertIncludes('scripts/kaola-workflow-plan-validator.js', 'OPERATOR_HINT_REGISTRY');

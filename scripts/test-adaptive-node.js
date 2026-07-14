@@ -53,12 +53,29 @@ const {
   runRouteFindings,
   parseFindingLine,
   resolveOwningNode,
+  resolveOwningNodes,
+  routeCanonicalFindings,
+  reviewJournalBlocker,
+  uniqueMaximalReviewProducer,
+  nextReviewAttemptOrdinal,
+  consumedReviewRepairs,
+  computeReviewCandidateDigest,
+  captureWriterBarrierIdentity,
+  verifyWriterBarrierIdentity,
+  readReviewJournal,
   // #472: dispatch-fidelity concurrency derivation
   deriveMaxSimultaneousOpen,
   // #463 Slice 4/5: synthesizer execution (direct-call tests for the deferred-tier conflict bail)
   synthesizeLevel,
 } = require('./kaola-workflow-adaptive-node');
-const { RUNNING_SET_NAME, MERGE_CONFLICT_REPAIR_LIMIT, dispatchEffortOpencode } = require('./kaola-workflow-adaptive-schema');
+const {
+  RUNNING_SET_NAME,
+  MERGE_CONFLICT_REPAIR_LIMIT,
+  dispatchEffortOpencode,
+  evaluateEffectiveVerdict,
+  canonicalLogicalGateIdentity,
+  validateReviewJournal,
+} = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 // #585: scheduler mutual-exclusion lock helpers (byte-identical ×4 in adaptive-schema).
 const { acquireProjectLock, isStaleLock, SCHEDULER_LOCK_NAME, LANE_STALENESS_MS } = require('./kaola-workflow-adaptive-schema');
@@ -90,6 +107,1536 @@ function assert(condition, message) {
   } else {
     failed++;
     console.error('FAIL: ' + message);
+  }
+}
+
+// Repair attempt n5-core-review:1 RED matrix (R1/R2/R4/R5).
+{
+  const src = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
+  const guardedSet = (src.match(/const SPLIT_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
+  assert(guardedSet.includes("'record-evidence'"),
+    'R1-LOCK-RED: mutating record-evidence participates in the project-lock predicate');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-r1-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r1');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(['| writer | in_progress | |'], [
+      '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), 'currentnonce12-rest\n');
+    let writes = 0;
+    const unbound = runRecordEvidence({ planPath, project: 'issue-r1', nodeId: 'writer',
+      stdinContent: 'RED: stale\nGREEN: stale\n', readFile: p => fs.readFileSync(p, 'utf8'),
+      writeFile: () => { writes++; }, cacheExists: p => fs.existsSync(p), mkdirp: () => {} });
+    assert(unbound.reason === 'evidence_generation_required' && writes === 0,
+      'R1-GENERATION-RED: hashed plans reject unbound stdin instead of minting the current generation');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+
+  const hash = 'a'.repeat(64);
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash, attempts: [{ attempt_id: 'x:1' }] }, hash).ok === false,
+    'R2-SCHEMA-RED: incomplete v1 attempts fail closed');
+  const crypto = require('crypto');
+  const gate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review', origin: ['writer'], members: ['review'] });
+  const generations = [{ member: 'review', nonce: 'nonce12345678' }];
+  const digest = 'b'.repeat(64);
+  const tx = crypto.createHash('sha256').update(JSON.stringify({ plan_hash: hash,
+    logical_gate_key: gate.key, candidate_digest: digest, generations })).digest('hex');
+  const body = 'evidence-binding: review nonce12345678\nverdict: fail\nfindings_blocking: 1\n';
+  const forged = { attempt_id: 'review:1', ordinal: 1, plan_hash: hash, logical_gate: gate,
+    transaction_key: tx, candidate_digest: digest, generations, settlement_command: 'close-node',
+    outcome: 'fail', reason: 'verdict_not_pass', lifecycle_settled: true,
+    repair: { selected_writer: null, settled: null }, consumed_by: null, findings: [], route_candidates: [],
+    receipts: [{ node_id: 'review', generation: 'nonce12345678',
+      receipt_sha256: crypto.createHash('sha256').update(body).digest('hex'), body,
+      effective_pass: true, verdict: 'pass', findings_blocking: 0 }],
+  };
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash, attempts: [forged] }, hash).reason === 'review_journal_receipt_verdict_mismatch',
+    'R2-FORGERY-RED: receipt verdict fields are recomputed from exact body');
+
+  const findingRaw = 'id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/shared.js fix_role=tdd-guide';
+  const findingBody = 'evidence-binding: review nonce12345678\nverdict: fail\nfindings_blocking: 1\nfinding: ' + findingRaw + '\n';
+  const canonicalFinding = { source_node: 'review', raw: findingRaw, id: 'F-1', scope: 'in_scope',
+    action: 'fix', status: 'open', severity: 'high', file: 'scripts/shared.js', fix_role: 'tdd-guide' };
+  const canonicalRoute = { source_node: 'review', finding_id: 'F-1', id: 'F-1', scope: 'in_scope',
+    action: 'fix', status: 'open', severity: 'high', file: 'scripts/shared.js',
+    ownership_candidates: ['writer-a', 'writer-b'], owning_node: null, fix_role: 'tdd-guide', raw: findingRaw };
+  const authoritative = { ...forged, receipts: [{ node_id: 'review', generation: 'nonce12345678',
+    receipt_sha256: crypto.createHash('sha256').update(findingBody).digest('hex'), body: findingBody,
+    effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+    findings: [canonicalFinding], route_candidates: [canonicalRoute] };
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...authoritative, outcome: 'pass', reason: null }] }, hash).reason === 'review_journal_outcome_mismatch',
+  'R9-SCHEMA-RED: sequence outcome/reason must equal the exact effective receipt verdict');
+  const staleBindingBody = 'evidence-binding: foreign stale-nonce\nverdict: fail\nfindings_blocking: 1\n';
+  const staleBindingAttempt = { ...authoritative,
+    receipts: [{ node_id: 'review', generation: 'nonce12345678', body: staleBindingBody,
+      receipt_sha256: crypto.createHash('sha256').update(staleBindingBody).digest('hex'),
+      effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+    findings: [], route_candidates: [] };
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [staleBindingAttempt] }, hash).reason === 'review_journal_receipt_binding_mismatch',
+  'R12-BINDING-RED: exact receipt body must bind once to receipt node and generation');
+
+  const fanoutGate = canonicalLogicalGateIdentity({ kind: 'fanout', id: 'red-team',
+    origin: ['writer'], members: ['skeptic-a', 'skeptic-b', 'skeptic-c'] });
+  const fanoutGenerations = fanoutGate.members.map((member, i) => ({ member, nonce: 'fanoutnonce' + i }));
+  const fanoutReceipt = (member, pass) => {
+    const generation = fanoutGenerations.find(g => g.member === member).nonce;
+    const body = 'evidence-binding: ' + member + ' ' + generation + '\nverdict: '
+      + (pass ? 'pass' : 'fail') + '\nfindings_blocking: ' + (pass ? '0' : '1') + '\n';
+    return { node_id: member, generation, body,
+      receipt_sha256: crypto.createHash('sha256').update(body).digest('hex'),
+      effective_pass: pass, verdict: pass ? 'pass' : 'fail', findings_blocking: pass ? 0 : 1 };
+  };
+  const fanoutAttempt = { attempt_id: 'fanout-' + crypto.createHash('sha256').update(fanoutGate.key).digest('hex') + ':1',
+    ordinal: 1, plan_hash: hash, logical_gate: fanoutGate, candidate_digest: '6'.repeat(64),
+    generations: fanoutGenerations,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: hash,
+      logical_gate_key: fanoutGate.key, candidate_digest: '6'.repeat(64), generations: fanoutGenerations })).digest('hex'),
+    settlement_command: 'close-node', outcome: null, reason: null,
+    receipts: [fanoutReceipt('skeptic-a', true)], findings: [], route_candidates: [],
+    lifecycle_settled: false, repair: { selected_writer: null, settled: null }, consumed_by: null };
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [fanoutAttempt] }, hash).ok === true,
+  'R12-QUORUM-RED: partial receipt set remains legal only as provisional null outcome');
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...fanoutAttempt, outcome: 'pass', lifecycle_settled: true }] }, hash).reason === 'review_journal_fanout_quorum_mismatch',
+  'R12-QUORUM-RED: settled/non-null fanout requires every exact member receipt');
+  const minorityReceipts = [fanoutReceipt('skeptic-a', true), fanoutReceipt('skeptic-b', false), fanoutReceipt('skeptic-c', false)];
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...fanoutAttempt, receipts: minorityReceipts, outcome: 'pass', lifecycle_settled: true }] }, hash).reason === 'review_journal_outcome_mismatch',
+  'R12-MAJORITY-RED: fanout pass cannot contradict strict majority of exact bodies');
+  const majorityReceipts = [fanoutReceipt('skeptic-a', true), fanoutReceipt('skeptic-b', true), fanoutReceipt('skeptic-c', false)];
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...fanoutAttempt, receipts: majorityReceipts, outcome: 'pass', lifecycle_settled: true }] }, hash).ok === true,
+  'R12-MAJORITY-RED: complete strict-majority quorum is valid');
+
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...authoritative, repair: { selected_writer: '', settled: true }, consumed_by: '' }] }, hash).ok === false,
+  'R13-EMPTY-RED: empty selected/consumed writer cannot stop a failed-attempt fence');
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...authoritative, findings: [42] }] }, hash).ok === false,
+  'R8-FINDINGS-RED: authoritative findings must equal canonical rows reparsed from receipt bodies');
+  assert(validateReviewJournal({ schema_version: 1, plan_hash: hash,
+    attempts: [{ ...authoritative, route_candidates: [{ ...canonicalRoute,
+      ownership_candidates: ['writer-b', 'writer-a'], owning_node: 'writer-a' }] }] }, hash).ok === false,
+  'R8-ROUTE-RED: routes reject unsorted multi-owner candidates and illegal owner selection');
+
+  const routePlanBody = makePlan(['| writer-a | complete | |', '| writer-b | complete | |',
+    '| review | complete | |', '| finalize | pending | |'], [
+    '| writer-a | tdd-guide | — | scripts/shared.js | 1 | sequence |',
+    '| writer-b | tdd-guide | — | scripts/shared.js | 1 | sequence |',
+    '| review | code-reviewer | writer-a, writer-b | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ]);
+  const routeHash = planValidator.computePlanHash(routePlanBody);
+  const routePlan = '<!-- plan_hash: ' + routeHash + ' -->\n' + routePlanBody;
+  const routeGate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review',
+    origin: ['writer-a', 'writer-b'], members: ['review'] });
+  const routeGenerations = [{ member: 'review', nonce: 'nonce12345678' }];
+  const routeDigest = '9'.repeat(64);
+  const routeAttempt = { ...authoritative, plan_hash: routeHash, logical_gate: routeGate,
+    candidate_digest: routeDigest, generations: routeGenerations,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: routeHash,
+      logical_gate_key: routeGate.key, candidate_digest: routeDigest, generations: routeGenerations })).digest('hex'),
+    route_candidates: [{ ...canonicalRoute, ownership_candidates: [], owning_node: null }] };
+  const routeFiles = {
+    '/p/workflow-plan.md': routePlan,
+    '/p/.cache/review.md': findingBody,
+    '/p/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: routeHash, attempts: [routeAttempt] }),
+    '/p/.cache/findings-route.json': 'sentinel-projection\n',
+  };
+  const projection = runRouteFindings({ nodeId: 'review', planPath: '/p/workflow-plan.md', repoRoot: '/p',
+    readFile: p => { if (!(p in routeFiles)) throw new Error('ENOENT'); return routeFiles[p]; },
+    writeFile: (p, c) => { routeFiles[p] = c; }, cacheExists: p => p in routeFiles }, 'test-project');
+  assert(projection.result === 'refuse' && projection.reason === 'review_journal_route_mismatch'
+    && routeFiles['/p/.cache/findings-route.json'] === 'sentinel-projection\n',
+  'R8-PROJECTION-RED: frozen-plan ownership mismatch refuses without rewriting compatibility projection');
+
+  const passBody = 'evidence-binding: review passnonce1234\nverdict: pass\nfindings_blocking: 0\n';
+  const passGenerations = [{ member: 'review', nonce: 'passnonce1234' }];
+  const passAttempt = { ...routeAttempt, attempt_id: 'review:2', ordinal: 2,
+    generations: passGenerations,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: routeHash,
+      logical_gate_key: routeGate.key, candidate_digest: routeDigest, generations: passGenerations })).digest('hex'),
+    outcome: 'pass', reason: null,
+    receipts: [{ node_id: 'review', generation: 'passnonce1234', body: passBody,
+      receipt_sha256: crypto.createHash('sha256').update(passBody).digest('hex'),
+      effective_pass: true, verdict: 'pass', findings_blocking: 0 }],
+    findings: [], route_candidates: [], lifecycle_settled: true,
+    repair: { selected_writer: null, settled: null }, consumed_by: null };
+  const latestFiles = { ...routeFiles,
+    '/p/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: routeHash,
+      attempts: [passAttempt, { ...routeAttempt, route_candidates: [canonicalRoute] }] }),
+    '/p/.cache/findings-route.json': 'stale-old-route\n' };
+  const latestProjection = runRouteFindings({ nodeId: 'review', planPath: '/p/workflow-plan.md', repoRoot: '/p',
+    readFile: p => { if (!(p in latestFiles)) throw new Error('ENOENT'); return latestFiles[p]; },
+    writeFile: (p, c) => { latestFiles[p] = c; }, cacheExists: p => p in latestFiles }, 'test-project');
+  assert(latestProjection.result === 'ok' && latestProjection.count === 0
+    && latestFiles['/p/.cache/findings-route.json'] === '[]\n',
+  'R10-LATEST-RED: highest authoritative ordinal projects empty routes despite journal array reorder');
+
+  const finalizeGate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'forged-display',
+    origin: ['review'], members: ['finalize'] });
+  const finalizeBody = 'evidence-binding: finalize finalnonce123\nverdict: pass\nfindings_blocking: 0\n';
+  const finalizeGenerations = [{ member: 'finalize', nonce: 'finalnonce123' }];
+  const forgedGateAttempt = { ...passAttempt, attempt_id: 'not-derived-from-gate', ordinal: 1,
+    logical_gate: finalizeGate, generations: finalizeGenerations,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: routeHash,
+      logical_gate_key: finalizeGate.key, candidate_digest: routeDigest, generations: finalizeGenerations })).digest('hex'),
+    receipts: [{ node_id: 'finalize', generation: 'finalnonce123', body: finalizeBody,
+      receipt_sha256: crypto.createHash('sha256').update(finalizeBody).digest('hex'),
+      effective_pass: true, verdict: 'pass', findings_blocking: 0 }] };
+  const forgedGateFiles = { '/p/workflow-plan.md': routePlan,
+    '/p/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: routeHash,
+      attempts: [forgedGateAttempt] }) };
+  const forgedGateState = readReviewJournal({ planPath: '/p/workflow-plan.md',
+    readFile: p => { if (!(p in forgedGateFiles)) throw new Error('ENOENT'); return forgedGateFiles[p]; },
+    cacheExists: p => p in forgedGateFiles }, routePlan);
+  assert(forgedGateState.reason === 'review_journal_gate_identity_mismatch',
+    'R11-GATE-RED: non-verdict member and forged display gate fail frozen-plan identity binding');
+
+  const wrongAttemptFiles = { '/p/workflow-plan.md': routePlan,
+    '/p/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: routeHash,
+      attempts: [{ ...passAttempt, attempt_id: 'arbitrary-id', ordinal: 2 }] }) };
+  const wrongAttemptState = readReviewJournal({ planPath: '/p/workflow-plan.md',
+    readFile: p => { if (!(p in wrongAttemptFiles)) throw new Error('ENOENT'); return wrongAttemptFiles[p]; },
+    cacheExists: p => p in wrongAttemptFiles }, routePlan);
+  assert(wrongAttemptState.reason === 'review_journal_attempt_identity_mismatch',
+    'R11-ATTEMPT-RED: deterministic prefix and contiguous gate-local ordinal bind attempts to the plan');
+
+  const repairPlanBody = makePlan(['| base | complete | |', '| writer | complete | |',
+    '| review | pending | |', '| finalize | pending | |'], [
+    '| base | implementer | — | scripts/base.js | 1 | sequence |',
+    '| writer | tdd-guide | base | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | writer | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ]);
+  const repairHash = planValidator.computePlanHash(repairPlanBody);
+  const repairPlan = '<!-- plan_hash: ' + repairHash + ' -->\n' + repairPlanBody;
+  const repairGate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review', origin: ['writer'], members: ['review'] });
+  const repairGens = [{ member: 'review', nonce: 'repairnonce12' }];
+  const repairBody = 'evidence-binding: review repairnonce12\nverdict: fail\nfindings_blocking: 1\n';
+  const producerIdentity = { baseline: 'a'.repeat(40), anchored_ref: 'a'.repeat(40),
+    open_token: 'b'.repeat(40), generation: 'a'.repeat(12),
+    ref: 'refs/kaola-workflow/barrier/test/writer' };
+  const repairAttemptBase = { attempt_id: 'review:1', ordinal: 1, plan_hash: repairHash,
+    logical_gate: repairGate, candidate_digest: '8'.repeat(64), generations: repairGens,
+    transaction_key: crypto.createHash('sha256').update(JSON.stringify({ plan_hash: repairHash,
+      logical_gate_key: repairGate.key, candidate_digest: '8'.repeat(64), generations: repairGens })).digest('hex'),
+    settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
+    receipts: [{ node_id: 'review', generation: 'repairnonce12', body: repairBody,
+      receipt_sha256: crypto.createHash('sha256').update(repairBody).digest('hex'),
+      effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+    findings: [], route_candidates: [], lifecycle_settled: true,
+    producer_bindings: { base: producerIdentity, writer: producerIdentity },
+    repair: { selected_writer: 'writer', settled: true }, consumed_by: 'writer' };
+  const readRepairAttempt = attempt => {
+    const files = { '/repair/workflow-plan.md': repairPlan,
+      '/repair/.cache/review-attempts.json': JSON.stringify({ schema_version: 1, plan_hash: repairHash, attempts: [attempt] }) };
+    return readReviewJournal({ planPath: '/repair/workflow-plan.md',
+      readFile: p => { if (!(p in files)) throw new Error('ENOENT'); return files[p]; },
+      cacheExists: p => p in files }, repairPlan);
+  };
+  assert(readRepairAttempt({ ...repairAttemptBase, producer_bindings: { foreign: producerIdentity },
+    repair: { selected_writer: 'foreign', settled: true }, consumed_by: 'foreign' }).reason === 'review_journal_repair_identity_mismatch',
+  'R13-FOREIGN-RED: consumed writer must exist as a frozen write-bearing producer');
+  assert(readRepairAttempt({ ...repairAttemptBase, producer_bindings: { base: producerIdentity },
+    repair: { selected_writer: 'base', settled: true }, consumed_by: 'base' }).reason === 'review_journal_repair_identity_mismatch',
+  'R13-NONMAX-RED: consumed writer must be the unique maximal write-bearing producer');
+  assert(readRepairAttempt({ ...repairAttemptBase, producer_bindings: {} }).reason === 'review_journal_repair_identity_mismatch',
+  'R13-BINDING-RED: consumed writer requires its immutable producer binding');
+  const validConsumedState = readRepairAttempt(repairAttemptBase);
+  assert(validConsumedState.ok === true && reviewJournalBlocker(validConsumedState.journal) === null,
+  'R13-CONTROL-RED: proven unique-maximal consumed writer legitimately clears its failed-attempt fence');
+
+  assert(typeof captureWriterBarrierIdentity === 'function' && typeof verifyWriterBarrierIdentity === 'function',
+    'R4-BINDING-RED: repair captures and verifies original baseline/ref/open-token/generation identity');
+  const identityTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-writer-identity-'));
+  try {
+    const planPath = path.join(identityTmp, 'issue-682', 'workflow-plan.md');
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const base = 'a'.repeat(40);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), base + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-open-writer'), 'b'.repeat(40) + '\n');
+    const captured = captureWriterBarrierIdentity({ planPath,
+      readFile: p => fs.readFileSync(p, 'utf8'), resolveBarrierRef: () => base }, 'writer');
+    assert(captured && verifyWriterBarrierIdentity(captured, { ...captured }),
+      'R4-BINDING: the complete original writer identity round-trips');
+    for (const key of ['baseline', 'anchored_ref', 'open_token', 'generation', 'ref']) {
+      assert(!verifyWriterBarrierIdentity(captured, { ...captured, [key]: captured[key] + '-tampered' }),
+        'R4-BINDING: changed ' + key + ' refuses repair identity');
+    }
+  } finally { fs.rmSync(identityTmp, { recursive: true, force: true }); }
+  assert(typeof readReviewJournal === 'function',
+    'R5-HISTORY-RED: missing-history detection is exported for direct fail-closed fixtures');
+  const historyTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-history-'));
+  try {
+    const projectDir = path.join(historyTmp, 'issue-history');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const historyBody = makePlan(['| review | complete | |'], [
+      '| review | code-reviewer | — | — | 1 | sequence |',
+    ]);
+    const historyHash = planValidator.computePlanHash(historyBody);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const plan = '<!-- plan_hash: ' + historyHash + ' -->\n' + historyBody;
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'cccccccccccc-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review cccccccccccc\nverdict: pass\nfindings_blocking: 0\n');
+    const missing = readReviewJournal({ planPath, readFile: p => fs.readFileSync(p, 'utf8'),
+      cacheExists: p => fs.existsSync(p), allowReviewJournalCreate: true,
+      creatingNodeId: 'review', creatingGeneration: 'cccccccccccc' }, plan);
+    assert(missing.reason === 'review_journal_missing',
+      'R5-HISTORY: close-time creation cannot launder a completed review witness');
+  } finally { fs.rmSync(historyTmp, { recursive: true, force: true }); }
+
+  // R7: two independent live review gates may both publish their current-generation receipts before
+  // either lock holder closes.  The first close creates the journal; the second appends independently.
+  const simultaneousTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-simultaneous-'));
+  try {
+    const project = 'issue-r7';
+    const projectDir = path.join(simultaneousTmp, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(simultaneousTmp, 'a.js'), '// a\n');
+    fs.writeFileSync(path.join(simultaneousTmp, 'b.js'), '// b\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, makePlan([
+      '| writer-a | complete | |', '| writer-b | complete | |',
+      '| review-a | pending | |', '| review-b | pending | |', '| finalize | pending | |',
+    ], [
+      '| writer-a | tdd-guide | — | a.js | 1 | sequence |',
+      '| writer-b | tdd-guide | — | b.js | 1 | sequence |',
+      '| review-a | code-reviewer | writer-a | — | 1 | sequence |',
+      '| review-b | code-reviewer | writer-b | — | 1 | sequence |',
+      '| finalize | finalize | review-a, review-b | — | 1 | sequence |',
+    ]));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# State\n');
+    const git = args => execFixtureFileSync('git', ['-C', simultaneousTmp, ...args], { stdio: 'ignore' });
+    git(['init']); git(['config', 'user.email', 'kw@test']); git(['config', 'user.name', 'kw']);
+    execFixtureFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
+      planPath, '--freeze', '--repair', '--json'], { cwd: simultaneousTmp, stdio: 'pipe' });
+    git(['add', '-A']); git(['commit', '-m', 'seed']);
+    for (const writer of ['writer-a', 'writer-b']) {
+      execFixtureFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
+        planPath, '--record-base', '--node-id', writer, '--json'], { cwd: simultaneousTmp, stdio: 'pipe' });
+    }
+    const cli = args => {
+      try {
+        const stdout = execFixtureFileSync(process.execPath,
+          [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), ...args],
+          { cwd: simultaneousTmp, encoding: 'utf8' });
+        return { exitCode: 0, ...JSON.parse(stdout.trim().split('\n').pop()) };
+      } catch (err) {
+        let parsed = {}; try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+        return { exitCode: err.status == null ? 1 : err.status, ...parsed };
+      }
+    };
+    const opened = cli(['open-ready', '--project', project, '--json']);
+    const byId = new Map((opened.opened || []).map(n => [n.id, n]));
+    assert(byId.has('review-a') && byId.has('review-b'),
+      'R7-SIMULTANEOUS-RED: real scheduler opens both independent review gates');
+    for (const review of ['review-a', 'review-b']) {
+      const nonce = byId.get(review).nonce;
+      const recorded = require('child_process').spawnSync(process.execPath,
+        [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'record-evidence', '--project', project,
+          '--node-id', review, '--stdin', '--json'],
+        { cwd: simultaneousTmp, encoding: 'utf8', input: 'evidence-binding: ' + review + ' ' + nonce
+          + '\nverdict: fail\nfindings_blocking: 1\n' });
+      assert(recorded.status === 0, 'R7-SIMULTANEOUS-RED: records current receipt for ' + review);
+    }
+    const closeA = cli(['close-node', '--project', project, '--node-id', 'review-a', '--json']);
+    const closeB = cli(['close-node', '--project', project, '--node-id', 'review-b', '--json']);
+    const journal = fs.existsSync(path.join(cacheDir, 'review-attempts.json'))
+      ? JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8')) : { attempts: [] };
+    const statuses = readLedgerStatuses(fs.readFileSync(planPath, 'utf8'));
+    assert(closeA.result === 'review_failed' && closeB.result === 'review_failed'
+      && journal.attempts.length === 2 && journal.attempts.every(a => a.lifecycle_settled === true),
+      'R7-SIMULTANEOUS-RED: both first closes settle one independent authoritative attempt');
+    assert(statuses['review-a'] === 'pending' && statuses['review-b'] === 'pending'
+      && statuses.finalize === 'pending' && !fs.existsSync(path.join(cacheDir, 'running-set.json')),
+      'R7-SIMULTANEOUS-RED: both gates return pending, running set drains, and successor stays hidden');
+  } finally { fs.rmSync(simultaneousTmp, { recursive: true, force: true }); }
+}
+
+// REPAIR-DIGEST-DRIFT: exclude only this run's control tree and .kw bookkeeping.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-digest-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-682'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'other-project'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, '.kw'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'code.js'), 'one\n');
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-682', 'workflow-state.md'), 'active-one\n');
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'other-project', 'state.md'), 'other-one\n');
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.kw/\n');
+    execFixtureFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore' });
+    execFixtureFileSync('git', ['config', 'user.email', 'kw@test'], { cwd: tmp });
+    execFixtureFileSync('git', ['config', 'user.name', 'kw'], { cwd: tmp });
+    execFixtureFileSync('git', ['add', '-A'], { cwd: tmp });
+    execFixtureFileSync('git', ['commit', '-m', 'base'], { cwd: tmp, stdio: 'ignore' });
+    const base = computeReviewCandidateDigest('', 'issue-682', tmp);
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-682', 'workflow-state.md'), 'active-two\n');
+    fs.writeFileSync(path.join(tmp, '.kw', 'bookkeeping'), 'changed\n');
+    assert(computeReviewCandidateDigest('', 'issue-682', tmp) === base,
+      'REPAIR-DIGEST-DRIFT: active control state and .kw bookkeeping are excluded');
+    fs.writeFileSync(path.join(tmp, 'code.js'), 'two\n');
+    assert(computeReviewCandidateDigest('', 'issue-682', tmp) !== base,
+      'REPAIR-DIGEST-DRIFT: product code drift changes candidate digest');
+    fs.writeFileSync(path.join(tmp, 'code.js'), 'one\n');
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'other-project', 'state.md'), 'other-two\n');
+    assert(computeReviewCandidateDigest('', 'issue-682', tmp) !== base,
+      'REPAIR-DIGEST-DRIFT: another workflow project remains candidate-relevant');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// FANOUT-PROVISIONAL-LAST: non-last votes stay provisional; only the last member settles the group.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-fanout-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-682');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| skeptic-a | in_progress | |', '| skeptic-b | in_progress | |',
+      '| finalize | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| skeptic-a | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| skeptic-b | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| finalize | finalize | skeptic-a, skeptic-b | — | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-a'), 'aaaaaaaaaaaa-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-a.md'),
+      'evidence-binding: skeptic-a aaaaaaaaaaaa\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'),
+      'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+      { id: 'skeptic-a', role: 'adversarial-verifier', kind: 'read' },
+      { id: 'skeptic-b', role: 'adversarial-verifier', kind: 'read' },
+    ] }, null, 2));
+    const opts = id => ({
+      planPath, project: 'issue-682', nodeId: id,
+      shell: (_p, args) => args.includes('--resume-check')
+        ? ({ exitCode: 0, ok: true, result: 'ok' }) : ({ exitCode: 0, result: 'ok', allDone: false, readyPending: [] }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p),
+      computeReviewCandidateDigest: () => 'e'.repeat(64),
+      captureWriterBarrierIdentity: () => ({ baseline: '1'.repeat(40), anchored_ref: '1'.repeat(40),
+        open_token: '2'.repeat(40), generation: '1'.repeat(12),
+        ref: 'refs/kaola-workflow/barrier/issue-682/writer' }),
+    });
+    const first = runCloseNode(opts('skeptic-a'));
+    if (!fs.existsSync(path.join(cacheDir, 'review-attempts.json'))) {
+      throw new Error('fanout first close did not create journal: ' + JSON.stringify(first));
+    }
+    let journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(first.result === 'ok' && first.provisional === true && journal.attempts[0].outcome === null
+      && journal.attempts[0].lifecycle_settled === false,
+      'FANOUT-PROVISIONAL-LAST: non-last vote closes provisionally without certifying successors');
+    let crashedAtOutcome = false;
+    try { runCloseNode({ ...opts('skeptic-b'), reviewFailpoint: 'outcome_written' }); }
+    catch (err) { crashedAtOutcome = String(err && err.message).includes('review_failpoint:outcome_written'); }
+    journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(crashedAtOutcome && journal.attempts[0].outcome === 'fail'
+      && journal.attempts[0].lifecycle_settled === false,
+      'FANOUT-CRASH-RETRY: aggregate outcome is durable before a simulated process crash');
+    const beforeCorrection = fs.readFileSync(path.join(cacheDir, 'skeptic-b.md'), 'utf8');
+    const corrected = runRecordEvidence({ ...opts('skeptic-b'), mkdirp: () => {},
+      stdinContent: 'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: pass\nfindings_blocking: 0\n' });
+    assert(corrected.reason === 'review_outcome_receipts_immutable'
+      && fs.readFileSync(path.join(cacheDir, 'skeptic-b.md'), 'utf8') === beforeCorrection,
+      'R14-FAIL-TO-PASS-RED: post-outcome current receipt replacement refuses with zero evidence mutation');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const directJournalBefore = fs.readFileSync(journalPath, 'utf8');
+    const directPlanBefore = fs.readFileSync(planPath, 'utf8');
+    const directRunningBefore = fs.readFileSync(runningPath, 'utf8');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'),
+      'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: pass\nfindings_blocking: 0\n');
+    const directReplacement = runCloseNode(opts('skeptic-b'));
+    const directNoMutation = fs.readFileSync(journalPath, 'utf8') === directJournalBefore
+      && fs.readFileSync(planPath, 'utf8') === directPlanBefore
+      && fs.existsSync(runningPath) && fs.readFileSync(runningPath, 'utf8') === directRunningBefore;
+    fs.writeFileSync(journalPath, directJournalBefore);
+    fs.writeFileSync(planPath, directPlanBefore);
+    fs.writeFileSync(runningPath, directRunningBefore);
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'), beforeCorrection);
+    assert(directReplacement.reason === 'review_outcome_receipts_immutable' && directNoMutation,
+      'R15-DIRECT-FAIL-TO-PASS-RED: direct evidence write after fail outcome refuses before journal/ledger/running mutation');
+    let crashedAfterFold = false;
+    try { runCloseNode({ ...opts('skeptic-b'), reviewFailpoint: 'plan_folded' }); }
+    catch (err) { crashedAfterFold = String(err && err.message).includes('review_failpoint:plan_folded'); }
+    assert(crashedAfterFold && readLedgerStatuses(fs.readFileSync(planPath, 'utf8'))['skeptic-a'] === 'pending',
+      'FANOUT-CRASH-RETRY: a crash after the plan fold leaves a retryable durable fail outcome');
+    let crashedAfterRunning = false;
+    try { runCloseNode({ ...opts('skeptic-b'), reviewFailpoint: 'running_removed' }); }
+    catch (err) { crashedAfterRunning = String(err && err.message).includes('review_failpoint:running_removed'); }
+    assert(crashedAfterRunning && !fs.existsSync(path.join(cacheDir, 'running-set.json')),
+      'FANOUT-CRASH-RETRY: a crash after running-set removal remains retryable');
+    const second = runCloseNode(opts('skeptic-b'));
+    journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(second.result === 'review_failed' && journal.attempts.length === 1
+      && journal.attempts[0].outcome === 'fail' && journal.attempts[0].receipts.length === 2
+      && validateReviewJournal(journal, hash).ok === true,
+      'FANOUT-PROVISIONAL-LAST: last member rereads both receipts and a tie refutes one logical-group attempt');
+    assert(readLedgerStatuses(fs.readFileSync(planPath, 'utf8'))['skeptic-a'] === 'pending'
+      && readLedgerStatuses(fs.readFileSync(planPath, 'utf8'))['skeptic-b'] === 'pending',
+      'FANOUT-PROVISIONAL-LAST: refutation returns the exact resolved group to pending');
+    const late = runRecordEvidence({ ...opts('skeptic-a'), stdinContent: 'verdict: pass\n', mkdirp: () => {} });
+    assert(late.reason === 'evidence_generation_stale',
+      'FANOUT-PROVISIONAL-LAST: late evidence for a non-current generation is refused');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R16: a fan-out failure is already committed when settled_written is durable. Both public close
+// commands must replay that terminal result after the group has returned to pending, without writes.
+// R25: a non-last fan-out member closes provisionally, but it is still a completed node and must
+// receive the same compliance, timing, and provenance bookkeeping as an ordinary close. The
+// bookkeeping is replay-safe when a process crashes immediately after the plan/compliance write.
+for (const closeKind of ['close-node', 'close-and-open-next']) {
+for (const crashAfterPlanWrite of [false, true]) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-provisional-bookkeeping-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r25');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| skeptic-a | in_progress | |',
+      '| skeptic-b | in_progress | |', '| finalize | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| skeptic-a | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| skeptic-b | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| finalize | finalize | skeptic-a, skeptic-b | — | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const timingPath = path.join(cacheDir, 'node-timings.jsonl');
+    const provenancePath = path.join(cacheDir, 'provenance-log.jsonl');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(statePath, '# State\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-a'), 'aaaaaaaaaaaa-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-a.md'),
+      'evidence-binding: skeptic-a aaaaaaaaaaaa\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'),
+      'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'skeptic-a', role: 'adversarial-verifier', kind: 'read' },
+      { id: 'skeptic-b', role: 'adversarial-verifier', kind: 'read' },
+    ] }, null, 2));
+    fs.writeFileSync(timingPath,
+      JSON.stringify({ node: 'skeptic-a', event: 'opened', ts: new Date().toISOString() }) + '\n'
+      + JSON.stringify({ node: 'skeptic-b', event: 'opened', ts: new Date().toISOString() }) + '\n');
+    const shell = (_scriptPath, args) => args.includes('--resume-check')
+      ? ({ exitCode: 0, ok: true, result: 'ok' })
+      : ({ exitCode: 0, result: 'ok', allDone: false, readyPending: [], readySet: [] });
+    let crashArmed = crashAfterPlanWrite;
+    const writeFile = (p, c) => {
+      fs.writeFileSync(p, c);
+      if (crashArmed && p === planPath && c.includes('| skeptic-a | complete |')) {
+        crashArmed = false;
+        throw new Error('simulated_crash_after_provisional_plan_write');
+      }
+    };
+    const common = { planPath, statePath, project: 'issue-r25', nodeId: 'skeptic-a', shell,
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile, cacheExists: p => fs.existsSync(p),
+      unlink: p => fs.unlinkSync(p), computeReviewCandidateDigest: () => '9'.repeat(64),
+      captureWriterBarrierIdentity: () => ({ baseline: '1'.repeat(40), anchored_ref: '1'.repeat(40),
+        open_token: '2'.repeat(40), generation: '1'.repeat(12),
+        ref: 'refs/kaola-workflow/barrier/issue-r25/writer' }) };
+    const closeFn = closeKind === 'close-node' ? runCloseNode : runCloseAndOpenNext;
+    let crashed = false;
+    let first;
+    try { first = closeFn(common); }
+    catch (err) { crashed = String(err && err.message).includes('simulated_crash_after_provisional_plan_write'); }
+    const retry = closeFn(common);
+    const retryAgain = closeFn(common);
+    const finalPlan = fs.readFileSync(planPath, 'utf8');
+    const complianceRows = finalPlan.split('\n')
+      .filter(line => line.includes('| adversarial-verifier (skeptic-a) |'));
+    const timings = fs.readFileSync(timingPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const provenance = fs.existsSync(provenancePath)
+      ? fs.readFileSync(provenancePath, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+    assert((crashAfterPlanWrite ? crashed : first && first.provisional === true)
+      && retry.provisional === true && retryAgain.provisional === true,
+    'R25-PROVISIONAL-BOOKKEEPING-RED: ' + closeKind + ' ' + (crashAfterPlanWrite ? 'crash retry' : 'ordinary retry')
+      + ' preserves the provisional close result');
+    assert(complianceRows.length === 1
+      && timings.filter(e => e.node === 'skeptic-a' && e.event === 'closed').length === 1
+      && provenance.filter(e => e.nodeId === 'skeptic-a' && e.event === 'close'
+        && e.nonce === 'aaaaaaaaaaaa').length === 1,
+    'R25-PROVISIONAL-BOOKKEEPING-RED: ' + closeKind + ' ' + (crashAfterPlanWrite ? 'crash retry' : 'ordinary retry')
+      + ' records exactly one compliance row, close timing, and generation-bound provenance entry');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+}
+
+for (const closeKind of ['close-node', 'close-and-open-next']) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-fanout-settled-replay-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r16');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| skeptic-a | in_progress | |', '| skeptic-b | in_progress | |',
+      '| finalize | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| skeptic-a | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| skeptic-b | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| finalize | finalize | skeptic-a, skeptic-b | — | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const evidencePaths = [path.join(cacheDir, 'skeptic-a.md'), path.join(cacheDir, 'skeptic-b.md')];
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(statePath, '# State\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-a'), 'aaaaaaaaaaaa-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(evidencePaths[0],
+      'evidence-binding: skeptic-a aaaaaaaaaaaa\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(evidencePaths[1],
+      'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'skeptic-a', role: 'adversarial-verifier', kind: 'read' },
+      { id: 'skeptic-b', role: 'adversarial-verifier', kind: 'read' },
+    ] }, null, 2));
+    const shell = (_scriptPath, args) => args.includes('--resume-check')
+      ? ({ exitCode: 0, ok: true, result: 'ok' })
+      : ({ exitCode: 0, result: 'ok', allDone: false, readyPending: ['finalize'], readySet: ['finalize'] });
+    const opts = id => ({ planPath, statePath, project: 'issue-r16', nodeId: id, shell,
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p),
+      computeReviewCandidateDigest: () => '6'.repeat(64),
+      captureWriterBarrierIdentity: () => ({ baseline: '1'.repeat(40), anchored_ref: '1'.repeat(40),
+        open_token: '2'.repeat(40), generation: '1'.repeat(12),
+        ref: 'refs/kaola-workflow/barrier/issue-r16/writer' }) });
+    const closeFn = closeKind === 'close-node' ? runCloseNode : runCloseAndOpenNext;
+    assert(runCloseNode(opts('skeptic-a')).provisional === true,
+      'R16-SETTLED-REPLAY-RED: ' + closeKind + ' fixture stores the first fan-out vote');
+    let crashed = false;
+    try { closeFn({ ...opts('skeptic-b'), reviewFailpoint: 'settled_written' }); }
+    catch (err) { crashed = String(err && err.message).includes('review_failpoint:settled_written'); }
+    const attempt = JSON.parse(fs.readFileSync(journalPath, 'utf8')).attempts[0];
+    const expected = { result: 'review_failed', reason: attempt.reason,
+      attempt_id: attempt.attempt_id, logical_gate: attempt.logical_gate, lifecycle_settled: true,
+      repair: 'repair-node --attempt-id ' + attempt.attempt_id + ' --node-id <agent-selected-writer>',
+      taskTransitions: [] };
+    const snapshot = () => ({
+      journal: fs.readFileSync(journalPath, 'utf8'),
+      plan: fs.readFileSync(planPath, 'utf8'),
+      running: fs.existsSync(runningPath) ? fs.readFileSync(runningPath, 'utf8') : null,
+      evidence: evidencePaths.map(p => fs.readFileSync(p, 'utf8')),
+    });
+    const committed = snapshot();
+    const retry = closeFn(opts('skeptic-b'));
+    const replayed = snapshot();
+    const retryAgain = closeFn(opts('skeptic-b'));
+    assert(crashed && attempt.outcome === 'fail' && attempt.lifecycle_settled === true,
+      'R16-SETTLED-REPLAY-RED: ' + closeKind + ' crashes after committing one settled failed attempt');
+    assert(JSON.stringify(retry) === JSON.stringify(expected)
+      && JSON.stringify(retryAgain) === JSON.stringify(expected),
+      'R16-SETTLED-REPLAY-RED: ' + closeKind + ' replays the original review_failed envelope');
+    assert(JSON.stringify(replayed) === JSON.stringify(committed)
+      && JSON.stringify(snapshot()) === JSON.stringify(committed)
+      && readLedgerStatuses(committed.plan).finalize === 'pending',
+      'R16-SETTLED-REPLAY-RED: ' + closeKind + ' replay preserves journal/ledger/running/evidence and opens no successor');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R18: a passing verdict-role selector must durably fold losing arms before running-set removal and
+// lifecycle settlement. Crash at that boundary for both close paths and prove only one arm is ready.
+for (const closeKind of ['close-node', 'close-and-open-next']) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-selector-order-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r18');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| review-select | in_progress | |',
+      '| arm-a | pending | |', '| arm-b | pending | |', '| review-arms | pending | |', '| done | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/writer.js | 1 | sequence |',
+      '| review-select | code-reviewer | writer | — | 1 | selector_source |',
+      '| arm-a | implementer | review-select | scripts/a.js | 1 | select(choice) |',
+      '| arm-b | implementer | review-select | scripts/b.js | 1 | select(choice) |',
+      '| review-arms | code-reviewer | arm-a, arm-b | — | 1 | sequence |',
+      '| done | finalize | review-arms | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(statePath, '# State\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-select'), 'rrrrrrrrrrrr-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-select.md'),
+      'evidence-binding: review-select rrrrrrrrrrrr\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-select', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const identity = { baseline: '1'.repeat(40), anchored_ref: '1'.repeat(40),
+      open_token: 'open-token', generation: '1'.repeat(12),
+      ref: 'refs/kaola-workflow/barrier/issue-r18/writer' };
+    const shell = (scriptPath, args) => {
+      const base = path.basename(scriptPath);
+      if (base === 'kaola-workflow-commit-node.js' && !args.includes('--start')) {
+        return { exitCode: 0, result: 'ok', overallOk: true,
+          selectorCheck: { isSelector: true, ok: true, selected: 'arm-a', armsToNa: ['arm-b'] } };
+      }
+      if (base === 'kaola-workflow-next-action.js') {
+        return computeNextAction(fs.readFileSync(planPath, 'utf8'), { resolveModel: () => 'sonnet' });
+      }
+      return { exitCode: 0, result: 'ok', ok: true };
+    };
+    const common = { planPath, statePath, project: 'issue-r18', nodeId: 'review-select', shell,
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p),
+      computeReviewCandidateDigest: () => '8'.repeat(64), captureWriterBarrierIdentity: () => identity };
+    const closeFn = closeKind === 'close-node' ? runCloseNode : runCloseAndOpenNext;
+    let crashed = false;
+    try { closeFn({ ...common, reviewFailpoint: 'selector_folded' }); }
+    catch (err) { crashed = String(err && err.message).includes('review_failpoint:selector_folded'); }
+    const planAfter = fs.readFileSync(planPath, 'utf8');
+    const statuses = readLedgerStatuses(planAfter);
+    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const ready = computeNextAction(planAfter, { resolveModel: () => 'sonnet' });
+    const blocker = reviewJournalBlocker(journal);
+    assert(crashed && statuses['review-select'] === 'complete' && statuses['arm-b'] === 'n/a',
+      'R18-SELECTOR-ORDER-RED: ' + closeKind + ' folds the losing arm at the durable crash boundary');
+    assert(journal.attempts[0].outcome === 'pass' && journal.attempts[0].lifecycle_settled === false
+      && fs.existsSync(runningPath),
+      'R18-SELECTOR-ORDER-RED: ' + closeKind + ' cannot settle or remove running state before selector folding');
+    assert(JSON.stringify((ready.readySet || []).map(n => n.id)) === JSON.stringify(['arm-a'])
+      && blocker && blocker.attempt_ids[0] === journal.attempts[0].attempt_id,
+      'R18-SELECTOR-ORDER-RED: ' + closeKind + ' exposes at most the selected arm and remains journal-fenced');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R19: downstream reviews bind only the completed select lineage. Close and repair both possible
+// arm choices, preserving journal validity after the selected producer is reopened in_progress.
+for (const selected of ['arm-a', 'arm-b']) {
+  const skipped = selected === 'arm-a' ? 'arm-b' : 'arm-a';
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-select-producer-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r19');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| classify | complete | |',
+      '| arm-a | ' + (selected === 'arm-a' ? 'complete' : 'n/a') + ' | |',
+      '| arm-b | ' + (selected === 'arm-b' ? 'complete' : 'n/a') + ' | |',
+      '| review | in_progress | |', '| done | pending | |',
+    ], [
+      '| classify | planner | — | — | 1 | selector_source |',
+      '| arm-a | implementer | classify | scripts/a.js | 1 | select(format) |',
+      '| arm-b | implementer | classify | scripts/b.js | 1 | select(format) |',
+      '| review | code-reviewer | arm-a, arm-b | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const selectedBaseline = (selected === 'arm-a' ? 'a' : 'b').repeat(40);
+    const selectedNonce = selectedBaseline.slice(0, 12);
+    const identity = { baseline: selectedBaseline, anchored_ref: selectedBaseline,
+      open_token: 'open-token-' + selected, generation: selectedNonce,
+      ref: 'refs/kaola-workflow/barrier/issue-r19/' + selected };
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + selected), selectedBaseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'rrrrrrrrrrrr-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review rrrrrrrrrrrr\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const digest = '9'.repeat(64);
+    const common = { planPath, project: 'issue-r19', nodeId: 'review',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => digest,
+      captureWriterBarrierIdentity: id => id === selected ? identity : null };
+    const closed = runCloseNode(common);
+    const journal = fs.existsSync(journalPath)
+      ? JSON.parse(fs.readFileSync(journalPath, 'utf8')) : { attempts: [] };
+    const attempt = journal.attempts[0];
+    assert(closed.result === 'review_failed' && attempt
+      && JSON.stringify(Object.keys(attempt.producer_bindings)) === JSON.stringify([selected]),
+      'R19-SELECT-PRODUCER-RED: close binds only completed ' + selected + ' and excludes n/a ' + skipped
+        + ', got ' + JSON.stringify({ closed, bindings: attempt && Object.keys(attempt.producer_bindings || {}) }));
+    const repaired = attempt ? runRepairNode({ ...common, nodeId: selected, attemptId: attempt.attempt_id }) : {};
+    const statuses = readLedgerStatuses(fs.readFileSync(planPath, 'utf8'));
+    const journalCheck = readReviewJournal(common, fs.readFileSync(planPath, 'utf8'));
+    assert(repaired.result === 'ok' && repaired.repaired === selected && repaired.baselineReused === true,
+      'R19-SELECT-PRODUCER-RED: repair accepts the executed unique-maximal producer ' + selected
+        + ', got ' + JSON.stringify(repaired));
+    assert(statuses[selected] === 'in_progress' && statuses[skipped] === 'n/a' && journalCheck.ok === true,
+      'R19-SELECT-PRODUCER-RED: repaired ' + selected + ' remains plan-bound while skipped arm stays n/a');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R20: immutable producer bindings belong to their attempt-time proof. A later review gate may
+// legitimately reopen the same producer without invalidating an earlier settled pass attempt.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-historical-producer-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r20');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| review-a | in_progress | |',
+      '| review-b | pending | |', '| done | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/writer.js | 1 | sequence |',
+      '| review-a | code-reviewer | writer | — | 1 | sequence |',
+      '| review-b | code-reviewer | review-a | — | 1 | sequence |',
+      '| done | finalize | review-b | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const writerBaseline = 'w'.repeat(40);
+    const identity = { baseline: writerBaseline, anchored_ref: writerBaseline,
+      open_token: 'writer-open-token', generation: writerBaseline.slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-r20/writer' };
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), writerBaseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-a'), 'aaaaaaaaaaaa-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-a.md'),
+      'evidence-binding: review-a aaaaaaaaaaaa\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-a', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const digest = '2'.repeat(64);
+    const common = { planPath, project: 'issue-r20',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => digest, captureWriterBarrierIdentity: () => identity };
+    const first = runCloseNode({ ...common, nodeId: 'review-a' });
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const openSecond = spliceLedgerNode(plan, 'review-b', 'in_progress', { allowFrom: ['pending'] });
+    fs.writeFileSync(planPath, openSecond.content);
+    fs.writeFileSync(path.join(cacheDir, 'review-b.md'),
+      'evidence-binding: review-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-b', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const second = runCloseNode({ ...common, nodeId: 'review-b' });
+    const beforeRepair = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const failedAttempt = beforeRepair.attempts.find(a => a.logical_gate.id === 'review-b');
+    assert(first.result === 'ok' && second.result === 'review_failed' && failedAttempt
+      && JSON.stringify(beforeRepair.attempts.find(a => a.logical_gate.id === 'review-a').producer_bindings)
+        === JSON.stringify({ writer: identity }),
+      'R20-HISTORICAL-BINDING-RED: sequential gates bind the same executed writer before later repair, got '
+        + JSON.stringify({ first, second, attempts: beforeRepair.attempts }));
+    const repaired = runRepairNode({ ...common, nodeId: 'writer', attemptId: failedAttempt.attempt_id });
+    plan = fs.readFileSync(planPath, 'utf8');
+    const journalCheck = readReviewJournal(common, plan);
+    const statuses = readLedgerStatuses(plan);
+    assert(repaired.result === 'ok' && statuses.writer === 'in_progress'
+      && statuses['review-a'] === 'pending' && statuses['review-b'] === 'pending',
+      'R20-HISTORICAL-BINDING-RED: later failed gate legitimately reopens shared producer');
+    assert(journalCheck.ok === true,
+      'R20-HISTORICAL-BINDING-RED: earlier pass attempt remains valid after later gate reopens writer, got '
+        + JSON.stringify(journalCheck));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R21: sibling gates over one candidate form one repair invalidation set even though neither
+// sequence reviewer individually post-dominates the writer. A separate failed attempt stays live.
+for (const firstPass of [true, false]) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-sibling-repair-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r21');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| review-a | in_progress | |',
+      '| review-b | in_progress | |', '| done | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/writer.js | 1 | sequence |',
+      '| review-a | code-reviewer | writer | — | 1 | sequence |',
+      '| review-b | code-reviewer | writer | — | 1 | sequence |',
+      '| done | finalize | review-a, review-b | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const writerBaseline = 'x'.repeat(40);
+    const identity = { baseline: writerBaseline, anchored_ref: writerBaseline,
+      open_token: 'writer-open-token', generation: writerBaseline.slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-r21/writer' };
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), writerBaseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-a'), 'aaaaaaaaaaaa-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-a.md'),
+      'evidence-binding: review-a aaaaaaaaaaaa\nverdict: ' + (firstPass ? 'pass' : 'fail')
+        + '\nfindings_blocking: ' + (firstPass ? '0' : '1') + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-b.md'),
+      'evidence-binding: review-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-a', role: 'code-reviewer', kind: 'read' },
+      { id: 'review-b', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const digest = '3'.repeat(64);
+    const common = { planPath, project: 'issue-r21',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => digest, captureWriterBarrierIdentity: () => identity };
+    const first = runCloseNode({ ...common, nodeId: 'review-a' });
+    const second = runCloseNode({ ...common, nodeId: 'review-b' });
+    const beforeRepair = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const firstAttempt = beforeRepair.attempts.find(a => a.logical_gate.id === 'review-a');
+    const secondAttempt = beforeRepair.attempts.find(a => a.logical_gate.id === 'review-b');
+    const repaired = runRepairNode({ ...common, nodeId: 'writer', attemptId: secondAttempt.attempt_id });
+    const planAfter = fs.readFileSync(planPath, 'utf8');
+    const statuses = readLedgerStatuses(planAfter);
+    const journalCheck = readReviewJournal(common, planAfter);
+    assert((firstPass ? first.result === 'ok' : first.result === 'review_failed')
+      && second.result === 'review_failed' && repaired.result === 'ok',
+      'R21-SIBLING-REPAIR-RED: sibling ' + (firstPass ? 'pass/fail' : 'fail/fail')
+        + ' attempts settle before bounded shared-writer repair');
+    assert(statuses.writer === 'in_progress' && statuses['review-a'] === 'pending'
+      && statuses['review-b'] === 'pending'
+      && repaired.gatesReset.includes('review-a') && repaired.gatesReset.includes('review-b'),
+      'R21-SIBLING-REPAIR-RED: repair folds every journal-bound sibling before reopening writer');
+    if (firstPass) {
+      assert(!fs.existsSync(path.join(cacheDir, 'review-a.md'))
+        && !fs.existsSync(path.join(cacheDir, 'barrier-base-review-a'))
+        && journalCheck.ok === true && reviewJournalBlocker(journalCheck.journal) === null,
+      'R21-SIBLING-REPAIR-RED: stale sibling pass evidence/baseline are removed and repaired journal remains clear');
+    } else {
+      const blocker = journalCheck.ok && reviewJournalBlocker(journalCheck.journal);
+      const liveFirst = journalCheck.ok && journalCheck.journal.attempts.find(a => a.attempt_id === firstAttempt.attempt_id);
+      assert(journalCheck.ok === true && liveFirst.consumed_by === null && blocker
+        && blocker.attempt_ids.includes(firstAttempt.attempt_id)
+        && journalCheck.journal.attempts.find(a => a.attempt_id === secondAttempt.attempt_id).consumed_by === 'writer',
+      'R21-SIBLING-REPAIR-RED: folding cannot consume or launder another shared-writer failed attempt');
+    }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R22: every durable repair seam after the plan fold resumes from the immutable selected
+// attempt. Current ledger history has already changed at these seams, so it must not be used to
+// re-select the writer; cleanup, settlement, and consumption instead continue exactly once.
+for (const repairFailpoint of ['repair_plan_written', 'repair_artifacts_removed', 'repair_settled_written']) {
+  for (const firstPass of [true, false]) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-sibling-repair-retry-'));
+    try {
+      const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r22');
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const body = makePlan([
+        '| writer | complete | |', '| review-a | in_progress | |',
+        '| review-b | in_progress | |', '| done | pending | |',
+      ], [
+        '| writer | tdd-guide | — | scripts/writer.js | 1 | sequence |',
+        '| review-a | code-reviewer | writer | — | 1 | sequence |',
+        '| review-b | code-reviewer | writer | — | 1 | sequence |',
+        '| done | finalize | review-a, review-b | CHANGELOG.md | 1 | sequence |',
+      ]);
+      const hash = planValidator.computePlanHash(body);
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      const journalPath = path.join(cacheDir, 'review-attempts.json');
+      const runningPath = path.join(cacheDir, 'running-set.json');
+      const writerBaseline = 'y'.repeat(40);
+      const identity = { baseline: writerBaseline, anchored_ref: writerBaseline,
+        open_token: 'writer-open-token', generation: writerBaseline.slice(0, 12),
+        ref: 'refs/kaola-workflow/barrier/issue-r22/writer' };
+      fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), writerBaseline + '\n');
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-a'), 'aaaaaaaaaaaa-rest\n');
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-b'), 'bbbbbbbbbbbb-rest\n');
+      fs.writeFileSync(path.join(cacheDir, 'review-a.md'),
+        'evidence-binding: review-a aaaaaaaaaaaa\nverdict: ' + (firstPass ? 'pass' : 'fail')
+          + '\nfindings_blocking: ' + (firstPass ? '0' : '1') + '\n');
+      fs.writeFileSync(path.join(cacheDir, 'review-b.md'),
+        'evidence-binding: review-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+      fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+        { id: 'review-a', role: 'code-reviewer', kind: 'read' },
+        { id: 'review-b', role: 'code-reviewer', kind: 'read' },
+      ] }));
+      const digest = '4'.repeat(64);
+      const journalWrites = [];
+      let recordJournalWrites = false;
+      const common = { planPath, project: 'issue-r22',
+        shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+          selectorCheck: { isSelector: false, ok: true } }),
+        readFile: p => fs.readFileSync(p, 'utf8'),
+        writeFile: (p, c) => {
+          fs.writeFileSync(p, c);
+          if (recordJournalWrites && p === journalPath) {
+            const selected = JSON.parse(c).attempts.find(a => a.logical_gate.id === 'review-b');
+            journalWrites.push({ settled: selected.repair.settled, consumed_by: selected.consumed_by });
+          }
+        },
+        cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+        computeReviewCandidateDigest: () => digest, captureWriterBarrierIdentity: () => identity };
+      const first = runCloseNode({ ...common, nodeId: 'review-a' });
+      const second = runCloseNode({ ...common, nodeId: 'review-b' });
+      const beforeRepair = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+      const firstAttempt = beforeRepair.attempts.find(a => a.logical_gate.id === 'review-a');
+      const selectedAttempt = beforeRepair.attempts.find(a => a.logical_gate.id === 'review-b');
+      let crashed = false;
+      try {
+        runRepairNode({ ...common, nodeId: 'writer', attemptId: selectedAttempt.attempt_id,
+          reviewFailpoint: repairFailpoint });
+      } catch (err) {
+        crashed = String(err && err.message).includes('review_failpoint:' + repairFailpoint);
+      }
+      const crashPlan = fs.readFileSync(planPath, 'utf8');
+      const crashJournal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+      const crashSelected = crashJournal.attempts.find(a => a.attempt_id === selectedAttempt.attempt_id);
+      assert(crashed && readLedgerStatuses(crashPlan).writer === 'in_progress'
+        && crashSelected.repair.selected_writer === 'writer'
+        && crashSelected.repair.settled === (repairFailpoint === 'repair_settled_written')
+        && crashSelected.consumed_by === null,
+      'R22-REPAIR-RETRY-RED: ' + repairFailpoint + ' durably records its exact selected repair phase');
+
+      recordJournalWrites = true;
+      const retried = runRepairNode({ ...common, nodeId: 'writer', attemptId: selectedAttempt.attempt_id });
+      const finalPlan = fs.readFileSync(planPath, 'utf8');
+      const finalStatuses = readLedgerStatuses(finalPlan);
+      const journalCheck = readReviewJournal(common, finalPlan);
+      const finalSelected = journalCheck.ok
+        && journalCheck.journal.attempts.find(a => a.attempt_id === selectedAttempt.attempt_id);
+      const finalFirst = journalCheck.ok
+        && journalCheck.journal.attempts.find(a => a.attempt_id === firstAttempt.attempt_id);
+      const writerEvidencePath = path.join(cacheDir, 'writer.md');
+      const writerEvidence = fs.existsSync(writerEvidencePath)
+        ? fs.readFileSync(writerEvidencePath, 'utf8') : '';
+      assert((firstPass ? first.result === 'ok' : first.result === 'review_failed')
+        && second.result === 'review_failed' && retried.result === 'ok' && retried.resumed === true
+        && finalStatuses.writer === 'in_progress' && finalStatuses['review-a'] === 'pending'
+        && finalStatuses['review-b'] === 'pending',
+      'R22-REPAIR-RETRY-RED: identical ' + repairFailpoint + ' retry resumes the selected shared writer');
+      assert(finalSelected && finalSelected.repair.settled === true && finalSelected.consumed_by === 'writer'
+        && journalWrites.length === (repairFailpoint === 'repair_settled_written' ? 1 : 2)
+        && journalWrites.every((state, index) => state.settled === true
+          && state.consumed_by === (index === journalWrites.length - 1 ? 'writer' : null)),
+      'R22-REPAIR-RETRY-RED: ' + repairFailpoint
+        + ' settles/consumes once without overwriting settled repair state, writes=' + JSON.stringify(journalWrites));
+      assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-review-a'))
+        && !fs.existsSync(path.join(cacheDir, 'barrier-base-review-b'))
+        && (firstPass ? !fs.existsSync(path.join(cacheDir, 'review-a.md'))
+          : fs.existsSync(path.join(cacheDir, 'review-a.md')))
+        && fs.existsSync(path.join(cacheDir, 'review-b.md'))
+        && writerEvidence.split('failed_review_attempt: ' + selectedAttempt.attempt_id).length === 2,
+      'R22-REPAIR-RETRY-RED: ' + repairFailpoint + ' completes sibling artifacts exactly once');
+      if (!firstPass) {
+        const blocker = journalCheck.ok && reviewJournalBlocker(journalCheck.journal);
+        assert(finalFirst.consumed_by === null && blocker
+          && blocker.attempt_ids.includes(firstAttempt.attempt_id)
+          && !blocker.attempt_ids.includes(selectedAttempt.attempt_id),
+        'R22-REPAIR-RETRY-RED: ' + repairFailpoint
+          + ' preserves the unrelated failed sibling as unresolved and unconsumed');
+      }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+}
+
+// R23: cleanup classification is per member's latest matching attempt/generation, not a monotonic
+// history of every pass. A newer unresolved failure receipt must survive sibling repair and retries.
+for (const reorderHistory of [false, true]) {
+for (const repairFailpoint of [null, 'repair_plan_written', 'repair_artifacts_removed', 'repair_settled_written']) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-latest-sibling-attempt-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r23');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| review-a | in_progress | |',
+      '| review-b | pending | |', '| done | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/writer.js | 1 | sequence |',
+      '| review-a | code-reviewer | writer | — | 1 | sequence |',
+      '| review-b | code-reviewer | writer | — | 1 | sequence |',
+      '| done | finalize | review-a, review-b | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const writerBaseline = 'z'.repeat(40);
+    const identity = { baseline: writerBaseline, anchored_ref: writerBaseline,
+      open_token: 'writer-open-token', generation: writerBaseline.slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-r23/writer' };
+    const firstGeneration = 'a11111111111';
+    const latestGeneration = 'a22222222222';
+    const latestFailureBody = 'evidence-binding: review-a ' + latestGeneration
+      + '\nverdict: fail\nfindings_blocking: 1\n';
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), writerBaseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-a'), firstGeneration + '-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-a.md'),
+      'evidence-binding: review-a ' + firstGeneration + '\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-a', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const digest = '6'.repeat(64);
+    const common = { planPath, project: 'issue-r23',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => digest, captureWriterBarrierIdentity: () => identity };
+
+    const firstPass = runCloseNode({ ...common, nodeId: 'review-a' });
+    let plan = fs.readFileSync(planPath, 'utf8');
+    let moved = spliceLedgerNode(plan, 'review-a', 'pending', { allowFrom: ['complete'] });
+    moved = spliceLedgerNode(moved.content, 'review-a', 'in_progress', { allowFrom: ['pending'] });
+    fs.writeFileSync(planPath, moved.content);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-a'), latestGeneration + '-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-a.md'), latestFailureBody);
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-a', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const latestFailure = runCloseNode({ ...common, nodeId: 'review-a' });
+
+    plan = fs.readFileSync(planPath, 'utf8');
+    moved = spliceLedgerNode(plan, 'review-b', 'in_progress', { allowFrom: ['pending'] });
+    fs.writeFileSync(planPath, moved.content);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-b.md'),
+      'evidence-binding: review-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [
+      { id: 'review-b', role: 'code-reviewer', kind: 'read' },
+    ] }));
+    const selectedFailure = runCloseNode({ ...common, nodeId: 'review-b' });
+    const beforeRepair = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const aAttempts = beforeRepair.attempts.filter(a => a.logical_gate.id === 'review-a');
+    const selectedAttempt = beforeRepair.attempts.find(a => a.logical_gate.id === 'review-b');
+    if (reorderHistory) {
+      beforeRepair.attempts = [aAttempts[1], selectedAttempt, aAttempts[0]];
+      fs.writeFileSync(journalPath, JSON.stringify(beforeRepair, null, 2) + '\n');
+    }
+    const reorderedCheck = readReviewJournal(common, fs.readFileSync(planPath, 'utf8'));
+    const assertionPrefix = reorderHistory ? 'R24-ORDINAL-ORDER-RED' : 'R23-LATEST-ATTEMPT-RED';
+    let crashed = false;
+    let repaired;
+    if (repairFailpoint) {
+      try {
+        runRepairNode({ ...common, nodeId: 'writer', attemptId: selectedAttempt.attempt_id,
+          reviewFailpoint: repairFailpoint });
+      } catch (err) {
+        crashed = String(err && err.message).includes('review_failpoint:' + repairFailpoint);
+      }
+      repaired = runRepairNode({ ...common, nodeId: 'writer', attemptId: selectedAttempt.attempt_id });
+    } else {
+      repaired = runRepairNode({ ...common, nodeId: 'writer', attemptId: selectedAttempt.attempt_id });
+    }
+
+    plan = fs.readFileSync(planPath, 'utf8');
+    const statuses = readLedgerStatuses(plan);
+    const journalCheck = readReviewJournal(common, plan);
+    const blocker = journalCheck.ok && reviewJournalBlocker(journalCheck.journal);
+    const finalLatest = journalCheck.ok
+      && journalCheck.journal.attempts.find(a => a.attempt_id === aAttempts[1].attempt_id);
+    const finalSelected = journalCheck.ok
+      && journalCheck.journal.attempts.find(a => a.attempt_id === selectedAttempt.attempt_id);
+    assert(firstPass.result === 'ok' && latestFailure.result === 'review_failed'
+      && selectedFailure.result === 'review_failed' && aAttempts.length === 2
+      && aAttempts[0].outcome === 'pass' && aAttempts[0].generations[0].nonce === firstGeneration
+      && aAttempts[1].outcome === 'fail' && aAttempts[1].generations[0].nonce === latestGeneration
+      && (!reorderHistory || reorderedCheck.ok === true) && (!repairFailpoint || crashed),
+    assertionPrefix + ': pass-then-fail sibling history reaches ' + (repairFailpoint || 'uninterrupted')
+      + ' repair with distinct immutable generations');
+    assert(repaired.result === 'ok' && statuses.writer === 'in_progress'
+      && statuses['review-a'] === 'pending' && statuses['review-b'] === 'pending'
+      && finalSelected.repair.settled === true && finalSelected.consumed_by === 'writer',
+    assertionPrefix + ': ' + (repairFailpoint || 'uninterrupted')
+      + ' repair settles and consumes the selected sibling exactly once');
+    assert(fs.existsSync(path.join(cacheDir, 'review-a.md'))
+      && fs.readFileSync(path.join(cacheDir, 'review-a.md'), 'utf8') === latestFailureBody
+      && !fs.existsSync(path.join(cacheDir, 'barrier-base-review-a')),
+    assertionPrefix + ': ' + (repairFailpoint || 'uninterrupted')
+      + ' preserves the newest failed receipt while removing its stale baseline');
+    assert(finalLatest.consumed_by === null && blocker
+      && blocker.attempt_ids.includes(finalLatest.attempt_id)
+      && !blocker.attempt_ids.includes(selectedAttempt.attempt_id),
+    assertionPrefix + ': ' + (repairFailpoint || 'uninterrupted')
+      + ' keeps the newest failed sibling authoritative and unconsumed');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+}
+
+// R14 pass outcome: the exact quorum and aggregate decision become immutable together at
+// outcome_written; unchanged retry still rolls the pass forward normally.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-fanout-pass-immutable-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r14');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(['| writer | complete | |', '| skeptic-a | in_progress | |',
+      '| skeptic-b | in_progress | |', '| finalize | pending | |'], [
+      '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| skeptic-a | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| skeptic-b | adversarial-verifier | writer | — | 1 | fanout(red-team) |',
+      '| finalize | finalize | skeptic-a, skeptic-b | — | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-a'), 'aaaaaaaaaaaa-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-skeptic-b'), 'bbbbbbbbbbbb-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-a.md'),
+      'evidence-binding: skeptic-a aaaaaaaaaaaa\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'),
+      'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+      { id: 'skeptic-a', role: 'adversarial-verifier', kind: 'read' },
+      { id: 'skeptic-b', role: 'adversarial-verifier', kind: 'read' },
+    ] }));
+    const opts = id => ({ planPath, project: 'issue-r14', nodeId: id,
+      shell: (_p, args) => args.includes('--resume-check')
+        ? ({ exitCode: 0, ok: true, result: 'ok' }) : ({ exitCode: 0, result: 'ok', allDone: false, readyPending: [] }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p),
+      computeReviewCandidateDigest: () => '5'.repeat(64),
+      captureWriterBarrierIdentity: () => ({ baseline: '1'.repeat(40), anchored_ref: '1'.repeat(40),
+        open_token: '2'.repeat(40), generation: '1'.repeat(12),
+        ref: 'refs/kaola-workflow/barrier/issue-r14/writer' }) });
+    assert(runCloseNode(opts('skeptic-a')).provisional === true,
+      'R14-PASS-TO-FAIL-RED: first pass receipt closes provisionally');
+    let crashed = false;
+    try { runCloseNode({ ...opts('skeptic-b'), reviewFailpoint: 'outcome_written' }); }
+    catch (err) { crashed = String(err && err.message).includes('review_failpoint:outcome_written'); }
+    assert(crashed, 'R14-PASS-TO-FAIL-RED: complete pass quorum crashes after durable outcome');
+    const before = fs.readFileSync(path.join(cacheDir, 'skeptic-b.md'), 'utf8');
+    const replacement = runRecordEvidence({ ...opts('skeptic-b'), mkdirp: () => {},
+      stdinContent: 'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n' });
+    assert(replacement.reason === 'review_outcome_receipts_immutable'
+      && fs.readFileSync(path.join(cacheDir, 'skeptic-b.md'), 'utf8') === before,
+      'R14-PASS-TO-FAIL-RED: post-pass-outcome replacement refuses with zero evidence mutation');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const directJournalBefore = fs.readFileSync(journalPath, 'utf8');
+    const directPlanBefore = fs.readFileSync(planPath, 'utf8');
+    const directRunningBefore = fs.readFileSync(runningPath, 'utf8');
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'),
+      'evidence-binding: skeptic-b bbbbbbbbbbbb\nverdict: fail\nfindings_blocking: 1\n');
+    const directReplacement = runCloseNode(opts('skeptic-b'));
+    const directNoMutation = fs.readFileSync(journalPath, 'utf8') === directJournalBefore
+      && fs.readFileSync(planPath, 'utf8') === directPlanBefore
+      && fs.existsSync(runningPath) && fs.readFileSync(runningPath, 'utf8') === directRunningBefore;
+    fs.writeFileSync(journalPath, directJournalBefore);
+    fs.writeFileSync(planPath, directPlanBefore);
+    fs.writeFileSync(runningPath, directRunningBefore);
+    fs.writeFileSync(path.join(cacheDir, 'skeptic-b.md'), before);
+    assert(directReplacement.reason === 'review_outcome_receipts_immutable' && directNoMutation,
+      'R15-DIRECT-PASS-TO-FAIL-RED: direct evidence write after pass outcome refuses before journal/ledger/running mutation');
+    const retry = runCloseNode(opts('skeptic-b'));
+    const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(retry.result === 'ok' && journal.attempts[0].outcome === 'pass'
+      && journal.attempts[0].lifecycle_settled === true && validateReviewJournal(journal, hash).ok === true,
+      'R14-UNCHANGED-CONTROL-RED: unchanged post-outcome pass retry settles normally');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// R9: sequence receipt replacement after the durable attempt-written crash seam must recompute the
+// authoritative transition in both directions, for both public close commands.
+for (const closeKind of ['close-node', 'close-and-open-next']) {
+  for (const replacementPass of [false, true]) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-sequence-retry-'));
+    try {
+      const projectDir = path.join(tmp, 'kaola-workflow', 'issue-r9');
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const body = makePlan(['| writer | complete | |', '| review | in_progress | |',
+        '| finalize | pending | |'], [
+        '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+        '| review | code-reviewer | writer | — | 1 | sequence |',
+        '| finalize | finalize | review | — | 1 | sequence |',
+      ]);
+      const hash = planValidator.computePlanHash(body);
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      const statePath = path.join(projectDir, 'workflow-state.md');
+      fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+      fs.writeFileSync(statePath, '# State\n');
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'rrrrrrrrrrrr-rest\n');
+      const initialPass = !replacementPass;
+      const evidence = pass => 'evidence-binding: review rrrrrrrrrrrr\nverdict: '
+        + (pass ? 'pass' : 'fail') + '\nfindings_blocking: ' + (pass ? '0' : '1') + '\n';
+      fs.writeFileSync(path.join(cacheDir, 'review.md'), evidence(initialPass));
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [
+        { id: 'review', role: 'code-reviewer', kind: 'read' },
+      ] }));
+      const shell = (scriptPath, args) => {
+        const base = path.basename(scriptPath);
+        if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', overallOk: true,
+          barrierCheck: { exitCode: 0, result: 'pass' }, selectorCheck: { isSelector: false, ok: true } };
+        if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: true,
+          readySet: [], readyPending: [], nextNode: null };
+        return { exitCode: 0, result: 'ok', ok: true };
+      };
+      const common = { planPath, statePath, project: 'issue-r9', nodeId: 'review', shell,
+        readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+        cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+        computeReviewCandidateDigest: () => '7'.repeat(64),
+        captureWriterBarrierIdentity: () => ({ baseline: '1'.repeat(40), anchored_ref: '1'.repeat(40),
+          open_token: '2'.repeat(40), generation: '1'.repeat(12),
+          ref: 'refs/kaola-workflow/barrier/issue-r9/writer' }) };
+      const closeFn = closeKind === 'close-node' ? runCloseNode : runCloseAndOpenNext;
+      let crashed = false;
+      try { closeFn({ ...common, reviewFailpoint: 'attempt_written' }); }
+      catch (err) { crashed = String(err && err.message).includes('review_failpoint:attempt_written'); }
+      assert(crashed, 'R9-SEQUENCE-RED: ' + closeKind + ' crashes after initial '
+        + (initialPass ? 'pass' : 'fail') + ' attempt write');
+      const replaced = runRecordEvidence({ ...common, stdinContent: evidence(replacementPass), mkdirp: () => {} });
+      assert(replaced.result === 'ok', 'R9-SEQUENCE-RED: legal same-generation receipt replacement succeeds');
+      const retry = closeFn(common);
+      const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+      const attempt = journal.attempts[0];
+      const status = readLedgerStatuses(fs.readFileSync(planPath, 'utf8')).review;
+      assert(attempt.outcome === (replacementPass ? 'pass' : 'fail')
+        && attempt.reason === (replacementPass ? null : 'verdict_not_pass')
+        && attempt.receipts[0].effective_pass === replacementPass
+        && (replacementPass ? (retry.result === 'ok' && status === 'complete')
+          : (retry.result === 'review_failed' && status === 'pending')),
+      'R9-SEQUENCE-RED: ' + closeKind + ' retry follows replacement '
+        + (replacementPass ? 'pass' : 'fail') + ' receipt exactly');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+}
+
+// REPAIR-UNIQUE-MAXIMAL / BREAKER-SIX integration over the durable journal.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-repair-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-682');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| review | pending | |', '| finalize | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| review | code-reviewer | writer | — | 1 | sequence |',
+      '| finalize | finalize | review | — | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), 'originalbaseline123\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'reviewbaseline1234\n');
+    const gate = canonicalLogicalGateIdentity({ kind: 'sequence', id: 'review', origin: ['writer'], members: ['review'] });
+    const digest = 'c'.repeat(64);
+    const generations = [{ member: 'review', nonce: 'reviewbaseli' }];
+    const receiptBody = 'evidence-binding: review reviewbaseli\nverdict: fail\nfindings_blocking: 1\n';
+    const repairIdentity = { baseline: 'originalbaseline123', anchored_ref: 'originalbaseline123',
+      open_token: 'open-token', generation: 'originalbase',
+      ref: 'refs/kaola-workflow/barrier/issue-682/writer' };
+    const transactionKey = require('crypto').createHash('sha256').update(JSON.stringify({
+      plan_hash: hash, logical_gate_key: gate.key, candidate_digest: digest, generations,
+    })).digest('hex');
+    const attempt = {
+      attempt_id: 'review:1', ordinal: 1, plan_hash: hash, logical_gate: gate,
+      transaction_key: transactionKey, candidate_digest: digest, generations,
+      settlement_command: 'close-node', outcome: 'fail', reason: 'verdict_not_pass',
+      receipts: [{ node_id: 'review', generation: 'reviewbaseli', body: receiptBody,
+        receipt_sha256: require('crypto').createHash('sha256').update(receiptBody).digest('hex'),
+        effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+      findings: [], route_candidates: [], lifecycle_settled: true, producer_bindings: { writer: repairIdentity },
+      repair: { selected_writer: null, settled: null }, consumed_by: null,
+    };
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    fs.writeFileSync(journalPath, JSON.stringify({ schema_version: 1, plan_hash: hash, attempts: [attempt] }, null, 2) + '\n');
+    const repairOpts = {
+      planPath, project: 'issue-682', nodeId: 'writer', attemptId: 'review:1',
+      shell: () => ({ exitCode: 0, result: 'ok' }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => digest,
+      captureWriterBarrierIdentity: () => repairIdentity,
+    };
+    let repairCrashed = false;
+    try { runRepairNode({ ...repairOpts, reviewFailpoint: 'repair_selected_written' }); }
+    catch (err) { repairCrashed = String(err && err.message).includes('review_failpoint:repair_selected_written'); }
+    const selectedJournal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    assert(repairCrashed && selectedJournal.attempts[0].repair.selected_writer === 'writer'
+      && selectedJournal.attempts[0].repair.settled === false,
+      'REPAIR-CRASH-RETRY: selected writer is durable before a simulated process crash');
+    const result = runRepairNode(repairOpts);
+    const repairedJournal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    assert(result.result === 'ok' && result.attempt_id === 'review:1' && result.baselineReused === true,
+      'REPAIR-UNIQUE-MAXIMAL: attempt-id repair reopens the agent-selected unique maximal writer');
+    assert(repairedJournal.attempts[0].repair.settled === true && repairedJournal.attempts[0].consumed_by === 'writer',
+      'REPAIR-UNIQUE-MAXIMAL: repair settles before consumed_by is durably written last');
+    assert(fs.readFileSync(path.join(cacheDir, 'barrier-base-writer'), 'utf8') === 'originalbaseline123\n',
+      'REPAIR-UNIQUE-MAXIMAL: writer original baseline is preserved byte-for-byte');
+
+    const attemptForOrdinal = (i, consumed) => {
+      const nonce = ('review-' + i).padEnd(12, 'x');
+      const gens = [{ member: 'review', nonce }];
+      const body = 'evidence-binding: review ' + nonce + '\nverdict: fail\nfindings_blocking: 1\n';
+      return { ...attempt, attempt_id: 'review:' + i, ordinal: i, generations: gens,
+        transaction_key: require('crypto').createHash('sha256').update(JSON.stringify({
+          plan_hash: hash, logical_gate_key: gate.key, candidate_digest: digest, generations: gens,
+        })).digest('hex'),
+        receipts: [{ node_id: 'review', generation: nonce, body,
+          receipt_sha256: require('crypto').createHash('sha256').update(body).digest('hex'),
+          effective_pass: false, verdict: 'fail', findings_blocking: 1 }],
+        repair: consumed ? { selected_writer: 'writer', settled: true } : { selected_writer: null, settled: null },
+        consumed_by: consumed ? 'writer' : null };
+    };
+    const attempts = [];
+    for (let i = 1; i <= 5; i++) attempts.push(attemptForOrdinal(i, true));
+    attempts.push(attemptForOrdinal(6, false));
+    const completedAgain = spliceLedgerNode(fs.readFileSync(planPath, 'utf8'), 'writer', 'complete',
+      { allowFrom: ['in_progress'] });
+    fs.writeFileSync(planPath, completedAgain.content);
+    fs.writeFileSync(journalPath, JSON.stringify({ schema_version: 1, plan_hash: hash, attempts }, null, 2) + '\n');
+    const before = fs.readFileSync(journalPath, 'utf8');
+    const limited = runRepairNode({
+      planPath, project: 'issue-682', nodeId: 'writer', attemptId: 'review:6',
+      shell: () => ({ exitCode: 0, result: 'ok' }), readFile: p => fs.readFileSync(p, 'utf8'),
+      writeFile: (p, c) => fs.writeFileSync(p, c), cacheExists: p => fs.existsSync(p),
+      unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d), computeReviewCandidateDigest: () => digest,
+      captureWriterBarrierIdentity: () => repairIdentity,
+    });
+    assert(limited.result === 'repair_limit_reached' && limited.consumed === 5,
+      'BREAKER-SIX: five consumed repairs are allowed and the sixth remains unresolved');
+    assert(fs.readFileSync(journalPath, 'utf8') === before,
+      'BREAKER-SIX: limit refusal performs zero journal mutation');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// Issue 682 runtime RED: opener fences, attempt ordinals, and agent-selected repair proof.
+{
+  assert(typeof reviewJournalBlocker === 'function' && typeof uniqueMaximalReviewProducer === 'function'
+    && typeof nextReviewAttemptOrdinal === 'function',
+  'REV-OPEN-FENCE/REPAIR-UNIQUE-MAXIMAL: review runtime policy helpers are exported');
+  if (typeof reviewJournalBlocker === 'function' && typeof uniqueMaximalReviewProducer === 'function'
+    && typeof nextReviewAttemptOrdinal === 'function') {
+    const gate = { key: 'gate-a' };
+    const attempts = [
+      { attempt_id: 'review:1', logical_gate: gate, ordinal: 1, outcome: 'fail', lifecycle_settled: true, repair: { selected_writer: 'writer', settled: true }, consumed_by: 'writer' },
+      { attempt_id: 'review:2', logical_gate: gate, ordinal: 2, outcome: 'fail', lifecycle_settled: true, repair: { selected_writer: null, settled: null }, consumed_by: null },
+    ];
+    assert(nextReviewAttemptOrdinal(attempts, gate.key) === 3,
+      'BREAKER-SIX: ordinal is monotonic per canonical logical gate');
+    const blocker = reviewJournalBlocker({ schema_version: 1, plan_hash: 'a'.repeat(64), attempts });
+    assert(blocker && blocker.attempt_ids[0] === 'review:2',
+      'REV-OPEN-FENCE: settled unconsumed failure blocks every opener by exact attempt id');
+
+    const graphNodes = [
+      { id: 'base', dependsOn: [], declared_write_set: 'scripts/base.js' },
+      { id: 'writer', dependsOn: ['base'], declared_write_set: 'scripts/a.js' },
+      { id: 'review', dependsOn: ['writer'], declared_write_set: '—' },
+    ];
+    const proof = uniqueMaximalReviewProducer(graphNodes, ['review'], 'writer');
+    assert(proof.ok === true && JSON.stringify(proof.producer_slice) === JSON.stringify(['base', 'writer']),
+      'REPAIR-UNIQUE-MAXIMAL: selected writer is the unique maximal common write-bearing ancestor');
+    assert(uniqueMaximalReviewProducer(graphNodes, ['review'], 'base').ok === false,
+      'REPAIR-LATER-PARALLEL: non-maximal selected writer refuses without harness substitution');
+  }
+  const independentBudgets = [
+    ...Array.from({ length: 5 }, (_, i) => ({ attempt_id: 'a:' + i, outcome: 'fail',
+      logical_gate: { key: 'gate-a' }, repair: { settled: true }, consumed_by: 'writer-a' })),
+    { attempt_id: 'b:1', outcome: 'fail', logical_gate: { key: 'gate-b' },
+      repair: { settled: true }, consumed_by: 'writer-b' },
+  ];
+  assert(consumedReviewRepairs(independentBudgets, 'gate-a') === 5
+    && consumedReviewRepairs(independentBudgets, 'gate-b') === 1,
+    'BREAKER-INDEPENDENT: consumed repair budgets are counted per canonical logical-gate key');
+}
+
+// Issue 682 RED: canonical routing preserves fields and never guesses among overlapping owners.
+{
+  const routeNodes = [
+    { id: 'writer-a', declared_write_set: 'scripts/a.js, scripts/shared.js' },
+    { id: 'writer-b', declared_write_set: 'scripts/shared.js' },
+  ];
+  assert(typeof resolveOwningNodes === 'function' && typeof routeCanonicalFindings === 'function',
+    'ROUTE-CANONICAL-0-1-N: canonical ownership helpers are exported');
+  if (typeof resolveOwningNodes === 'function' && typeof routeCanonicalFindings === 'function') {
+    assert(JSON.stringify(resolveOwningNodes('scripts/shared.js', routeNodes)) === JSON.stringify(['writer-a', 'writer-b']),
+      'ROUTE-CANONICAL-0-1-N: all ownership candidates are retained and sorted');
+    const routed = routeCanonicalFindings(
+      [{ id: 'F-1', scope: 'in_scope', action: 'fix', status: 'open', severity: 'high', file: 'scripts/shared.js', fix_role: 'tdd-guide' }],
+      routeNodes,
+      'review');
+    assert(routed[0].owning_node === null && routed[0].ownership_candidates.length === 2,
+      'ROUTE-CANONICAL-0-1-N: multiple candidates never select an owner');
+    assert(routed[0].fix_role === 'tdd-guide' && routed[0].severity === 'high' && routed[0].scope === 'in_scope',
+      'ROUTE-CANONICAL-0-1-N: canonical fields and explicit fix_role are preserved');
+  }
+}
+
+// Issue 682 RED: the review transaction's pure policy must be shared by every close path.
+// These tests intentionally precede runtime integration so a missing helper is a genuine pre-impl RED.
+{
+  assert(typeof evaluateEffectiveVerdict === 'function',
+    'REV-PREDICATE-PARITY: schema exports the canonical effective-verdict helper');
+  if (typeof evaluateEffectiveVerdict === 'function') {
+    const cases = [
+      ['verdict: pass\n', true, null],
+      ['verdict: fail\nfindings_blocking: 0\n', false, 'verdict_not_pass'],
+      ['verdict: pass\nfindings_blocking: 2\n', false, 'blocking_findings'],
+      ['verdict: pass\nfindings_blocking: 0\nfinding: id=F-1 scope=in_scope action=fix status=open\n', false, 'unresolved_in_scope_fix'],
+    ];
+    for (const [receipt, pass, reason] of cases) {
+      const actual = evaluateEffectiveVerdict(receipt);
+      assert(actual.pass === pass && actual.reason === reason,
+        'REV-PREDICATE-PARITY: receipt evaluates canonically: ' + JSON.stringify({ actual, pass, reason }));
+    }
+  }
+
+  assert(typeof canonicalLogicalGateIdentity === 'function',
+    'STATE-BOUNDARY: schema exports canonical logical-gate identity');
+  if (typeof canonicalLogicalGateIdentity === 'function') {
+    const a = canonicalLogicalGateIdentity({ kind: 'fanout', id: 'reusable', origin: ['review'], members: ['b', 'a'] });
+    const b = canonicalLogicalGateIdentity({ kind: 'fanout', id: 'renamed', origin: ['review'], members: ['a', 'b'] });
+    assert(a.key === b.key && a.id !== b.id,
+      'FANOUT-PROVISIONAL-LAST: identity uses resolved origin + sorted members, not reusable label');
+  }
+
+  assert(typeof validateReviewJournal === 'function',
+    'STATE-BOUNDARY: schema exports fail-closed review-journal validation');
+  if (typeof validateReviewJournal === 'function') {
+    const hash = 'a'.repeat(64);
+    assert(validateReviewJournal({ schema_version: 1, plan_hash: hash, attempts: [] }, hash).ok === true,
+      'STATE-BOUNDARY: empty v1 journal for current plan is valid');
+    for (const journal of [
+      null,
+      { schema_version: 2, plan_hash: hash, attempts: [] },
+      { schema_version: 1, plan_hash: 'b'.repeat(64), attempts: [] },
+      { schema_version: 1, plan_hash: hash, attempts: [{ attempt_id: 'x:1' }, { attempt_id: 'x:1' }] },
+    ]) {
+      assert(validateReviewJournal(journal, hash).ok === false,
+        'STATE-BOUNDARY: malformed/version/hash/duplicate journal fails closed: ' + JSON.stringify(journal));
+    }
   }
 }
 
@@ -570,6 +2117,7 @@ function makeState(opts) {
   r665 = run665([NODE_CLI_665, 'open-next', '--project', project665, '--json']);
   assert(r665.out.result === 'ok' && r665.out.opened && r665.out.opened.id === 'impl-core',
     'T6c: open-next opens impl-core, got ' + JSON.stringify(r665.out));
+  const implCoreNonce665 = r665.out.nonce;
 
   // splice + resume: opening flips the ledger status via the (now fixed) locateSection; the write
   // must land OUTSIDE the hash-covered ## Node Briefs body, so --resume-check still passes.
@@ -579,7 +2127,8 @@ function makeState(opts) {
 
   // close: record RED/GREEN evidence for impl-core, then close-and-open-next opens review.
   const rec665 = spawn665(process.execPath, [NODE_CLI_665, 'record-evidence', '--project', project665, '--node-id', 'impl-core', '--stdin', '--json'], {
-    cwd: repoRoot665, encoding: 'utf8', input: 'RED: impl-core failed before implementation\nGREEN: impl-core passes after implementation\n',
+    cwd: repoRoot665, encoding: 'utf8', input: 'evidence-binding: impl-core ' + implCoreNonce665
+      + '\nRED: impl-core failed before implementation\nGREEN: impl-core passes after implementation\n',
   });
   assert(rec665.status === 0, 'T6c: impl-core evidence records: ' + rec665.stderr + rec665.stdout);
   r665 = run665([NODE_CLI_665, 'close-and-open-next', '--project', project665, '--node-id', 'impl-core', '--json']);
@@ -6272,6 +7821,7 @@ function rtHarness(initialFiles, opts) {
       g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
       execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, stdio: 'pipe' });
       g(['add', '-A']); g(['commit', '-m', 'seed']);
+      execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'impl', '--json'], { cwd: repoRoot, stdio: 'pipe' });
       const opened = runNode(repoRoot, ['open-ready', '--project', project, '--json'], DEFAULT);
       assert(opened.result === 'ok' && opened.opened.length === 2, 'R4 real open-ready opens both explicit skeptics, got ' + JSON.stringify(opened));
       for (const item of opened.opened) {
@@ -9348,19 +10898,18 @@ function rtHarness(initialFiles, opts) {
     try { out665r1 = JSON.parse(String(err.stdout || '').trim()); } catch (_) { out665r1 = { execError: String(err.message || err) }; }
   }
 
-  assert(out665r1.result === 'ok', '#665 R1: the real repair-node CLI subcommand succeeds, got ' + JSON.stringify(out665r1));
-  assert(out665r1.gatesReset && out665r1.gatesReset.includes('av'),
-    '#665 R1: the legacy fan-out row (av) folds as the post-dominating gate, got ' + JSON.stringify(out665r1.gatesReset));
-  assert(!fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-0.md'))
-    && !fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-1.md'))
-    && !fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-2.md')),
-    '#665 R1: the real CLI dispatch purges the legacy role-prefix receipts (readdir now flows through repair-node\'s dispatch, mirroring reopen-node\'s)');
+  assert(out665r1.result === 'refuse' && (out665r1.errors || []).includes('--attempt-id required for repair-node'),
+    '#665 R1 superseded: frozen-plan repair requires an authoritative attempt id, got ' + JSON.stringify(out665r1));
+  assert(fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-0.md'))
+    && fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-1.md'))
+    && fs.existsSync(path.join(cacheDir665r1, 'adversarial-verifier-2.md')),
+    '#665 R1 superseded: missing attempt id is a zero-mutation refusal preserving legacy receipts');
   assert(fs.existsSync(path.join(cacheDir665r1, 'unrelated.md')),
     '#665 R1: an unrelated .cache file (non-matching name) is left untouched');
   assert(fs.existsSync(path.join(cacheDir665r1, 'barrier-base-impl')),
     "#665 R1: the writer's OWN barrier-base is NEVER removed (anti-laundering invariant)");
-  assert(!fs.existsSync(path.join(cacheDir665r1, 'barrier-base-av')),
-    '#665 R1: the downstream gate barrier-base IS removed (stale baseline)');
+  assert(fs.existsSync(path.join(cacheDir665r1, 'barrier-base-av')),
+    '#665 R1 superseded: missing attempt id preserves downstream baseline bytes');
 
   try { fs.rmSync(repoRoot665r1, { recursive: true, force: true }); } catch (_) {}
 }
@@ -10516,6 +12065,8 @@ function rtHarness(initialFiles, opts) {
     try { execFileSync('node', [VALIDATOR_439, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
+    execFileSync('node', [VALIDATOR_439, planPath, '--record-base', '--node-id', 'impl', '--json'],
+      { cwd: repoRoot, encoding: 'utf8' });
     return { repoRoot, project, projDir, cacheDir, planPath, g };
   }
   function run439(repoRoot, subArgs) {
@@ -10621,10 +12172,37 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(cacheDir, 'gate.md'),
       'evidence-binding: gate ' + (gateNonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
     const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'gate', '--json']);
-    assert(r.result === 'ok', 'T439-7: gate close succeeds (the gate close itself is legitimate), got ' + JSON.stringify(r));
-    assert(r.speculative_review_required && r.speculative_review_required.gate === 'gate' &&
-      (r.speculative_review_required.speculative || []).includes('docs'),
-      'T439-7: a verdict:fail gate surfaces speculative_review_required naming docs, got ' + JSON.stringify(r.speculative_review_required));
+    assert(r.result === 'review_failed' && r.lifecycle_settled === true,
+      'T439-7: gate failure settles one review attempt and returns the gate pending, got ' + JSON.stringify(r));
+    assert(r.attempt_id === 'gate:1', 'T439-7: failure names the exact durable attempt id');
+    const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(journal.attempts.length === 1 && journal.attempts[0].outcome === 'fail'
+      && journal.attempts[0].lifecycle_settled === true && journal.attempts[0].consumed_by === null,
+      'REV-SEQ-FAIL-BOTH: authoritative journal persists the settled unresolved failure');
+    const orient = run439(repoRoot, ['orient', '--project', 'issue-439', '--json']);
+    assert(orient.reason === 'review_attempt_unresolved' && (orient.attempt_ids || []).includes('gate:1')
+      && /repair-node --attempt-id gate:1/.test(orient.repair || ''),
+      'REV-OPEN-FENCE: orient stays read-only and names exact attempt/recovery');
+    const reopen = run439(repoRoot, ['reopen-node', '--project', 'issue-439', '--node-id', 'impl', '--json']);
+    assert(reopen.reason === 'review_attempt_unresolved' && (reopen.attempt_ids || []).includes('gate:1'),
+      'REOPEN-FENCE: unresolved failed attempt blocks generic reopen');
+    rm439(repoRoot);
+  }
+
+  // REV-SEQ-FAIL-BOTH: fused close uses the identical effective-pass and settlement transaction.
+  {
+    const { repoRoot, cacheDir, planPath } = make439Repo('off');
+    const gateNonce = openGate439(repoRoot, cacheDir);
+    fs.writeFileSync(path.join(cacheDir, 'gate.md'),
+      'evidence-binding: gate ' + (gateNonce || '') + '\nverdict: pass\nfindings_blocking: 0\n'
+      + 'finding: id=F-fused scope=in_scope action=fix status=open file=docs/a.md\n');
+    const before = fs.readFileSync(planPath, 'utf8');
+    const fused = run439(repoRoot, ['close-and-open-next', '--project', 'issue-439', '--node-id', 'gate', '--json']);
+    assert(fused.result === 'review_failed' && fused.reason === 'unresolved_in_scope_fix'
+      && fused.attempt_id === 'gate:1',
+      'REV-SEQ-FAIL-BOTH: fused close cannot pass an unresolved canonical in-scope fix');
+    assert(ledgerStatus439(planPath, 'gate') === 'pending' && fs.readFileSync(planPath, 'utf8') !== before,
+      'REV-SEQ-FAIL-BOTH: fused failure returns the exact gate pending without opening a successor');
     rm439(repoRoot);
   }
 
@@ -10672,8 +12250,8 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(cacheDir, 'gate.md'),
       'evidence-binding: gate ' + (gateNonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
     const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'gate', '--json']);
-    assert(r.result === 'ok' && r.speculative_review_required && (r.speculative_review_required.speculative || []).includes('docs'),
-      'T439-10: after the guard held docs, the gate verdict:fail surfaces speculative_review_required naming docs, got ' + JSON.stringify(r.speculative_review_required));
+    assert(r.result === 'review_failed' && r.attempt_id === 'gate:1',
+      'T439-10: held speculative work cannot turn a failed review into a successful close, got ' + JSON.stringify(r));
     rm439(repoRoot);
   }
 
@@ -10778,6 +12356,8 @@ function rtHarness(initialFiles, opts) {
     try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
+    execFileSync('node', [VALIDATOR_596, planPath, '--record-base', '--node-id', 'writerA', '--json'],
+      { cwd: repoRoot, encoding: 'utf8' });
     return { repoRoot, project: PROJECT_596, projDir, cacheDir, planPath, g };
   }
 
@@ -10813,6 +12393,8 @@ function rtHarness(initialFiles, opts) {
     try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
+    execFileSync('node', [VALIDATOR_596, planPath, '--record-base', '--node-id', 'writerA', '--json'],
+      { cwd: repoRoot, encoding: 'utf8' });
     return { repoRoot, project: PROJECT_596, projDir, cacheDir, planPath, g };
   }
 
@@ -10936,9 +12518,8 @@ function rtHarness(initialFiles, opts) {
     assert(fs.existsSync(path.join(cacheDir, 'barrier-base-writerW')), 'T596-4: writerW baseline recorded at open');
     fs.writeFileSync(path.join(cacheDir, 'gate1.md'), 'evidence-binding: gate1 ' + (gate1Nonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
     const rGate = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'gate1', '--json']);
-    assert(rGate.result === 'ok' && rGate.speculative_review_required && rGate.speculative_review_required.gate === 'gate1'
-      && (rGate.speculative_review_required.speculative || []).includes('writerW'),
-      'T596-4: gate1 verdict:fail surfaces speculative_review_required naming writerW, got ' + JSON.stringify(rGate.speculative_review_required));
+    assert(rGate.result === 'review_failed' && rGate.attempt_id === 'gate1:1',
+      'T596-4: gate1 verdict:fail becomes a settled failed review transaction, got ' + JSON.stringify(rGate));
     const r = run596(repoRoot, ['discard-speculative', '--project', project, '--node-id', 'writerW', '--json']);
     assert(r.result === 'ok' && r.discarded === true && r.legTornDown === true && r.evidenceDiscarded === true && r.groupCleared === true,
       'T596-4: discard-speculative tears down the leg + purges evidence + clears the (sole-member) group, got ' + JSON.stringify(r));
@@ -11065,7 +12646,7 @@ function rtHarness(initialFiles, opts) {
     // we want gate1 TERMINAL while writerW's running-set entry stays exactly as open-ready left it, to
     // isolate the reconcile-time gate check from the close-node speculative-review machinery).
     const rGate = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'gate1', '--json']);
-    assert(rGate.result === 'ok', 'T596-9: gate1 closes verdict:fail, got ' + JSON.stringify(rGate));
+    assert(rGate.result === 'review_failed', 'T596-9: gate1 settles verdict:fail without exposing successors, got ' + JSON.stringify(rGate));
     assert(ledgerStatus596(planPath, 'writerW') === 'in_progress', 'T596-9: writerW ledger row is STILL in_progress (the roll-forward candidate)');
     // Flag running-set.json mid-open (the Phase-3-never-ran crash window); writerW's ledger row is
     // deliberately left in_progress (unlike T596-9).
@@ -11953,6 +13534,23 @@ function rtHarness(initialFiles, opts) {
     const st = ledgerStatuses(planPath);
     assert(st.ra === 'pending' && st.rb === 'pending', 'T-585-live-refuse: ledger unchanged (no in_progress) — zero mutation');
     assert(readRS(cacheDir) === null, 'T-585-live-refuse: no running set written');
+    cleanup(repoRoot);
+  }
+
+  // record-evidence mutates the same project cache and therefore shares the scheduler lock.
+  {
+    const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-ra'), 'dddddddddddd-rest\n');
+    const evidencePath = path.join(cacheDir, 'ra.md');
+    const before = fs.existsSync(evidencePath) ? fs.readFileSync(evidencePath, 'utf8') : null;
+    fs.writeFileSync(path.join(cacheDir, SCHEDULER_LOCK_NAME),
+      JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }));
+    const r = runNode(repoRoot, ['record-evidence', '--project', project, '--node-id', 'ra', '--stdin', '--json'], {},
+      'evidence-binding: ra dddddddddddd\nverdict: pass\nfindings_blocking: 0\n');
+    assert(r.result === 'refuse' && r.reason === 'scheduler_locked',
+      'R1-LOCK: record-evidence refuses under a live project-lock holder');
+    assert((fs.existsSync(evidencePath) ? fs.readFileSync(evidencePath, 'utf8') : null) === before,
+      'R1-LOCK: lock contention leaves evidence bytes unchanged');
     cleanup(repoRoot);
   }
 

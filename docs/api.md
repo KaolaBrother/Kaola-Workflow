@@ -1265,6 +1265,88 @@ node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contract
 
 These two scripts form the atomicity interface for the adaptive executor. They are wired into the per-node loop of `kaola-workflow-plan-run` and **called directly by the main session** (the #272 realignment: `kaola-workflow-adaptive-node.js` owns the per-node lifecycle as typed script transactions run main-session-direct — there is no contractor round-trip in the per-node loop): the main session runs `kaola-workflow-next-action.js` for the ready set and `kaola-workflow-commit-node.js --node-id X --start` / `--node-id X` for the per-node *advance* and *commit* brackets, dispatches the role, and owns the consent-halt decision. The aggregator's **whole-plan** mode (no `--node-id`) is exercised by unit tests only; Finalization runs its merge gate by calling the plan-validator directly (this preserves the `--resume-check`/`plan_hash` integrity check that the whole-plan barrier does not run), not via the aggregator. Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
 
+### Authoritative review journal and direct repair (D-682-01)
+
+`kaola-workflow-adaptive-node.js` persists review transactions at
+`kaola-workflow/{project}/.cache/review-attempts.json`. The top-level schema is:
+
+```json
+{
+  "schema_version": 1,
+  "plan_hash": "<64-hex>",
+  "attempts": []
+}
+```
+
+Every attempt requires these fields: `attempt_id`, positive gate-local `ordinal`, `plan_hash`,
+`logical_gate`, `transaction_key`, `candidate_digest`, `generations`, `settlement_command`,
+`outcome`, `reason`, `receipts`, `findings`, `route_candidates`, `lifecycle_settled`, `repair`, and
+`consumed_by`; `producer_bindings` is present on newly-created attempts. `logical_gate` contains
+`key`, `kind`, display `id`, sorted unique `origin`, and sorted unique `members`. Its authoritative
+`key` is the JSON encoding of `{kind, origin, members}`; the display id and reusable fan-out label do
+not define identity. Ordinals are unique, contiguous positive integers within that key, and physical
+array position has no chronological authority.
+
+`transaction_key` is SHA-256 over the journal `plan_hash`, canonical logical-gate key,
+`candidate_digest`, and sorted `{member, nonce}` generations. Each receipt stores its full bound
+evidence body and SHA-256. The candidate digest is a SHA-256 of the sorted Git tree listing built from
+`HEAD` plus all working-tree changes, excluding the active `kaola-workflow/{project}/` subtree,
+`.kw/`, and `.git/`; journal and ledger writes therefore do not change the reviewed product digest.
+New `producer_bindings` preserve each executed producer's original `baseline`, equal `anchored_ref`,
+`open_token`, derived `generation`, and barrier `ref`.
+
+The shared `evaluateEffectiveVerdict` predicate passes only when all three conditions hold:
+
+- the last column-0 verdict is `pass`;
+- `findings_blocking` is zero (an absent count retains the historical zero default); and
+- no canonical finding remains with `scope=in_scope`, `action=fix`, and a status other than
+  `resolved` or `deferred`.
+
+A sequence attempt has exactly one receipt and settles to that effective result. A fan-out attempt
+may remain `outcome:null`, `lifecycle_settled:false` while receipts are provisional; an outcome is
+written only after every exact member has a receipt, and passes only on a strict majority. Receipt
+bodies are immutable once an aggregate outcome exists. A failed settlement writes in this order:
+attempt/outcome → gate ledger rows `pending` → running-set removal →
+`lifecycle_settled:true`. The response is `result:"review_failed"` with the exact `attempt_id`.
+Failed members are pending for re-execution, but the settled unconsumed journal attempt remains the
+authoritative blocker. `orient`, ordinary openers, and `reopen-node` return
+`review_attempt_unresolved`; an interrupted settlement is resumed with its recorded
+`settlement_command` rather than reclassified. Passing closes complete the ordinary ledger,
+compliance, selector, and running-set transaction before marking the journal attempt settled.
+
+Repair is invoked directly and attempt-bound:
+
+```bash
+node scripts/kaola-workflow-adaptive-node.js repair-node \
+  --project <project> --attempt-id <attempt-id> --node-id <agent-selected-writer> --json
+```
+
+The harness does not select the writer. Before mutation it requires the proposed writer to be the
+unique maximal executed write-producing ancestor common to the logical gate, verifies the persisted
+writer barrier tuple, recomputes the unchanged candidate digest, and reruns the original writer
+barrier. Zero or multiple eligible owners, candidate drift, identity drift, or a failed original
+barrier return `repair_requires_replan` without mutation. A different writer after selection returns
+`repair_writer_mismatch`.
+
+The durable repair order is: persist `repair.selected_writer` with `settled:false`; fold downstream
+gates and reopen the writer using its original baseline; delete stale downstream baselines and stale
+completed gate receipts; seed the writer repair brief; persist `repair.settled:true`; then persist
+`consumed_by`. Retrying after any step resumes the same attempt and does not create a second repair.
+When cleanup considers multiple attempts bound to the same candidate and writer, it selects the
+greatest validated `ordinal` independently for each gate member; array order cannot cause an older
+pass to delete a newer unresolved failure. Exactly five settled-and-consumed failed attempts are
+allowed per canonical logical-gate key; the next returns `result:"repair_limit_reached"` with
+`limit:5` and no repair mutation.
+
+`route_candidates` is validated against the receipts' canonical findings. `ownership_candidates`
+is sorted and unique, and `owning_node` is populated only when exactly one candidate exists.
+`.cache/findings-route.json` is a regenerable projection of the highest-ordinal authoritative
+attempt for the source gate; it is never journal authority and never chooses among multiple owners.
+
+The shared atomic replace helper fsyncs the temporary file before rename. It does not fsync the
+parent directory afterward; that is the pre-existing deferred R17 durability follow-up and was not
+changed by D-682-01.
+
 ### Script: `kaola-workflow-next-action.js`
 
 Computes the ready-set, next node, and resolved model for the adaptive executor from a frozen `workflow-plan.md`. Implemented over the plan-validator's exported `parseNodes`/`parseLedger` (no reimplementation); model resolution via `resolveAgentModel`.

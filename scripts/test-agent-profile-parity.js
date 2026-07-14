@@ -60,6 +60,7 @@ const FEATURE_TOKENS = [
   'planner_override',
   'difficulty alone is not evidence',
   'never inflate a budget to hide a wedged agent',
+  'semantic dependency and verification boundaries',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
@@ -99,10 +100,16 @@ for (const md of mdFiles) {
 
 for (const file of ['agents/workflow-planner.md', ...TOML_TREES.map(t => t + '/workflow-planner.toml')]) {
   const content = read(file) || '';
+  const normalizedContent = content.replace(/\s+/g, ' ');
   for (const token of ['wait_budget_minutes', 'planner_override', 'through 720 minutes',
     'nondelegable', 'optimizer conflict', 'difficulty alone is not evidence',
     'never inflate a budget to hide a wedged agent']) {
     assert(content.includes(token), `${file} must carry planner wait-budget contract token ${JSON.stringify(token)}`);
+  }
+  for (const token of ['high-risk filesystem, concurrency, persistence, and provenance work',
+    'semantic dependency and verification boundaries', 'independently testable',
+    'large coherent nodes remain legal', 'file-count, line-count, complexity, or diff-size threshold']) {
+    assert(normalizedContent.includes(token), `${file} must carry semantic-boundary planner guidance token ${JSON.stringify(token)}`);
   }
 }
 

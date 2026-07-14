@@ -798,6 +798,21 @@ Beyond the vendored set, the adaptive path adds locally-authored roles: `adversa
 
 **Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `issue-scout`, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
 
+**Review transactions and bounded repair.** Gate closes are recorded in the plan-bound
+`.cache/review-attempts.json` journal before lifecycle settlement. One effective-verdict predicate
+requires `verdict: pass`, zero blocking findings, and no unresolved in-scope `action=fix` finding.
+A failed sequence gate or settled fan-out refutation returns its gate members to `pending` while the
+durable attempt remains the blocker; `orient`, ordinary openers, and generic `reopen-node` refuse
+until it is repaired. The agent selects a writer from the frozen DAG and calls
+`repair-node --attempt-id <attempt> --node-id <writer>`; the harness proves that writer is the unique
+maximal executed producer, preserves its original barrier identity and candidate digest, and never
+chooses an owner or rewrites the DAG. Zero or multiple eligible owners return
+`repair_requires_replan`. Repair retries converge across every durable seam, sibling cleanup follows
+the greatest validated ordinal for each logical gate member rather than JSON array order, and each
+logical gate permits five consumed repairs before the sixth returns `repair_limit_reached`.
+`findings-route.json` is only a regenerable view of the journal's canonical routing rows. See
+`docs/api.md` and `docs/decisions/D-682-01.md`.
+
 #### Supported adaptive patterns
 
 The four shapes (`sequence`, `fanout`, `loop`, `select`) are a *grammar*, not a fixed menu — the planner composes them with `depends_on` edges and the right role on each node into a task-shaped DAG. The patterns below are **composable building blocks, not options to choose between**: the planner draws *several* into one DAG to fit the issue (the final **Composed** row stacks three at once). Each row is a real, in-grammar `workflow-plan.md` the validator accepts; the **Governance** column is the decision `kaola-workflow-plan-validator.js` returns (`auto-run` = proceeds immediately; `ask` = recorded as audit metadata by the handoff, which still freezes and proceeds — no approval gate — but the blast-radius reason is surfaced in the packet for the orchestrator).

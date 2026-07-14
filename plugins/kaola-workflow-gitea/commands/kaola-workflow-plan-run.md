@@ -406,6 +406,18 @@ fields. Surface them VERBATIM — print the full `reason` / `operator_hint` / `o
 route the refusal through a lossy JSON-summary helper that truncates it.
 
 <!-- CARD: repair-routing -->
+**Authoritative failed-review repair protocol.** `review_failed` is a settled failed transaction.
+Read the authoritative `review-attempts.json` attempt (`attempt_id`, `logical_gate`, `outcome`,
+`reason`, `route_candidates`, `lifecycle_settled`, `repair`, and `consumed_by`), choose the
+writer as an agent decision from the frozen DAG and canonical `ownership_candidates`, then invoke
+`repair-node --attempt-id {attempt_id} --node-id {agent-selected-writer}`. The harness never selects
+a repair owner and never rewrites the DAG. On retry or reconciliation, reread the journal and resume
+the same attempt; treat `findings-route.json` only as a regenerable projection, never as authority.
+`repair_requires_replan` is a zero-mutation refusal; an unresolved attempt makes `reopen-node`
+refuse with `review_attempt_unresolved`. Five consumed repairs are allowed per canonical logical
+gate; the sixth returns `repair_limit_reached`. Zero candidates and multiple candidates leave
+`owning_node: null`; multiple owners never imply selection.
+
 On barrier refusal / `route-findings` result: `docs/plan-run-cards/repair-routing.md`
 (covers `write_set_granularity` / `write_set_overflow` / `sensitive_write_unreviewed` /
 `foreign_archive` / `unattributed_write`; `revert-overflow` vs `repair-node`; `halt for consent`;

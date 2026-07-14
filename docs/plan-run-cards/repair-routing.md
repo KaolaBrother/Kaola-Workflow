@@ -9,6 +9,20 @@ D-434-01 (sanctioned repair primitives), D-424-01 (`--drop-base` anti-laundering
 
 ---
 
+## Authoritative failed-review repair
+
+**Authoritative failed-review repair protocol.** `review_failed` is a settled failed transaction.
+Read the authoritative `review-attempts.json` attempt (`attempt_id`, `logical_gate`, `outcome`,
+`reason`, `route_candidates`, `lifecycle_settled`, `repair`, and `consumed_by`), choose the
+writer as an agent decision from the frozen DAG and canonical `ownership_candidates`, then invoke
+`repair-node --attempt-id {attempt_id} --node-id {agent-selected-writer}`. The harness never selects
+a repair owner and never rewrites the DAG. On retry or reconciliation, reread the journal and resume
+the same attempt; treat `findings-route.json` only as a regenerable projection, never as authority.
+`repair_requires_replan` is a zero-mutation refusal; an unresolved attempt makes `reopen-node`
+refuse with `review_attempt_unresolved`. Five consumed repairs are allowed per canonical logical
+gate; the sixth returns `repair_limit_reached`. Zero candidates and multiple candidates leave
+`owning_node: null`; multiple owners never imply selection.
+
 ## 1. Reading the refusal envelope
 
 When `close-and-open-next` refuses, the output is a typed envelope:

@@ -33,6 +33,29 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   intra-issue write-set disjointness, and the durable
   `workflow-plan.md` + `## Node Ledger` + `plan_hash` resume contract.
 
+  **Authoritative review transaction boundary (D-682-01).** Review evidence is not interpreted
+  independently by each close path. The shared schema layer computes one effective verdict, derives
+  a canonical logical-gate identity from gate kind plus sorted origin/member sets, and validates the
+  plan-bound `.cache/review-attempts.json` journal. A sequence gate is one receipt; an adversarial
+  fan-out stays provisional until every exact member has supplied a bound receipt, then settles by
+  strict majority. The close transaction writes the attempt first, folds a failed gate back to
+  `pending`, removes its running-set members, and marks the attempt settled last. Until settlement is
+  complete, retries replay the recorded close command; after a settled failure, `orient`, normal
+  openers, and generic reopen are fenced by the unresolved attempt. A pass completes through the
+  ordinary ledger/compliance close and marks the attempt settled only after that durable transition.
+
+  Repair remains an agent-owned reasoning step over a script-owned transaction. The agent names the
+  attempt and proposed writer; before the first repair mutation the executor proves a unique maximal
+  executed producer in the frozen DAG, unchanged candidate digest, unchanged original barrier tuple,
+  and a passing original writer barrier. It then records the selected writer, folds downstream gates
+  to `pending`, reopens the writer while retaining its original baseline, removes stale downstream
+  artifacts, records repair settlement, and consumes the attempt. Every seam is retryable. Cleanup of
+  related gate receipts is chronological by the greatest validated gate-local `ordinal`, never by
+  physical journal position, so a later live failure cannot be deleted by an older receipt that was
+  serialized later. The five-repair breaker is keyed by canonical logical-gate identity; a sixth
+  consumed repair refuses without mutation. The journal is crash-safe evidence, not a scheduler or a
+  second workflow state machine.
+
   **A new shape of work composes with the existing library, rather than adding a new lane
   (issue #634).** Not every deliverable is task-shaped (a known acceptance criterion, one
   attempt). *Direction-not-destination* work — "make it faster / smaller / less flaky," with no

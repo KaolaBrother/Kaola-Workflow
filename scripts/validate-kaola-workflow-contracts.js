@@ -607,6 +607,13 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '
 // #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'clear-halt');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "subcommand === 'clear-halt'");
+for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
+  'repair_requires_replan', 'repair_limit_reached', "'--attempt-id'", 'uniqueMaximalReviewProducer']) {
+  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, token);
+}
+for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
+  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, token);
+}
 // #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
 // findings-route.json output + VERDICT_ROLES table must be present in the Codex aggregators.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'OPERATOR_HINT_REGISTRY');

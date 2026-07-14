@@ -758,6 +758,13 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-sessio
 // #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'clear-halt');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
+for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
+  'repair_requires_replan', 'repair_limit_reached', "'--attempt-id'", 'uniqueMaximalReviewProducer']) {
+  assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', token);
+}
+for (const token of ['evaluateEffectiveVerdict', 'canonicalLogicalGateIdentity', 'validateReviewJournal']) {
+  assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', token);
+}
 // #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
 // DEFINED via the kaola_script() resolver before its first use — undefined in a consumer install.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'kaola_script(){');

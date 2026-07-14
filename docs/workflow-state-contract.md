@@ -56,6 +56,34 @@ here for the full contract.
     attaches `selection_evidence: present|absent` to the closure receipt (advisory only — a
     user-named claim legitimately has none, since the scout never runs on that branch). See
     `docs/api.md` § Closure Contract.
+  - `review-attempts.json` (D-682-01) — the authoritative, plan-bound review transaction journal.
+    It is schema version 1 and carries the frozen `plan_hash` plus immutable attempts keyed by a
+    canonical logical-gate identity (gate kind + sorted origin/member sets), contiguous positive
+    gate-local ordinals, candidate and receipt digests, exact evidence generations, canonical
+    findings/routing rows, original producer barrier bindings, settlement state, and repair
+    consumption. Physical `attempts[]` order is not chronology; the greatest validated ordinal is
+    authoritative within a logical gate. The candidate digest excludes the active project subtree,
+    `.kw/`, and `.git/`, so journal/ledger/cache transitions cannot change the reviewed product
+    identity.
+
+    The journal is evidence for the existing ledger/running-set lifecycle, not another scheduler.
+    An attempt is written before a gate lifecycle transition. A failed sequence or fully-voted
+    fan-out folds every logical-gate member to `pending`, removes those members from the running set,
+    and only then records `lifecycle_settled:true`. This is a held-pending state: the rows are pending,
+    but the settled unconsumed failure fences `orient`, normal opening, and generic reopen until an
+    attempt-bound repair consumes it. An interrupted settlement is retried through its recorded
+    `settlement_command`; a provisional fan-out remains unsettled until every exact member votes and
+    a strict majority is computed. Passing close paths settle the journal only after the ordinary
+    complete/compliance/running-set transition lands.
+
+    Direct repair records the agent-selected writer before any ledger mutation, retains that writer's
+    original baseline, then durably reopens the writer before deleting stale downstream artifacts.
+    `repair.settled:true` precedes `consumed_by`, making retries at every seam idempotent. Cleanup uses
+    the highest ordinal independently for each matching gate member, so reordering the JSON array
+    cannot delete a newer live failure. Consumed repair count is scoped to the canonical logical-gate
+    key: five are allowed and the sixth refuses as `repair_limit_reached`. Canonical routing remains
+    in the journal; `findings-route.json` is only a regenerable projection. See `docs/api.md` §
+    Authoritative review journal and direct repair.
   - `running-set.json` — tracks which nodes are currently in the running set
     (`{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`; per-node fields: `id`, `role`, `kind`,
     `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at

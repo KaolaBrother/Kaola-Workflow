@@ -94,6 +94,12 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   grant; prefer a planner-selected role/model tier over multiplying nodes to hit a count. The other
   walls still bind: exact-path shapes, concurrent-sibling disjointness, `generated_port_split`, and
   the per-node barrier's actual-write refusal.
+  **Semantic-boundary planning for high-risk work.** Shape high-risk filesystem, concurrency,
+  persistence, and provenance work around semantic dependency and verification boundaries when
+  those units are independently testable. This is guidance, not a rejection wall: large coherent
+  nodes remain legal. Do not introduce any numeric file-count, line-count, complexity, or diff-size
+  threshold; keep a cohesive change together when splitting would obscure ownership, invariants, or
+  verification.
   **The one shape the freeze wall cannot catch:** a **bare token naming a path that does NOT
   exist at freeze but becomes a DIRECTORY by write-time** — the staged *scaffold→extend* plan you are
   most likely to author. The freeze-time bare-directory check `statSync`s the token and

@@ -681,6 +681,58 @@ const FOREIGN_MARKERS = new Set([
   '<!-- CARD: resume -->',
 ].map(norm));
 
+// Failed-review repair is an agent-owned decision over the authoritative attempt journal. Keep the
+// complete protocol reachable from the canonical card and every one of the six plan-run surfaces;
+// deleting any semantic token from any mirror must fail this focused contract.
+{
+  const repairProtocolFiles = [
+    'docs/plan-run-cards/repair-routing.md',
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  const canonicalOwnershipSelection = 'writer as an agent decision from the frozen DAG and canonical `ownership_candidates`, then invoke `repair-node --attempt-id {attempt_id} --node-id {agent-selected-writer}`';
+  const canonicalZeroAndMultipleSelection = 'Zero candidates and multiple candidates leave `owning_node: null`; multiple owners never imply selection.';
+  const repairProtocolTokens = [
+    '`review_failed` is a settled failed transaction',
+    'authoritative `review-attempts.json` attempt',
+    '`attempt_id`, `logical_gate`, `outcome`, `reason`, `route_candidates`, `lifecycle_settled`, `repair`, and `consumed_by`',
+    '`repair-node --attempt-id {attempt_id} --node-id {agent-selected-writer}`',
+    canonicalOwnershipSelection,
+    'The harness never selects a repair owner and never rewrites the DAG',
+    'On retry or reconciliation',
+    '`findings-route.json` only as a regenerable projection',
+    '`repair_requires_replan` is a zero-mutation refusal',
+    '`reopen-node` refuse with `review_attempt_unresolved`',
+    'Five consumed repairs are allowed per canonical logical gate',
+    'the sixth returns `repair_limit_reached`',
+    'multiple candidates leave `owning_node: null`',
+    'multiple owners never imply selection',
+    canonicalZeroAndMultipleSelection,
+  ];
+  const missingRepairProtocolTokens = content => repairProtocolTokens.filter(token =>
+    !content.includes(norm(token)));
+  for (const file of repairProtocolFiles) {
+    const content = norm(fs.readFileSync(path.join(REPO, file), 'utf8'));
+    const missing = missingRepairProtocolTokens(content);
+    for (const token of repairProtocolTokens) {
+      assert(!missing.includes(token),
+        `failed-review repair protocol token ${JSON.stringify(token)} must be reachable from ${file}`);
+    }
+    for (const [label, token] of [
+      ['frozen-DAG ownership selection', canonicalOwnershipSelection],
+      ['zero/multiple-candidate non-selection', canonicalZeroAndMultipleSelection],
+    ]) {
+      const mutated = content.replace(norm(token), '');
+      assert(missingRepairProtocolTokens(mutated).includes(token),
+        `failed-review ${label} mutation must RED on ${file}`);
+    }
+  }
+}
+
 // Legacy in-scope pin tokens the derived-universe manifest cannot fold cleanly
 // (present on a strict SUBSET of a block's obligated set): a forge-renamed noun,
 // and a github-command+skill-only finalize refusal (the gitlab/gitea finalize
