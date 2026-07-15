@@ -21,12 +21,10 @@ Each node is one row of the `## Nodes` table:
 - **role** must be in the installed library (the nine canonical roles + any
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
   an unknown role.
-- **model** (optional) — the role's static Codex tier from `{reasoning|standard}`. On the current
-  runtime, the standard tier -> `gpt-5.6-sol` at `medium` through profile pins on `code-explorer`,
-  `knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, and
-  `metric-optimizer`; the reasoning tier -> `gpt-5.6-sol` at `xhigh` through standalone pins on every
-  other Kaola role. Every role profile pins both fields. Codex 0.144 reloads named profiles after transient overrides, so do not use the
-  cell to change a role's static class: a conflict refuses as `codex_profile_tier_mismatch`. The legacy
+- **model** (optional) — declarative reasoning/wait-budget metadata from `{reasoning|standard}`.
+  Every named Codex role profile omits model and effort so the child inherits the current parent
+  session; this cell never selects child strength and never conflicts with a role's historical/default
+  metadata class. The legacy
   `opus`/`sonnet` aliases remain accepted as `reasoning`/`standard`; new plans author neutral tokens.
   An out-of-vocab cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a
   model; absent/`—` resolves through the same role-static tier, and an unresolved card refuses as

@@ -1,8 +1,6 @@
 name = "code-reviewer"
 description = "Kaola-Workflow for Codex Phase 5 reviewer: performs detached correctness, scope, maintainability, and test coverage review."
 nickname_candidates = ["Reviewer", "Critic", "Inspector"]
-model = "gpt-5.6-sol"
-model_reasoning_effort = "xhigh"
 developer_instructions = """
 You are the code-reviewer role for Kaola-Workflow for Codex.
 

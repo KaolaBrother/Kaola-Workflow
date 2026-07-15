@@ -98,6 +98,32 @@ for (const md of mdFiles) {
   }
 }
 
+// Inherited Codex profiles omit both runtime-strength keys. The tier remains declarative metadata
+// in the schema/planner; a named role profile must not override the current parent session pair.
+for (const tree of TOML_TREES) {
+  const profiles = fs.readdirSync(path.join(root, tree)).filter(f => f.endsWith('.toml')).sort();
+  assert(profiles.length === 16, `${tree} must contain exactly 16 role profiles, got ${profiles.length}`);
+  for (const profile of profiles) {
+    const content = read(`${tree}/${profile}`) || '';
+    assert(!/^model\s*=/m.test(content), `${tree}/${profile} must inherit model by omitting the key`);
+    assert(!/^model_reasoning_effort\s*=/m.test(content),
+      `${tree}/${profile} must inherit reasoning effort by omitting the key`);
+  }
+}
+for (const profile of fs.readdirSync(path.join(root, TOML_TREES[0])).filter(f => f.endsWith('.toml'))) {
+  const triple = TOML_TREES.map(tree => read(`${tree}/${profile}`));
+  assert(triple.every(content => content === triple[0]), `${profile} must be byte-identical across all three Codex trees`);
+}
+
+// Dispatch assertions must describe inherited parent runtime strength plus declarative role metadata.
+// These retired phrases contradict the behavior they sit beside and must not return.
+const adaptiveNodeAssertions = read('scripts/test-adaptive-node.js') || '';
+for (const phrase of ['standalone pinned profile pair', 'profile-pinned Sol/medium',
+  'pinned role profile', 'conflicts with the role profile is surfaced fail-closed']) {
+  assert(!adaptiveNodeAssertions.includes(phrase),
+    `scripts/test-adaptive-node.js must not retain retired static-profile wording ${JSON.stringify(phrase)}`);
+}
+
 for (const file of ['agents/workflow-planner.md', ...TOML_TREES.map(t => t + '/workflow-planner.toml')]) {
   const content = read(file) || '';
   const normalizedContent = content.replace(/\s+/g, ' ');

@@ -1949,14 +1949,16 @@ function testAdaptiveValidatorGovernance() {
       const rNa = na.computeNextAction(frozenLegacy, { resolveModel: () => 'sonnet' });
       assert(rNa.result === 'ok' && rNa.nextNode && rNa.nextNode.model === 'opus',
         '#610: computeNextAction accepts the legacy plan and preserves its opus cell, got: ' + JSON.stringify(rNa));
-      // dispatch efforts identical across the alias rename.
+      // Codex inheritance posture is identical across the alias rename.
       assert(schema.dispatchEffort('opus').codex_reasoning_effort === schema.dispatchEffort('reasoning').codex_reasoning_effort
-        && schema.dispatchEffort('opus').codex_reasoning_effort === 'xhigh',
-        '#610: legacy opus dispatches with the SAME xhigh effort as neutral reasoning');
+        && schema.dispatchEffort('opus').codex_reasoning_effort === null
+        && schema.dispatchEffort('opus').codex_reasoning_effort_source === 'parent_session',
+        '#610: legacy opus inherits the same parent effort as neutral reasoning');
       assert(schema.dispatchEffort('sonnet').codex_reasoning_effort === schema.dispatchEffort('standard').codex_reasoning_effort
-        && schema.dispatchEffort('sonnet').codex_reasoning_effort === 'medium'
-        && schema.dispatchEffort('sonnet').codex_model === 'gpt-5.6-sol',
-        '#610: legacy sonnet dispatches with the SAME Sol/medium pair as neutral standard');
+        && schema.dispatchEffort('sonnet').codex_reasoning_effort === null
+        && schema.dispatchEffort('sonnet').codex_model === null
+        && schema.dispatchEffort('sonnet').codex_model_source === 'parent_session',
+        '#610: legacy sonnet inherits the same parent pair as neutral standard');
 
       // #611 AC2/AC5: the Codex join protocol's tier→wait-budget derivation and the typed
       // delegation-outcome evidence contract. Budgets: reasoning=40m, standard=20m, untiered=role-default
@@ -17417,7 +17419,7 @@ function testSummaryDispatchSegments602() {
     spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
   };
 
-  // (a) open-next --summary — single opened node; model: sonnet -> profile-pinned effort=medium.
+  // (a) open-next --summary — single opened node; model tier remains metadata and effort inherits.
   {
     const grepo = adaptiveTmp('summary-602-open-next');
     initGitRepoWithBareRemote(grepo);
@@ -17442,8 +17444,8 @@ function testSummaryDispatchSegments602() {
       const line = r.stdout.trim();
       assert(/^summary: ok/.test(line), '#602 (a): summary must start with "summary: ok", got: ' + JSON.stringify(line));
       assert(SUMMARY_SEG.test(line), '#602 (a): summary must carry a dispatch segment opened=/role=/task=/mode=/effort=, got: ' + JSON.stringify(line));
-      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v1-thread-id effort=medium/.test(line),
-        '#602 (a): summary segment must reflect the dispatch card (n1/tdd-guide/medium), got: ' + JSON.stringify(line));
+      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v1-thread-id effort=inherit/.test(line),
+        '#602 (a): summary segment must reflect parent-session inheritance, got: ' + JSON.stringify(line));
     } finally {
       fs.rmSync(grepo, { recursive: true, force: true });
       try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}

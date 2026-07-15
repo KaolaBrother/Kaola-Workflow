@@ -1526,15 +1526,8 @@ function testInstallSchemaPruneManifest332() {
       const pinned = profilePolicy.CODEX_PINNED_STANDARD_ROLES.includes(role);
       const reasoning = profilePolicy.CODEX_PINNED_REASONING_ROLES.includes(role);
       assert(pinned !== reasoning, '#332 AC3: ' + role + ' must belong to exactly one profile class');
-      if (pinned) {
-        assert(/^model = "gpt-5\.6-sol"$/m.test(body)
-          && /^model_reasoning_effort = "medium"$/m.test(body),
-        '#332 AC3: ' + role + ' must pin gpt-5.6-sol/medium');
-      } else {
-        assert(/^model = "gpt-5\.6-sol"$/m.test(body)
-          && /^model_reasoning_effort = "xhigh"$/m.test(body),
-          '#332 AC3: ' + role + ' must pin gpt-5.6-sol/xhigh');
-      }
+      assert(!/^model\s*=/m.test(body) && !/^model_reasoning_effort\s*=/m.test(body),
+        '#332 AC3: ' + role + ' must inherit the parent session by omitting both runtime keys');
     }
     const manifestPath = path.join(agentsDir, manifestBase);
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');

@@ -905,26 +905,25 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'not 
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispatch Mode Detection');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
-// Current Codex adapter: selected roles pin Sol/medium; all others pin Sol/xhigh.
+// Current Codex adapter: all known role profiles inherit the parent-session runtime pair.
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'profile pins for `gpt-5.6-sol` at `medium`');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'profiles pin `gpt-5.6-sol` at `xhigh`');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-equals-child inheritance proof');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'installed profile path');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Codex 0.144 durable-result override');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'dispatch.codex_profile_mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Omit both `model`');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model: dispatch.codex_model');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_tier_mismatch');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_tier_mismatch');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_runtime_mismatch');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model-and-effort proof');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-equals-child inheritance proof');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'reasoning tier -> `gpt-5.6-sol` at `xhigh`');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'standard tier -> `gpt-5.6-sol` at `medium`');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'standalone Sol/medium carry-out profiles');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'standalone Sol/xhigh profiles');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'no role inherits the parent model or effort');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'codex_profile_tier_mismatch');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'declarative reasoning/wait-budget metadata');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'child inherits the current parent session');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'declarative tier metadata');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'child inherits the current parent session');
+assertNotIncludes(pluginRoot + '/agents/workflow-planner.toml', 'codex_profile_tier_mismatch');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the GitLab edition surfaces (port validator, plan-run command, planner TOML).
@@ -963,8 +962,8 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', '--forbidden
 // issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
 // installer copy (require.main guard means require() never runs main()) and assert its
 // source-tree validator passes for the GitLab plugin tree — every agents/*.toml has a
-// matching non-empty top-level `name`, a description, valid nickname_candidates, its governed
-// standalone Sol/medium or Sol/xhigh pin, a non-blank developer_instructions, every config_file resolves, and every toml is referenced by
+// matching non-empty top-level `name`, a description, valid nickname_candidates, inherited
+// runtime-key omission, declarative tier metadata, non-blank developer_instructions, every config_file resolves, and every toml is referenced by
 // exactly one [agents.*] entry (catches the issue-scout class of omission forever).
 const gitlabInstaller = require('./install-codex-agent-profiles.js');
 const gitlabProfiles = gitlabInstaller.validateSourceProfiles(path.join(root, pluginRoot));
@@ -985,13 +984,13 @@ const gitlabPreflight = require('./kaola-workflow-codex-preflight.js');
 const sortGitlabPolicy = values => [...values].sort();
 assert(JSON.stringify(sortGitlabPolicy(gitlabInstaller.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'GitLab installer pinned-role policy must match adaptive schema');
+  'GitLab installer role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sortGitlabPolicy(gitlabInstaller.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_REASONING_ROLES)),
   'GitLab installer reasoning-role policy must match adaptive schema');
 assert(JSON.stringify(sortGitlabPolicy(gitlabPreflight.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'GitLab preflight pinned-role policy must match adaptive schema');
+  'GitLab preflight role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sortGitlabPolicy(gitlabPreflight.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_REASONING_ROLES)),
   'GitLab preflight reasoning-role policy must match adaptive schema');
@@ -999,12 +998,12 @@ assert(gitlabInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && gitlabInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && gitlabPreflight.CODEX_STANDARD_MODEL === gitlabInstaller.CODEX_STANDARD_MODEL
     && gitlabPreflight.CODEX_STANDARD_EFFORT === gitlabInstaller.CODEX_STANDARD_EFFORT,
-  'GitLab installer/preflight standard profile pair must be gpt-5.6-sol/medium');
+  'GitLab installer/preflight historical standard migration pair must be gpt-5.6-sol/medium');
 assert(gitlabInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
     && gitlabInstaller.CODEX_REASONING_EFFORT === 'xhigh'
     && gitlabPreflight.CODEX_REASONING_MODEL === gitlabInstaller.CODEX_REASONING_MODEL
     && gitlabPreflight.CODEX_REASONING_EFFORT === gitlabInstaller.CODEX_REASONING_EFFORT,
-  'GitLab installer/preflight reasoning profile pair must be gpt-5.6-sol/xhigh');
+  'GitLab installer/preflight historical reasoning migration pair must be gpt-5.6-sol/xhigh');
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', '.codex-plugin');
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'isCodexPluginScriptDir');
 

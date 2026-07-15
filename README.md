@@ -180,13 +180,12 @@ The **Model** column is the `common` profile. The **default** install profile is
 `security-reviewer`, `issue-scout`) install on **Opus** unless you pass
 `--profile=common`.
 
-On the current Codex runtime, role profiles own the pair. Eight carry-out roles (`code-explorer`,
-`knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, and
-`metric-optimizer`) pin `gpt-5.6-sol` at `medium`. The remaining planning, architecture, repair,
-review, security, adversarial, workflow-planning, and synthesis roles use standalone profiles that
-pin `gpt-5.6-sol` at `xhigh`. No Kaola role inherits its pair from the parent. The legacy
-`opus`/`sonnet` plan aliases remain accepted as `reasoning`/`standard`, but a node tier must match its
-role's static profile class; a mismatch is refused before spawn.
+On the current Codex runtime, every named Kaola role profile omits top-level `model` and
+`model_reasoning_effort`, so the child inherits both effective values from the parent session. The
+portable `reasoning`/`standard` plan tiers (and legacy `opus`/`sonnet` aliases) remain declarative
+metadata for role defaults and 40/20-minute wait budgets; they do not select a Codex child pair.
+Reasoning-floor roles still fail closed: a fresh current-session JSONL proof must establish a
+classified `gpt-5.6-sol`/`xhigh`-or-higher parent posture before dispatch.
 
 `adversarial-verifier` is locally authored for the [adaptive workflow](#adaptive-workflow-the-default-path)
 (issue #227) rather than derived from ECC — a dedicated refute-by-default skeptic that
@@ -563,9 +562,11 @@ The audit must keep these facts separate:
   enough for Kaola fan-out and root-to-subagent dispatch.
 - The installed plugin cache, generated role profiles, and global hooks must be
   fresh relative to the plugin source Codex is actually loading.
-- Runtime profile integrity still requires child-session proof: verify the
-  spawned child session JSONL records `gpt-5.6-sol` with `turn_context.effort`
-  `medium` for a standard profile and `xhigh` for a reasoning profile.
+- Runtime profile integrity still requires child-session proof: bind the child
+  JSONL to the requested role/profile and verify its `turn_context.model` and
+  `turn_context.effort` exactly equal the freshly read parent pair. A
+  reasoning-floor role additionally requires the parent proof to meet the
+  classified `gpt-5.6-sol`/`xhigh` floor.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -730,17 +731,20 @@ locally under `local-authorized` only when you explicitly disable delegation.
 Codex 0.144 reloads a named role profile after transient spawn overrides, so Kaola
 does not rely on per-spawn `model` or `reasoning_effort`. Standalone role TOMLs
 include the same `description` and `nickname_candidates` metadata as the managed
-`config.toml` block. The eight carry-out profiles additionally pin
-`model = "gpt-5.6-sol"` and `model_reasoning_effort = "medium"`; every other
-profile pins the same model with `model_reasoning_effort = "xhigh"`. The retired
-`<role>-max` effort-variant profiles are not used.
+`config.toml` block and deliberately omit both runtime keys. Exact historical
+Sol/medium or Sol/xhigh pairs are treated as stale managed profiles and migrated
+back to omission; partial or illegal pins are malformed. This per-profile rule is
+separate from the user-owned root `model_reasoning_effort` setting, which controls
+the parent session's dispatch posture and is never rewritten by profile migration.
+The retired `<role>-max` effort-variant profiles are not used.
 
-The adaptive planner still writes portable `reasoning`/`standard` tier tokens, but
-on Codex it must use the role's static class. Dispatch cards expose
-`codex_profile_mode: "pinned"`, the expected model/effort pair, and a
-compatibility boolean. A conflicting plan tier refuses as
-`codex_profile_tier_mismatch`; a child-session JSONL pair that does not match the
-standalone profile expectation refuses as `codex_profile_runtime_mismatch`.
+The adaptive planner still writes portable `reasoning`/`standard` tier tokens.
+Codex dispatch cards expose `codex_profile_mode: "inherit"`, retain the role's
+default tier as metadata, and source the effective model/effort pair from a fresh
+parent-session JSONL proof. `codex_tier_unresolved` remains the refusal for invalid
+or absent tier metadata; missing/stale proof, changed profile binding, or a child
+pair that differs from the parent/card pair refuses as
+`codex_profile_runtime_mismatch`.
 
 Every Codex DAG node role writes its full nonce-bound deliverable directly to the seeded
 `dispatch.evidence_file` under `kaola-workflow/{project}/.cache/` before returning. Its final message

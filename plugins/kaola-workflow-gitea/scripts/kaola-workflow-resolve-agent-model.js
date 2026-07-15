@@ -9,10 +9,8 @@ const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
   'knowledge-lookup': 'sonnet',
   planner: 'opus',
-  // Codex 0.144 reloads named role profiles after applying transient spawn overrides. Keep
-  // decision/gate roles on the reasoning tier so their standalone Codex profiles pin
-  // gpt-5.6-sol/xhigh; only the explicitly pinned carry-out roles below resolve to the standard
-  // tier (their standalone profiles pin gpt-5.6-sol/medium).
+  // These defaults preserve each role's declarative reasoning/wait-budget class. Codex named
+  // profiles inherit runtime strength from the parent session; this map never selects a child pair.
   'code-architect': 'opus',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',
@@ -50,6 +48,168 @@ function isReasoningClass(model) {
   return m === 'reasoning' || m === 'opus';
 }
 
+const CODEX_SESSION_SCAN_MAX_FILES = 2048;
+const CODEX_SESSION_SCAN_MAX_DEPTH = 8;
+const CODEX_SESSION_SCAN_MAX_DIRS = 256;
+const CODEX_SESSION_SCAN_MAX_ENTRIES = 8192;
+const CODEX_SESSION_FILE_MAX_BYTES = 16 * 1024 * 1024;
+const CODEX_SESSION_META_PREFIX_BYTES = 64 * 1024;
+
+function closeSessionCandidate(candidate) {
+  if (!candidate || candidate.fd === undefined) return;
+  try { fs.closeSync(candidate.fd); } catch (_) {}
+}
+
+function sameDescriptorStat(left, right) {
+  return Boolean(left && right && left.isFile() && right.isFile()
+    && left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.ctimeNs === right.ctimeNs && left.mtimeNs === right.mtimeNs);
+}
+
+function readSessionDescriptor(fd, size) {
+  const buffer = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const bytes = fs.readSync(fd, buffer, offset, size - offset, offset);
+    if (bytes <= 0) break;
+    offset += bytes;
+  }
+  return offset === size ? buffer.toString('utf8') : null;
+}
+
+function loadCodexSessionProof({ codexHome, threadId } = {}) {
+  const requested = String(threadId || '').trim();
+  const absent = () => ({ status: 'absent', thread_id: requested || null, model: null,
+    reasoning_effort: null, observed_at: null, source: 'session_jsonl' });
+  if (!requested || !codexHome) return absent();
+  const root = path.join(codexHome, 'sessions');
+  const stack = [{ dir: root, depth: 0 }];
+  let filesSeen = 0;
+  let dirsSeen = 0;
+  let entriesSeen = 0;
+  let scanComplete = true;
+  let ambiguous = false;
+  let candidate = null;
+  while (stack.length && scanComplete && !ambiguous) {
+    if (dirsSeen >= CODEX_SESSION_SCAN_MAX_DIRS) {
+      scanComplete = false;
+      break;
+    }
+    const current = stack.pop();
+    let dir;
+    try { dir = fs.opendirSync(current.dir); dirsSeen++; }
+    catch (_) {
+      scanComplete = false;
+      continue;
+    }
+    try {
+      while (scanComplete && !ambiguous) {
+        let entry;
+        try { entry = dir.readSync(); }
+        catch (_) {
+          scanComplete = false;
+          break;
+        }
+        if (entry === null) break;
+        if (entriesSeen >= CODEX_SESSION_SCAN_MAX_ENTRIES) {
+          scanComplete = false;
+          break;
+        }
+        entriesSeen++;
+        const full = path.join(current.dir, entry.name);
+        if (entry.isDirectory()) {
+          if (current.depth >= CODEX_SESSION_SCAN_MAX_DEPTH) scanComplete = false;
+          else stack.push({ dir: full, depth: current.depth + 1 });
+        } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+          if (filesSeen >= CODEX_SESSION_SCAN_MAX_FILES) {
+            scanComplete = false;
+            break;
+          }
+          filesSeen++;
+          let fd;
+          let keepFd = false;
+          try {
+            if (typeof fs.constants.O_NOFOLLOW !== 'number'
+                || typeof fs.constants.O_NONBLOCK !== 'number') {
+              scanComplete = false;
+              break;
+            }
+            fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            const stat = fs.fstatSync(fd, { bigint: true });
+            if (!stat.isFile()) {
+              scanComplete = false;
+              break;
+            }
+            const buffer = Buffer.alloc(Number(stat.size < BigInt(CODEX_SESSION_META_PREFIX_BYTES)
+              ? stat.size : BigInt(CODEX_SESSION_META_PREFIX_BYTES)));
+            const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+            const lines = buffer.subarray(0, bytes).toString('utf8').split(/\r?\n/);
+            let metaId = null;
+            let metaClassified = false;
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              let event;
+              try { event = JSON.parse(line); } catch (_) { break; }
+              if (event && event.type === 'session_meta') {
+                const rawId = event.payload && event.payload.id;
+                if (typeof rawId === 'string' && rawId.trim()) {
+                  metaId = rawId;
+                  metaClassified = true;
+                }
+                break;
+              }
+            }
+            if (!metaClassified && BigInt(bytes) < stat.size) scanComplete = false;
+            if (metaId === requested) {
+              if (candidate) ambiguous = true;
+              else {
+                candidate = { fd, stat };
+                keepFd = true;
+              }
+            }
+          } catch (_) {
+            // The dirent already identified a regular JSONL candidate. If it cannot be opened,
+            // stat-checked, or prefix-read, discovery is incomplete and cannot prove a unique binding.
+            scanComplete = false;
+          }
+          finally { if (fd !== undefined && !keepFd) try { fs.closeSync(fd); } catch (_) {} }
+        }
+      }
+    } finally { try { dir.closeSync(); } catch (_) {} }
+  }
+  try {
+    if (!scanComplete || ambiguous || !candidate
+        || candidate.stat.size > BigInt(CODEX_SESSION_FILE_MAX_BYTES)) return absent();
+    const beforeRead = fs.fstatSync(candidate.fd, { bigint: true });
+    if (!sameDescriptorStat(candidate.stat, beforeRead)) return absent();
+    const content = readSessionDescriptor(candidate.fd, Number(beforeRead.size));
+    const afterRead = fs.fstatSync(candidate.fd, { bigint: true });
+    if (content === null || !sameDescriptorStat(beforeRead, afterRead)) return absent();
+    let metaSeen = false;
+    let latest = null;
+    try {
+      for (const line of content.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (!metaSeen && event && event.type === 'session_meta') {
+          if (!event.payload || event.payload.id !== requested) return absent();
+          metaSeen = true;
+        }
+        if (event && event.type === 'turn_context' && event.payload) latest = event;
+      }
+    } catch (_) { return absent(); }
+    if (!metaSeen || !latest || typeof latest.payload.model !== 'string' || !latest.payload.model.trim()
+        || typeof latest.payload.effort !== 'string' || !latest.payload.effort.trim()
+        || typeof latest.timestamp !== 'string' || !latest.timestamp.trim()) return absent();
+    return { status: 'fresh', thread_id: requested, model: latest.payload.model,
+      reasoning_effort: latest.payload.effort, observed_at: latest.timestamp, source: 'session_jsonl' };
+  } catch (_) {
+    return absent();
+  } finally {
+    closeSessionCandidate(candidate);
+  }
+}
+
 // #463 Slice 1 (AC14): ENFORCE the reasoning-class floor. For a REASONING_FLOOR_ROLES role, the
 // resolved model MUST be reasoning-class; a manifest/frontmatter override that LOWERS the floor — or an
 // explicit `inherit` (empty), which could resolve to a non-reasoning session model — is a typed refusal,
@@ -58,18 +218,41 @@ function isReasoningClass(model) {
 // on a violation. ENFORCEMENT is opt-in via resolveAgentModel({enforceFloor:true}) / the CLI
 // --enforce-floor flag, so the back-compat string-return contract is unchanged for existing callers;
 // the step-4 synthesizer dispatch (and the post-G1 intent-verifier) opt in.
-function enforceReasoningFloor(role, model) {
+function enforceReasoningFloor(role, model, options) {
   const name = String(role || '').trim();
   if (!REASONING_FLOOR_ROLES.has(name)) return { ok: true, role: name, model: model || '', floor: null };
-  if (isReasoningClass(model)) return { ok: true, role: name, model, floor: 'opus' };
+  if (!isReasoningClass(model)) {
+    return {
+      ok: false,
+      reason: 'reasoning_floor_violation',
+      role: name,
+      model: model || '(inherit)',
+      floor: options && options.runtime === 'codex' ? 'gpt-5.6-sol/xhigh' : 'opus',
+      operator_hint: `Role '${name}' must resolve to a reasoning-class tier; resolved '${model || 'inherit'}'.`
+    };
+  }
+  if (!options || options.runtime !== 'codex') return { ok: true, role: name, model, floor: 'opus' };
+  const proof = options.sessionProof || {};
+  if (proof.status === 'stale' || (proof.thread_id && proof.thread_id !== options.currentThreadId)) {
+    return { ok: false, reason: 'reasoning_floor_proof_stale', role: name, model,
+      floor: 'gpt-5.6-sol/xhigh', operator_hint: 'Codex reasoning-floor proof is stale for the current parent session.' };
+  }
+  if (proof.status !== 'fresh' || proof.thread_id !== options.currentThreadId || !proof.observed_at
+      || !proof.model || !proof.reasoning_effort) {
+    return { ok: false, reason: 'reasoning_floor_proof_missing', role: name, model,
+      floor: 'gpt-5.6-sol/xhigh', operator_hint: 'Codex reasoning-floor proof is missing for the current parent session.' };
+  }
+  const effortRank = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4, ultra: 5 };
+  if (proof.model === 'gpt-5.6-sol' && effortRank[proof.reasoning_effort] >= effortRank.xhigh) {
+    return { ok: true, role: name, model, floor: 'gpt-5.6-sol/xhigh' };
+  }
   return {
     ok: false,
     reason: 'reasoning_floor_violation',
     role: name,
-    model: model || '(inherit)',
-    floor: 'opus',
-    operator_hint: `Role '${name}' must resolve to a reasoning-class model (opus); resolved '${model || 'inherit'}'. `
-      + 'A plan may RAISE but never LOWER this floor — remove the agent manifest/frontmatter override (to use the opus default) or set it to a reasoning-class tier.'
+    model,
+    floor: 'gpt-5.6-sol/xhigh',
+    operator_hint: `Codex parent posture '${proof.model}/${proof.reasoning_effort}' is below or unclassified against gpt-5.6-sol/xhigh.`
   };
 }
 
@@ -106,9 +289,8 @@ function modelFromFile(agentName, agentDir) {
 }
 
 function resolveAgentModelRaw(name, dir, options = {}) {
-  // Current Codex named profiles are role-static. Ignore a co-installed Claude model manifest when
-  // the Codex edition asks for static defaults; otherwise a Claude `higher`/`common` choice could
-  // silently flip the Codex profile class before dispatch.
+  // Keep Codex declarative role defaults independent of a co-installed Claude model manifest;
+  // otherwise a Claude `higher`/`common` choice could silently flip tier metadata and wait budgets.
   if (options.staticDefaults && DEFAULT_AGENT_MODELS[name]) {
     const v = DEFAULT_AGENT_MODELS[name];
     return v.toLowerCase() === 'inherit' ? '' : v;
@@ -241,6 +423,12 @@ module.exports = {
   REASONING_FLOOR_ROLES,
   isReasoningClass,
   enforceReasoningFloor,
+  loadCodexSessionProof,
+  CODEX_SESSION_SCAN_MAX_FILES,
+  CODEX_SESSION_SCAN_MAX_DEPTH,
+  CODEX_SESSION_SCAN_MAX_DIRS,
+  CODEX_SESSION_SCAN_MAX_ENTRIES,
+  CODEX_SESSION_FILE_MAX_BYTES,
   extractFrontmatterModel,
   formatAgentArgument,
   isCodexPluginScriptDir,

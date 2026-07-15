@@ -1359,10 +1359,9 @@ function buildDispatch(nodeInfo, context) {
     agent_type:         nodeInfo.role,
     codex_dispatch_mode: codexDispatchMode,
     codex_task_name:    codexTaskName,
-    ...dispatchEffort(nodeInfo.model),
-    // Current-Codex adapter: the named role profile, not a transient spawn override, owns the
-    // effective pair. A planner tier that conflicts with the role's static profile class is surfaced
-    // on the card and plan-run refuses it before spawn (`codex_profile_tier_mismatch`).
+    ...dispatchEffort(nodeInfo.model, nodeInfo.codex_session_proof || ctx.session_proof),
+    // Current-Codex adapter: the named role profile inherits the parent pair. The historical role
+    // class remains declarative metadata and never creates a tier/profile conflict.
     ...codexProfilePolicy(nodeInfo.role, nodeInfo.model),
     // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
     // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
@@ -1373,6 +1372,11 @@ function buildDispatch(nodeInfo, context) {
     // runtime). null/absent provider → role_default (the agent's configured variant wins).
     ...dispatchEffortOpencode(nodeInfo.model, ctx.opencode_provider),
   };
+  if (ctx.runtime === 'codex' || nodeInfo.codex_session_proof) {
+    const proof = nodeInfo.codex_session_proof || ctx.session_proof || { status: 'absent', source: 'session_jsonl' };
+    d.codex_session_proof_status = proof.status || 'absent';
+    d.codex_session_proof_source = proof.source || 'session_jsonl';
+  }
   if (Number.isInteger(nodeInfo.wait_budget_minutes)) {
     const { validateWaitBudgetNode } = require('./kaola-workflow-plan-validator');
     const optimizeContracts = new Map();
@@ -1497,8 +1501,9 @@ function dispatchSummarySegments(result) {
   for (const m of members) {
     const d = m && m.dispatch;
     if (!d || d.node_id == null) continue;
-    const effort = (d.codex_reasoning_effort != null && String(d.codex_reasoning_effort).trim() !== '')
-      ? d.codex_reasoning_effort : 'unresolved';
+    const effort = d.codex_reasoning_effort_source === 'parent_session' ? 'inherit'
+      : ((d.codex_reasoning_effort != null && String(d.codex_reasoning_effort).trim() !== '')
+        ? d.codex_reasoning_effort : 'unresolved');
     segs.push('opened=' + d.node_id + ' role=' + d.role + ' task=' + d.codex_task_name
       + ' mode=' + d.codex_dispatch_mode + ' effort=' + effort);
   }
@@ -6493,12 +6498,15 @@ function runOpenReady(opts) {
   }
 
   const openedAt = (typeof now === 'function') ? now() : null;
+  // Session proof is valid only for this immediate parent turn. Retain it in a transient lookup for
+  // card construction, but never persist it in running-set.json or reuse it during reconciliation.
+  const sessionProofById = new Map(toOpen.map(n => [n.id, n.codex_session_proof || null]));
   const newNodes = toOpen.map(n => ({
     id: n.id,
     role: n.role,
     kind: openKind,
     declared_write_set: n.declared_write_set,
-    // #382: persist the per-node model tier (next-action resolved it via node.model || role-static)
+    // Persist the per-node declarative tier (next-action resolved node.model || role default)
     // so running-set.json carries it — a reconcile-running-set roll-forward / crash re-dispatch keeps
     // the planner's tier instead of losing it. null when next-action returned no model.
     model: n.model || null,
@@ -6832,7 +6840,9 @@ function runOpenReady(opts) {
       // buildDispatch omits the keys ⇒ byte-identical to pre-#591 (mirrors the conditional laneGroup attach).
       const legInfo = (legs && legs[n.id]) ? legs[n.id] : null;
       const dispatch = buildDispatch(
-        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set, observes: observesById.get(n.id) || '', wait_budget_minutes: waitBudgetById.get(n.id) },
+        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set,
+          observes: observesById.get(n.id) || '', wait_budget_minutes: waitBudgetById.get(n.id),
+          codex_session_proof: sessionProofById.get(n.id) || null },
         {
           nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null,
           leg_path: legInfo ? legInfo.legPath : null, leg_branch: legInfo ? legInfo.legBranch : null,

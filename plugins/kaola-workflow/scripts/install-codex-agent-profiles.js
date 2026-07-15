@@ -49,8 +49,7 @@ const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
 //   prune step removes these even with NO manifest present (repairs every pre-manifest
 //   machine). docs-lookup.toml was renamed to knowledge-lookup in #249; the six `<role>-max`
 //   effort variants were retired in #451. Append here whenever a role file is removed/renamed.
-// EFFORT_VALUES — the only legal model_reasoning_effort values; the source schema
-//   validator (validateProfileText) and the preflight's mirror both pin this set.
+// EFFORT_VALUES — recognized historical values used only to classify migration input.
 // Agent profile TOMLs also carry the user-facing role `description` and
 // `nickname_candidates` from config/agents.toml so standalone Codex profiles expose
 // the same identity metadata as the managed config block.
@@ -105,9 +104,8 @@ if (process.argv.some(a => a === '--enable-adaptive' || a.startsWith('--enable-a
   console.warn('Kaola-Workflow Codex installer: --enable-adaptive is retired (#538); adaptive is the unconditional default. Ignoring.');
 }
 
-// The `<role>-max` xhigh effort-variant matrix is retired. Current Codex compatibility is expressed
-// directly in the base profiles: selected carry-out roles pin Sol/medium; every other role pins
-// Sol/xhigh. No install-time variant generation;
+// Named profiles omit model/effort so every role inherits the current parent session. The role lists
+// retain only declarative standard/reasoning metadata classes; no variant generation occurs.
 // no adaptive-schema require here.
 
 function assert(condition, message) {
@@ -204,9 +202,8 @@ function upsertBlock(existing, block) {
 
 // ---------------------------------------------------------------------------
 // #332 schema validation — inline regex, no TOML lib (these files are Kaola-authored
-// with a fixed top-level shape: required identity + developer_instructions and a role-governed
-// model policy. Selected carry-out profiles MUST pin Sol/medium; every other profile MUST pin
-// Sol/xhigh. The top-level region is the text before the first ^[ table.
+// with a fixed top-level shape: required identity + developer_instructions and omitted runtime keys
+// for parent-session inheritance. The top-level region is the text before the first ^[ table.
 // Returns [] when valid, or a list of human-readable reasons.
 // ---------------------------------------------------------------------------
 function validateProfileText(text, role, expectedMeta = null) {
@@ -246,34 +243,13 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
-  const modelMatch = top.match(/^model\s*=\s*"([^"]*)"\s*$/m);
-  const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
-    reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
-  }
-  const pinnedStandard = CODEX_PINNED_STANDARD_ROLES.includes(role);
-  const pinnedReasoning = CODEX_PINNED_REASONING_ROLES.includes(role);
-  if (!pinnedStandard && !pinnedReasoning) {
+  const modelLines = top.match(/^model\s*=.*$/gm) || [];
+  const effortLines = top.match(/^model_reasoning_effort\s*=.*$/gm) || [];
+  if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role)) {
     reasons.push(`role "${role}" has no Codex profile-tier policy`);
-  } else if (pinnedStandard) {
-    if (!modelMatch) reasons.push(`missing top-level 'model' pin (expected ${CODEX_STANDARD_MODEL})`);
-    else if (modelMatch[1] !== CODEX_STANDARD_MODEL) {
-      reasons.push(`top-level 'model' is "${modelMatch[1]}" but pinned standard roles require "${CODEX_STANDARD_MODEL}"`);
-    }
-    if (!effortMatch) reasons.push(`missing top-level 'model_reasoning_effort' pin (expected ${CODEX_STANDARD_EFFORT})`);
-    else if (effortMatch[1] !== CODEX_STANDARD_EFFORT) {
-      reasons.push(`model_reasoning_effort is "${effortMatch[1]}" but pinned standard roles require "${CODEX_STANDARD_EFFORT}"`);
-    }
-  } else {
-    if (!modelMatch) reasons.push(`missing top-level 'model' pin (expected ${CODEX_REASONING_MODEL})`);
-    else if (modelMatch[1] !== CODEX_REASONING_MODEL) {
-      reasons.push(`top-level 'model' is "${modelMatch[1]}" but pinned reasoning roles require "${CODEX_REASONING_MODEL}"`);
-    }
-    if (!effortMatch) reasons.push(`missing top-level 'model_reasoning_effort' pin (expected ${CODEX_REASONING_EFFORT})`);
-    else if (effortMatch[1] !== CODEX_REASONING_EFFORT) {
-      reasons.push(`model_reasoning_effort is "${effortMatch[1]}" but pinned reasoning roles require "${CODEX_REASONING_EFFORT}"`);
-    }
   }
+  if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
+  if (effortLines.length > 0) reasons.push("top-level 'model_reasoning_effort' must be omitted to inherit the parent session");
 
   const instrMatch = text.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""/m);
   if (!instrMatch) {
@@ -302,6 +278,21 @@ function validateProfileText(text, role, expectedMeta = null) {
   }
 
   return reasons;
+}
+
+function classifyProfilePinPosture(text) {
+  const firstTableIdx = String(text || '').search(/^\[/m);
+  const top = firstTableIdx === -1 ? String(text || '') : String(text || '').slice(0, firstTableIdx);
+  const models = [...top.matchAll(/^model\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
+  const efforts = [...top.matchAll(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
+  const anyModelLine = (top.match(/^model\s*=.*$/gm) || []).length;
+  const anyEffortLine = (top.match(/^model_reasoning_effort\s*=.*$/gm) || []).length;
+  if (anyModelLine === 0 && anyEffortLine === 0) return 'inherit';
+  if (anyModelLine === 1 && anyEffortLine === 1 && models.length === 1 && efforts.length === 1
+      && models[0] === CODEX_STANDARD_MODEL && [CODEX_STANDARD_EFFORT, CODEX_REASONING_EFFORT].includes(efforts[0])) {
+    return 'legacy_pinned';
+  }
+  return 'malformed';
 }
 
 // Parse config/agents.toml for [agents.<role>] metadata.
@@ -1521,6 +1512,7 @@ module.exports = {
   copyHookScripts,
   seedKaolaConfig,
   validateProfileText,
+  classifyProfilePinPosture,
   validateSourceProfiles,
   pruneStaleProfiles,
   readManifest,

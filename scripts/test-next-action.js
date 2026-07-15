@@ -787,6 +787,27 @@ const specPlanAuto = (nodes, ledger) => '## Meta\nspeculative_open_policy: auto\
   assert(rOk.result === 'ok', 'FLOOR-2: a reasoning-class synthesizer passes');
   assert(rOk.readySet[0].id === 'synth' && rOk.readySet[0].model === 'opus', 'FLOOR-2: emits the opus synthesizer');
 
+  const codexBase = { resolveModel: role => (role === 'synthesizer' ? 'opus' : 'sonnet'),
+    runtime: 'codex', currentThreadId: 'thread-current' };
+  const rMissing = computeNextAction(content, { ...codexBase, sessionProof: { status: 'absent', source: 'session_jsonl' } });
+  assert(rMissing.reason === 'reasoning_floor_proof_missing', 'FLOOR-2a: absent Codex proof refuses with the missing reason');
+  const rStale = computeNextAction(content, { ...codexBase, sessionProof: { status: 'stale', thread_id: 'thread-old',
+    model: 'gpt-5.6-sol', reasoning_effort: 'xhigh', observed_at: 'old', source: 'session_jsonl' } });
+  assert(rStale.reason === 'reasoning_floor_proof_stale', 'FLOOR-2b: stale Codex proof refuses with the stale reason');
+  const rBelow = computeNextAction(content, { ...codexBase, sessionProof: { status: 'fresh', thread_id: 'thread-current',
+    model: 'gpt-5.6-sol', reasoning_effort: 'high', observed_at: 'now', source: 'session_jsonl' } });
+  assert(rBelow.reason === 'reasoning_floor_violation', 'FLOOR-2c: sub-floor current Codex posture refuses');
+  const proof = { status: 'fresh', thread_id: 'thread-current', model: 'gpt-5.6-sol',
+    reasoning_effort: 'xhigh', observed_at: 'now', source: 'session_jsonl' };
+  const rCodexOk = computeNextAction(content, { ...codexBase, sessionProof: proof });
+  assert(rCodexOk.result === 'ok', 'FLOOR-2d: fresh current Sol/xhigh proof passes');
+  assert(JSON.stringify(rCodexOk.nextNode.codex_session_proof) === JSON.stringify({
+    status: 'fresh', model: 'gpt-5.6-sol', reasoning_effort: 'xhigh'
+  }), 'FLOOR-2d: descriptor carries only the minimum verified proof payload to dispatch');
+  assert(!('thread_id' in rCodexOk.nextNode.codex_session_proof)
+    && !('observed_at' in rCodexOk.nextNode.codex_session_proof),
+    'FLOOR-2d: serialized descriptors omit parent correlation identifiers and timestamps');
+
   // FLOOR-3: a NON-floor role resolving to sonnet is never constrained (no false refusal).
   const plainContent = makePlan(
     ['| a | tdd-guide | — | scripts/a.js | 1 | sequence |', '| finalize | finalize | a | — | 1 | sequence |'],

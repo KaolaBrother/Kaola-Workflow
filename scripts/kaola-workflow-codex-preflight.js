@@ -7,8 +7,8 @@
 // Hard-gates Codex agent-profile freshness BEFORE any subagent-invoked compliance
 // is claimed. Verifies:
 //   (a) .codex/agents/kaola-workflow/<role>.toml exists for every REQUIRED role
-//       AND is schema-valid (top-level non-empty `name` matching the role, the governed
-//       standalone Sol/medium or Sol/xhigh profile pin, non-empty `description`, valid `nickname_candidates`,
+//       AND is schema-valid (top-level non-empty `name` matching the role, omitted runtime-strength
+//       keys for parent inheritance, non-empty `description`, valid `nickname_candidates`,
 //       and a non-blank developer_instructions block) - codex >=0.138 silently ignores
 //       a profile without a non-empty `name`.
 //   (b) .codex/config.toml contains the managed block with an [agents.{role}] entry
@@ -790,34 +790,13 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
-  const modelMatch = top.match(/^model\s*=\s*"([^"]*)"\s*$/m);
-  const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
-    reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
-  }
-  const pinnedStandard = CODEX_PINNED_STANDARD_ROLES.includes(role);
-  const pinnedReasoning = CODEX_PINNED_REASONING_ROLES.includes(role);
-  if (!pinnedStandard && !pinnedReasoning) {
+  const modelLines = top.match(/^model\s*=.*$/gm) || [];
+  const effortLines = top.match(/^model_reasoning_effort\s*=.*$/gm) || [];
+  if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role)) {
     reasons.push(`role "${role}" has no Codex profile-tier policy`);
-  } else if (pinnedStandard) {
-    if (!modelMatch) reasons.push(`missing top-level 'model' pin (expected ${CODEX_STANDARD_MODEL})`);
-    else if (modelMatch[1] !== CODEX_STANDARD_MODEL) {
-      reasons.push(`top-level 'model' is "${modelMatch[1]}" but pinned standard roles require "${CODEX_STANDARD_MODEL}"`);
-    }
-    if (!effortMatch) reasons.push(`missing top-level 'model_reasoning_effort' pin (expected ${CODEX_STANDARD_EFFORT})`);
-    else if (effortMatch[1] !== CODEX_STANDARD_EFFORT) {
-      reasons.push(`model_reasoning_effort is "${effortMatch[1]}" but pinned standard roles require "${CODEX_STANDARD_EFFORT}"`);
-    }
-  } else {
-    if (!modelMatch) reasons.push(`missing top-level 'model' pin (expected ${CODEX_REASONING_MODEL})`);
-    else if (modelMatch[1] !== CODEX_REASONING_MODEL) {
-      reasons.push(`top-level 'model' is "${modelMatch[1]}" but pinned reasoning roles require "${CODEX_REASONING_MODEL}"`);
-    }
-    if (!effortMatch) reasons.push(`missing top-level 'model_reasoning_effort' pin (expected ${CODEX_REASONING_EFFORT})`);
-    else if (effortMatch[1] !== CODEX_REASONING_EFFORT) {
-      reasons.push(`model_reasoning_effort is "${effortMatch[1]}" but pinned reasoning roles require "${CODEX_REASONING_EFFORT}"`);
-    }
   }
+  if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
+  if (effortLines.length > 0) reasons.push("top-level 'model_reasoning_effort' must be omitted to inherit the parent session");
 
   const instrMatch = text.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""/m);
   if (!instrMatch) {
@@ -847,6 +826,26 @@ function validateProfileText(text, role, expectedMeta = null) {
 
   return reasons;
 }
+
+function classifyProfilePinPosture(text) {
+  const firstTableIdx = String(text || '').search(/^\[/m);
+  const top = firstTableIdx === -1 ? String(text || '') : String(text || '').slice(0, firstTableIdx);
+  const models = [...top.matchAll(/^model\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
+  const efforts = [...top.matchAll(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
+  const anyModelLine = (top.match(/^model\s*=.*$/gm) || []).length;
+  const anyEffortLine = (top.match(/^model_reasoning_effort\s*=.*$/gm) || []).length;
+  if (anyModelLine === 0 && anyEffortLine === 0) return 'inherit';
+  if (anyModelLine === 1 && anyEffortLine === 1 && models.length === 1 && efforts.length === 1
+      && models[0] === CODEX_STANDARD_MODEL && [CODEX_STANDARD_EFFORT, CODEX_REASONING_EFFORT].includes(efforts[0])) {
+    return 'legacy_pinned';
+  }
+  return 'malformed';
+}
+
+const LEGACY_PIN_ONLY_REASONS = new Set([
+  "top-level 'model' must be omitted to inherit the parent session",
+  "top-level 'model_reasoning_effort' must be omitted to inherit the parent session"
+]);
 
 // ---------------------------------------------------------------------------
 // Template role parsing — reads config/agents.toml via inline regex (no TOML lib).
@@ -1039,6 +1038,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
 
   // Inspect the agents dir contents: malformed required profiles + stale/extra files.
   const malformed = [];
+  const legacyPinnedProfiles = [];
   const staleFiles = [];
   const extraUnmanaged = [];
   const manifest = readManifest(agentsDir);
@@ -1063,8 +1063,13 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
         // Required role: schema-check it.
         let txt = '';
         try { txt = fs.readFileSync(path.join(agentsDir, name), 'utf8'); } catch { txt = ''; }
+        const posture = classifyProfilePinPosture(txt);
         const reasons = validateProfileText(txt, role, metaByRole.get(role));
-        if (reasons.length > 0) malformed.push({ role, file: name, reasons });
+        if (posture === 'legacy_pinned') {
+          const nonPinReasons = reasons.filter(reason => !LEGACY_PIN_ONLY_REASONS.has(reason));
+          if (nonPinReasons.length === 0) legacyPinnedProfiles.push({ role, file: name });
+          else malformed.push({ role, file: name, reasons: nonPinReasons });
+        } else if (reasons.length > 0) malformed.push({ role, file: name, reasons });
       } else if (manifestFiles.has(name) || RETIRED_PROFILE_FILES.includes(name)) {
         staleFiles.push(name);
       } else {
@@ -1074,6 +1079,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
   }
 
   malformed.sort((a, b) => a.role.localeCompare(b.role));
+  legacyPinnedProfiles.sort((a, b) => a.role.localeCompare(b.role));
   staleFiles.sort();
   extraUnmanaged.sort();
 
@@ -1086,6 +1092,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     conflictingRolesOutside,
     missingProfiles,
     malformed,
+    legacyPinnedProfiles,
     staleFiles,
     extraUnmanaged,
     manifest: manifestStatus,
@@ -1350,12 +1357,13 @@ function runPreflight(opts) {
   // managed_block_stale so the existing #266 fixtures keep their statuses.
   const blockMissing = !scope.blockFound;
   const malformedFirst = scope.malformed.length > 0;
+  const legacyPinsPresent = scope.legacyPinnedProfiles.length > 0;
   const staleFilesPresent = scope.staleFiles.length > 0;
   const profilesMissing = missingProfiles.length > 0;
   const configStale = blockMissing || missingFromBlock.length > 0;
   const onlyBlockRolesStale = scope.staleRolesInBlock.length > 0;
 
-  const isStale = malformedFirst || staleFilesPresent || profilesMissing || configStale || onlyBlockRolesStale;
+  const isStale = malformedFirst || legacyPinsPresent || staleFilesPresent || profilesMissing || configStale || onlyBlockRolesStale;
 
   if (!isStale) {
     return {
@@ -1387,6 +1395,29 @@ function runPreflight(opts) {
       return {
         status: 'profiles_malformed',
         malformed: scope.malformed,
+        extra_unmanaged: scope.extraUnmanaged,
+        stale: true,
+        repair: repairCmd,
+        safe_autofix: true,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
+        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
+        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
+        effective_subagent_width: scope.effective_subagent_width,
+        min_wait_timeout_ms: scope.min_wait_timeout_ms,
+        max_wait_timeout_ms: scope.max_wait_timeout_ms,
+        default_wait_timeout_ms: scope.default_wait_timeout_ms,
+      };
+    }
+    if (legacyPinsPresent) {
+      return {
+        status: 'profiles_stale',
+        stale_profiles: scope.legacyPinnedProfiles,
         extra_unmanaged: scope.extraUnmanaged,
         stale: true,
         repair: repairCmd,
@@ -1572,6 +1603,7 @@ function runPreflight(opts) {
 
   const stillStale =
     after.malformed.length > 0 ||
+    after.legacyPinnedProfiles.length > 0 ||
     after.staleFiles.length > 0 ||
     afterMissingProfiles.length > 0 ||
     !after.blockFound ||
@@ -1637,6 +1669,7 @@ function runPreflight(opts) {
 function scopeIsStale(s) {
   return s.exists && (
     s.malformed.length > 0 ||
+    s.legacyPinnedProfiles.length > 0 ||
     s.staleFiles.length > 0 ||
     s.missingProfiles.length > 0 ||
     !s.blockFound ||
@@ -1666,6 +1699,7 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     missing_roles: scope.missingProfiles,
     missing_from_block: scope.missingFromBlock,
     malformed: scope.malformed,
+    stale_profiles: scope.legacyPinnedProfiles,
     stale_files: scope.staleFiles,
     stale_roles_in_block: scope.staleRolesInBlock,
     conflicting_roles_outside: scope.conflictingRolesOutside,
@@ -1895,6 +1929,7 @@ module.exports = {
   checkManagedBlock,
   checkProfiles,
   validateProfileText,
+  classifyProfilePinPosture,
   inspectScope,
   readManifest,
   RETIRED_PROFILE_FILES,

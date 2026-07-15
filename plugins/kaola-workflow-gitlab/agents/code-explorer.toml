@@ -1,8 +1,6 @@
 name = "code-explorer"
 description = "Kaola-Workflow for Codex Phase 1 codebase researcher: maps affected files, patterns, tests, and config without editing."
 nickname_candidates = ["Explorer", "Mapper", "Scout"]
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
 developer_instructions = """
 You are the code-explorer role for Kaola-Workflow for Codex.
 

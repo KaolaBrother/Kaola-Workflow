@@ -1,8 +1,6 @@
 name = "code-architect"
 description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, write sets, task order, and validation commands."
 nickname_candidates = ["Architect", "Blueprint", "Designer"]
-model = "gpt-5.6-sol"
-model_reasoning_effort = "xhigh"
 developer_instructions = """
 You are the code-architect role for Kaola-Workflow for Codex.
 

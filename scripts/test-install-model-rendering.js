@@ -9,6 +9,21 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
+const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
+
+// The supported inheritance representation is omission, while an exact historical full pin is
+// stale migration input rather than fresh schema input.
+{
+  const inherited = fs.readFileSync(path.join(root, 'plugins/kaola-workflow/agents/implementer.toml'), 'utf8');
+  const pinned = inherited.replace(/^developer_instructions/m,
+    'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions');
+  assert.deepStrictEqual(codexProfileInstaller.validateProfileText(inherited, 'implementer'), [],
+    'an unpinned inherited profile must satisfy the source schema');
+  assert.strictEqual(typeof codexProfileInstaller.classifyProfilePinPosture, 'function',
+    'installer exports the profile pin migration classifier');
+  assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(pinned), 'legacy_pinned',
+    'an exact historical Sol/medium pair is stale migration input, not fresh');
+}
 
 function readInstalledCommand(name) {
   return fs.readFileSync(path.join(tmp, '.claude', 'commands', name), 'utf8');
@@ -435,6 +450,29 @@ try {
       assert.strictEqual(preflight.status, 0, '#581: preflight over fresh project profiles must pass: ' + preflight.stderr + preflight.stdout);
       let preflightJson = JSON.parse(preflight.stdout);
       assert.strictEqual(preflightJson.dispatch_mode, 'v1-thread-id', '#581: preflight reports v1-thread-id by default');
+      const legacyProfilePath = path.join(projectAgentsDir, 'implementer.toml');
+      const inheritedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
+      fs.writeFileSync(legacyProfilePath, inheritedProfile.replace(/^developer_instructions/m,
+        'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions'));
+      const configBeforeMigration = fs.readFileSync(projectConfigPath, 'utf8');
+      const staleLegacy = spawnSync(process.execPath,
+        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+      assert.notStrictEqual(staleLegacy.status, 0, 'legacy pinned project profile must not satisfy preflight');
+      const staleLegacyJson = JSON.parse(staleLegacy.stdout);
+      assert.strictEqual(staleLegacyJson.status, 'profiles_stale', 'legacy full pin has the stale migration status');
+      assert(Array.isArray(staleLegacyJson.stale_profiles)
+        && staleLegacyJson.stale_profiles.some(p => p.role === 'implementer'), 'stale result names the legacy profile');
+      const migratedLegacy = spawnSync(process.execPath,
+        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+      assert.strictEqual(migratedLegacy.status, 0, 'default project preflight migrates a legacy full pin: ' + migratedLegacy.stderr);
+      assert.strictEqual(JSON.parse(migratedLegacy.stdout).autofixed, true, 'legacy migration reports autofixed');
+      const migratedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
+      assert(!/^model\s*=/m.test(migratedProfile) && !/^model_reasoning_effort\s*=/m.test(migratedProfile),
+        'legacy migration installs the inherited omission posture');
+      assert.strictEqual(fs.readFileSync(projectConfigPath, 'utf8'), configBeforeMigration,
+        'profile migration does not rewrite the root-level user-owned dispatch posture');
       assertDispatchModeForConfig(configText, 'v1-thread-id', '#584 no multi_agent_v2 key', false);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 boolean true', true);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 boolean false', false);
@@ -732,6 +770,30 @@ try {
     const installerModulePath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
     const preflightMod = require(preflightModulePath);
     const installerMod = require(installerModulePath);
+
+    const mixedLegacyScope = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-mixed-legacy-profile-'));
+    try {
+      const mixedAgentsDir = path.join(mixedLegacyScope, 'agents', 'kaola-workflow');
+      fs.mkdirSync(mixedAgentsDir, { recursive: true });
+      const sourceProfile = fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'implementer.toml'), 'utf8');
+      const mixedProfile = sourceProfile
+        .replace(/^name = "implementer"$/m, 'name = "wrong-role"')
+        .replace(/^developer_instructions/m,
+          'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions');
+      fs.writeFileSync(path.join(mixedAgentsDir, 'implementer.toml'), mixedProfile);
+      const inspection = preflightMod.inspectScope({
+        codexDir: mixedLegacyScope,
+        templateRoles: ['implementer'],
+        templateEntries: []
+      });
+      assert.strictEqual(inspection.legacyPinnedProfiles.length, 0,
+        'legacy pair is safely migratable only when the remaining profile schema is valid');
+      assert(inspection.malformed.some(item => item.role === 'implementer'
+        && item.reasons.some(reason => reason.includes('must equal the role "implementer"'))),
+      'legacy pin plus invalid role metadata remains profiles_malformed');
+    } finally {
+      fs.rmSync(mixedLegacyScope, { recursive: true, force: true });
+    }
 
     const postureFixtures = [
       { label: 'no features table at all', cfg: '', expected: 'none' },

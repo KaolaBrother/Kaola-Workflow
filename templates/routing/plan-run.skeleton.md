@@ -74,24 +74,20 @@ and must run from the main root, above.)
 
 <!-- PIN: codex-dispatch -->
 Model, reasoning effort, and identity: always delegate to the base `dispatch.agent_type` profile (= the
-node's role). Current Codex compatibility is profile-static because Codex 0.144 reloads a named role
-profile after transient spawn overrides. The selected carry-out roles (`code-explorer`,
-`knowledge-lookup`, `tdd-guide`, `implementer`, `doc-updater`, `issue-scout`, `contractor`, and
-`metric-optimizer`) carry standalone profile pins for `gpt-5.6-sol` at `medium`; every other Kaola
-role's standalone profiles pin `gpt-5.6-sol` at `xhigh`. No role inherits its model or
-effort from the parent. The descriptor's `dispatch.codex_profile_mode` is therefore `pinned`, and its
-non-null `dispatch.codex_model` + `dispatch.codex_reasoning_effort` fields are the pair that must be
-observed, not spawn arguments to pass. If either field remains null, refuse with
-`codex_tier_unresolved`. If `dispatch.codex_profile_compatible` is not true (for example, a plan puts
-`reasoning` on a standard-profile role or `standard` on a reasoning-profile role), refuse with
-`codex_profile_tier_mismatch`; current Codex cannot honor that per-node tier change reliably.
+node's role). Every named profile omits both runtime-strength keys and therefore inherits the current
+parent session. The descriptor's `dispatch.codex_profile_mode` is `inherit`; its
+`dispatch.codex_profile_tier` remains declarative role metadata, and its
+`dispatch.codex_model` + `dispatch.codex_reasoning_effort` fields come only from a fresh parent-session
+proof. An unresolved tier refuses as `codex_tier_unresolved`; inheritance never creates a tier/profile
+compatibility conflict.
 
-Before the first real node for each profile tier used by the run, require a fresh child-session
-model-and-effort proof from that tier. Spawn the probe by role identity only, then inspect the spawned
-child's session JSONL `turn_context.model` and `turn_context.effort`; config text, `codex features
-list`, spawn arguments, and parent-side descriptors are not proof. A `standard` profile probe must
-record `gpt-5.6-sol` + `medium`; a `reasoning` profile probe must record `gpt-5.6-sol` + `xhigh`. If either value is
-absent, stale, or mismatched, refuse with `codex_profile_runtime_mismatch`. A parent-side encrypted
+Before the first real node for the current parent session and installed profile-set fingerprint,
+require one fresh parent-equals-child inheritance proof. Spawn the probe by role identity only, bind it
+to the intended installed profile path and role, then inspect both parent and child session JSONL latest
+`turn_context` model and effort. Config text, spawn arguments, and parent-side descriptors are not proof.
+If the profile-set binding changes, either value is absent/stale, the child identity/path is wrong, or
+the child pair differs from the freshly re-read parent pair, refuse with
+`codex_profile_runtime_mismatch`. A parent-side encrypted
 output/decryption failure does not erase valid JSONL profile evidence. For real node work it is a
 separate transport failure handled only by the durable-result contract below: verified child-written
 cache evidence may continue as `returned_partial`; missing or invalid cache evidence cannot.

@@ -210,11 +210,11 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T5b: Codex tiered-model-and-effort dispatch prose must stay effective across the 3
+// T5b: Codex inherited-model-and-effort dispatch prose must stay effective across the 3
 // Codex SKILL plan-run surfaces (Codex-runtime-only; the Claude commands never
-// carry this dispatch mode). Current Codex role profiles own the pair: pinned
-// carry-out roles run standalone Sol/medium profiles and every other role runs standalone Sol/xhigh.
-// Both v2 and v1 omit transient overrides and require child-session proof.
+// carry this dispatch mode). Current Codex role profiles omit the executable pair and inherit it
+// from the parent session; role classes remain declarative tier and wait-budget metadata.
+// Both v2 and v1 omit transient overrides and require parent-equals-child session proof.
 // ---------------------------------------------------------------------------
 {
   const planRunSurfaces = [
@@ -233,10 +233,10 @@ for (const ed of codexEditions) {
       `T5b: ${f} must not pass the descriptor pair as transient overrides`);
     assert(content.includes('codex_tier_unresolved'),
       `T5b: ${f} must refuse rather than spawn an untiered Codex role`);
-    assert(content.includes('fresh child-session') && content.includes('model-and-effort proof'),
-      `T5b: ${f} must require fresh child-session model-and-effort proof`);
-    assert(content.includes('codex_profile_tier_mismatch'),
-      `T5b: ${f} must fail closed on a plan/profile tier conflict`);
+    assert(content.includes('fresh parent') && content.includes('parent-equals-child'),
+      `T5b: ${f} must require one fresh parent-equals-child inheritance proof`);
+    assert(!content.includes('codex_profile_tier_mismatch'),
+      `T5b: ${f} must retire the static plan/profile tier-conflict refusal`);
     assert(content.includes('codex_profile_runtime_mismatch'),
       `T5b: ${f} must fail closed when child JSONL disproves the profile pair`);
     assert(content.includes('direct `agents` namespace')
@@ -310,14 +310,14 @@ for (const ed of codexEditions) {
     assert(content.includes('never use `fork_turns: "all"`'), `T5b: ${f} must prohibit full-history control-plane forks`);
   }
 
-  // Current-runtime adapter: pin both static pair classes and the role-owned dispatch mode.
+  // Current-runtime adapter: assert parent-session inheritance and declarative role metadata.
   const codexSkillSurfaces = planRunSurfaces.filter(f => f.includes('/skills/'));
   for (const f of codexSkillSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(content.includes('profile pins for `gpt-5.6-sol` at `medium`'),
-      `T5b: ${f} must document the pinned standard pair`);
-    assert(content.includes('profiles pin `gpt-5.6-sol` at `xhigh`'),
-      `T5b: ${f} must document the pinned reasoning pair`);
+    assert(content.includes('current parent session'),
+      `T5b: ${f} must document parent-session inheritance`);
+    assert(content.includes('installed profile path'),
+      `T5b: ${f} must bind the proof to the installed profile path`);
     assert(content.includes('dispatch.codex_profile_mode'),
       `T5b: ${f} must route by the descriptor profile mode`);
   }
@@ -942,10 +942,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'fork_turns: "none"', surfaces: prSkill },
     { token: 'dispatch.codex_profile_mode', surfaces: prSkill },
     { token: 'codex_tier_unresolved', surfaces: prSkill },
-    { token: 'codex_profile_tier_mismatch', surfaces: prSkill },
     { token: 'codex_profile_runtime_mismatch', surfaces: prSkill },
-    { token: 'profile pins for `gpt-5.6-sol` at `medium`', surfaces: prSkill },
-    { token: 'profiles pin `gpt-5.6-sol` at `xhigh`', surfaces: prSkill },
     { token: 'Codex 0.144 durable-result override', surfaces: prSkill },
     { token: 'transport_error: encrypted_return', surfaces: prSkill },
     { token: 'direct `agents` namespace', surfaces: prSkill },

@@ -1,8 +1,6 @@
 name = "tdd-guide"
 description = "Kaola-Workflow for Codex Phase 4 executor: implements assigned tasks with RED -> GREEN -> REFACTOR evidence."
 nickname_candidates = ["TDD", "Executor", "Builder"]
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
 developer_instructions = """
 You are the tdd-guide role for Kaola-Workflow for Codex.
 

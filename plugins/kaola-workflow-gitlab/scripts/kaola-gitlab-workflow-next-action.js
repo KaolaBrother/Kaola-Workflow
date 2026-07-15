@@ -28,7 +28,7 @@ const fs = require('fs');
 const { parseNodes, parseLedger, parseSpeculativePolicy, parseOptimizeContracts, validateWaitBudgetNode, uniqueSink, hasUnresolvableEntry } = require('./kaola-gitlab-workflow-plan-validator');
 const { parseWriteSetCell, isProtected } = require('./kaola-gitlab-workflow-classifier');
 const { LEDGER_STATUSES, NODE_MODEL_TIERS, normalizeTier, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
-const { enforceReasoningFloor } = require('./kaola-workflow-resolve-agent-model');
+const { enforceReasoningFloor, loadCodexSessionProof, isCodexPluginScriptDir } = require('./kaola-workflow-resolve-agent-model');
 
 // Terminal statuses: a node in either state counts as "done" for dependency
 // purposes, so an n/a node satisfies the depends_on of its successors.
@@ -44,6 +44,14 @@ const TERMINAL = new Set(['complete', 'n/a']);
  */
 function computeNextAction(content, opts) {
   const resolveModel = (opts && opts.resolveModel) || (() => '');
+  const runtime = opts && opts.runtime;
+  const currentThreadId = opts && opts.currentThreadId;
+  const sessionProof = opts && opts.sessionProof;
+  const dispatchProof = runtime === 'codex' ? {
+    status: sessionProof && sessionProof.status ? sessionProof.status : 'absent',
+    model: sessionProof && sessionProof.model ? sessionProof.model : null,
+    reasoning_effort: sessionProof && sessionProof.reasoning_effort ? sessionProof.reasoning_effort : null,
+  } : null;
 
   // 1. Parse nodes. Empty parse => refuse.
   const nodes = parseNodes(content);
@@ -112,6 +120,7 @@ function computeNextAction(content, opts) {
     model: node.model || resolveModel(node.role),
     declared_write_set: node.writeSetRaw,
     shape: node.shape.kind,
+    ...(runtime === 'codex' ? { codex_session_proof: dispatchProof } : {}),
     // Optional and conditional: legacy/no-override descriptor bytes stay unchanged.
     ...(Number.isInteger(node.wait_budget_minutes) ? { wait_budget_minutes: node.wait_budget_minutes } : {}),
   });
@@ -147,7 +156,7 @@ function computeNextAction(content, opts) {
   // refusal — the aggregator never emits a silently-lowered floor role for dispatch. The EFFECTIVE
   // model is checked (not just the resolved default), since an authored column bypasses resolveModel.
   for (const n of readySet) {
-    const check = enforceReasoningFloor(n.role, n.model);
+    const check = enforceReasoningFloor(n.role, n.model, { runtime, currentThreadId, sessionProof });
     if (!check.ok) {
       return {
         result: 'refuse',
@@ -303,7 +312,12 @@ function main() {
   const resolveModel = role =>
     require('./kaola-workflow-resolve-agent-model').resolveAgentModel(role);
 
-  const result = computeNextAction(content, { resolveModel });
+  const runtime = isCodexPluginScriptDir(__dirname) ? 'codex' : null;
+  const currentThreadId = runtime === 'codex' ? String(process.env.CODEX_THREAD_ID || '').trim() : null;
+  const sessionProof = runtime === 'codex'
+    ? loadCodexSessionProof({ codexHome: process.env.CODEX_HOME || require('os').homedir() + '/.codex', threadId: currentThreadId })
+    : null;
+  const result = computeNextAction(content, { resolveModel, runtime, currentThreadId, sessionProof });
   process.stdout.write(JSON.stringify(result) + '\n');
   if (result.result === 'refuse') process.exitCode = 1;
 }

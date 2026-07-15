@@ -5862,8 +5862,10 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
     if (base === 'kaola-workflow-next-action.js') {
       return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
-        { id: 'rev-a', role: 'code-reviewer', declared_write_set: '—', model: 'opus' },
-        { id: 'rev-b', role: 'security-reviewer', declared_write_set: '—', model: 'sonnet' },
+        { id: 'rev-a', role: 'code-reviewer', declared_write_set: '—', model: 'opus',
+          codex_session_proof: { status: 'fresh', model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' } },
+        { id: 'rev-b', role: 'security-reviewer', declared_write_set: '—', model: 'sonnet',
+          codex_session_proof: { status: 'absent', model: null, reasoning_effort: null } },
       ] };
     }
     if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
@@ -5876,6 +5878,17 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   const set = JSON.parse(h.files[RS_SET_PATH]);
   const setById = Object.fromEntries(set.nodes.map(n => [n.id, n.model]));
   assert(setById['rev-a'] === 'opus' && setById['rev-b'] === 'sonnet', 'R12: running-set.json persists per-node model, got ' + JSON.stringify(setById));
+  const dispatchById = Object.fromEntries(r.opened.map(o => [o.id, o.dispatch]));
+  assert(dispatchById['rev-a'].codex_model === 'gpt-5.6-sol'
+    && dispatchById['rev-a'].codex_reasoning_effort === 'xhigh'
+    && dispatchById['rev-a'].codex_session_proof_status === 'fresh',
+    'R12: open-ready fresh proof reaches the immediate dispatch card, got ' + JSON.stringify(dispatchById['rev-a']));
+  assert(dispatchById['rev-b'].codex_model === null
+    && dispatchById['rev-b'].codex_reasoning_effort === null
+    && dispatchById['rev-b'].codex_session_proof_status === 'absent',
+    'R12: open-ready absent proof remains explicit and fail-closed, got ' + JSON.stringify(dispatchById['rev-b']));
+  assert(!('codex_session_proof' in set.nodes[0]) && !('codex_session_proof' in set.nodes[1]),
+    'R12: transient session proof is not persisted in running-set.json');
 }
 
 // ===========================================================================
@@ -11687,19 +11700,21 @@ function rtHarness(initialFiles, opts) {
     required_tokens: ['evidence-binding', 'RED', 'GREEN'],
     working_dir: '/fake/worktree',
     forge_rider: null,
+    runtime: 'codex',
+    session_proof: { status: 'fresh', thread_id: 'parent', model: 'gpt-5.6-sol', reasoning_effort: 'high', observed_at: 'now', source: 'session_jsonl' },
   };
   const dOpus = buildDispatch(opusNode, opusCtx);
   assert(dOpus.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: opus agent_type equals base role');
   assert(dOpus.codex_model === 'gpt-5.6-sol', 'D451-DISPATCH-EFFORT: opus codex_model is gpt-5.6-sol');
-  assert(dOpus.codex_model_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_model_source is planner_model');
-  assert(dOpus.codex_reasoning_effort === 'xhigh', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort is xhigh');
-  assert(dOpus.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort_source is planner_model');
-  assert(dOpus.codex_profile_mode === 'pinned' && dOpus.codex_profile_tier === 'reasoning'
+  assert(dOpus.codex_model_source === 'parent_session', 'D451-DISPATCH-EFFORT: opus codex_model_source is parent_session');
+  assert(dOpus.codex_reasoning_effort === 'high', 'D451-DISPATCH-EFFORT: reasoning card inherits parent effort');
+  assert(dOpus.codex_reasoning_effort_source === 'parent_session', 'D451-DISPATCH-EFFORT: reasoning effort source is parent_session');
+  assert(dOpus.codex_profile_mode === 'inherit' && dOpus.codex_profile_tier === 'reasoning'
     && dOpus.codex_profile_compatible === true,
-    'D451-DISPATCH-EFFORT: reasoning reviewer uses the standalone pinned profile pair');
+    'D451-DISPATCH-EFFORT: reasoning reviewer inherits parent runtime under declarative reasoning metadata');
   assert(dOpus.codex_task_name === 'n1_planner_code_reviewer', 'D451-DISPATCH-EFFORT: opus dispatch carries task-name identity for per-spawn calls');
 
-  // Case 2: sonnet model → profile-pinned Sol/medium
+  // Case 2: sonnet tier metadata → inherits the same parent runtime
   const sonnetNode = { id: 'n2-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
   const sonnetCtx = {
     nonce: 'def456abc123',
@@ -11707,22 +11722,24 @@ function rtHarness(initialFiles, opts) {
     required_tokens: ['evidence-binding'],
     working_dir: '/fake/worktree',
     forge_rider: null,
+    runtime: 'codex',
+    session_proof: opusCtx.session_proof,
   };
   const dSonnet = buildDispatch(sonnetNode, sonnetCtx);
   assert(dSonnet.agent_type === 'implementer', 'D451-DISPATCH-EFFORT: sonnet agent_type equals base role');
   assert(dSonnet.codex_model === 'gpt-5.6-sol', 'D451-DISPATCH-EFFORT: sonnet codex_model is gpt-5.6-sol');
-  assert(dSonnet.codex_model_source === 'planner_model', 'D451-DISPATCH-EFFORT: sonnet codex_model_source is planner_model');
-  assert(dSonnet.codex_reasoning_effort === 'medium', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort is medium');
-  assert(dSonnet.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort_source is planner_model');
-  assert(dSonnet.codex_profile_mode === 'pinned' && dSonnet.codex_profile_tier === 'standard'
+  assert(dSonnet.codex_model_source === 'parent_session', 'D451-DISPATCH-EFFORT: sonnet codex_model_source is parent_session');
+  assert(dSonnet.codex_reasoning_effort === 'high', 'D451-DISPATCH-EFFORT: standard card inherits the same parent effort');
+  assert(dSonnet.codex_reasoning_effort_source === 'parent_session', 'D451-DISPATCH-EFFORT: standard effort source is parent_session');
+  assert(dSonnet.codex_profile_mode === 'inherit' && dSonnet.codex_profile_tier === 'standard'
     && dSonnet.codex_profile_compatible === true,
-    'D451-DISPATCH-EFFORT: standard implementer uses the pinned role profile');
+    'D451-DISPATCH-EFFORT: standard implementer inherits parent runtime under declarative standard metadata');
 
-  // Case 2b: a plan tier that conflicts with the role profile is surfaced fail-closed on the card.
+  // Case 2b: the plan tier and role class remain declarative while the runtime pair is inherited.
   const dMismatch = buildDispatch({ ...sonnetNode, role: 'code-reviewer' }, sonnetCtx);
-  assert(dMismatch.codex_profile_mode === 'pinned' && dMismatch.codex_profile_tier === 'reasoning'
-    && dMismatch.codex_profile_compatible === false,
-    'D451-DISPATCH-EFFORT: standard reviewer conflicts with its pinned reasoning profile');
+  assert(dMismatch.codex_profile_mode === 'inherit' && dMismatch.codex_profile_tier === 'reasoning'
+    && dMismatch.codex_profile_compatible === true,
+    'D451-DISPATCH-EFFORT: explicit tier stays compatible with inherited parent runtime metadata');
 
   // Case 3: null helper input → unresolved role_default sentinel (plan-run refuses before spawn)
   const nullModelNode = { id: 'n3-review', role: 'code-reviewer', model: null, declared_write_set: '—' };
@@ -11739,9 +11756,9 @@ function rtHarness(initialFiles, opts) {
   assert(dNull.codex_model_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_model_source is role_default');
   assert(dNull.codex_reasoning_effort === null, 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort is null');
   assert(dNull.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort_source is role_default');
-  assert(dNull.codex_profile_mode === 'pinned' && dNull.codex_profile_tier === 'reasoning'
-    && dNull.codex_profile_compatible === false,
-    'D451-DISPATCH-EFFORT: unresolved direct helper input is not profile-compatible');
+  assert(dNull.codex_profile_mode === 'inherit' && dNull.codex_profile_tier === 'reasoning'
+    && dNull.codex_profile_compatible === true,
+    'D451-DISPATCH-EFFORT: inherited profile compatibility is independent of unresolved tier');
 
   // #382-opencode: the opencode effort twin (dispatchEffortOpencode). No provider in ctx →
   // role_default (the agent's configured variant wins), so the cases above all carry null.
@@ -11812,24 +11829,24 @@ function rtHarness(initialFiles, opts) {
 
   // NEUTRAL reasoning tier: same effort as legacy opus + a native display object.
   const dR = mk('reasoning');
-  assert(dR.codex_model === 'gpt-5.6-sol', 'TIER-RENAME: reasoning → gpt-5.6-sol model');
-  assert(dR.codex_reasoning_effort === 'xhigh', 'TIER-RENAME: reasoning → xhigh effort');
+  assert(dR.codex_model === null, 'TIER-RENAME: reasoning metadata does not select a Codex model');
+  assert(dR.codex_reasoning_effort === null, 'TIER-RENAME: reasoning metadata does not select Codex effort');
   assert(dR.model === 'reasoning', 'TIER-RENAME: raw tier stays in the dispatch card');
   assert(dR.model_display && dR.model_display.claude === 'opus'
-    && dR.model_display.codex === 'gpt-5.6-sol (xhigh reasoning effort)'
+    && dR.model_display.codex === 'parent session (reasoning tier metadata)'
     && dR.model_display.opencode === 'top effort variant',
     'ENVELOPE-DISPLAY: reasoning model_display is runtime-native, got ' + JSON.stringify(dR.model_display));
 
   // NEUTRAL standard tier: same effort as legacy sonnet + a native display object.
   const dS = mk('standard');
-  assert(dS.codex_model === 'gpt-5.6-sol', 'TIER-RENAME: standard → gpt-5.6-sol model');
-  assert(dS.codex_reasoning_effort === 'medium', 'TIER-RENAME: standard → medium effort');
+  assert(dS.codex_model === null, 'TIER-RENAME: standard metadata does not select a Codex model');
+  assert(dS.codex_reasoning_effort === null, 'TIER-RENAME: standard metadata does not select Codex effort');
   assert(dS.model_display && dS.model_display.claude === 'sonnet'
-    && dS.model_display.codex === 'gpt-5.6-sol (medium reasoning effort)'
+    && dS.model_display.codex === 'parent session (standard tier metadata)'
     && dS.model_display.opencode === 'second effort variant',
     'ENVELOPE-DISPLAY: standard model_display is runtime-native, got ' + JSON.stringify(dS.model_display));
-  assert(dR.codex_profile_compatible === true && dS.codex_profile_compatible === false,
-    'CODEX-PROFILE: code-reviewer accepts reasoning and refuses a standard tier mismatch');
+  assert(dR.codex_profile_compatible === true && dS.codex_profile_compatible === true,
+    'CODEX-PROFILE: inherited code-reviewer accepts either declarative tier');
 
   // BACK-COMPAT: a legacy opus/sonnet cell (frozen plan) dispatches with the SAME effort AND the
   // SAME display as its neutral token — a resumed legacy plan is behavior-identical.

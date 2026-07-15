@@ -739,7 +739,7 @@ for (const reviewerBody of [
 // issue #332: source agent-profile schema wall. require() the installer (the #325
 // require.main guard means require() never runs main()) and assert its source-tree
 // validator passes — every agents/*.toml has a matching non-empty top-level `name`,
-// a description, valid nickname_candidates, its governed standalone Sol/medium or Sol/xhigh pin,
+// a description, valid nickname_candidates, inherited runtime-key omission plus declarative tier metadata,
 // a non-blank developer_instructions, every
 // config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
 // This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
@@ -764,13 +764,13 @@ const codexPreflight = require(path.join(root, pluginRoot, 'scripts', 'kaola-wor
 const sorted = values => [...values].sort();
 assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'Codex installer pinned-role policy must match adaptive schema');
+  'Codex installer role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_REASONING_ROLES)),
   'Codex installer reasoning-role policy must match adaptive schema');
 assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'Codex preflight pinned-role policy must match adaptive schema');
+  'Codex preflight role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_REASONING_ROLES)),
   'Codex preflight reasoning-role policy must match adaptive schema');
@@ -778,12 +778,12 @@ assert(codexInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && codexInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && codexPreflight.CODEX_STANDARD_MODEL === codexInstaller.CODEX_STANDARD_MODEL
     && codexPreflight.CODEX_STANDARD_EFFORT === codexInstaller.CODEX_STANDARD_EFFORT,
-  'Codex installer/preflight standard profile pair must be gpt-5.6-sol/medium');
+  'Codex installer/preflight historical standard migration pair must be gpt-5.6-sol/medium');
 assert(codexInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
     && codexInstaller.CODEX_REASONING_EFFORT === 'xhigh'
     && codexPreflight.CODEX_REASONING_MODEL === codexInstaller.CODEX_REASONING_MODEL
     && codexPreflight.CODEX_REASONING_EFFORT === codexInstaller.CODEX_REASONING_EFFORT,
-  'Codex installer/preflight reasoning profile pair must be gpt-5.6-sol/xhigh');
+  'Codex installer/preflight historical reasoning migration pair must be gpt-5.6-sol/xhigh');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, '.codex-plugin');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, 'isCodexPluginScriptDir');
 
@@ -797,8 +797,8 @@ function deriveCodexRoleCatalog() {
   const roles = [];
   const re = /^\[agents\.([a-z0-9-]+)\]/gm;
   let m;
-  // The <role>-max variants remain retired. The base profile itself now owns either the selected
-  // standalone Sol/medium or Sol/xhigh pin, while the catalog still derives the role SET only.
+  // The <role>-max variants remain retired. Base profiles inherit the parent-session runtime pair;
+  // their declarative tier metadata remains separate while the catalog derives the role SET only.
   while ((m = re.exec(templateText)) !== null) {
     roles.push(m[1]);
   }
@@ -879,26 +879,26 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     '#451: config/agents.toml must not register any [agents.<role>-max] table: ' + maxTables.join(', '));
 }
 
-// Current Codex compatibility: selected roles pin Sol/medium; all others pin Sol/xhigh.
+// Current Codex compatibility: all known role profiles inherit the parent-session runtime pair.
 // Transient per-spawn pair overrides are deliberately omitted because Codex 0.144 reloads the named
 // role profile after applying them. The child JSONL is the proof surface.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'profile pins for `gpt-5.6-sol` at `medium`');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'profiles pin `gpt-5.6-sol` at `xhigh`');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-equals-child inheritance proof');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'installed profile path');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Codex 0.144 durable-result override');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fork_turns: "none"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Omit both `model`');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model: dispatch.codex_model');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_tier_unresolved');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_profile_tier_mismatch');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_profile_tier_mismatch');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_profile_runtime_mismatch');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model-and-effort proof');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-equals-child inheritance proof');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`sonnet`/absent');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'reasoning tier -> `gpt-5.6-sol` at `xhigh`');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'standard tier -> `gpt-5.6-sol` at `medium`');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'standalone Sol/medium carry-out profiles');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'standalone Sol/xhigh profiles');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'codex_profile_tier_mismatch');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'declarative reasoning/wait-budget metadata');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'child inherits the current parent session');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'declarative tier metadata');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'child inherits the current parent session');
+assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'codex_profile_tier_mismatch');
 
 // #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
 // run-start notice + the consent-halt escalation on both the codex SKILL and the root Claude
