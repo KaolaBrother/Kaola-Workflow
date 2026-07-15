@@ -1584,10 +1584,22 @@ function validatePlan(content, opts) {
   // last-wins; cacheBaseFile/barrierRef COLLIDE on `barrier-base-<sanitized>`). Refuse at the
   // authoring gate. NOT added to revalidateForResume — a legacy frozen plan with a dup id must still
   // resume-check (the #381 freeze-only landmine). O(n): a raw-id Set + a sanitized->rawid Map.
+  //
+  // #688 (item 3, R5): a RESERVED node id — a literal `Object.prototype` key (`__proto__`, `constructor`,
+  // `toString`, ...) — freezes in-grammar today, then poisons readLedgerStatuses' plain-object status map:
+  // `out['__proto__'] = status` is a silent SETTER no-op on a `{}` literal (it retargets the object's
+  // prototype instead of creating an own property), so the row vanishes and the run wedges fail-closed
+  // (record-evidence refuses evidence_generation_stale unconditionally). Refuse at the grammar, not as
+  // spot-hardening of readLedgerStatuses (that key-drop is the SYMPTOM, not the place to patch).
+  // Object.getOwnPropertyNames(Object.prototype) is the canonical reserved set (no hardcoded list to drift).
+  const reservedNodeIdKeys = new Set(Object.getOwnPropertyNames(Object.prototype));
   {
     const seenRaw = new Set();
     const seenSan = new Map();
     for (const n of nodes) {
+      if (reservedNodeIdKeys.has(n.id)) {
+        errors.push(`node id "${n.id}" is a reserved Object.prototype key — plain-object ledger/status maps cannot represent it safely (readLedgerStatuses silently drops a "__proto__" write); rename the node`);
+      }
       if (seenRaw.has(n.id)) {
         errors.push(`duplicate node id "${n.id}" — node ids must be unique (the per-node barrier/ledger key on id; a duplicate is silently judged against the first row)`);
       }

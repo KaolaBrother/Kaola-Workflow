@@ -18,6 +18,11 @@ const { spawnSync } = require('child_process');
 const SCRIPT = path.join(__dirname, 'kaola-workflow-full-advance.js');
 const REPO = path.resolve(__dirname, '..');
 const repair = require('./kaola-workflow-repair-state.js');
+// #689: in-process require of the script itself for the parent-dir-fsync monkey-patch seam (every
+// other test in this file spawns the script as a subprocess; this ONE direct require is needed
+// because fs.<method> patching is only observable by the production function's OWN `require('fs')`
+// binding when both live in the same process).
+const { writeFileAtomic } = require('./kaola-workflow-full-advance.js');
 
 let passed = 0;
 let failed = 0;
@@ -394,6 +399,104 @@ const DELEGATE_STATE = STATE_WITH_SINK + '\ndelegation_policy: delegate\n';
   o = run(root, ['orient', '--project', 'issue-1']);
   assert(o.json && o.json.full_step === 'finalize' && o.json.next_command.endsWith('/kaola-workflow-finalize issue-1'), 'T18: review present -> finalize');
   fs.rmSync(root, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// #689 — writeFileAtomic parent-directory fsync ORDERING (same gap #685 fixed on the adaptive path's
+// writeFileAtomicReplace, copied verbatim). Node's require('fs') is a process-wide singleton, so
+// patching fs.<method> here is observed by the production function's own `require('fs')` binding
+// (same seam as test-claim-hardening.js's #685 regression). Every patched method is restored in a
+// `finally` so the spy never leaks into a later test in this process.
+// ---------------------------------------------------------------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-atomic-dirfsync-'));
+  const parentDir = path.join(dir, 'sub');
+  const target = path.join(parentDir, 'workflow-state.md');
+  const calls = [];
+  const fdToPath = new Map();
+  const origOpenSync = fs.openSync;
+  const origFsyncSync = fs.fsyncSync;
+  const origRenameSync = fs.renameSync;
+  const origCloseSync = fs.closeSync;
+  fs.openSync = function (p, ...rest) {
+    const fd = origOpenSync.call(fs, p, ...rest);
+    fdToPath.set(fd, p);
+    calls.push({ fn: 'openSync', arg: p, fd });
+    return fd;
+  };
+  fs.fsyncSync = function (fd) {
+    calls.push({ fn: 'fsyncSync', arg: fdToPath.get(fd), fd });
+    return origFsyncSync.call(fs, fd);
+  };
+  fs.renameSync = function (a, b) {
+    calls.push({ fn: 'renameSync', arg: [a, b] });
+    return origRenameSync.call(fs, a, b);
+  };
+  fs.closeSync = function (fd) {
+    calls.push({ fn: 'closeSync', arg: fdToPath.get(fd), fd });
+    return origCloseSync.call(fs, fd);
+  };
+  let wrote;
+  try {
+    wrote = writeFileAtomic(target, 'gamma');
+  } finally {
+    fs.openSync = origOpenSync;
+    fs.fsyncSync = origFsyncSync;
+    fs.renameSync = origRenameSync;
+    fs.closeSync = origCloseSync;
+  }
+  assert(wrote === true, '#689: write with the order-tracking spy in place still returns true');
+  const renameIdx = calls.findIndex(c => c.fn === 'renameSync');
+  assert(renameIdx !== -1, '#689: renameSync was called, got ' + JSON.stringify(calls));
+  const tmpFsyncIdx = calls.findIndex((c, i) => i < renameIdx && c.fn === 'fsyncSync');
+  assert(tmpFsyncIdx !== -1, '#689: the tmp-file fd is fsynced BEFORE renameSync (pre-existing contract), got ' + JSON.stringify(calls));
+  const dirOpenIdx = calls.findIndex((c, i) => i > renameIdx && c.fn === 'openSync' && c.arg === parentDir);
+  assert(dirOpenIdx !== -1, '#689: parent directory opened AFTER renameSync, got ' + JSON.stringify(calls));
+  const dirOpenFd = dirOpenIdx !== -1 ? calls[dirOpenIdx].fd : undefined;
+  const dirFsyncIdx = calls.findIndex((c, i) => i > dirOpenIdx && c.fn === 'fsyncSync' && c.fd === dirOpenFd);
+  assert(dirFsyncIdx !== -1,
+    '#689: the parent-directory fd is fsynced after open+rename — full required order is ' +
+    'fsyncSync(tmpFd) -> renameSync -> openSync(dir) -> fsyncSync(dirFd) -> closeSync(dirFd), got ' + JSON.stringify(calls));
+  const dirCloseIdx = calls.findIndex((c, i) => i > dirFsyncIdx && c.fn === 'closeSync' && c.fd === dirOpenFd);
+  assert(dirCloseIdx !== -1, '#689: the parent-directory fd is closed after its own fsync, got ' + JSON.stringify(calls));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// #689 — platform fail-soft on the parent-directory fsync. A directory open/fsync can be refused on
+// some platforms/filesystems (Windows, EISDIR, EACCES, EINVAL). That failure must degrade SILENTLY —
+// never propagate, never turn a previously-accepted write into a refusal.
+// ---------------------------------------------------------------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-atomic-failsoft-'));
+  const parentDir = path.join(dir, 'sub');
+  const target = path.join(parentDir, 'workflow-state.md');
+  const origOpenSync = fs.openSync;
+
+  function patchOpenSyncToFaultOnDir(code) {
+    fs.openSync = function (p, ...rest) {
+      if (p === parentDir) {
+        const err = new Error('#689 fault injection: simulated ' + code + ' opening the parent directory');
+        err.code = code;
+        throw err;
+      }
+      return origOpenSync.call(fs, p, ...rest);
+    };
+  }
+
+  let wrote1, threw1 = false;
+  patchOpenSyncToFaultOnDir('EISDIR');
+  try { wrote1 = writeFileAtomic(target, 'delta'); } catch (_) { threw1 = true; } finally { fs.openSync = origOpenSync; }
+  assert(threw1 === false, '#689: a directory-open failure during the fsync step must NOT propagate (fail-soft)');
+  assert(wrote1 === true, '#689: the write still completes and returns its normal true contract despite the fsync failure');
+  assert(fs.readFileSync(target, 'utf8') === 'delta', '#689: content is durably written even when parent-dir fsync is unsupported');
+
+  let wrote2, threw2 = false;
+  patchOpenSyncToFaultOnDir('EACCES');
+  try { wrote2 = writeFileAtomic(target, 'epsilon'); } catch (_) { threw2 = true; } finally { fs.openSync = origOpenSync; }
+  assert(threw2 === false && wrote2 === true, '#689: fail-soft degrades every call, not just the first');
+  assert(fs.readFileSync(target, 'utf8') === 'epsilon', '#689: content is durably written on the second fail-soft call too');
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

@@ -3405,20 +3405,25 @@ function sweepBarrierRefs(root) {
         }
       }
 
-      // (c) #686 R8: present-but-UNREADABLE workflow-state.md KEEP — an independent pass over the
-      // SAME entries listing as (b). readActiveFolders drops (never re-implemented here — see the
-      // R8 doc paragraph above) a folder whose state file exists but fails to read; that folder's
-      // ONLY liveness evidence is otherwise lost. A project dir with NO workflow-state.md at all is
-      // deliberately skipped here (no liveness evidence — correctly reapable).
+      // (c) #686 R8 + #691 R10 (a sibling): present-but-UNPROBEABLE workflow-state.md KEEP — an
+      // independent pass over the SAME entries listing as (b). readActiveFolders drops (never
+      // re-implemented here — see the R8 doc paragraph above) a folder whose state file exists but
+      // fails to read; that folder's ONLY liveness evidence is otherwise lost. A single fs.statSync
+      // (then a readFileSync attempt, both inside ONE try) distinguishes a clean ENOENT (genuinely
+      // absent — no liveness evidence, correctly reapable) from ANY OTHER fault (EACCES/EISDIR/EPERM/…
+      // — unprobeable, KEEP). #691: `fs.existsSync(stateFile)` alone cannot make this distinction — it
+      // returns false both when the state file is genuinely absent AND when it is merely unreachable
+      // because the PARENT project directory itself is chmod-000 (EACCES-through-parent), so a live
+      // project whose directory (not just its state file) is unreadable was wrongly dropped from keep.
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name === 'archive' || entry.name.startsWith('.') || !isSafeName(entry.name)) continue;
         const stateFile = path.join(workflowDir, entry.name, 'workflow-state.md');
-        if (!fs.existsSync(stateFile)) continue;
         try {
+          fs.statSync(stateFile);
           fs.readFileSync(stateFile, 'utf8');
           // readable — already covered (or correctly excluded) by pass (a) above.
-        } catch (_) {
-          keep.add(sanitizeBarrierTag(entry.name));
+        } catch (e) {
+          if (e && e.code !== 'ENOENT') keep.add(sanitizeBarrierTag(entry.name));
         }
       }
     }

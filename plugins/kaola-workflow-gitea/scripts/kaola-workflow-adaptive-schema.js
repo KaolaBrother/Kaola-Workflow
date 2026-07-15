@@ -703,11 +703,17 @@ const CANONICAL_TREE_ENTRY_RE = /^[0-7]{6} [0-9a-f]{40}$/i;
 
 // A canonical blob map: a plain object whose keys are sorted repo-relative paths and whose values are
 // tree-entry identities. Canonical form is what makes a byte-comparison against a freshly computed map sound.
+// #688 (item 4, R6): ORDER-INSENSITIVE by construction — a plain JS object always enumerates
+// canonical-integer keys (e.g. "10", "2024") FIRST, in ascending numeric order, ahead of EVERY string
+// key regardless of insertion order. That forced reordering can diverge from a pure lexicographic sort
+// purely as an engine artifact (a string key that sorts before the integer key lexicographically still
+// enumerates AFTER it), so comparing Object.keys(value)'s native enumeration order against its own
+// sorted form rejects a correctly-built map for no reason connected to how it was built. Sort once and
+// validate shape only — no caller relies on the raw enumeration order (every lookup in this codebase is
+// per-key, never a whole-object stringify comparison).
 function isCanonicalBlobMap(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const keys = Object.keys(value);
-  const sorted = keys.slice().sort();
-  if (JSON.stringify(keys) !== JSON.stringify(sorted)) return false;
+  const keys = Object.keys(value).sort();
   return keys.every(k => k && typeof value[k] === 'string' && CANONICAL_TREE_ENTRY_RE.test(value[k]));
 }
 

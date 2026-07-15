@@ -67,6 +67,8 @@ const {
   deriveMaxSimultaneousOpen,
   // #463 Slice 4/5: synthesizer execution (direct-call tests for the deferred-tier conflict bail)
   synthesizeLevel,
+  // #688 (items 1+2): rebind-admissibility predicate, direct-call hardening regressions.
+  proveRebindAdmissible,
 } = require('./kaola-workflow-adaptive-node');
 const {
   RUNNING_SET_NAME,
@@ -75,6 +77,8 @@ const {
   evaluateEffectiveVerdict,
   canonicalLogicalGateIdentity,
   validateReviewJournal,
+  // #688 (item 4): canonical blob-map shape check, direct-call hardening regression.
+  isCanonicalBlobMap,
 } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 // #585: scheduler mutual-exclusion lock helpers (byte-identical ×4 in adaptive-schema).
@@ -16530,6 +16534,150 @@ function rtHarness(initialFiles, opts) {
     assert(!repaired.evidenceRemoved.includes('g_fail.md') && fs.existsSync(path.join(cacheDir, 'g_fail.md')),
       'N684-6: the failed singleton\'s evidence is RETAINED as the repair brief, not purged');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ===========================================================================
+// #688 — fail-closed hardening of proveRebindAdmissible's ledger-status inputs (items 1+2, low,
+// unreachable-today edges surfaced by the #683 adversarial campaign). Direct-call unit assertions,
+// exactly as the issue's own acceptance criteria sanction (a synthetic absent-ledger call; an n/a-arm
+// construction) — neither shape is reachable through the real repair-node CLI today.
+//
+// Fixture: one slice node `writer` (the current attempt's own producer, declares a.js) and one
+// disjoint owner `other` (declares b.js) whose OWN gate is a DIFFERENT, already-repaired attempt
+// (`repair.selected_writer: 'other'`). The candidate delta moves b.js (owned solely by `other`,
+// disjoint from the slice) since cand and now disagree on its blob — the ONLY path P3b can ever
+// attribute, and exactly the seam #688.1/2 hardens (repairWriters' ledger-status quantifier).
+// ===========================================================================
+{
+  const makeProveCtx = () => ({
+    nodes: [
+      { id: 'writer', writeSetRaw: 'a.js' },
+      { id: 'other', writeSetRaw: 'b.js' },
+    ],
+    attempt: {
+      candidate_residue_digest: 'RESIDUE688',
+      producer_bindings: { writer: {} },
+      logical_gate: { key: 'gate-writer-688', members: ['writer'] },
+      rebind: [],
+    },
+    attempts: [{
+      logical_gate: { key: 'gate-other-688', members: ['other'] },
+      repair: { selected_writer: 'other', settled: false },
+    }],
+    now: { residue_digest: 'RESIDUE688',
+      declared: { 'a.js': '100644 ' + 'a'.repeat(40), 'b.js': '100644 ' + 'b'.repeat(40) } },
+    cand: { digest: 'X688',
+      declared: { 'a.js': '100644 ' + 'a'.repeat(40), 'b.js': '100644 ' + 'c'.repeat(40) } },
+    declaredUnion: new Set(['a.js', 'b.js']),
+    foreign: [],
+    nodeId: 'writer',
+    // NOTE: `ledgerStatuses` is deliberately OMITTED here — the synthetic absent-ledger call.
+  });
+
+  // #688.1 — a synthetic ABSENT ledger (ctx carries no `ledgerStatuses` key at all): the pre-fix
+  // `(ledgerStatuses || {})[m]` fallback degrades every lookup to undefined !== 'complete' -> true,
+  // i.e. admit-ALL. Fail-closed posture: an absent ledger must refuse attribution instead.
+  {
+    const out = proveRebindAdmissible(makeProveCtx());
+    assert(out.ok === false && out.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(out.paths) === JSON.stringify(['b.js']),
+      '#688.1: a synthetic absent ledger (ctx.ledgerStatuses omitted) fails CLOSED — refuses '
+      + 'candidate_delta_unattributed on b.js instead of admit-all, got ' + JSON.stringify(out));
+  }
+
+  // #688.2 — an n/a-ARM construction: the owner gate's sole member sits at status n/a (a
+  // selector-pruned arm that never re-reviews). The pre-fix quantifier `!== 'complete'` treats n/a as
+  // "still live", wrongly attributing through it. Restrict to {pending, in_progress}.
+  {
+    const ctx = makeProveCtx();
+    ctx.ledgerStatuses = { other: 'n/a' };
+    const out = proveRebindAdmissible(ctx);
+    assert(out.ok === false && out.reason === 'candidate_delta_unattributed'
+      && JSON.stringify(out.paths) === JSON.stringify(['b.js']),
+      '#688.2: an n/a owner-gate member is excluded from the liveness quantifier — refuses '
+      + 'candidate_delta_unattributed on b.js, got ' + JSON.stringify(out));
+  }
+
+  // Regression controls — a genuinely LIVE owner gate (pending or in_progress) must still attribute
+  // the delta via P3b exactly as before (the fix narrows the quantifier, it must not empty it).
+  {
+    const ctxPending = makeProveCtx();
+    ctxPending.ledgerStatuses = { other: 'pending' };
+    const outPending = proveRebindAdmissible(ctxPending);
+    assert(outPending.ok === true
+      && JSON.stringify(outPending.absorbed.map(a => a.path)) === JSON.stringify(['b.js'])
+      && JSON.stringify(outPending.attributed_to) === JSON.stringify(['other']),
+      '#688: (control) a genuinely pending owner gate still attributes the delta via P3b, got ' + JSON.stringify(outPending));
+
+    const ctxInProgress = makeProveCtx();
+    ctxInProgress.ledgerStatuses = { other: 'in_progress' };
+    const outInProgress = proveRebindAdmissible(ctxInProgress);
+    assert(outInProgress.ok === true && JSON.stringify(outInProgress.attributed_to) === JSON.stringify(['other']),
+      '#688: (control) a genuinely in_progress owner gate still attributes the delta via P3b, got ' + JSON.stringify(outInProgress));
+  }
+}
+
+// ===========================================================================
+// #688.4 — isCanonicalBlobMap's enumeration-order check made ORDER-INSENSITIVE. JS forces
+// canonical-integer object keys (e.g. "10", "2024") to enumerate FIRST, in numeric order, ahead of
+// EVERY string key regardless of insertion order — so a correctly-built declared-path map containing
+// a repo-root file literally named a canonical integer can fail the pre-fix native-enumeration-vs-
+// lexicographic-sort comparison purely as an artifact of that forced reordering, not a real disorder.
+// ===========================================================================
+{
+  const mode = '100644 ';
+  // A string key that sorts (lexicographically, character-by-character) BEFORE the canonical-integer
+  // key "10" (".env" starts with '.' = 0x2E, less than '1' = 0x31) — the exact shape the issue names:
+  // "a repo-root file named a canonical integer (10, 2024) alongside a string-earlier path".
+  const declared = { '.env': mode + 'a'.repeat(40), '10': mode + 'b'.repeat(40) };
+  // Sanity: this is precisely the native-order-vs-sorted mismatch the pre-fix check choked on (JS
+  // enumerates the integer-like key '10' before the string key '.env' regardless of insertion order).
+  assert(JSON.stringify(Object.keys(declared)) !== JSON.stringify(Object.keys(declared).slice().sort()),
+    '#688.4 fixture sanity: native enumeration order for {.env, 10} really does diverge from lexicographic sort');
+  assert(isCanonicalBlobMap(declared) === true,
+    '#688.4: an integer-keyed candidate_declared map ({.env, 10}) must pass isCanonicalBlobMap after the '
+    + 'order-insensitive fix, got false');
+
+  // Regression control: a genuinely malformed map (a value that is not a canonical tree-entry string)
+  // must still be rejected — the fix removes the enumeration-order dependency, not the shape check.
+  assert(isCanonicalBlobMap({ '.env': 'not-a-tree-entry' }) === false,
+    '#688.4: (control) a non-canonical value shape is still rejected');
+  assert(isCanonicalBlobMap(null) === false && isCanonicalBlobMap([]) === false && isCanonicalBlobMap('x') === false,
+    '#688.4: (control) non-object/array/string inputs are still rejected');
+}
+
+// ===========================================================================
+// #688.3 — a reserved node id (a literal Object.prototype key, e.g. `__proto__`) must REFUSE at
+// freeze, not silently poison readLedgerStatuses' plain-object status map (a `{}` literal's
+// `out['__proto__'] = status` is a silent setter no-op, never an own property — the row vanishes and
+// the run wedges fail-closed). Direct-call against validatePlan (the freeze-time grammar).
+// ===========================================================================
+{
+  const body688c = makePlan(
+    ['| impl | pending | |', '| __proto__ | pending | |', '| finalize | pending | |'],
+    [
+      '| impl | tdd-guide | — | scripts/impl688c.js | 1 | sequence |',
+      '| __proto__ | code-reviewer | impl | — | 1 | sequence |',
+      '| finalize | finalize | __proto__ | CHANGELOG.md | 1 | sequence |',
+    ]);
+  const v688c = planValidator.validatePlan(body688c, {});
+  assert(v688c.result === 'refuse' && v688c.reason === 'plan_invalid'
+    && Array.isArray(v688c.errors) && v688c.errors.some(e => e.includes('__proto__') && e.includes('reserved')),
+    '#688.3: a node id literally named `__proto__` refuses in-grammar at freeze (plan_invalid, a '
+    + 'reserved-Object.prototype-key error), got ' + JSON.stringify({ result: v688c.result, reason: v688c.reason, errors: v688c.errors }));
+
+  // Regression control: a legitimate node id (not a reserved key) still freezes clean — the fix must
+  // not reject ordinary plans.
+  const cleanBody688c = makePlan(
+    ['| impl | pending | |', '| review | pending | |', '| finalize | pending | |'],
+    [
+      '| impl | tdd-guide | — | scripts/impl688c-clean.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+  const vClean688c = planValidator.validatePlan(cleanBody688c, {});
+  assert(vClean688c.result === 'in-grammar',
+    '#688.3: (control) an ordinary node id set still freezes clean, got ' + JSON.stringify({ result: vClean688c.result, errors: vClean688c.errors }));
 }
 
 if (failed > 0) {

@@ -4643,10 +4643,16 @@ function proveRebindAdmissible(ctx) {
   // (its own attempt unresolved) its post-dominators cannot reopen, so the owner gate stays folded and
   // its writer stays attributable. The ground-truth folded-state is the ledger status of the gate's
   // members (a gate folds ALL its members to `pending` and re-passes them ALL to `complete` together).
+  // #688 (items 1+2, N2R1/N3R1): FAIL CLOSED on an absent ledger (no `|| {}` admit-all fallback — a
+  // missing/omitted ledgerStatuses now refuses attribution rather than treating every lookup as
+  // "non-complete") AND restrict the liveness quantifier to status ∈ {pending, in_progress} — the ONLY
+  // statuses whose owner gate will actually re-review. `n/a` (a selector-pruned arm) never re-reviews
+  // and, unlike in_progress, is not caught by would_orphan_in_progress, so it must NOT count as live.
   const repairWriters = new Set((attempts || [])
     .filter(a => a && a.repair && a.repair.selected_writer != null
       && a.logical_gate && a.logical_gate.key !== attempt.logical_gate.key
-      && (a.logical_gate.members || []).some(m => (ledgerStatuses || {})[m] !== 'complete'))
+      && ledgerStatuses != null
+      && (a.logical_gate.members || []).some(m => ledgerStatuses[m] === 'pending' || ledgerStatuses[m] === 'in_progress'))
     .map(a => a.repair.selected_writer));
   const candidateDelta = [...(declaredUnion || [])].filter(p => !slicePaths.has(p)
     && (now.declared[p] || null) !== (cand.declared[p] || null));
@@ -8722,4 +8728,8 @@ module.exports = {
   // write-node-runs-strictly-alone invariant means no OTHER write is ever live while a speculative
   // fan-out is reachable).
   selectSpeculativeWriteGroup,
+  // #688 (items 1+2): the P1..P4 rebind-admissibility predicate, exported for direct-call hardening
+  // regressions (a synthetic absent-ledger call and an n/a-arm construction — neither reachable
+  // through the real repair-node CLI today).
+  proveRebindAdmissible,
 };

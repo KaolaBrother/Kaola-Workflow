@@ -2915,6 +2915,101 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// ---------------------------------------------------------------------------
+// #691 (R10, an R8 sibling): keep-pass (c) used `fs.existsSync(stateFile)` to distinguish
+// present-vs-absent, but `existsSync` returns FALSE when the state file cannot be reached because its
+// PARENT project directory is itself chmod 000 (EACCES-through-parent) — indistinguishable from a
+// genuinely-absent file, so a LIVE project whose *directory* is chmod-000 (state file live inside,
+// just unreachable) was dropped from the keep set and its live barrier gc-anchor reaped. Fix: a single
+// fs.statSync (then readFileSync) try/catch that KEEPS on any non-ENOENT fault (EACCES/EISDIR/EPERM/…)
+// and stays reapable on a clean ENOENT. Guarded with a process.getuid() root-skip (chmod 000 is not
+// enforced running as root); perms restored + directory removed in a `finally` (vars hoisted above the
+// try, per #690 test hygiene).
+// ---------------------------------------------------------------------------
+{
+  const isRoot691 = typeof process.getuid === 'function' && process.getuid() === 0;
+  if (isRoot691) {
+    console.error('SKIP #691: running as root — chmod 000 is not enforced, skipping the chmod-000-project-directory regression');
+  } else {
+    const { execFileSync: execFS691, spawnSync: spawnS691 } = require('child_process');
+    const CLAIM691 = path.join(__dirname, 'kaola-workflow-claim.js');
+    const GIT_ENV_691 = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+    });
+    const g691 = (cwd, args) => execFS691('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_691 });
+
+    const mainRoot691 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-691-main-')));
+    // Declared ABOVE the try (test hygiene, per #690) so the finally can always restore perms and
+    // clean up even if an assertion throws mid-test.
+    let projDirChmod691;
+    try {
+      g691(mainRoot691, ['init', '-b', 'main']);
+      g691(mainRoot691, ['config', 'user.email', 't@t.com']);
+      g691(mainRoot691, ['config', 'user.name', 'Test']);
+      g691(mainRoot691, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(mainRoot691, 'README.md'), 'fixture\n');
+      g691(mainRoot691, ['add', 'README.md']);
+      g691(mainRoot691, ['commit', '-m', 'init']);
+      const headSha691 = execFS691('git', ['-C', mainRoot691, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
+
+      // A LIVE SEQUENCE-run project whose PROJECT DIRECTORY (not just the state file) is chmod 000:
+      // workflow-state.md is live INSIDE it, but traversing into the directory itself is denied
+      // (EACCES-through-parent), so pre-fix `fs.existsSync(stateFile)` reads false — indistinguishable
+      // from a genuinely-absent file. Deliberately no .cache/running-set.json — the state file is its
+      // SOLE keep signal.
+      const liveProj691 = 'issue-691chmoddirlive';
+      projDirChmod691 = path.join(mainRoot691, 'kaola-workflow', liveProj691);
+      fs.mkdirSync(projDirChmod691, { recursive: true });
+      fs.writeFileSync(path.join(projDirChmod691, 'workflow-state.md'), 'status: in_progress\nissue_number: 69143\n');
+      fs.chmodSync(projDirChmod691, 0o000);
+      g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1', headSha691]);
+
+      // A genuinely DEAD project (no folder at all) — must still be reaped, not swept into a blanket
+      // keep-everything by this fix.
+      const deadProj691 = 'issue-691dead';
+      g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + deadProj691 + '/n1', headSha691]);
+
+      // A genuinely-ABSENT state file control: the project folder EXISTS and is fully readable, but
+      // carries NO workflow-state.md at all (clean ENOENT). This must stay reapable — the fix must
+      // distinguish "cannot probe" (EACCES/EISDIR/...) from "probed clean and it is absent" (ENOENT).
+      const enoentProj691 = 'issue-691cleanenoent';
+      fs.mkdirSync(path.join(mainRoot691, 'kaola-workflow', enoentProj691), { recursive: true });
+      g691(mainRoot691, ['update-ref', 'refs/kaola-workflow/barrier/' + enoentProj691 + '/n1', headSha691]);
+
+      const listRefs691 = (prefix) => execFS691('git', ['-C', mainRoot691, 'for-each-ref', '--format=%(refname)', prefix], { encoding: 'utf8', env: GIT_ENV_691 }).trim();
+      const beforeSweep691 = listRefs691('refs/kaola-workflow/barrier/' + liveProj691 + '/');
+      assert(beforeSweep691 === 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1',
+        '#691 fixture: the chmod-000-project-directory live barrier ref exists before the sweep, got ' + JSON.stringify(beforeSweep691));
+
+      const run691 = spawnS691(process.execPath, [CLAIM691, 'barrier-ref-sweep', '--json'], {
+        cwd: mainRoot691, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+      });
+      let out691 = {};
+      try { out691 = JSON.parse(String(run691.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(run691.status === 0, '#691: barrier-ref-sweep must exit 0, got status=' + run691.status + ' stdout=' + run691.stdout + ' stderr=' + run691.stderr);
+
+      const afterSweep691 = listRefs691('refs/kaola-workflow/barrier/' + liveProj691 + '/');
+      assert(afterSweep691 === 'refs/kaola-workflow/barrier/' + liveProj691 + '/n1',
+        '#691: a LIVE project whose project DIRECTORY is chmod 000 (workflow-state.md live but unreachable, '
+        + 'EACCES-through-parent) must be KEPT — existsSync-through-a-denied-parent is indistinguishable from '
+        + 'genuinely-absent and must not be treated as reapable. tagsKept=' + JSON.stringify(out691.tagsKept)
+        + ' tagsDeleted=' + JSON.stringify(out691.tagsDeleted) + ' refsDeleted=' + JSON.stringify(out691.refsDeleted));
+      assert(Array.isArray(out691.tagsKept) && out691.tagsKept.includes(liveProj691),
+        '#691: tagsKept must include the chmod-000-project-directory live project tag, got ' + JSON.stringify(out691.tagsKept));
+      assert(listRefs691('refs/kaola-workflow/barrier/' + deadProj691 + '/') === '',
+        '#691: a genuinely dead (no-folder-anywhere) tag must still be reaped — the fix must not degrade into keep-everything');
+      assert(listRefs691('refs/kaola-workflow/barrier/' + enoentProj691 + '/') === '',
+        '#691: a genuinely-absent state file (clean ENOENT, project folder present and readable) must stay '
+        + 'reapable — the statSync/readFileSync fault must be distinguished from a clean ENOENT, not treated as keep-everything');
+    } finally {
+      if (projDirChmod691) { try { fs.chmodSync(projDirChmod691, 0o755); } catch (_) {} }
+      fs.rmSync(mainRoot691, { recursive: true, force: true });
+    }
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
