@@ -1,0 +1,20 @@
+{
+  "project": "issue-687",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n5-code-review",
+      "count": 6
+    },
+    {
+      "reasonClass": "manual:tool-refusal",
+      "sample": "n5 review attempt 3 parent return was policy-flagged after its read-only checker completed; re-dispatched with narrower repository-quality phrasing",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:sink-archive-collision",
+      "sample": "collision-suffixed archive left uncommitted and missing closure/attestation blocks after status:sinked",
+      "count": 1
+    }
+  ]
+}
