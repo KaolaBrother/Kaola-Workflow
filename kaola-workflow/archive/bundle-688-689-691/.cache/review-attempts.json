@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "plan_hash": "6c241b828794e7c5a07e293b850c885f8622c26db8e78c50069cf99985034bec",
+  "attempts": [
+    {
+      "attempt_id": "n2-review:1",
+      "ordinal": 1,
+      "plan_hash": "6c241b828794e7c5a07e293b850c885f8622c26db8e78c50069cf99985034bec",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n1-harden\"],\"members\":[\"n2-review\"]}",
+        "kind": "sequence",
+        "id": "n2-review",
+        "origin": [
+          "n1-harden"
+        ],
+        "members": [
+          "n2-review"
+        ]
+      },
+      "transaction_key": "4cf7f0e2cdc6f182d65b1254b99b4d3ff2b938bf5c96157fa1e88ba1737ae154",
+      "candidate_digest": "d9af42bdbbcc93aa3fa8504556c28ff4c9056e8569c33e7adfaddfd2f5215c47",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 1e7d79bea3b0c7dec9a5931bc80dc479ddc5a5b8",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 5333b9fb5c2658304ef3f4bcd1d193ea2f80522f",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 e7f179b20a4ed18f06e8ce983fa4b14bfe068d53",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-fast-advance.js": "100644 16895a021a99261cffce665a7bc9ce886ee60522",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-full-advance.js": "100644 71c86e31c70b98a6abfbef720278fcba2e63d79a",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-phase4-advance.js": "100644 7f91cb22ff8b22374d5c854e8ed61f3859aa0a4c",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js": "100644 1e4919e78c2c226f711a1d47884b7e4ad016d608",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 72b64da09ad6ac3c2220b860969d9f856593b00a",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 3e3e1ea49ada80ca70fb49aa3165c493597bdd6d",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-fast-advance.js": "100644 69cab1366640c89d36c2f37189a6c25127cf0e5a",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-full-advance.js": "100644 0322a92b59b274d7888df9e0ecdb938c05c5940a",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-phase4-advance.js": "100644 1b13c68a4e4384156c2df47f273eae02aabb3743",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js": "100644 688a97982edac0e9e7b62436bcb1c54b02577c91",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 426b1caa585b07b7599b7410aba448a29db6679a",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 2df90891cb2460d8857ad5ddd97045e1215f19a6",
+        "plugins/kaola-workflow/scripts/kaola-workflow-fast-advance.js": "100644 6cc27852f20cda26cfb813d2bce27ab3e39fd00f",
+        "plugins/kaola-workflow/scripts/kaola-workflow-full-advance.js": "100644 841ccd97d73e02632dcb39a8f3c7cf9e0c522c21",
+        "plugins/kaola-workflow/scripts/kaola-workflow-phase4-advance.js": "100644 ab89a4336b22bd0fddeeae8cf794ba38c3ab2e8c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js": "100644 b7fa5360ca823899557ce78d1c714aaccebb6f01",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 426b1caa585b07b7599b7410aba448a29db6679a",
+        "scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "scripts/kaola-workflow-claim.js": "100644 2df90891cb2460d8857ad5ddd97045e1215f19a6",
+        "scripts/kaola-workflow-fast-advance.js": "100644 6cc27852f20cda26cfb813d2bce27ab3e39fd00f",
+        "scripts/kaola-workflow-full-advance.js": "100644 841ccd97d73e02632dcb39a8f3c7cf9e0c522c21",
+        "scripts/kaola-workflow-phase4-advance.js": "100644 ab89a4336b22bd0fddeeae8cf794ba38c3ab2e8c",
+        "scripts/kaola-workflow-plan-validator.js": "100644 b7fa5360ca823899557ce78d1c714aaccebb6f01",
+        "scripts/test-adaptive-node.js": "100644 74ecaf3634360f4ba78ce26a1b5da8a7b4120a61",
+        "scripts/test-claim-hardening.js": "100644 31767afe297b83b61049b61a2ae79e7a48b10c28",
+        "scripts/test-fast-advance.js": "100644 58ab1186d6319aa6f728c311c15fbf3ffeaec246",
+        "scripts/test-full-advance.js": "100644 61343199c72d407f91df58d42acd7ed30463f4ce",
+        "scripts/test-phase4-advance.js": "100644 b107ba13540d86400d4d1916862cfc2a158852e2"
+      },
+      "candidate_residue_digest": "de3aba3c16a6eccf21a1c377b8769a4894345c14d53cd131c46f63d419ed74c5",
+      "generations": [
+        {
+          "member": "n2-review",
+          "nonce": "35b7f9e283d0"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n2-review",
+          "generation": "35b7f9e283d0",
+          "receipt_sha256": "de3ebd50d2cba3a87da60f1a82c9f86101d4bc26e0aa07be8bbe998d8caf0333",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n2-review 35b7f9e283d0\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-harden f9a8f0a8faa9\n\nfinding: id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 micro-TOCTOU: a state file deleted between statSync and readFileSync (clean ENOENT at read) is now reaped where the old code kept it; unreachable via shipped atomic-replace (rename leaves no absent window), requires an out-of-band delete mid-sweep, and the issue's prescribed fix mandates exactly this clean-ENOENT-reapable shape — nit, nothing to change.\n\n# n2-review — bundle #688/#689/#691 (33-file diff), 40 adversarial probes + 3 mutation kills\n\n## #688.1 fail-closed absent ledger — tighten-only\nSole real call site (adaptive-node.js:4937) always threads ledgerStatuses=proofLedger from readLedgerStatuses\n(returns an object on every path, never null). 10 probes: omitted/null/undefined/{} ledger → refuse\ncandidate_delta_unattributed, no crash. new-true ⇒ old-true, so it can only shrink repairWriters (admits→refusals).\n\n## #688.2 n/a exclusion — live co-repair still recovers\nQuantifier {pending,in_progress} newly excludes n/a + corrupt/missing lookups (fail-closed). Probes: n/a/complete/\nmissing/bogus refuse; pending/in_progress still attribute via P3b. N11 seven-step regression (real CLI, frozen\nplan) — co-repair of gb:1 while ga folded-pending STILL absorbs ax.js via live P3b — green in the 2166 run.\n\n## #688.3 reserved node-id refusal — at freeze, plan_invalid\n__proto__/constructor/toString/hasOwnProperty/valueOf node ids → refuse plan_invalid \"reserved Object.prototype\nkey\"; ordinary ids + reserved-substring ids (proto-review) still freeze in-grammar. In validatePlan:1595\n(revalidateForResume has no validatePlan call → legacy frozen plans still resume, mirrors the dup-id precedent).\nObject.getOwnPropertyNames(Object.prototype) avoids a drifting hand-list.\n\n## #688.4 isCanonicalBlobMap — HIGHEST RISK, NOT WEAKENED\n22 probes: every genuinely-invalid map STILL rejected (39/41-hex sha, non-octal/5-digit mode, sha-only, non-hex,\nnumeric/null/nested value, empty-string key, array/string/null/undefined, one-good-one-bad, trailing-garbage).\nValid maps (incl. integer-keyed {'.env','10'}, {'2024','a.js'}, null-proto) pass. Only the enumeration-order\ncomparison dropped; shape check (CANONICAL_TREE_ENTRY_RE + truthy key) untouched. The dropped check protected\nnothing — candidate_declared enumeration order is never hashed/byte-compared (digest hashes the sorted ls-tree\n`lines`; transaction_key hashes {plan_hash,gate,candidate_digest,generations}). Decisive: the production builder\ncomputeReviewCandidateDigest builds sortedDeclared by sorted-key insertion — the exact map JS re-orders on an\ninteger key — so the old check rejected the production code's OWN output. Mutation kill: re-insert the\nenumeration comparison → 1 RED (the #688.4 assertion), restore cmp byte-identical, 2166 green.\n\n## #689 parent-dir fsync (fast/full/phase4) — fail-soft airtight\nAll 3 blocks byte-identical, strictly AFTER the rename try/catch that rethrows (real rename/ENOSPC still\npropagates). Block: try open+fsync, catch swallows all, finally closes fd (guarded) — no path rethrows or alters\nthe true return; idempotent no-write early-return skips it. Each test its own script + order-tracking spy\n(fsync(tmp)→rename→open(dir)→fsync(dirFd)→close(dirFd)) + EISDIR/EACCES fault injection (no throw, true return,\ndurable content). Mutation kill: remove open+fsync from fast → 3 RED, restore cmp byte-identical, 136 green.\nSuites fast 136 / full 78 / phase4 57 green.\n\n## #691 statSync ENOENT keep — sweep-local, mutation-killed\nkeep-pass (c) (claim.js:3270-3280): one try over statSync+readFileSync, keep on e.code !== 'ENOENT'. chmod-000\nDIRECTORY (EACCES-through-parent) now KEPT; no-folder + clean-ENOENT still reaped (all 3 in ONE end-to-end CLI\nsweep, root-skip guarded, perms restored). readActiveFolders untouched. Mutation kill: gate keep behind existsSync\n→ 2 RED (live tag reaped), restore cmp byte-identical, 251 green.\n\n## Parity + no over-reach\nSchema shasum 7ef17db5 identical ×4; edition-sync --check green (10 ports, 24 mirrors, 27 byte-identical groups);\nvalidate-script-sync OK; hand-ported forge claim.js hunks byte-identical to canonical (diff-of-diffs clean).\nDiff scope: adaptive-node = repairWriters predicate + additive test export; schema = isCanonicalBlobMap only\n(writeFileAtomicReplace + roadmap.js untouched); plan-validator = reserved-id check in validatePlan only; claim =\nkeep-pass (c) only; advance = fsync block + additive export; tests additive. No #683 rebind semantics/partition\nproof/live refusal/#685 adaptive helper touched. Walkthrough green; gitea chain spot-checked green with\nKAOLA_RUN_CHAINS_CONCURRENCY=serial; accept n1's FOUR_CHAIN_EXIT=0 for the rest given clean code reading + parity.\n\nAPPROVE — six hardening fixes correct, strictly tightening, 40 probes + 3 mutation kills, parity clean; no\nweakened check, no fail-soft hole, no over-tightening of live #683 co-repair, no regression.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n2-review",
+          "raw": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 micro-TOCTOU: a state file deleted between statSync and readFileSync (clean ENOENT at read) is now reaped where the old code kept it; unreachable via shipped atomic-replace (rename leaves no absent window), requires an out-of-band delete mid-sweep, and the issue's prescribed fix mandates exactly this clean-ENOENT-reapable shape — nit, nothing to change.",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "none",
+          "status": "resolved",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "#691"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n2-review",
+          "finding_id": "R1",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "none",
+          "status": "resolved",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 micro-TOCTOU: a state file deleted between statSync and readFileSync (clean ENOENT at read) is now reaped where the old code kept it; unreachable via shipped atomic-replace (rename leaves no absent window), requires an out-of-band delete mid-sweep, and the issue's prescribed fix mandates exactly this clean-ENOENT-reapable shape — nit, nothing to change."
+        }
+      ],
+      "producer_bindings": {
+        "n1-harden": {
+          "baseline": "f9a8f0a8faa9a4a8bf2776ac0c9451bfd21343e1",
+          "anchored_ref": "f9a8f0a8faa9a4a8bf2776ac0c9451bfd21343e1",
+          "open_token": "c92488cf89c58e2322a04151d895b891b6cb22f1",
+          "generation": "f9a8f0a8faa9",
+          "ref": "refs/kaola-workflow/barrier/bundle-688-689-691/n1-harden"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "n3-adversary:1",
+      "ordinal": 1,
+      "plan_hash": "6c241b828794e7c5a07e293b850c885f8622c26db8e78c50069cf99985034bec",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"n2-review\"],\"members\":[\"n3-adversary\"]}",
+        "kind": "sequence",
+        "id": "n3-adversary",
+        "origin": [
+          "n2-review"
+        ],
+        "members": [
+          "n3-adversary"
+        ]
+      },
+      "transaction_key": "73295a2617214870dfed66a910272c407a3f3c46bab756fa700f62b86594b0ca",
+      "candidate_digest": "d9af42bdbbcc93aa3fa8504556c28ff4c9056e8569c33e7adfaddfd2f5215c47",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 1e7d79bea3b0c7dec9a5931bc80dc479ddc5a5b8",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 5333b9fb5c2658304ef3f4bcd1d193ea2f80522f",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 e7f179b20a4ed18f06e8ce983fa4b14bfe068d53",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-fast-advance.js": "100644 16895a021a99261cffce665a7bc9ce886ee60522",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-full-advance.js": "100644 71c86e31c70b98a6abfbef720278fcba2e63d79a",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-phase4-advance.js": "100644 7f91cb22ff8b22374d5c854e8ed61f3859aa0a4c",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js": "100644 1e4919e78c2c226f711a1d47884b7e4ad016d608",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 72b64da09ad6ac3c2220b860969d9f856593b00a",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 3e3e1ea49ada80ca70fb49aa3165c493597bdd6d",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-fast-advance.js": "100644 69cab1366640c89d36c2f37189a6c25127cf0e5a",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-full-advance.js": "100644 0322a92b59b274d7888df9e0ecdb938c05c5940a",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-phase4-advance.js": "100644 1b13c68a4e4384156c2df47f273eae02aabb3743",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js": "100644 688a97982edac0e9e7b62436bcb1c54b02577c91",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 426b1caa585b07b7599b7410aba448a29db6679a",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 2df90891cb2460d8857ad5ddd97045e1215f19a6",
+        "plugins/kaola-workflow/scripts/kaola-workflow-fast-advance.js": "100644 6cc27852f20cda26cfb813d2bce27ab3e39fd00f",
+        "plugins/kaola-workflow/scripts/kaola-workflow-full-advance.js": "100644 841ccd97d73e02632dcb39a8f3c7cf9e0c522c21",
+        "plugins/kaola-workflow/scripts/kaola-workflow-phase4-advance.js": "100644 ab89a4336b22bd0fddeeae8cf794ba38c3ab2e8c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js": "100644 b7fa5360ca823899557ce78d1c714aaccebb6f01",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 426b1caa585b07b7599b7410aba448a29db6679a",
+        "scripts/kaola-workflow-adaptive-schema.js": "100644 f322217fd9929406540014d6f3d037223de6d6b4",
+        "scripts/kaola-workflow-claim.js": "100644 2df90891cb2460d8857ad5ddd97045e1215f19a6",
+        "scripts/kaola-workflow-fast-advance.js": "100644 6cc27852f20cda26cfb813d2bce27ab3e39fd00f",
+        "scripts/kaola-workflow-full-advance.js": "100644 841ccd97d73e02632dcb39a8f3c7cf9e0c522c21",
+        "scripts/kaola-workflow-phase4-advance.js": "100644 ab89a4336b22bd0fddeeae8cf794ba38c3ab2e8c",
+        "scripts/kaola-workflow-plan-validator.js": "100644 b7fa5360ca823899557ce78d1c714aaccebb6f01",
+        "scripts/test-adaptive-node.js": "100644 74ecaf3634360f4ba78ce26a1b5da8a7b4120a61",
+        "scripts/test-claim-hardening.js": "100644 31767afe297b83b61049b61a2ae79e7a48b10c28",
+        "scripts/test-fast-advance.js": "100644 58ab1186d6319aa6f728c311c15fbf3ffeaec246",
+        "scripts/test-full-advance.js": "100644 61343199c72d407f91df58d42acd7ed30463f4ce",
+        "scripts/test-phase4-advance.js": "100644 b107ba13540d86400d4d1916862cfc2a158852e2"
+      },
+      "candidate_residue_digest": "de3aba3c16a6eccf21a1c377b8769a4894345c14d53cd131c46f63d419ed74c5",
+      "generations": [
+        {
+          "member": "n3-adversary",
+          "nonce": "38744c1d6cb7"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "n3-adversary",
+          "generation": "38744c1d6cb7",
+          "receipt_sha256": "1edaf8bc0b1f682497e4ecfef8cf1973e708c8f439251c807159085e70dd8cd6",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: n3-adversary 38744c1d6cb7\nverdict: pass\nfindings_blocking: 0\nupstream_read: n1-harden f9a8f0a8faa9\n\nfinding: id=R2 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=cosmetic: the isCanonicalBlobMap refusal prose at adaptive-schema.js:804 still says \"with sorted keys\" — stale wording after the order-insensitive change, zero behavior impact; tidy opportunistically, not worth a repair round\nfinding: id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 stat→read micro-TOCTOU (n2's R1) — unreachable via shipped atomic-rename writes; concur resolved\n\n# n3-adversary — bundle #688/#689/#691 (real-flow reachability, executed surfaces 1-6)\n\n## 1. #688.1 fail-closed absent ledger — no reachable break\nproveRebindAdmissible has ONE call site (runRepairNode STEP 13 :4937), always threaded proofLedger=\nreadLedgerStatuses(initialPlan) (returns an object on every path, {} never null). DECISIVE upstream fence\n(executed V8): with a {} ledger, uniqueMaximalReviewProducer returns history_valid:false → readReviewJournal's\nidentity check (:2212-2223) refuses review_journal_repair_identity_mismatch for any attempt with producer_bindings/\nrepair.selected_writer; runRepairNode returns on !ok at :4825 BEFORE STEP 13. Since repairWriters is non-empty\nonly when another attempt has repair.selected_writer, every state the new refusal could fire in is already fenced.\nOnly route past = a hand-tampered plan (ledger deleted; plan_hash excludes the ledger, revalidateForResume never\nchecks it) — and there the OLD behavior was the admit-all bug the issue targets. Crash-resume/fast-path never\ntouch the predicate. Probes V1-V4: {}/null/corrupt/case-variant refuse, no crash.\n\n## 2. #688.2 n/a exclusion — no reachable legitimate co-repair breaks\nfoldSelectorArms (:1854) is the ONLY spliceLedgerNode(...,'n/a'); arms fold to n/a at selector close before any\narm opens, so a repair-owning gate at n/a is unconstructible via CLI (repair/reopen fold to pending only). The\nexotic reopened-selector corner: even there the new refusal is SOUND (a pruned gate never re-reviews → old\nattribution waived review). Killer probe V5 (uncovered by shipped tests): a MULTI-member owner gate with one n/a\n+ one pending STILL attributes via .some — partially-pruned fan-out not over-tightened. V6 complete+in_progress\nattributes; V7 all-complete refuses (preserved). Predicate byte-identical ×4.\n\n## 3. #688.4 no lost invariant\ncandidate_declared enumeration order is used NOWHERE: transaction_key hashes {plan_hash,gate,candidate_digest,\ngenerations} (not the map); candidate digest hashes the SORTED ls-tree lines; every consumer is per-key; no\nwhole-map JSON.stringify comparison exists (grep). Real-repo drive: production computeReviewCandidateDigest emits\ndeclared enumerating [\"10\",\"2024\",\".env\",\"a.js\"] — the OLD check REJECTED production's own output (P2). A canonical\ninteger-keyed journal attempt validates green after a byte round-trip (P3b), double round-trip byte-stable (P5b) —\neven a hypothetical stored-vs-recomputed whole-map compare would agree (both hoist integer keys identically).\nShape checks not weakened: 39-hex/5-digit-mode/empty-key/array still refused (P7-P10). New check accepts a strict\nsuperset differing only in enumeration order. Cosmetic: :804 prose stale (R2).\n\n## 4. #689 fail-soft — 27/27 fault-injection probes ×3 scripts, airtight\nPer script: T1 success order fsync(tmp)→close→rename→open(dir)→fsync(dirFd)→close(dirFd), zero fd leaked; T2\nidempotent same-content → false, never opens dir; T3 dir-open EACCES swallowed → true durable; T4 dir-fsync\nENOTSUP swallowed → true, dir fd STILL closed (fsync-failure leak check); T5 dir-close EBADF swallowed; T6 rename\nENOSPC STILL propagates, tmp unlinked, block never entered; T7 tmp-fsync ENOSPC still propagates. dirFd!==undefined\nguard correct even for fd 0. Blocks byte-identical ×3, strictly after the rethrowing rename catch.\n\n## 5. #691 — kept/reaped correct, no new swallow (real CLI)\n5 real barrier refs, real barrier-ref-sweep: chmod-000 PROJECT DIR (live state inside) → KEPT; no-folder → reaped;\nclean-ENOENT (folder, no state) → reaped; state-file-is-a-directory EISDIR → KEPT; normal live → KEPT (unchanged).\nThe single catch keeps on any non-ENOENT — swallow direction is always KEEP (fail-closed), never reap. Only\nreap-divergence is the R1 TOCTOU (resolved). keep-pass (c) byte-identical ×4.\n\n## 6. #688.3 + cross-fix regression\n#688.3: 12 Object.prototype ids refused at validatePlan; reserved-substring ids (proto-review/constructor-gate/\ntoString2/my__proto__x) still freeze; a legacy frozen plan with node id `constructor` (even mid-run in_progress)\nstill passes revalidateForResume (no stranded plans). Motivation confirmed: readLedgerStatuses drops a __proto__\nrow; a missing toString row reads as the inherited function — full-reserved-set breadth justified.\nRegression: adaptive-node 2166 (incl #683 seven-step N11 + 32 #664-fold refs); claim-hardening 251 (#685 ×14 +\n#686 ×61 + #691 ×8); fast 136 / full 78 / phase4 57. ALL FOUR CHAINS run by me → FOUR_CHAIN_EXIT=0, 6 walkthroughs\npassed, 12 surfaces byte-match. Schema md5 a250d3a8 ×4; edition-sync + validate-script-sync green. Test diffs purely\nadditive.\n\n## Verdict\nNOT-REFUTED (high) — all six fixes correct, strictly tightening, regression-free under executed probes on surfaces\n1-6. Residuals cosmetic (R2 stale prose; R1 resolved TOCTOU). No repo file modified.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R2 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=cosmetic: the isCanonicalBlobMap refusal prose at adaptive-schema.js:804 still says \"with sorted keys\" — stale wording after the order-insensitive change, zero behavior impact; tidy opportunistically, not worth a repair round",
+          "id": "R2",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "cosmetic:"
+        },
+        {
+          "source_node": "n3-adversary",
+          "raw": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 stat→read micro-TOCTOU (n2's R1) — unreachable via shipped atomic-rename writes; concur resolved",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "none",
+          "status": "resolved",
+          "severity": "low",
+          "fix_role": "none",
+          "rationale": "#691"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R2",
+          "id": "R2",
+          "scope": "in_scope",
+          "action": "document",
+          "status": "deferred",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R2 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=cosmetic: the isCanonicalBlobMap refusal prose at adaptive-schema.js:804 still says \"with sorted keys\" — stale wording after the order-insensitive change, zero behavior impact; tidy opportunistically, not worth a repair round"
+        },
+        {
+          "source_node": "n3-adversary",
+          "finding_id": "R1",
+          "id": "R1",
+          "scope": "in_scope",
+          "action": "none",
+          "status": "resolved",
+          "severity": "low",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "none",
+          "raw": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 stat→read micro-TOCTOU (n2's R1) — unreachable via shipped atomic-rename writes; concur resolved"
+        }
+      ],
+      "producer_bindings": {
+        "n1-harden": {
+          "baseline": "f9a8f0a8faa9a4a8bf2776ac0c9451bfd21343e1",
+          "anchored_ref": "f9a8f0a8faa9a4a8bf2776ac0c9451bfd21343e1",
+          "open_token": "c92488cf89c58e2322a04151d895b891b6cb22f1",
+          "generation": "f9a8f0a8faa9",
+          "ref": "refs/kaola-workflow/barrier/bundle-688-689-691/n1-harden"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+[
+  {
+    "source_node": "n3-adversary",
+    "finding_id": "R2",
+    "id": "R2",
+    "scope": "in_scope",
+    "action": "document",
+    "status": "deferred",
+    "severity": "low",
+    "ownership_candidates": [],
+    "owning_node": null,
+    "fix_role": "none",
+    "raw": "id=R2 scope=in_scope action=document status=deferred severity=low fix_role=none rationale=cosmetic: the isCanonicalBlobMap refusal prose at adaptive-schema.js:804 still says \"with sorted keys\" — stale wording after the order-insensitive change, zero behavior impact; tidy opportunistically, not worth a repair round"
+  },
+  {
+    "source_node": "n3-adversary",
+    "finding_id": "R1",
+    "id": "R1",
+    "scope": "in_scope",
+    "action": "none",
+    "status": "resolved",
+    "severity": "low",
+    "ownership_candidates": [],
+    "owning_node": null,
+    "fix_role": "none",
+    "raw": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#691 stat→read micro-TOCTOU (n2's R1) — unreachable via shipped atomic-rename writes; concur resolved"
+  }
+]

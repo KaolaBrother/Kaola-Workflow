@@ -1,0 +1,7 @@
+{"timestamp":"2026-07-14T22:59:43.020Z","event":"open","nodeId":"n1-harden","nonce":"f9a8f0a8faa9","by":"adaptive-node"}
+{"timestamp":"2026-07-14T23:48:51.499Z","event":"close","nodeId":"n1-harden","nonce":"f9a8f0a8faa9","by":"adaptive-node"}
+{"timestamp":"2026-07-14T23:48:51.922Z","event":"open","nodeId":"n2-review","nonce":"35b7f9e283d0","by":"adaptive-node"}
+{"timestamp":"2026-07-15T00:17:36.446Z","event":"close","nodeId":"n2-review","nonce":"35b7f9e283d0","by":"adaptive-node"}
+{"timestamp":"2026-07-15T00:17:36.914Z","event":"open","nodeId":"n3-adversary","nonce":"38744c1d6cb7","by":"adaptive-node"}
+{"timestamp":"2026-07-15T00:50:14.479Z","event":"close","nodeId":"n3-adversary","nonce":"38744c1d6cb7","by":"adaptive-node"}
+{"timestamp":"2026-07-15T00:50:14.947Z","event":"open","nodeId":"n4-finalize","nonce":"fab2a0a91497","by":"adaptive-node"}
