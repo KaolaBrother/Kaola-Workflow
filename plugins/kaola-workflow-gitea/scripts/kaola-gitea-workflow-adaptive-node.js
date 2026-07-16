@@ -3977,6 +3977,31 @@ function journalOwnedReviewGenerationMembers(opts, planContent) {
   return owned;
 }
 
+// #703 (Proposal 3): the barrier baseline of a COMPLETE producer node referenced by an UNRESOLVED
+// review attempt (`consumed_by == null`) is NOT an orphan — a settled-fail attempt still routes to
+// `repair-node`, whose non-discard recovery restores the writer's anchored ref FROM
+// `.cache/barrier-base-<writer>`. Dropping it in the reconcile orphan-sweep wedges the repair
+// (`writer_identity_changed` with the recovery file already deleted — the issue's aggravator). Unlike
+// journalOwnedReviewGenerationMembers (which owns still-unsettled review-fanout GENERATIONS, keyed on
+// `lifecycle_settled === false`), this owns the PRODUCER slice of any attempt awaiting resolution —
+// including a lifecycle_settled fail whose repair has not yet consumed it. Consumed attempts
+// (`consumed_by != null`, e.g. a source attempt migrated into a child replan epoch) release their
+// producers: the repair lands via the epoch's inserted node, not the old writer's baseline. Returns
+// raw node ids; fail-soft (an unreadable/legacy journal contributes nothing — the sweep already
+// prefers under-reaping to over-reaping, so an unreadable journal simply adds no keep entries).
+function journalReferencedProducerBaselines(opts, planContent) {
+  const referenced = new Set();
+  const state = readReviewJournal(opts, planContent);
+  if (!state.ok || state.legacy) return referenced;
+  for (const attempt of (state.journal.attempts || [])) {
+    if (attempt.consumed_by != null) continue;
+    for (const producerId of Object.keys(attempt.producer_bindings || {})) {
+      if (producerId) referenced.add(producerId);
+    }
+  }
+  return referenced;
+}
+
 // Narrow exception to the global unresolved-review mutation fence.  It permits
 // only the still-missing members of one schema-2 code/security fanout to consume
 // their already-reserved generations.  Every other opener/mutator remains
@@ -10129,6 +10154,15 @@ function runReconcileRunningSet(opts) {
       for (const member of journalOwnedReviewGenerationMembers(opts, readFile(planPath))) {
         keep.add(sanB(member));
       }
+      // #703 (Proposal 3): KEEP the baseline of every COMPLETE producer referenced by an unresolved
+      // (`consumed_by == null`) review attempt. A settled-fail gate's attempt still routes to
+      // repair-node, whose documented non-discard recovery restores the writer's ref from
+      // `.cache/barrier-base-<writer>`; sweeping it here (as a `no_running_set` reconcile run
+      // mid-diagnosis did) deletes the exact file the repair needs — the issue's aggravator. Complete
+      // producers of an unresolved attempt are never orphans while that attempt is unconsumed.
+      for (const producer of journalReferencedProducerBaselines(opts, readFile(planPath))) {
+        keep.add(sanB(producer));
+      }
       if (running) {
         for (const n of (running.nodes || [])) { if (n && n.id) keep.add(sanB(n.id)); }
         if (running.lane_group) {
@@ -10328,8 +10362,11 @@ function runReconcileRunningSet(opts) {
   // (kept) keep their fresh baselines.
   if (typeof shell === 'function') {
     const journalOwned = journalOwnedReviewGenerationMembers(opts, readFile(planPath));
+    // #703 (Proposal 3): also spare a departing member that is a producer of an unresolved review
+    // attempt — its baseline is the repair-node recovery ref, not an orphan.
+    const referencedProducers = journalReferencedProducerBaselines(opts, readFile(planPath));
     for (const id of new Set([...dropped, ...cappedOut, ...closed, ...stale])) {
-      if (!journalOwned.has(id)) {
+      if (!journalOwned.has(id) && !referencedProducers.has(id)) {
         shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
       }
     }

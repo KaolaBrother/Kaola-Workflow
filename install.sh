@@ -179,6 +179,11 @@ fi
 
 SUPPORT_SCRIPTS_DIR="$SUPPORT_DIR/scripts"
 SUPPORT_HOOKS_DIR="$SUPPORT_DIR/hooks"
+# #703: the plan-run reference cards (docs/plan-run-cards/*.md) ship into the install layout so operators
+# can follow the barrier/repair/resume/governance recovery recipes the plan-run command cites. They are
+# forge-SHARED: the one source is repo-root docs/plan-run-cards for every forge (never a per-forge tree).
+SOURCE_CARDS_DIR="$SCRIPT_DIR/docs/plan-run-cards"
+SUPPORT_DOCS_DIR="$SUPPORT_DIR/docs/plan-run-cards"
 
 echo "Kaola-Workflow — installer"
 echo "Forge: $FORGE"
@@ -651,6 +656,27 @@ for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   echo "Installed support hook: $SUPPORT_HOOKS_DIR/$hook_name"
 done
 
+# #703: install the plan-run reference cards. FAIL CLOSED on a missing source directory or an empty
+# card set — the plan-run command references these cards (e.g. repair-routing.md) by name, so a missing
+# source is a packaging bug, not something to silently skip (same rationale as the support-script/hook
+# loops above). Glob-copied like the command files (static .md, no manifest allowlist).
+if [[ ! -d "$SOURCE_CARDS_DIR" ]]; then
+  echo "Install error: plan-run reference cards missing from source: $SOURCE_CARDS_DIR" >&2
+  exit 1
+fi
+mkdir -p "$SUPPORT_DOCS_DIR"
+card_count=0
+for card_file in "$SOURCE_CARDS_DIR"/*.md; do
+  [[ -e "$card_file" ]] || continue
+  cp "$card_file" "$SUPPORT_DOCS_DIR/$(basename "$card_file")"
+  echo "Installed plan-run card: $SUPPORT_DOCS_DIR/$(basename "$card_file")"
+  card_count=$((card_count + 1))
+done
+if [[ "$card_count" -eq 0 ]]; then
+  echo "Install error: no plan-run reference cards found in $SOURCE_CARDS_DIR" >&2
+  exit 1
+fi
+
 # Install hooks.json with $CLAUDE_PLUGIN_ROOT rewritten to absolute install path.
 # Manual install does not set CLAUDE_PLUGIN_ROOT, so the placeholder is replaced
 # with $SUPPORT_DIR (e.g. ~/.claude/kaola-workflow) at install time.
@@ -904,6 +930,13 @@ done
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
 done
+
+# #703: verify the canonical plan-run card shipped (repair-routing.md is the barrier/repair recovery
+# recipe the command cites); a missing card means packaging dropped the docs and operators fly blind.
+if [[ ! -f "$SUPPORT_DOCS_DIR/repair-routing.md" ]]; then
+  echo "Verify error: plan-run reference card missing: $SUPPORT_DOCS_DIR/repair-routing.md" >&2
+  verification_failed=1
+fi
 
 if [[ "$verification_failed" -ne 0 ]]; then
   exit 1
