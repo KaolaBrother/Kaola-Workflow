@@ -7215,7 +7215,12 @@ function rtHarness(initialFiles, opts) {
   assert(Array.isArray(r.closedDropped) && r.closedDropped.includes('rev-a'), 'S384: rev-a in closedDropped, got ' + JSON.stringify(r.closedDropped));
   const set = JSON.parse(h.files[RS_SET_PATH]);
   assert(set.nodes.length === 1 && set.nodes[0].id === 'rev-b', 'S384: rev-a removed, rev-b remains in the set');
-  assert(dropCalls.includes('rev-a'), 'S384 (#385): --drop-base shelled for the dropped terminal member, got ' + JSON.stringify(dropCalls));
+  // #706: a ledger-COMPLETE member leaving the set on the close direction KEEPS its baseline — the
+  // close-crash repair must converge to the same durable state a successful close leaves (baseline
+  // retained), because a later post-dominating gate close captures the writer identity (producer
+  // bindings) from `.cache/barrier-base-<id>`. Pre-#706 this shelled --drop-base and the later gate
+  // close refused writer_identity_unavailable.
+  assert(!dropCalls.includes('rev-a'), 'S384 (#706): --drop-base NOT shelled for the ledger-complete member (its writer identity feeds later gate closes), got ' + JSON.stringify(dropCalls));
 
   // orient routes the close-crash wedge to reconcile-running-set (not orphan_multi_in_progress).
   {

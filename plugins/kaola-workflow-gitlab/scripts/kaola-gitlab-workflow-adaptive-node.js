@@ -10173,7 +10173,9 @@ function runReconcileRunningSet(opts) {
   //
   // FALSE-POSITIVE GUARD (correctness-critical — dropping a LIVE baseline corrupts an in-flight run):
   // a `barrier-base-<san>` file is an ORPHAN only when its (sanitized) id matches NO live owner. KEEP it
-  // when the id is (a) an in_progress ledger row (a member awaiting its close barrier), (b) a running-set
+  // when the id is (a) an in_progress ledger row (a member awaiting its close barrier), (a2) — #706 — a
+  // COMPLETE ledger row (its writer identity feeds every later post-dominating gate close's producer
+  // bindings; see the keep loop), (b) a running-set
   // node id (the reconcile machine below owns that member's precise roll-forward/back + baseline drop), or
   // (c) a live lane_group member id / the live lane_group group_id (the group baseline is the diff anchor
   // for the eventual group barrier), or (d) — #680 REPAIR — ANY `barrier-base-lg-*` group baseline when
@@ -10196,7 +10198,21 @@ function runReconcileRunningSet(opts) {
       // (member ids themselves contain hyphens), so when running is torn/absent the ONLY authoritative
       // signal that a `barrier-base-lg-*` might be live is the presence of an in_progress row.
       let hasInProgressB = false;
-      for (const id of Object.keys(ledgerB)) { if (ledgerB[id] === 'in_progress') { keep.add(sanB(id)); hasInProgressB = true; } }
+      for (const id of Object.keys(ledgerB)) {
+        if (ledgerB[id] === 'in_progress') { keep.add(sanB(id)); hasInProgressB = true; }
+        // #706: a ledger-COMPLETE node's baseline is NEVER an orphan. A post-dominating gate that has
+        // not yet recorded a review attempt captures every complete producer's writer identity
+        // (barrier-base + barrier-open + anchored ref) at ITS OWN close — so the #703
+        // journal-referenced keep below cannot protect it (no attempt exists yet to reference it).
+        // Sweeping it here forced the consumer-observed writer_identity_unavailable refusal at the
+        // later gate close, remedied only by a manual --record-base re-record against the CURRENT
+        // tree — semantically weaker (the writer's historical diff attribution is lost). Retention is
+        // cheap (.cache is archived with the run) and mirrors a successful close, which never drops
+        // the closed node's baseline. The sweep's purpose — reclaiming baselines of discarded /
+        // never-completed nodes (ledger pending, or no ledger row at all) — is untouched: those still
+        // sweep, which also keeps --record-base's idempotent-reuse from resurrecting a stale snapshot.
+        else if (ledgerB[id] === 'complete') keep.add(sanB(id));
+      }
       // A bounded logical review can legitimately own a real reservation for
       // a still-pending member.  The immutable journal generation is its live
       // owner just as surely as an in_progress ledger row; dropping it here
@@ -10417,8 +10433,15 @@ function runReconcileRunningSet(opts) {
     // #703 (Proposal 3): also spare a departing member that is a producer of an unresolved review
     // attempt — its baseline is the repair-node recovery ref, not an orphan.
     const referencedProducers = journalReferencedProducerBaselines(opts, readFile(planPath));
+    // #706: also spare every ledger-COMPLETE departing member (the #384 close-direction `closed` set).
+    // A successful close KEEPS the closed node's baseline — a later post-dominating gate close captures
+    // the writer's identity (producer bindings) from it — so the close-crash repair must converge to
+    // that same durable state, not a strictly-more-destructive one. Pre-#706 this drop forced the
+    // writer_identity_unavailable refusal at the later gate close. Rolled-back / capped-out / stale
+    // members are never ledger-complete here (a terminal row routes to `closed`), so the open-direction
+    // #385 stale-baseline drop is unchanged.
     for (const id of new Set([...dropped, ...cappedOut, ...closed, ...stale])) {
-      if (!journalOwned.has(id) && !referencedProducers.has(id)) {
+      if (!journalOwned.has(id) && !referencedProducers.has(id) && ledger[id] !== 'complete') {
         shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
       }
     }
