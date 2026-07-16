@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// Integration tests for the --sink transaction (kaola-workflow-sink-merge.js) — issues #694/#700/#705.
-// Hand-rolled assert + counter; repo style (no framework) — mirrors test-bundle-finalize.js.
+// Integration tests for the --sink transaction (kaola-workflow-sink-merge.js) — issues
+// #694/#700/#705/#707. Hand-rolled assert + counter; repo style (no framework) — mirrors
+// test-bundle-finalize.js.
 //
 // Covered scenarios:
 //   (a) #694 — a STALE cross-run sink-receipt.json (older claim_ts) with a FLIPPED keep-open intent
@@ -23,6 +24,18 @@
 //   (g) #705 — a MIXED bundle (one close + one keep-open) removes ONLY the closing issue's roadmap
 //       source and keeps the kept-open member's — the per-member excludeIssues scoping of
 //       archiveProjectDir/reconcileRoadmapForClosure.
+//   (h) #707 — a WORKTREE-POSTURED sink must land the worktree's untracked per-node .cache
+//       evidence into the archive: the merge step's staged worktree copy is union-landed per FILE
+//       into the live folder (branch-tracked content still wins), so the finalize step's archive
+//       carries the run's REAL evidence and archive_commit makes it durable at HEAD.
+//   (i) #707 — a sink whose live folder is EVIDENCE-EMPTY while the ## Node Ledger proves node
+//       evidence was recorded (complete rows) must refuse LOUDLY (typed sink_incomplete /
+//       node_evidence_missing, exit 1, finalize step left NOT done) instead of archiving an
+//       evidence-empty trail; restoring the evidence and re-running completes the sink.
+//   (j) #707 — verifyArchiveComplete hardening (unit): with requireLedgerEvidence, a faithful copy
+//       of an evidence-gutted source whose ledger has complete rows can NEVER pass; without the
+//       flag the source-relative contract is unchanged.
+//   (iii — via c/d/e/f) the plan-less singleton / collision-suffixed archive paths stay green.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -506,12 +519,221 @@ function suffixedArchiveRel(tmpRoot, project) {
   }
 })();
 
+// --------------------------------------------------------------------------- (h)/(i)/(j) #707
+
+// Minimal plan lookalike carrying ONLY what the archive evidence floor reads: a `## Node Ledger`
+// (parseLedger). No freeze/plan-hash needed — the fixture state carries no epoch envelope, so the
+// archive epoch-authority gate resolves the project as legacy.
+function planWithLedger(rows) {
+  const lines = [
+    '# Workflow Plan', '', '## Meta', 'labels: test', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+  ];
+  for (const r of rows) lines.push('| ' + r.id + ' | ' + (r.role || 'implementer') + ' | — | — | 1 | sequence |');
+  lines.push('', '## Node Ledger', '', '| id | status |', '|---|---|');
+  for (const r of rows) lines.push('| ' + r.id + ' | ' + r.status + ' |');
+  lines.push('');
+  return lines.join('\n');
+}
+
+// Worktree-postured sole-archiver fixture: the feature branch carries the live folder (state +
+// plan whose ledger has COMPLETE rows + summary) — the worktree-native shape — and a REAL linked
+// worktree at the canonical .kw/worktrees/<project> path holds the branch with UNTRACKED per-node
+// .cache evidence (the exact shape a running-set executor leaves behind: evidence is
+// barrier-exempt and never committed). opts.evidence: { 'n1.md': content } written into the
+// WORKTREE's .cache only; omit to build the evidence-lost shape (no worktree at all).
+function buildWorktreeEvidenceFixture(project, issue, opts) {
+  opts = opts || {};
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  // main: roadmap source + mirror.
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  // feature branch: live folder with state + ledger-complete plan + summary, and a deliverable.
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(liveDir, { recursive: true });
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState(project, issue, new Date().toISOString()));
+  fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), planWithLedger(opts.ledgerRows || [
+    { id: 'n1-impl', status: 'complete' },
+    { id: 'n2-review', role: 'code-reviewer', status: 'complete' },
+    { id: 'n3-finalize', role: 'finalize', status: 'in_progress' },
+  ]));
+  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: deliverable + live state']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  // Linked worktree on the branch at the canonical path, holding UNTRACKED node evidence.
+  if (opts.evidence) {
+    const wtPath = path.join(tmpRoot, '.kw', 'worktrees', project);
+    git(tmpRoot, ['worktree', 'add', wtPath, branch]);
+    const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(wtCache, { recursive: true });
+    for (const name of Object.keys(opts.evidence)) {
+      fs.writeFileSync(path.join(wtCache, name), opts.evidence[name]);
+    }
+  }
+
+  return { tmpRoot, remotePath, binDir, logFile, branch };
+}
+
+(function testWorktreePosturedSinkArchivesWorktreeCacheEvidence() {
+  console.log('Test (#707 h): a worktree-postured sink must archive the worktree\'s untracked .cache node evidence — landed into the live folder before archive, committed at HEAD');
+  const project = 'issue-70701';
+  const issue = 70701;
+  const evidence = {
+    'n1-impl.md': 'binding: n1-impl nonce70701\n\nimplementer evidence (worktree copy)\n',
+    'n2-review.md': 'binding: n2-review nonce70701\n\nverdict: pass\n',
+  };
+  const fx = buildWorktreeEvidenceFixture(project, issue, { evidence });
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#707 h: sink exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#707 h: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    const archRel = (out && out.receipt && out.receipt.archive_dest) || suffixedArchiveRel(fx.tmpRoot, project) || ('kaola-workflow/archive/' + project);
+    // The run's REAL node evidence must be IN the archive on disk...
+    for (const name of Object.keys(evidence)) {
+      const onDisk = path.join(fx.tmpRoot, archRel, '.cache', name);
+      assert(fs.existsSync(onDisk), '#707 h: archived .cache/' + name + ' must exist on disk at ' + archRel + '; .cache holds: '
+        + JSON.stringify((() => { try { return fs.readdirSync(path.join(fx.tmpRoot, archRel, '.cache')); } catch (_) { return fs.existsSync(path.join(fx.tmpRoot, archRel)) ? fs.readdirSync(path.join(fx.tmpRoot, archRel)) : '<no archive dir>'; } })()));
+      if (fs.existsSync(onDisk)) {
+        assert(fs.readFileSync(onDisk, 'utf8') === evidence[name], '#707 h: archived .cache/' + name + ' must carry the WORKTREE copy byte-for-byte');
+      }
+      // ... and durable at HEAD (archive_commit), so a later squash/cleanup cannot orphan it.
+      assert(catFileType(fx.tmpRoot, 'HEAD:' + archRel + '/.cache/' + name) === 'blob',
+        '#707 h: archived .cache/' + name + ' must be committed at HEAD');
+    }
+
+    // Branch-tracked live content still wins the union landing: the archived state is the
+    // checkout-resolved one (it carries the ## Sink block committed on the branch).
+    const archState = showAtHead(fx.tmpRoot, archRel + '/workflow-state.md');
+    assert(archState && archState.includes('claim_ts:'), '#707 h: archived workflow-state.md must be the branch-tracked copy');
+
+    const status = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
+    assert(status === '', '#707 h: main checkout must be clean after status:sinked; got:\n' + status);
+    const calls = readLog(fx.logFile);
+    assert(calls.includes('close:' + issue), '#707 h: the issue must be closed; calls=' + JSON.stringify(calls));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+(function testEvidenceEmptyArchiveRefusesLoudlyThenRecovers() {
+  console.log('Test (#707 i): an evidence-empty live folder whose ledger PROVES recorded node evidence must refuse loudly (typed, exit 1, resumable) — never archive an empty evidence trail; restoring evidence + re-running completes');
+  const project = 'issue-70702';
+  const issue = 70702;
+  // No worktree, no evidence anywhere — but the ledger says n1-impl/n2-review completed.
+  const fx = buildWorktreeEvidenceFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 1, '#707 i: sink must exit 1 on an evidence-empty archive attempt; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'finalize',
+      '#707 i: typed refusal must be result:refuse reason:sink_incomplete step:finalize; got ' + JSON.stringify(out));
+    assert(out && out.archive_refusal === 'node_evidence_missing',
+      '#707 i: archive_refusal must be node_evidence_missing; got ' + JSON.stringify(out && out.archive_refusal));
+    assert(out && Array.isArray(out.missing) && out.missing.includes('.cache/n1-impl.md') && out.missing.includes('.cache/n2-review.md'),
+      '#707 i: missing must list the ledger-proven evidence files; got ' + JSON.stringify(out && out.missing));
+
+    // Fail-closed: the live folder survives untouched; NO archived copy of it exists anywhere.
+    assert(fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project, 'workflow-state.md')),
+      '#707 i: the live project folder must SURVIVE the refusal (fail-closed, nothing deleted)');
+    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
+      '#707 i: no plain archive of the project may exist after the refusal');
+    assert(suffixedArchiveRel(fx.tmpRoot, project) === null
+      || !fs.existsSync(path.join(fx.tmpRoot, suffixedArchiveRel(fx.tmpRoot, project), 'workflow-state.md')),
+      '#707 i: no collision-suffixed archive of the project may exist after the refusal');
+    // The issue was NOT closed (closure never ran).
+    const calls = readLog(fx.logFile);
+    assert(!calls.includes('close:' + issue), '#707 i: the issue must NOT be closed on a refused sink; calls=' + JSON.stringify(calls));
+
+    // RECOVERY: restore the run's evidence into the live folder, re-run --sink → completes with
+    // the evidence archived + committed (the finalize step was left NOT done, so the resume retries it).
+    const liveCache = path.join(fx.tmpRoot, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(liveCache, { recursive: true });
+    fs.writeFileSync(path.join(liveCache, 'n1-impl.md'), 'restored n1 evidence\n');
+    fs.writeFileSync(path.join(liveCache, 'n2-review.md'), 'restored n2 evidence\n');
+    const second = runSink(fx, ['--issue', String(issue)]);
+    const out2 = lastJson(second);
+    assert(second.status === 0, '#707 i: the recovery re-run must exit 0; got ' + second.status + '\nstdout: ' + second.stdout + '\nstderr: ' + second.stderr);
+    assert(out2 && out2.status === 'sinked', '#707 i: the recovery re-run must reach status:sinked; got ' + JSON.stringify(out2 && out2.status));
+    const archRel = (out2 && out2.receipt && out2.receipt.archive_dest) || suffixedArchiveRel(fx.tmpRoot, project) || ('kaola-workflow/archive/' + project);
+    assert(catFileType(fx.tmpRoot, 'HEAD:' + archRel + '/.cache/n1-impl.md') === 'blob',
+      '#707 i: after recovery the restored evidence must be archived + committed at HEAD');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+(function testVerifyArchiveCompleteRequiresLedgerEvidence() {
+  console.log('Test (#707 j): verifyArchiveComplete with requireLedgerEvidence can NEVER pass an evidence-empty copy of a ledger-complete source; the flag-less source-relative contract is unchanged');
+  const claim = require(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'));
+  const base = makeTmpRoot();
+  try {
+    const src = path.join(base, 'src');
+    const dest = path.join(base, 'dest');
+    fs.mkdirSync(src, { recursive: true });
+    fs.writeFileSync(path.join(src, 'workflow-state.md'), '# Kaola-Workflow State\nstatus: active\n');
+    fs.writeFileSync(path.join(src, 'workflow-plan.md'), planWithLedger([
+      { id: 'n1', status: 'complete' },
+      { id: 'n2', status: 'n/a' },
+    ]));
+    // dest is a FAITHFUL copy of the (already evidence-gutted) source — the passes-on-empty shape.
+    fs.mkdirSync(dest, { recursive: true });
+    for (const f of ['workflow-state.md', 'workflow-plan.md']) fs.copyFileSync(path.join(src, f), path.join(dest, f));
+
+    const flagless = claim.verifyArchiveComplete(src, dest);
+    assert(flagless && flagless.ok === true,
+      '#707 j: WITHOUT the flag the source-relative contract is unchanged (a faithful copy passes); got ' + JSON.stringify(flagless));
+
+    const hardened = claim.verifyArchiveComplete(src, dest, { requireLedgerEvidence: true });
+    assert(hardened && hardened.ok === false,
+      '#707 j: WITH requireLedgerEvidence an evidence-empty copy of a ledger-complete source must REFUSE; got ' + JSON.stringify(hardened));
+    assert(hardened && Array.isArray(hardened.missing) && hardened.missing.includes('.cache/n1.md'),
+      '#707 j: the refusal must name the ledger-proven evidence file; got ' + JSON.stringify(hardened && hardened.missing));
+    assert(hardened && Array.isArray(hardened.missing) && !hardened.missing.includes('.cache/n2.md'),
+      '#707 j: an n/a ledger row must NOT be demanded; got ' + JSON.stringify(hardened && hardened.missing));
+
+    // With the evidence present in BOTH copies, the hardened check passes.
+    for (const d of [src, dest]) {
+      fs.mkdirSync(path.join(d, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(d, '.cache', 'n1.md'), 'evidence\n');
+    }
+    const satisfied = claim.verifyArchiveComplete(src, dest, { requireLedgerEvidence: true });
+    assert(satisfied && satisfied.ok === true,
+      '#707 j: with the evidence present the hardened check passes; got ' + JSON.stringify(satisfied));
+  } finally {
+    try { fs.rmSync(base, { recursive: true, force: true }); } catch (_) {}
+  }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

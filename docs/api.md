@@ -3116,9 +3116,10 @@ the active folder open. The authoritative closure receipt for a `sink:pr`
 project is emitted by `cmdWatchPr`/`cmdWatchMr` when the PR/MR merges. This is
 documented behavior, not a gap; no schema change is needed.
 
-**`sink_incomplete` refuse envelope (issue #497; `push_upstream` shape added by issue #619).**
-When a hard `push_upstream`, `push_main`, or `closure` failure occurs, `sink-merge` emits a
-refuse envelope to stdout (exit 1) instead of `status:sinked`. There are three distinct shapes
+**`sink_incomplete` refuse envelope (issue #497; `push_upstream` shape added by issue #619;
+`finalize` shape added by issue #707).**
+When a hard `push_upstream`, `finalize`, `push_main`, or `closure` failure occurs, `sink-merge`
+emits a refuse envelope to stdout (exit 1) instead of `status:sinked`. The shapes are
 discriminated by `step`:
 
 `step:"push_upstream"` (issue #619) — `git push -u origin <branch>` did not verifiably reach
@@ -3133,6 +3134,31 @@ a re-run retries it.
   "step": "push_upstream",
   "push_upstream": "failed",
   "branch": "<branch-name>",
+  "detail": "..."
+}
+```
+
+`step:"finalize"` (issue #707) — archiving `kaola-workflow/<project>/` was refused because the
+archive would LOSE evidence the run recorded: `archive_refusal:"node_evidence_missing"` when the
+frozen plan's `## Node Ledger` proves node evidence was recorded (`complete` rows — every close is
+evidence-checked, and the ledger lives in `workflow-plan.md`, so it survives a gutted `.cache/`)
+but the live folder being archived no longer holds it, or the #676 lossy-copy family when the
+copied archive dropped a file the source held. Both name the lost files in `missing`. The refusal
+fires BEFORE any archive mutation — the live folder is not deleted — and the `finalize` step is
+left NOT done so a re-run retries it after the operator restores the run's `.cache` evidence
+(from the worktree copy, if it still exists). The benign snapshot family (`missing: []`, e.g. a
+journal-only live dir holding nothing but the sink's own receipt) keeps its historical silent
+skip.
+
+```json
+{
+  "result": "refuse",
+  "reason": "sink_incomplete",
+  "step": "finalize",
+  "archive_refusal": "node_evidence_missing",
+  "missing": [".cache/<node-id>.md", "..."],
+  "branch": "<branch-name>",
+  "default_branch": "<defBranch>",
   "detail": "..."
 }
 ```
@@ -3185,6 +3211,8 @@ repaired.
 In both cases the **sink-receipt** (`.cache/sink-receipt.json`) is updated
 before the refuse emit:
 
+- `archive_refusal: "node_evidence_missing"` (or the inner #676 reason) is
+  written to the receipt on the `finalize` refusal path (issue #707).
 - `push_main: "failed"` is written to the receipt on the `push_main` failure
   path (a new enum value for this field; the success path leaves the field
   absent until `stepDone("push_main")` records it as `done`).
