@@ -1717,10 +1717,17 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
   const stagedReconciled = []; // #403.7: MAIN staged-ADD orphans actually unstaged (#297) — recorded, not silent
   const roadmapByRoot = {}; // #428: dual-root per-member removal map
   const residue = [];       // #428: files that survived despite a removal attempt
+  // #705: normalize the per-member keep-open set ONCE (numbers; tolerant of string entries).
+  const excludeSet = (opts && Array.isArray(opts.excludeIssues))
+    ? new Set(opts.excludeIssues.map(Number)) : null;
   for (const issueN of memberNumbers) {
     const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
     let thisRemoved = 'absent';
-    if (opts && opts.keepRoadmapSource) {
+    // #336/#705: preserve this member's roadmap source when keep-open is in force for the whole run
+    // (keepRoadmapSource) OR when this specific member is in the per-member excludeIssues keep-open
+    // set — the issue stays open, so it must stay tracked in the mirror.
+    const keepThis = !!(opts && opts.keepRoadmapSource) || (excludeSet !== null && excludeSet.has(Number(issueN)));
+    if (keepThis) {
       thisRemoved = 'kept';
     } else {
       try {
@@ -1759,7 +1766,7 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
           try { fs.unlinkSync(mainRoadmapAbs); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
           if (wasStaged) stagedReconciled.push('issue-' + issueN + '.md');
           thisRemovedMain = 'absent'; // was only a staged-ADD orphan, no committed copy
-        } else if (!(opts && opts.keepRoadmapSource)) {
+        } else if (!keepThis) {
           // #428: file IS committed on main's HEAD — remove the working-tree copy and stage the deletion
           // so the sink commit drops it from main.
           // Exception: when keepWorktree is true, the archive commit on the feature branch will carry
@@ -1788,7 +1795,7 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
       main:     thisRemovedMain     === 'removed' || thisRemovedMain     === 'absent' || thisRemovedMain     === 'kept',
     };
     // #428: record residue (surviving files despite a removal attempt, or after a failed unlink)
-    if (!(opts && opts.keepRoadmapSource)) {
+    if (!keepThis) {
       if (fs.existsSync(roadmapFilePath))
         residue.push({ issue: issueN, root: 'worktree', path: roadmapFilePath, reason: 'unlink_failed' });
       // For keepWorktree, the main-root file intentionally survives (will be removed at sink-merge),

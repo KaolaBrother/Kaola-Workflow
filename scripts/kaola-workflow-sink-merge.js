@@ -1188,6 +1188,27 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   return { ok: true, stashRef, removedDuplicates };
 }
 
+// #694/#705: the ONE keep-open intent derivation for the --sink transaction — reused by the finalize
+// step (to scope roadmap-source retention), persistSinkClosureMetadata (the ## Closure disposition),
+// and the terminal keep_open_verify guard. Defense-in-depth over three sources: the live
+// --keep-issue-open flag, the receipt's recorded keep_open_requested, OR the workflow-state.md
+// issue_action: comment_keep_open (mirrors postMergeCleanup's archived-state honor). Both the archived
+// state (post-archive: archive_dest / the default archive path) AND the live folder (pre-archive, when
+// the finalize step calls this before archiveProjectDir moves it) are probed; a missing file reads as
+// no-signal, never an error. Whole-run posture: there is no per-member keep-open flag in the sink API.
+function deriveSinkKeepOpen(mainRoot, args, receipt) {
+  if (!!args.keepIssueOpen || (receipt && receipt.keep_open_requested === true)) return true;
+  if (args.issue == null) return false;
+  const candidates = [];
+  if (receipt && receipt.archive_dest) candidates.push(path.join(mainRoot, receipt.archive_dest, 'workflow-state.md'));
+  candidates.push(path.join(mainRoot, 'kaola-workflow', 'archive', args.project, 'workflow-state.md'));
+  candidates.push(path.join(mainRoot, 'kaola-workflow', args.project, 'workflow-state.md'));
+  for (const sc of candidates) {
+    try { if (/^issue_action:\s*comment_keep_open\s*$/m.test(fs.readFileSync(sc, 'utf8'))) return true; } catch (_) {}
+  }
+  return false;
+}
+
 // #700: persist the SAME terminal metadata cmdFinalize writes — the ## Closure state block
 // (appendClosureBlock) + the ## Attestation summary block (persistAttestationToSummary) — into the
 // archive dest, for a --sink that is the SOLE archiver (no prior cmdFinalize --keep-worktree already
@@ -1203,7 +1224,7 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
   const dest = archiveResult && archiveResult.dest;
   if (!dest) return;
   try {
-    const keepOpen = !!args.keepIssueOpen || sinkReceipt.keep_open_requested === true;
+    const keepOpen = deriveSinkKeepOpen(mainRoot, args, sinkReceipt);
     const closureReceipt = buildClosureReceipt(args.project, args.issue != null ? args.issue : null, {
       archive: 'closed',
       roadmap_source_removed: archiveResult.roadmap_source_removed,
@@ -1421,7 +1442,21 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // (already_finalized early-return when archive exists).
       try {
         const { archiveProjectDir } = require('./kaola-workflow-claim.js');
-        const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false });
+        // #705: this sink is the SOLE archiver (no prior cmdFinalize passed keepRoadmapSource). If
+        // keep-open is in force, archiveProjectDir would otherwise remove kaola-workflow/.roadmap/
+        // issue-N.md for an issue that stays OPEN — dropping an open issue from the ROADMAP.md mirror.
+        // Derive keep-open with the same three-source derivation the terminal keep_open_verify guard
+        // uses, then scope roadmap-source retention to the kept-open member set via excludeIssues
+        // (whole-run posture → every member when keep-open is in force; a closing run keeps none, so
+        // the source is removed exactly as before). Read the LIVE state here (pre-archive).
+        const keepOpenAtFinalize = deriveSinkKeepOpen(mainRoot, args, receipt);
+        const finalizeMembers = (Array.isArray(args.issueNumbers) && args.issueNumbers.length)
+          ? args.issueNumbers
+          : (args.issue != null ? [args.issue] : []);
+        const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, {
+          keepWorktree: false,
+          excludeIssues: keepOpenAtFinalize ? finalizeMembers : [],
+        });
         // #700: carry the ACTUAL archive destination (possibly collision-suffixed to
         // archive/<project>.archived-<ts>/ when archive/<project>/ already exists) through the
         // receipt, so archive_commit stages/commits the exact dir — not a hardcoded plain path that
@@ -1784,17 +1819,10 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // not-confirmed-closed proceeds (an unprobeable forge must not block a legitimate sink); only a
   // POSITIVE still-closed after reopen refuses.
   {
-    let keepOpen = !!args.keepIssueOpen || receipt.keep_open_requested === true;
-    if (!keepOpen && args.issue != null) {
-      const stateCandidates = [];
-      if (receipt.archive_dest) stateCandidates.push(path.join(mainRoot, receipt.archive_dest, 'workflow-state.md'));
-      stateCandidates.push(path.join(mainRoot, 'kaola-workflow', 'archive', args.project, 'workflow-state.md'));
-      for (const sc of stateCandidates) {
-        try {
-          if (/^issue_action:\s*comment_keep_open\s*$/m.test(fs.readFileSync(sc, 'utf8'))) { keepOpen = true; break; }
-        } catch (_) {}
-      }
-    }
+    // #705: ONE derivation, shared with the finalize step + persistSinkClosureMetadata (never a
+    // fourth variant). At this terminal point the live folder is already archived, so the helper's
+    // live-state candidate simply reads as no-signal; the archived-state candidates carry the intent.
+    const keepOpen = deriveSinkKeepOpen(mainRoot, args, receipt);
     // Trust the push_main #517 reopen when it already ran this invocation (receipt already records
     // reopened_after_autoclose): that is the DESIGNATED reopen point. This terminal guard is a
     // BACKSTOP for paths that SKIPPED push_main — a stale/resumed receipt where the #517 reopen never
