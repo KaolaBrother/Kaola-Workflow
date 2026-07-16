@@ -854,11 +854,11 @@ All three `.toml` twins for a given profile are byte-identical
 (forge-neutral by the §341 contract — no CLI binaries, no forge brands) and carry the same
 `description` / `nickname_candidates` metadata as the managed `config/agents.toml` block.
 
-**Generated reviewer exception.** `code-reviewer` and `adversarial-verifier` are not maintained as
-independent Markdown/TOML prose. Their canonical behavior lives in
+**Generated reviewer exception.** `code-reviewer`, `adversarial-verifier`, and `security-reviewer`
+are not maintained as independent Markdown/TOML prose. Their canonical behavior lives in
 `templates/reviewers/behavior-contracts.json`; the closed tool/model/transport adapters live in
 `templates/reviewers/runtime-adapters.json`; and `scripts/generate-reviewer-profiles.js` is the sole
-writer for the three Claude outputs and six Codex outputs. A shared `behavior_contract_hash` binds
+writer for the five Claude outputs and nine Codex outputs. A shared `behavior_contract_hash` binds
 the normalized runtime-neutral core, while each render's `resolved_profile_hash` binds its complete
 bytes (with the self-hash slot normalized during verification). OpenCode derives from the generated
 Claude root and must preserve the normalized core and behavior identity.

@@ -141,7 +141,7 @@ if (reviewerGenerator) {
   assert(repositoryErrors.length === 0,
     `tracked reviewer profiles must equal canonical generation: ${repositoryErrors.join('; ')}`);
 
-  assert(rendered.length === 9, `reviewer generator must render exactly 9 profiles, got ${rendered.length}`);
+  assert(rendered.length === 14, `reviewer generator must render exactly 14 profiles, got ${rendered.length}`);
   assert(JSON.stringify([...byPath.keys()].sort()) === JSON.stringify([...reviewerGenerator.EXPECTED_OUTPUT_PATHS].sort()),
     'reviewer generator output set must be complete and closed');
 

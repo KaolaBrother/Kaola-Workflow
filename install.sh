@@ -413,7 +413,7 @@ install_agent_files() {
     fi
 
     case "$agent" in
-      code-reviewer|adversarial-verifier)
+      code-reviewer|adversarial-verifier|security-reviewer)
         refresh_reviewer_resolved_profile_hash "$dest"
         local reviewer_metadata
         reviewer_metadata="$(reviewer_manifest_metadata "$agent" "$source_file" "$dest")"
