@@ -2768,6 +2768,10 @@ function testCodexReplanEditionContract699() {
       plan_epoch: 1, plan_hash: '3'.repeat(64),
     },
     epoch_lineage_id: '4'.repeat(64),
+    snapshot: {
+      authority_projection: { entry_cas: { candidate_digest: '6'.repeat(64) } },
+      authority_digest: 'b'.repeat(64),
+    },
     source: {
       source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
       source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
@@ -2890,14 +2894,20 @@ function testCodexReplanEditionContract699() {
     };
     snapshot.manifest_self_digest = schema.snapshotManifestDigest(snapshot);
     fs.writeFileSync(path.join(epochDir, 'manifest.json'), schema.canonicalJson(snapshot) + '\n');
-    assert(replan.verifyAllEpochSnapshots(projectDir).ok,
-      'Codex re-plan smoke: live epoch snapshot must digest-verify before archive');
+    // Fail-closed edition contract: a schema-1 manifest with no external-seal chain cannot
+    // digest-verify (a genuine schema-2 snapshot is only ever produced by the full replan
+    // lifecycle, exercised end to end in test-replan.js). The codex twin must refuse this
+    // unverifiable epoch snapshot at BOTH the shared verifier and the archive preflight, and
+    // must never delete a live project whose epoch-snapshot authority does not verify.
+    const verified = replan.verifyAllEpochSnapshots(projectDir);
+    assert(!verified.ok && verified.reason === 'legacy_snapshot_binding_unsealed',
+      'Codex re-plan smoke: an unsealed epoch snapshot must refuse digest verification, got ' + JSON.stringify(verified));
     const archived = claim.archiveProjectDir(archiveRoot, project, 'closed');
-    assert(archived.archived === true && fs.readFileSync(path.join(archived.dest, '.cache', 'epochs', '1',
-      'files', '.cache', 'review-attempts.json')).equals(rebindBytes),
-    'Codex re-plan smoke: final archive must retain exact nested rebind-ledger bytes');
-    assert(replan.verifyAllEpochSnapshots(archived.dest).ok,
-      'Codex re-plan smoke: archived epoch snapshot must remain digest-verifiable');
+    assert(archived.archived !== true && archived.archive_incomplete === true
+      && archived.snapshot_error === 'legacy_snapshot_binding_unsealed',
+    'Codex re-plan smoke: archive must refuse an unverifiable epoch snapshot before any delete, got ' + JSON.stringify(archived));
+    assert(fs.existsSync(projectDir) && !fs.existsSync(path.join(archiveRoot, 'kaola-workflow', 'archive')),
+      'Codex re-plan smoke: a refused archive must preserve the live project and create no archive dir');
   } finally { fs.rmSync(archiveRoot, { recursive: true, force: true }); }
 
   console.log('testCodexReplanEditionContract699: PASSED');
