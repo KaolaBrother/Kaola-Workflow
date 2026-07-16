@@ -898,6 +898,18 @@ function resolveSinkReceiptPath(mainRoot, project) {
   const archive = path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json');
   if (fs.existsSync(live)) return live;
   if (fs.existsSync(archive)) return archive;
+  // A collision-suffixed archive (archive/<project>.archived-<ts>/) may hold the receipt: the
+  // finalize step follows archiveProjectDir's actual dest, so a crash-resume must scan the suffixed
+  // candidates too (newest suffix first — the suffix is a sortable timestamp).
+  try {
+    const archiveRoot = path.join(mainRoot, 'kaola-workflow', 'archive');
+    const suffixed = fs.readdirSync(archiveRoot)
+      .filter(name => name.startsWith(project + '.archived-')).sort().reverse();
+    for (const name of suffixed) {
+      const candidate = path.join(archiveRoot, name, '.cache', 'sink-receipt.json');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch (_) {}
   const liveDir = path.join(mainRoot, 'kaola-workflow', project);
   if (fs.existsSync(liveDir)) return live;
   return archive;
@@ -1203,7 +1215,12 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
 }
 
 function runSinkTransaction(args, mainRoot, defBranch) {
-  const { receipt, receiptPath, newCycle } = loadOrInitReceipt(mainRoot, args.project, args.branch, args.issue, args.issueNumbers, defBranch, args.keepIssueOpen);
+  const loaded = loadOrInitReceipt(mainRoot, args.project, args.branch, args.issue, args.issueNumbers, defBranch, args.keepIssueOpen);
+  const { receipt, newCycle } = loaded;
+  // Reassignable: the finalize step's archiveProjectDir renames the live folder (receipt included)
+  // into the archive dest — every later write must follow it there, or writeSinkReceipt's mkdirSync
+  // resurrects a phantom empty live .cache/ and the authoritative receipt forks from the archive.
+  let receiptPath = loaded.receiptPath;
   const stepDone = (step) => {
     receipt.steps[step] = 'done'; receipt.updated_at = new Date().toISOString();
     // #518: for a new-cycle reinit, skip writing the receipt at the preflight step —
@@ -1336,6 +1353,9 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         if (archiveResult && archiveResult.dest) {
           receipt.archive_dest = path.relative(mainRoot, archiveResult.dest).split(path.sep).join('/');
           persistSinkClosureMetadata(mainRoot, args, receipt, archiveResult);
+          // The rename just moved the live receipt into the dest — follow it, so stepDone('finalize')
+          // and every later step write the archived copy instead of resurrecting the live path.
+          receiptPath = path.join(archiveResult.dest, '.cache', 'sink-receipt.json');
         }
       } catch (e) { if (e instanceof TypeError || e instanceof ReferenceError) throw e; /* #555: re-throw a missing-export programmer error (the #550 drift class); swallow only archive-already-exists idempotency */ }
       stepDone('finalize'); continue;
@@ -1433,8 +1453,8 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // edit --state open) and record the event in the receipt so callers can detect + audit it.
       if (!OFFLINE && args.keepIssueOpen && args.issue != null) {
         try {
-          if (probeIssueClosed(args.issue, {})) {
-            reopenIssue(args.issue, {});
+          if (probeIssueClosed(args.issue, { cwd: mainRoot })) {
+            reopenIssue(args.issue, { cwd: mainRoot });
             receipt.remote_issue_closed = 'reopened_after_autoclose';
             receipt.updated_at = new Date().toISOString();
             writeSinkReceipt(receiptPath, receipt);
@@ -1583,9 +1603,9 @@ function runSinkTransaction(args, mainRoot, defBranch) {
     if (!OFFLINE && keepOpen && args.issue != null && receipt.remote_issue_closed !== 'reopened_after_autoclose') {
       let stillClosed = false;
       try {
-        if (probeIssueClosed(args.issue, {})) {
-          try { reopenIssue(args.issue, {}); } catch (_) {}
-          stillClosed = probeIssueClosed(args.issue, {});
+        if (probeIssueClosed(args.issue, { cwd: mainRoot })) {
+          try { reopenIssue(args.issue, { cwd: mainRoot }); } catch (_) {}
+          stillClosed = probeIssueClosed(args.issue, { cwd: mainRoot });
           if (!stillClosed) { receipt.remote_issue_closed = 'reopened_after_autoclose'; receipt.updated_at = new Date().toISOString(); writeSinkReceipt(receiptPath, receipt); }
         }
       } catch (_) { stillClosed = false; }

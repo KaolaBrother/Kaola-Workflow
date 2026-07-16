@@ -62,10 +62,18 @@ function writeGhMock(binDir, logFile) {
   fs.writeFileSync(path.join(binDir, 'gh.js'), [
     "'use strict';",
     'const fs = require("fs");',
+    'const path = require("path");',
     'const argv = process.argv.slice(2);',
     'const a = argv.join(" ");',
     'const logFile = ' + JSON.stringify(logFile) + ';',
     'function log(m){ try { fs.appendFileSync(logFile, m + "\\n"); } catch(_){} }',
+    // cwd-honest, like real gh: without --repo, gh resolves its target repo from the invoking cwd.
+    // The sink transaction chdirs to os.tmpdir(), so any call site that drops { cwd: mainRoot }
+    // must FAIL here exactly as real gh does — a cwd-blind mock is how the #694 keep-open guard
+    // shipped as a silent no-op.
+    'let d = process.cwd(); let inRepo = false;',
+    'for (;;) { if (fs.existsSync(path.join(d, ".git"))) { inRepo = true; break; } const p = path.dirname(d); if (p === d) break; d = p; }',
+    'if (!inRepo) { log("REJECTED-wrong-cwd:" + process.cwd() + " args=" + a); process.stderr.write("gh: could not determine base repo, use --repo (cwd not a git repository)\\n"); process.exit(1); }',
     'function lines(){ try { return fs.readFileSync(logFile,"utf8").split("\\n"); } catch(_){ return []; } }',
     'if (a.includes("repo view")) { process.stdout.write(JSON.stringify({owner:{login:"t"},name:"r"})+"\\n"); process.exit(0); }',
     'const viewM = a.match(/issue view (\\d+)/);',
@@ -322,6 +330,44 @@ function suffixedArchiveRel(tmpRoot, project) {
     // Closure ran exactly on the resume (the aborted first run stopped before push_main/closure).
     const calls = readLog(fx.logFile);
     assert(calls.filter(c => c === 'close:' + issue).length === 1, '#694 b: the issue is closed exactly once (on resume); calls=' + JSON.stringify(calls));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (c)
+
+(function testKeepOpenEndStateGuardReopensWithRealCwd() {
+  console.log('Test (#694 c): the terminal keep-open guard actually probes + reopens a closed issue against a cwd-honest forge (regression: bare {} gh opts made it a silent no-op)');
+  const project = 'issue-69403';
+  const issue = 69403;
+  // Keep-open intent comes ONLY from the archived state (issue_action: comment_keep_open), so the
+  // push_main #517 reopen (gated on args.keepIssueOpen) is skipped and the TERMINAL guard is the
+  // sole reopen point — the exact backstop path it exists for.
+  const fx = buildSoleArchiverFixture(project, issue, { issueAction: 'comment_keep_open' });
+  fx.projectName = project;
+  try {
+    // The issue is CLOSED on the forge before the sink runs (auto-close analog).
+    fs.appendFileSync(fx.logFile, 'close:' + issue + '\n');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    const calls = readLog(fx.logFile);
+
+    // The guard must reach the forge from a real repo cwd (the mock rejects non-repo cwds like gh).
+    assert(!calls.some(c => c.startsWith('REJECTED-wrong-cwd')), '#694 c: no gh call may run outside the repo cwd; calls=' + JSON.stringify(calls));
+    assert(calls.includes('reopen:' + issue), '#694 c: the terminal guard must reopen the closed kept-open issue; calls=' + JSON.stringify(calls));
+    assert(result.status === 0, '#694 c: sink exits 0 after a successful backstop reopen; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#694 c: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(out && out.receipt && out.receipt.remote_issue_closed === 'reopened_after_autoclose',
+      '#694 c: receipt must record reopened_after_autoclose; got ' + JSON.stringify(out && out.receipt && out.receipt.remote_issue_closed));
+    // Ground truth from the mock state machine: last close/reopen event leaves the issue OPEN.
+    let closed = false;
+    for (const c of calls) { if (c === 'close:' + issue) closed = true; else if (c === 'reopen:' + issue) closed = false; }
+    assert(!closed, '#694 c: the issue must actually be OPEN at end of run; calls=' + JSON.stringify(calls));
+    // Post-finalize receipt writes follow the archive dest — no phantom live .cache/ resurrection.
+    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project)),
+      '#694 c: the archived live project dir must NOT be resurrected by post-finalize receipt writes');
   } finally {
     cleanup(fx);
   }
