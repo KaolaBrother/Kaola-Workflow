@@ -1178,6 +1178,101 @@ assertIncludes('commands/workflow-next.md', 'selection-evidence');
 assertIncludes('commands/kaola-workflow-finalize.md', 'observed_gap_unseeded');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'run-gaps-manual.md');
 
+// Re-plan edition contract: the installer mapping, executable CLI, shared vocabulary, and every
+// generated routing surface are one behavior contract. The manual-install smoke runs only from the
+// repository copy; this validator's byte-identical Codex-plugin twin still exercises its packaged
+// script directly.
+{
+  const expectedNames = {
+    github: 'kaola-workflow-replan.js',
+    gitlab: 'kaola-gitlab-workflow-replan.js',
+    gitea: 'kaola-gitea-workflow-replan.js',
+  };
+  for (const [forge, expectedName] of Object.entries(expectedNames)) {
+    const emitted = installManifest.supportScripts(forge)
+      .filter(name => /workflow-replan\.js$/.test(name));
+    assert(JSON.stringify(emitted) === JSON.stringify([expectedName]),
+      're-plan install mapping for ' + forge + ' must emit exactly ' + expectedName + ', got ' + JSON.stringify(emitted));
+  }
+
+  const replanRel = 'scripts/kaola-workflow-replan.js';
+  assert(exists(replanRel), 'Claude/Codex re-plan aggregator is missing: ' + replanRel);
+  const cli = require('child_process').spawnSync(process.execPath,
+    [path.join(root, replanRel), 'status', '--project', 'n5-missing-project', '--json'],
+    { cwd: root, encoding: 'utf8' });
+  assert(cli.status !== 0, 're-plan status on a missing project must refuse');
+  const cliResult = JSON.parse(String(cli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+  assert(cliResult.reason === 'replan_authority_path_invalid',
+    're-plan CLI must execute and return the typed missing-authority refusal, got ' + JSON.stringify(cliResult));
+
+  const replanSchema = require('./kaola-workflow-adaptive-schema.js');
+  assert(JSON.stringify(replanSchema.REPLAN_PHASES) === JSON.stringify([
+    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
+  ]), 're-plan phases must remain canonical across editions');
+  assert(JSON.stringify(replanSchema.REPLAN_STATUSES) === JSON.stringify([
+    'none', 'in_progress', 'candidate_changed', 'consent_halt',
+  ]), 're-plan statuses must remain canonical across editions');
+  assert(JSON.stringify(replanSchema.REPLAN_CAS_SEAMS) === JSON.stringify([
+    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
+  ]), 're-plan CAS seams must remain canonical across editions');
+
+  const closure = require('./kaola-workflow-closure-contract.js');
+  assert((closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('preserved')
+      && (closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('failed')
+      && closure.CLOSURE_INVARIANTS.some(row => row.id === 'epoch-lineage-preserved'),
+  'closure contract must retain the digest-verified epoch-lineage receipt and invariant');
+
+  if (exists('install.sh')) {
+    const tempHome = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kw-n5-claude-install-'));
+    try {
+      const installed = require('child_process').spawnSync('bash', [path.join(root, 'install.sh'),
+        '--yes', '--no-settings-merge', '--forge=github'], {
+        cwd: root, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+      });
+      assert(installed.status === 0, 'Claude installer must ship the re-plan aggregator: ' + installed.stderr);
+      const installedScript = path.join(tempHome, '.claude', 'kaola-workflow', 'scripts', expectedNames.github);
+      assert(fs.existsSync(installedScript) && (fs.statSync(installedScript).mode & 0o111) !== 0,
+        'Claude installed re-plan aggregator must be present and executable');
+      const installedCli = require('child_process').spawnSync(process.execPath,
+        [installedScript, 'status', '--project', 'n5-missing-project', '--json'],
+        { cwd: root, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome } });
+      const installedResult = JSON.parse(String(installedCli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+      assert(installedCli.status !== 0 && installedResult.reason === 'replan_authority_path_invalid',
+        'installed Claude re-plan aggregator must execute the typed refusal contract');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+
+    const editions = [
+      { prefix: '', aggregator: expectedNames.github },
+      { prefix: 'plugins/kaola-workflow-gitlab/', aggregator: expectedNames.gitlab },
+      { prefix: 'plugins/kaola-workflow-gitea/', aggregator: expectedNames.gitea },
+    ];
+    for (const edition of editions) {
+      const surfaces = [
+        edition.prefix + 'commands/kaola-workflow-plan-run.md',
+        edition.prefix + 'commands/kaola-workflow-adapt.md',
+        edition.prefix + 'commands/kaola-workflow-finalize.md',
+        edition.prefix + 'commands/workflow-next.md',
+        edition.prefix + (edition.prefix ? 'skills/' : 'plugins/kaola-workflow/skills/') + 'kaola-workflow-plan-run/SKILL.md',
+        edition.prefix + (edition.prefix ? 'skills/' : 'plugins/kaola-workflow/skills/') + 'kaola-workflow-adapt/SKILL.md',
+        edition.prefix + (edition.prefix ? 'skills/' : 'plugins/kaola-workflow/skills/') + 'kaola-workflow-finalize/SKILL.md',
+        edition.prefix + (edition.prefix ? 'skills/' : 'plugins/kaola-workflow/skills/') + 'kaola-workflow-next/SKILL.md',
+      ];
+      for (const file of surfaces) {
+        const control = sectionBody(read(file), 'In-progress re-plan control plane');
+        assert(control.includes(edition.aggregator) && control.includes('resume --project {project} --json')
+            && control.includes('workflow-plan.next.md') && control.includes('replan-planner-attestation.json'),
+        file + ' must route the installed re-plan aggregator, planner child, and attestation');
+        for (const forbiddenRoute of ['kaola-workflow-claim.js discard --project', 'discard+restart a fresh adaptive run',
+          'auto-takeover', 'approval gate']) {
+          assert(!control.includes(forbiddenRoute), file + ' re-plan control plane must not expose ' + forbiddenRoute);
+        }
+      }
+    }
+  }
+}
+
 // PROVENANCE_BAN: agent-facing prompt surfaces (agents/*.md, commands/*.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
 // PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,

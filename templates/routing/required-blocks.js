@@ -188,6 +188,25 @@ const REQUIRED_BLOCKS = [
       'never from the card — the card never carries it',
     ],
   },
+  {
+    block_id: 'pr-replan-control-plane',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: replan-plan-run -->',
+      '`replan_in_progress`',
+      'single legal mutation',
+      '`replan_phase`',
+      '`parent_plan_hash`',
+      '`child_plan_hash`',
+      '`last_cas_result`',
+      '`replan_planner_dispatch_required`',
+      '`workflow-plan.next.md`',
+      '`.cache/replan-planner-attestation.json`',
+      '`planner_control_boundary_violation`',
+    ],
+  },
 
   // ==== finalize (basename kaola-workflow-finalize on both surface types) ====
   {
@@ -235,6 +254,25 @@ const REQUIRED_BLOCKS = [
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: ['final-validation.md'],
+  },
+  {
+    block_id: 'fn-replan-control-plane',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: replan-finalize -->',
+      '`replan_in_progress`',
+      'single legal mutation',
+      '`replan_phase`',
+      '`parent_plan_hash`',
+      '`child_plan_hash`',
+      '`last_cas_result`',
+      '`replan_planner_dispatch_required`',
+      '`workflow-plan.next.md`',
+      '`.cache/replan-planner-attestation.json`',
+      '`planner_control_boundary_violation`',
+    ],
   },
 
   // ==== next (ASYMMETRIC: command basename workflow-next, skill basename
@@ -308,6 +346,25 @@ const REQUIRED_BLOCKS = [
       'model="{ISSUE_SCOUT_MODEL}"',
       'isolated, self-contained control-plane brief',
       'argument-shape refusal',
+    ],
+  },
+  {
+    block_id: 'nx-replan-control-plane',
+    topic: 'next',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: replan-next -->',
+      '`replan_in_progress`',
+      'single legal mutation',
+      '`replan_phase`',
+      '`parent_plan_hash`',
+      '`child_plan_hash`',
+      '`last_cas_result`',
+      '`replan_planner_dispatch_required`',
+      '`workflow-plan.next.md`',
+      '`.cache/replan-planner-attestation.json`',
+      '`planner_control_boundary_violation`',
     ],
   },
 ];

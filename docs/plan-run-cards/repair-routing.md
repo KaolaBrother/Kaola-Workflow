@@ -5,7 +5,8 @@ has produced a `findings-route.json` record, or you need to dispatch a fix agent
 repair loop.
 
 **Related:** D-445-01 (`operator_hint` field), D-446-01 (`route-findings` companion record),
-D-434-01 (sanctioned repair primitives), D-424-01 (`--drop-base` anti-laundering)
+D-434-01 (sanctioned repair primitives), D-424-01 (`--drop-base` anti-laundering),
+D-699-01 (planner-owned claim-preserving re-plan epochs)
 
 ---
 
@@ -22,6 +23,58 @@ the same attempt; treat `findings-route.json` only as a regenerable projection, 
 refuse with `review_attempt_unresolved`. Five consumed repairs are allowed per canonical logical
 gate; the sixth returns `repair_limit_reached`. Zero candidates and multiple candidates leave
 `owning_node: null`; multiple owners never imply selection.
+
+### Planner-owned epoch transition after `repair_requires_replan`
+
+`repair_requires_replan` means the frozen DAG cannot prove one safe direct-repair owner. It does
+**not** authorize editing/re-freezing the frozen parent, dropping its barrier history, or discarding
+the live claim/candidate. The `repair-node` transaction must already have mechanically written the
+schema-2 `.cache/replan-source.json` outcome before returning this refusal. Verify that file exists;
+never create or repair it manually. Then prepare the claim-scoped transition from the same settled
+attempt:
+
+```bash
+node scripts/kaola-workflow-replan.js prepare \
+  --project {project} --source-attempt {attempt_id} \
+  --reason review_repair_requires_replan --json
+
+node scripts/kaola-workflow-replan.js resume --project {project} --json
+```
+
+The first `resume` normally returns `replan_planner_dispatch_required` with the exact packet path,
+empty `workflow-plan.next.md` seed, transaction id, dispatch nonce, and planner profile identity.
+The packet also carries `snapshot_authority_projection` and its digest, which were derived from
+stable parent/source/entry-CAS authority before planner dispatch. A missing projection is a fixture
+or transaction-shape defect, not a value for the operator to invent.
+Dispatch `workflow-planner` with that packet and no proposed nodes/roles/dependencies/write sets;
+the planner exclusively authors and attests the child. Then repeat the same `resume` command until
+it commits or returns a typed refusal.
+
+The frozen parent remains byte-immutable and authoritative through `parent_archived`. The issue
+claim/label, branch, worktree, claim-root base, and candidate survive. Four CAS seams bind the
+candidate/root/frontier; `replan_candidate_changed` advances neither epoch nor counter and requires
+a new planner child. Activation is a six-prefix journaled multi-file roll-forward, not one
+filesystem-atomic swap. Every parent epoch snapshot — including the authoritative review journal
+and complete per-attempt rebind ledger — stays in the final archive. Inherited code/security work
+keeps its G4 certifier obligations in the child. The schema-2 child's historically named
+`parent_snapshot_manifest_digest` binds the projection digest; the later full manifest separately
+seals the exact child, attestation, file index, self-digest, and exact manifest bytes.
+
+Two automatic review-driven replacements are allowed at claim scope. A further automatic attempt
+durably consent-halts before planner dispatch; one audited user action may run `extend-consent` to
+add exactly one ceiling slot. The one-shot diagnosis-to-build exemption applies only to its frozen,
+typed proof contract and never to a review-driven reason. A verified v1 parent stays byte-immutable
+and may enter v2 only through the explicit compatibility transaction; never rewrite it in place.
+
+### Diagnosis-to-build is a separate no-review source
+
+Do not relabel a failed review as Case B. `diagnosis_to_build` is considered only when both
+`review-attempts.json` and `replan-source.json` are absent. The completed schema-2 parent must bind
+the exact terminal `diagnosis_root_cause`, `falsified_alternatives`, `acceptance_contract`, and
+`recommendation` artifacts; every writer must be limited to those four artifact paths; and the child
+must cite the proof and recommendation digests. Presence of review authority returns
+`case_b_review_authority_present`. The first valid transition costs zero and consumes the one-shot
+exemption; untyped, repeated, writer-bearing, or citation-missing variants count or refuse.
 
 ## 1. Reading the refusal envelope
 
@@ -97,10 +150,12 @@ Subtypes that also use `revert-overflow`:
 without a preceding security-reviewer gate node in the plan.
 
 Recovery options:
-- **Add a security-reviewer gate** — plan-repair (via `--freeze`) to insert a gate node
-  immediately before the offending node. Re-freeze the plan (see [governance card](governance.md)).
 - **Remove the sensitive write** — if the write is not necessary, remove it from the node's
   implementation and re-dispatch.
+- **Replace the DAG through the epoch transaction** — when the sensitive write is required and the
+  frozen plan lacks the needed certifier reachability, route the settled attempt through
+  `kaola-workflow-replan.js prepare`/`resume`. `workflow-planner` authors the child; main does not
+  insert the gate into the frozen parent.
 
 ---
 
@@ -111,9 +166,11 @@ its write set. The barrier has no owner for the write.
 
 Resolution:
 1. Check `findings-route.json` for `owning_node: null` — this confirms no node claims the path.
-2. Plan-repair via `--freeze`: add the file to the appropriate node's write set.
-3. Re-freeze the plan (the `plan_hash` changes; re-run `--freeze-checked` → `--freeze`).
-4. Re-run the node that should own the write.
+2. Let the authoritative attempt settle as `repair_requires_replan`; do not assign ownership by
+   editing the frozen plan.
+3. Prepare/resume the planner-owned epoch transaction from that attempt.
+4. The child planner decides the replacement ownership/write set, inherits the candidate frontier,
+   and supplies the required review/certifier path before activation.
 
 ---
 
@@ -149,31 +206,39 @@ Read it first. It points at the exact recovery command for the specific `reason`
 
 ---
 
-## 8. Plan-repair via `--freeze` when write-set widening is needed
+## 8. Planner-owned re-plan when the frozen DAG must change
 
-When the repair requires adding a file to a node's write set (e.g., `unattributed_write` or
-`sensitive_write_unreviewed`), the plan itself must change. Plan-repair procedure:
+Once a plan is frozen, write-set widening, a new reviewer/certifier path, multiple plausible owners,
+or a genuinely different topology is an epoch transition — never an in-place `--freeze` repair.
 
-1. Edit `workflow-plan.md` to add the file to the appropriate node's `write_set` array.
-2. Re-freeze:
-   ```bash
-   node scripts/kaola-workflow-adaptive-handoff.js --freeze-checked --json \
-     --plan kaola-workflow/{project}/workflow-plan.md
-   # capture the new plan_hash, then:
-   node scripts/kaola-workflow-adaptive-handoff.js --freeze --governance-ack <hash> --json \
-     --plan kaola-workflow/{project}/workflow-plan.md
-   ```
-3. After re-freeze, delete the stale barrier baseline for the affected node:
-   ```bash
-   rm kaola-workflow/{project}/.cache/barrier-base-{nodeId}
-   ```
-4. Re-open the node with `open-next` (it will record a fresh baseline).
+1. Read the settled authoritative attempt and confirm its `attempt_id`, source reason, candidate,
+   routing, `lifecycle_settled`, and unconsumed status.
+2. Confirm the completed `repair-node` call persisted a schema-2 `repair_outcome` envelope whose
+   `attempt_id` matches. If it is absent, re-run the same repair transaction; do not hand-author JSON.
+3. Run `kaola-workflow-replan.js prepare --project {project} --source-attempt {attempt_id}`.
+4. Run `resume`. On `replan_planner_dispatch_required`, read the named packet and dispatch
+   `workflow-planner`; pass evidence/reason only, not an exact DAG or ownership choice.
+5. The planner writes only the seeded `workflow-plan.next.md` and the digest-bound attestation. Its
+   `parent_snapshot_manifest_digest` must equal the packet's snapshot-authority digest.
+6. Run `resume` again. It validates the attested schema-2 child, preserves the inherited frontier
+   and G4 obligations, snapshots the parent, and rolls activation forward under the fence.
+7. If any CAS seam returns `replan_candidate_changed`, do not patch the child. Resume the recorded
+   re-authoring path so the planner authors against the newly observed candidate.
+8. If `replan_consent_required` fires, stop. Only a user-authorized `extend-consent` call may add one
+   slot; an agent cannot self-clear or rewrite the ceiling.
+
+Do not delete barrier bases or epoch evidence manually. The transaction snapshots the parent proof
+first and removes only manifest-listed, digest-unchanged epoch-local caches during its journaled
+activation. A verified legacy v1 parent follows the same explicit compatibility entry when moving to
+v2; its exact frozen bytes are snapshotted rather than rewritten. A historical committed schema-1
+child whose binding field remains `pending` is acceptable only when recursive verification reports
+`legacy_external_binding`; `legacy_snapshot_binding_unsealed` is a stop, not a repair hint.
 
 ---
 
 ## 9. Dispatching a fix agent and closing the repair loop
 
-After the repair action (revert-overflow, plan-repair, etc.):
+After an admissible in-place repair action (`revert-overflow`, attempt-bound `repair-node`, etc.):
 
 1. Dispatch a fix agent (same role as the original node, or `implementer` for write repairs).
 2. The fix agent writes within the corrected write set.
@@ -185,6 +250,10 @@ After the repair action (revert-overflow, plan-repair, etc.):
      --ledger kaola-workflow/{project}/workflow-ledger.md
    ```
 4. Run `close-and-open-next` again. If the barrier passes, the loop advances normally.
+
+After a planner-owned epoch transition, do not close the old node. Activation installs an
+all-pending child Ledger and regenerates `workflow-tasks.json`; resume through the child plan's normal
+frontier instead.
 
 ---
 
@@ -225,10 +294,17 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 | `reason` | Recovery |
 |---|---|
 | `write_set_overflow` (+ subtypes) | `revert-overflow` (NEVER `drop-base`) |
-| `sensitive_write_unreviewed` | Add reviewer gate to plan OR remove sensitive write |
-| `unattributed_write` | `owning_node: null` in route-findings → plan-repair (add to write set) |
+| `sensitive_write_unreviewed` | Remove the sensitive write OR planner-owned re-plan with a real security certifier path |
+| `unattributed_write` | `owning_node: null` in route-findings → settle attempt → planner-owned re-plan |
 | `barrier_failed` | Read `findings-route.json` → dispatch fix agent → close repair loop |
+| `repair_requires_replan` | `kaola-workflow-replan.js prepare` from the settled attempt, then `resume`; never edit the frozen parent |
+| `replan_source_outcome_missing` / `replan_source_journal_missing` | Re-run/inspect the exact direct-repair transaction; never create `.cache/replan-source.json` manually |
+| `case_b_review_authority_present` | Do not use Case B; settle/consume the review-driven authority through its typed route |
+| `replan_candidate_changed` | No epoch/counter advance; resume planner re-authoring against the current candidate |
+| `replan_in_progress` | Run only `kaola-workflow-replan.js resume --project {project}` |
+| `replan_consent_required` | Stop for a user-authorized one-slot `extend-consent`; agent cannot self-clear |
+| `legacy_snapshot_binding_unsealed` | Stop; historical `pending` is compatible only when recursive verification proves every external seal |
 | `member_vacuity` | No-op leg → re-dispatch the leg's role (or declare `no_op:` in evidence) |
 | `merge_conflict` | Terminal escalation after K=3 repairs → `write-halt --reason merge_conflict` (RESUMABLE) |
 | crash / mid-run failure | `repair-node` (keeps original baseline) |
-| `plan_hash_mismatch` | Plan tampered → re-run `--freeze-checked` → `--freeze` |
+| `plan_hash_mismatch` | Frozen authority tampered → restore/prove the recorded parent bytes or stop; never re-stamp the tampered parent |

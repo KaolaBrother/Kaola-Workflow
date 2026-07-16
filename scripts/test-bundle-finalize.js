@@ -337,7 +337,9 @@ function readLog(logFile) {
 }
 
 // Also import checkClosureInvariants for direct per-issue invariant testing.
-const { checkClosureInvariants } = require('./kaola-workflow-claim');
+const { checkClosureInvariants, verifyArchiveComplete, archiveProjectDir,
+  buildClaimAnchors } = require('./kaola-workflow-claim');
+const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
 
 // ---------------------------------------------------------------------------
 // Test (1): Bundle finalize — closes all 3 members
@@ -1435,6 +1437,94 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+})();
+
+// ---------------------------------------------------------------------------
+// #699: linked-worktree archive verification is recursive for epoch snapshots,
+// including non-Markdown proof files. A dropped or tampered descendant must
+// refuse before either live copy is removed.
+// ---------------------------------------------------------------------------
+(function testRecursiveEpochArchiveCompleteness() {
+  console.log('Test (#699): verifyArchiveComplete recursively preserves epoch snapshots');
+  const src = makeTmpRoot();
+  const dest = makeTmpRoot();
+  try {
+    fs.writeFileSync(path.join(src, 'workflow-state.md'), 'status: closed\n');
+    fs.mkdirSync(path.join(src, '.cache', 'epochs', '1', 'files', '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(src, '.cache', 'epochs', '1', 'manifest.json'), '{"manifest_self_digest":"fixture"}\n');
+    fs.writeFileSync(path.join(src, '.cache', 'epochs', '1', 'files', '.cache', 'receipt.bin'), Buffer.from([0, 1, 2, 3]));
+    fs.mkdirSync(path.join(dest, '.cache', 'epochs', '1', 'files', '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'workflow-state.md'), 'status: closed\n');
+    fs.writeFileSync(path.join(dest, '.cache', 'epochs', '1', 'manifest.json'), '{"manifest_self_digest":"fixture"}\n');
+    let checked = verifyArchiveComplete(src, dest);
+    assert(checked.ok === false && checked.missing.some(p => p.endsWith('receipt.bin')),
+      '#699: a missing non-md epoch receipt makes archive completeness fail, got ' + JSON.stringify(checked));
+    fs.writeFileSync(path.join(dest, '.cache', 'epochs', '1', 'files', '.cache', 'receipt.bin'), Buffer.from([9, 9, 9, 9]));
+    checked = verifyArchiveComplete(src, dest);
+    assert(checked.ok === false && Array.isArray(checked.mismatched) && checked.mismatched.some(p => p.endsWith('receipt.bin')),
+      '#699: a digest-mismatched epoch receipt makes archive completeness fail, got ' + JSON.stringify(checked));
+    fs.copyFileSync(path.join(src, '.cache', 'epochs', '1', 'files', '.cache', 'receipt.bin'), path.join(dest, '.cache', 'epochs', '1', 'files', '.cache', 'receipt.bin'));
+    checked = verifyArchiveComplete(src, dest);
+    assert(checked.ok === true, '#699: byte-identical recursive epoch archive verifies, got ' + JSON.stringify(checked));
+  } finally {
+    fs.rmSync(src, { recursive: true, force: true });
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+})();
+
+// #699: every archive caller shares one fail-closed success predicate. Only a
+// completed archive or the idempotent source-missing retry is success; every
+// partial, malformed, or absent result is a refusal.
+(function testArchiveSuccessPredicate699() {
+  assert(typeof archiveSucceeded === 'function', '#699: closure contract exports archiveSucceeded');
+  if (typeof archiveSucceeded !== 'function') return;
+  assert(archiveSucceeded({ archived: true }) === true, '#699: archived:true is archive success');
+  assert(archiveSucceeded({ skipped: 'source-missing' }) === true, '#699: source-missing retry is archive success');
+  for (const result of [null, undefined, {}, { archived: false }, { archive_incomplete: true },
+    { snapshot_error: 'invalid' }, { skipped: 'other' }]) {
+    assert(archiveSucceeded(result) === false,
+      '#699: malformed/refused archive result fails closed: ' + JSON.stringify(result));
+  }
+})();
+
+// #699: the canonical epoch-1 planless tuple is positive authority, not a
+// missing-plan error. Archive it directly and prove the live folder is removed
+// only after the shared verifier accepts the complete shape.
+(function testCanonicalPlanlessEpochOneArchive699() {
+  const root = makeTmpRoot();
+  const project = 'issue-69901';
+  const projectDir = path.join(root, 'kaola-workflow', project);
+  try {
+    initGitRepo(root);
+    const anchors = buildClaimAnchors(root, {
+      issue_number: 69901,
+      branch: 'workflow/' + project,
+      claim_ts: '2026-01-01T00:00:00Z',
+      session_marker: 'bundle-finalize-699',
+    });
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project,
+      'status: active', '', '## Planning Evidence', 'plan_hash: none',
+      'decision: none', 'first_node_id: none', 'first_node_role: none', '',
+      '## Epoch Lineage', 'epoch_schema_version: ' + anchors.epoch_schema_version,
+      'claim_repository_id: ' + anchors.claim_repository_id,
+      'claim_identity_digest: ' + anchors.claim_identity_digest,
+      'claim_root_object_format: ' + anchors.claim_root_object_format,
+      'claim_root_base_commit: ' + anchors.claim_root_base_commit,
+      'claim_root_base_tree: ' + anchors.claim_root_base_tree,
+      'claim_root_base_digest: ' + anchors.claim_root_base_digest,
+      'epoch_lineage_id: ' + anchors.epoch_lineage_id, 'plan_epoch: 1',
+      'active_plan_hash: none', 'active_snapshot_manifest_digest: none', '',
+      '## Sink', 'issue_number: 69901', 'branch: workflow/' + project, 'sink: merge',
+      'main_root: ' + root, 'session_marker: bundle-finalize-699',
+      'claim_ts: 2026-01-01T00:00:00Z', '',
+    ].join('\n'));
+    const result = archiveProjectDir(root, project, 'abandoned', '.planless');
+    assert(result && result.archived === true && result.dest
+      && !fs.existsSync(projectDir) && fs.existsSync(result.dest),
+    '#699 canonical planless epoch-1 authority archives successfully, got ' + JSON.stringify(result));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 })();
 
 // ---------------------------------------------------------------------------

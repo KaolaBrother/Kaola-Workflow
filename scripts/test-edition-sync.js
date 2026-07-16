@@ -15,6 +15,15 @@ const read = rel => fs.readFileSync(path.join(REPO, rel), 'utf8');
 
 const FORGES = ['gitlab', 'gitea'];
 
+// Issue #699: replan is a generated rename-normalized aggregator, so one
+// canonical registration must produce both forge ports.
+assert(GENERATED_AGGREGATORS.includes('kaola-workflow-replan.js'),
+  '#699: GENERATED_AGGREGATORS enrolls kaola-workflow-replan.js');
+assert(forgeRel('kaola-workflow-replan.js', 'gitlab') === 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js',
+  '#699: replan maps to the GitLab edition path');
+assert(forgeRel('kaola-workflow-replan.js', 'gitea') === 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-replan.js',
+  '#699: replan maps to the Gitea edition path');
+
 // ---------------------------------------------------------------------------
 // T1: PARITY GREEN — every generated forge aggregator port byte-equals the
 // rename-normalized render of canonical. (The committed tree is in sync.)

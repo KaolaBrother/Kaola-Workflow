@@ -44,6 +44,15 @@ for (const forge of manifest.FORGES) {
     `#407: CLI --hooks ${forge} must equal supportHooks('${forge}')`);
 }
 
+// Issue #699: the manual installer must carry the transaction engine under
+// the correct edition-local filename for every forge.
+assert.ok(manifest.supportScripts('github').includes('kaola-workflow-replan.js'),
+  '#699: GitHub support scripts include canonical replan');
+assert.ok(manifest.supportScripts('gitlab').includes('kaola-gitlab-workflow-replan.js'),
+  '#699: GitLab support scripts include renamed replan port');
+assert.ok(manifest.supportScripts('gitea').includes('kaola-gitea-workflow-replan.js'),
+  '#699: Gitea support scripts include renamed replan port');
+
 // --- 1b. NEW shared script picked up with NO install.sh edit: append a planted base to a COPY of
 //     the manifest module (a fresh require of a temp clone with one extra SUPPORT_SCRIPTS entry) and
 //     assert it appears in every forge's emission under the correct rename. This models "register

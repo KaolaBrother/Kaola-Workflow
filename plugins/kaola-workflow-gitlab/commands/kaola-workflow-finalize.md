@@ -5,6 +5,41 @@ argument-hint: <project name>
 
 # Kaola-Workflow Finalization
 
+## In-progress re-plan control plane
+
+<!-- PIN: replan-finalize -->
+
+This fence outranks every Finalization prerequisite and side effect. Before validation, contractor
+dispatch, archive, closure, roadmap, commit, or sink work, read the project state and transaction
+status. If either reports `replan_in_progress`, the frozen parent remains authoritative and
+Finalization is forbidden. Read-only orientation reports the exact `replan_phase`,
+`transaction_id`, `parent_plan_hash`, `child_plan_hash` (or `none`), and `last_cas_result`.
+
+The single legal mutation while the fence is active is:
+
+```bash
+REPLAN_SCRIPT="./plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js"
+[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kaola-gitlab-workflow-replan.js}"
+[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="$HOME/.claude/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js"
+[ -f "$REPLAN_SCRIPT" ] || { echo "BLOCKED: kaola-gitlab-workflow-replan.js unavailable" >&2; exit 1; }
+node "$REPLAN_SCRIPT" resume --project {project} --json
+```
+
+`decision:ask` remains advisory. If resume returns `replan_planner_dispatch_required`, dispatch
+the genuine `workflow-planner` profile in Re-plan dispatch mode with only repository root, project,
+`transaction_id`, `dispatch_nonce`, profile identity, the exact
+`.cache/replan-planner-packet.json` path, and its reason/source evidence. No role sequence, node
+ids, dependencies, write sets, cardinality, shape, model, or exact DAG fragment may come from the
+orchestrator; that is `planner_control_boundary_violation`. Only the planner writes the seeded
+`workflow-plan.next.md` and `.cache/replan-planner-attestation.json`; then run the same resume
+command. Missing or mismatched proof is `replan_planner_attestation_invalid`.
+
+An invalid child uses the bounded unfrozen child-repair loop with the same planner and verbatim
+validator errors; the main session never repairs the child DAG. At the bound, stop with typed
+evidence—never finalize the parent, start another claim, or route to another path. A verified
+legacy-v1 parent transitions through the same fenced resume path; normal legacy behavior outside a
+transaction remains unchanged.
+
 Finalization proves the workflow is complete and records final metadata. Do not
 repair inline when final validation fails except under the Trivial Inline Edit
 Exception below.

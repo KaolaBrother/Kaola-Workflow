@@ -9,6 +9,8 @@ record a one-line derivation in the node's `.cache` evidence — OPTIONAL, never
 blocks a gate. An axiom may only make you stricter:
 never cite one to skip a typed gate, refusal, or barrier.
 
+<!-- SLOT:nx-replan-control-plane -->
+
 <!-- REGION:command -->
 `/workflow-next` is the thin router for the six phase commands. It owns
 startup, Git/roadmap freshness, project selection, resume detection, and phase
@@ -247,10 +249,12 @@ nothing to resolve and nothing to deliberate.
 3. **Default → adaptive.** No matching path-name keyword and no explicit
    `KAOLA_PATH` → `export KAOLA_PATH=adaptive` and proceed to Step 0a-2. The
    export is the action (it makes Step 0b skip and the adaptive front end fire).
-   Adaptive just runs. There is NO automatic fallback to fast/full — when
-   adaptive cannot proceed the only recourse is inside adaptive (bounded planner
-   repair → discard+restart a fresh adaptive run → stop+ask), per
+   Adaptive just runs. There is NO automatic fallback to fast/full. For a normal
+   fresh-start draft that never froze, the recourse stays inside adaptive (bounded
+   planner repair → discard+restart a fresh adaptive run → stop+ask), per
 <!-- SPLICE:nx-cmd-008 -->
+   This startup fallback is forbidden while `replan_in_progress`; the re-plan fence
+   permits only the edition-local `resume --project {project} --json` mutation.
 
 State the chosen path and one-line reason aloud before Step 0b:
 
@@ -799,9 +803,12 @@ nothing to resolve and nothing to deliberate.
 3. **Default → adaptive.** No matching path-name keyword and no explicit `KAOLA_PATH` →
    `export KAOLA_PATH=adaptive` and proceed to the Adaptive front-end entry section. The
    export is the action (it makes the Startup transaction skip and the adaptive front end
-   fire). Adaptive just runs. There is NO automatic fallback to fast/full — when adaptive
-   cannot proceed the only recourse is inside adaptive (bounded planner repair →
-   discard+restart a fresh adaptive run → stop+ask), per the `kaola-workflow-adapt` skill.
+   fire). Adaptive just runs. There is NO automatic fallback to fast/full. For a normal
+   fresh-start draft that never froze, the recourse stays inside adaptive (bounded planner
+   repair → discard+restart a fresh adaptive run → stop+ask), per the
+   `kaola-workflow-adapt` skill. This startup fallback is forbidden while
+   `replan_in_progress`; the re-plan fence permits only the edition-local
+   `resume --project {project} --json` mutation.
 
 State the chosen path and one-line reason aloud before the Startup transaction:
 

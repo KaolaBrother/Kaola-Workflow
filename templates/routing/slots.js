@@ -17,6 +17,89 @@
 // forge branches already carry their forge basenames; the github branch is the
 // canonical namespace).
 
+const REPLAN_SCRIPTS = {
+  github: 'kaola-workflow-replan.js',
+  gitlab: 'kaola-gitlab-workflow-replan.js',
+  gitea: 'kaola-gitea-workflow-replan.js',
+};
+
+const REPLAN_LOCAL_DIRS = {
+  github: './plugins/kaola-workflow/scripts',
+  gitlab: './plugins/kaola-workflow-gitlab/scripts',
+  gitea: './plugins/kaola-workflow-gitea/scripts',
+};
+
+const REPLAN_CACHE_PACKAGES = {
+  github: 'kaola-workflow',
+  gitlab: 'kaola-workflow-gitlab',
+  gitea: 'kaola-workflow-gitea',
+};
+
+function replanResolver(surfaceType, forge) {
+  const script = REPLAN_SCRIPTS[forge];
+  if (surfaceType === 'command') {
+    const repoCandidate = forge === 'github' ? `./scripts/${script}` : `${REPLAN_LOCAL_DIRS[forge]}/${script}`;
+    const pluginRootCandidate = `\${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/${script}}`;
+    const installCandidate = `$HOME/.claude/${REPLAN_CACHE_PACKAGES[forge]}/scripts/${script}`;
+    return `REPLAN_SCRIPT=""\nfor _p in "${repoCandidate}" "${pluginRootCandidate}" "${installCandidate}"; do\n  [ -f "$_p" ] && { REPLAN_SCRIPT="$_p"; break; }\ndone\n[ -n "$REPLAN_SCRIPT" ] || { echo "BLOCKED: ${script} unavailable" >&2; exit 1; }`;
+  }
+  const localCandidate = `${REPLAN_LOCAL_DIRS[forge]}/${script}`;
+  const packageName = REPLAN_CACHE_PACKAGES[forge];
+  return `REPLAN_SCRIPT="${localCandidate}"\nif [ ! -f "$REPLAN_SCRIPT" ]; then\n  REPLAN_SCRIPT="$(find "$HOME/.codex/plugins/cache" -path '*/${packageName}/*/scripts/${script}' -print -quit 2>/dev/null)"\nfi\n[ -n "$REPLAN_SCRIPT" ] && [ -f "$REPLAN_SCRIPT" ] || { echo "BLOCKED: ${script} unavailable" >&2; exit 1; }`;
+}
+
+function replanControlPlane(marker, surfaceType, forge) {
+  const script = REPLAN_SCRIPTS[forge];
+  return `## In-progress re-plan control plane
+
+<!-- PIN: ${marker} -->
+
+This fence outranks every normal startup, mirror, scheduler, handoff, validation, and
+finalization route. Before any such action, read the project state and transaction status. When
+either reports \`replan_in_progress\`, do not mutate or replace the frozen parent
+\`workflow-plan.md\`. Read-only orientation must report the exact \`replan_phase\`,
+\`transaction_id\`, \`parent_plan_hash\`, \`child_plan_hash\` (or \`none\`), and
+\`last_cas_result\`; never reconstruct them from memory.
+
+The single legal mutation while the fence is active is the edition-local re-plan resume command:
+
+\`\`\`bash
+${replanResolver(surfaceType, forge)}
+node "$REPLAN_SCRIPT" resume --project {project} --json
+\`\`\`
+
+The installed aggregator is \`${script}\`. Do not run mirror/open/record/close/run-chains,
+ordinary adaptive handoff, claim archive, task-mirror refresh, or finalize while an intermediate
+phase remains. \`decision:ask\` remains advisory and never adds a pause or gate.
+
+If resume returns \`replan_planner_dispatch_required\`, dispatch the genuine
+\`workflow-planner\` profile in its Re-plan dispatch mode with an isolated brief containing only
+the repository root, project, \`transaction_id\`, \`dispatch_nonce\`, profile identity, the exact
+\`.cache/replan-planner-packet.json\` path, and the packet's reason/source evidence. No role
+sequence, node ids, dependencies, write sets, cardinality, shape, model, or exact DAG fragment may
+be supplied by the orchestrator; an attempt earns \`planner_control_boundary_violation\`. The
+planner alone writes the seeded \`workflow-plan.next.md\` and
+\`.cache/replan-planner-attestation.json\`, then returns through this same resume command. Missing,
+stale, replayed, or mismatched dispatch proof/attestation is
+\`replan_planner_attestation_invalid\`; main must never synthesize either artifact.
+
+An invalid unfrozen child uses the bounded unfrozen child-repair loop: re-dispatch the same planner
+with the verbatim validator errors and its own child draft, then resume. The main session never
+repairs the child DAG. At the retry bound, stop with the typed evidence; do not create a competing
+plan, restart the claim, or route to another path. A verified legacy-v1 parent follows this same
+transaction into a schema-2 child; legacy normal startup behavior otherwise stays unchanged.`;
+}
+
+function replanSlot(marker) {
+  const out = { command: {}, skill: {} };
+  for (const surfaceType of Object.keys(out)) {
+    for (const forge of Object.keys(REPLAN_SCRIPTS)) {
+      out[surfaceType][forge] = replanControlPlane(marker, surfaceType, forge);
+    }
+  }
+  return out;
+}
+
 const SLOTS = {
   // ---- plan-run --------------------------------------------------------
   'pr-frontmatter': {
@@ -47,10 +130,12 @@ const SLOTS = {
       gitea: "ACTIVE_WORKTREE_PATH=\"$(node -e \"try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}\" 2>/dev/null)\" || true\n[ -z \"$ACTIVE_WORKTREE_PATH\" ] && ACTIVE_WORKTREE_PATH=\"$(pwd)\"\nKAOLA_SCRIPTS=\"plugins/kaola-workflow-gitea/scripts\"\nif [ ! -f \"$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js\" ]; then\n  KAOLA_SCRIPTS=\"$(dirname \"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow-gitea/*/scripts/kaola-gitea-workflow-adaptive-node.js' -print -quit 2>/dev/null)\")\"\nfi",
     },
   },
+  'pr-replan-control-plane': replanSlot('replan-plan-run'),
 
   // ---- next (frontmatter 2-shape + H1; both forge-invariant) -----------
   "nx-frontmatter": {"command":"---\ndescription: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.\nargument-hint: (optional project name or task description)\n---","skill":"---\nname: kaola-workflow-next\ndescription: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and phase artifacts.\n---"},
   "nx-h1": {"command":"# Workflow Next - thin router","skill":"# Kaola-Workflow Next"},
+  'nx-replan-control-plane': replanSlot('replan-next'),
 };
 
 const SPLICES = {

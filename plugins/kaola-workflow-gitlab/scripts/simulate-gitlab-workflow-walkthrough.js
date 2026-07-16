@@ -311,6 +311,9 @@ function testGitlabAdaptive() {
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-adaptive-'));
   try {
+    // #699: claim requires a resolvable claim-anchor git root (buildClaimAnchors); a bare
+    // temp dir refuses claim_root_unavailable with empty stdout before any JSON is emitted.
+    glInitGitRepo(tmp);
     // #538: adaptive is unconditionally legal — claim always acquires (no switch).
     fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
     let r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-901', '--workflowPath', 'adaptive'], tmp).stdout);
@@ -1367,6 +1370,7 @@ function testGitlabBundleSingleIssueStateHasNoBundleFields() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-single-'));
   fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
   try {
+    glInitGitRepo(tmp);
     glPlantRoadmapIssue(tmp, 601);
     const r = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '601'],
       { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
@@ -1670,10 +1674,8 @@ function testGitlabFinalizeArchiveVerifiesBeforeDelete() {
     );
     assert.strictEqual(result.archive_incomplete, true,
       'gitlab #426: archiveProjectDir must return archive_incomplete:true, got: ' + JSON.stringify(result));
-    assert.ok(
-      Array.isArray(result.missing) && result.missing.includes('workflow-state.md'),
-      'gitlab #426: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing)
-    );
+    assert.strictEqual(result.snapshot_error, 'state_missing',
+      'gitlab #426: malformed source (no workflow-state.md) must fail the epoch-authority preflight before copy/delete, got: ' + JSON.stringify(result));
     console.log('testGitlabFinalizeArchiveVerifiesBeforeDelete: PASSED');
   } finally {
     try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}

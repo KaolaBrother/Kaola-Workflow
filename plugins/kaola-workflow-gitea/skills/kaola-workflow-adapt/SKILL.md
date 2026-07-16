@@ -5,6 +5,43 @@ description: Use when authoring an adaptive workflow-plan.md — freely compose 
 
 # Skill: kaola-workflow-adapt
 
+## In-progress re-plan control plane
+
+<!-- PIN: replan-adapt -->
+
+This fence outranks normal adaptive startup and authoring. Before any claim, handoff, or planner
+startup action, read the project state and transaction status. When either reports
+`replan_in_progress`, keep the frozen parent `workflow-plan.md` authoritative. Read-only
+orientation reports the exact `replan_phase`, `transaction_id`, `parent_plan_hash`,
+`child_plan_hash` (or `none`), and `last_cas_result`; never reconstruct them from memory.
+
+The single legal mutation while the fence is active is:
+
+```bash
+REPLAN_SCRIPT="plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-replan.js"
+if [ ! -f "$REPLAN_SCRIPT" ]; then
+  REPLAN_SCRIPT="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitea/*/scripts/kaola-gitea-workflow-replan.js' -print -quit 2>/dev/null)"
+fi
+[ -n "$REPLAN_SCRIPT" ] && [ -f "$REPLAN_SCRIPT" ] || { echo "BLOCKED: kaola-gitea-workflow-replan.js unavailable" >&2; exit 1; }
+node "$REPLAN_SCRIPT" resume --project {project} --json
+```
+
+Do not run normal startup, ordinary adaptive handoff, scheduler, task-mirror refresh, archive, or
+finalize during an intermediate phase. `decision:ask` remains advisory and adds no gate. If resume
+returns `replan_planner_dispatch_required`, dispatch the genuine `workflow-planner` profile in its
+Re-plan dispatch mode with only the repository root, project, `transaction_id`, `dispatch_nonce`,
+profile identity, the exact `.cache/replan-planner-packet.json` path, and its reason/source
+evidence. No role sequence, node ids, dependencies, write sets, cardinality, shape, model, or exact
+DAG fragment may come from the orchestrator; that is
+`planner_control_boundary_violation`. The planner alone writes the seeded
+`workflow-plan.next.md` plus `.cache/replan-planner-attestation.json`, and main then invokes the
+same resume command. Missing or mismatched proof is `replan_planner_attestation_invalid`.
+
+An invalid child uses the bounded unfrozen child-repair loop with the same planner and verbatim
+validator errors; the main session never repairs the child DAG. At the bound, stop with typed
+evidence—never start another claim or path. A verified legacy-v1 parent enters its schema-2 child
+through this transaction; normal startup and other legacy behavior remain unchanged.
+
 Phase-0 of the adaptive path: the agent **freely authors** a task-shaped DAG for *this*
 issue — which roles, how many, in what shape — into a `workflow-plan.md`. There is no
 template library and no knob-binding ceremony. Mirror of `commands/kaola-workflow-adapt.md`
@@ -139,7 +176,7 @@ the example above models both.
 
 ### Question-shaped & bug-shaped issues
 
-When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, dispatched concurrently) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping run, then RE-PLANS as a fresh run (new `plan_hash`, no in-place thaw). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
+When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, dispatched concurrently) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping epoch, then continues through the claim-preserving re-plan control plane into one immutable child epoch (new `plan_hash`, parent remains frozen). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 
@@ -222,7 +259,7 @@ and freeze). The claim (at repo-root — the adaptive claim provisions a worktre
 
 - **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-gitea-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-gitea-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. NEVER downgrade to fast/full — there is no automatic fallback between paths; the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-gitea-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. This fallback applies only to normal startup while the draft is unfrozen; it is forbidden under `replan_in_progress`. NEVER downgrade to fast/full — there is no automatic fallback between paths; the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
 
 After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
 

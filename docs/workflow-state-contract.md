@@ -84,6 +84,37 @@ here for the full contract.
     key: five are allowed and the sixth refuses as `repair_limit_reached`. Canonical routing remains
     in the journal; `findings-route.json` is only a regenerable projection. See `docs/api.md` §
     Authoritative review journal and direct repair.
+  - `replan-source.json` (#699 / D-699-01) — a schema-2 `repair_outcome` envelope written
+    mechanically by the direct-repair runtime before it returns `repair_requires_replan`. It binds
+    the exact failed, lifecycle-settled, unconsumed attempt; typed reason and producer slice; parent
+    plan/lineage/claim root; journal/attempt/evidence/candidate digests; and a canonical
+    `outcome_digest`. It is never an operator-authored bootstrap. An identical retry reuses the
+    authority; a competing semantic payload refuses `replan_source_conflict`.
+  - `replan-transaction.json` (#699 / D-699-01) — the authoritative claim-scoped re-plan transaction.
+    It binds the frozen parent, typed review or no-review diagnosis source, claim/root/epoch identity,
+    candidate/inherited frontier, four CAS observations, the pre-dispatch snapshot-authority
+    projection, liveness budget, planner packet/attestation, frozen child, immutable full snapshot,
+    41-family durable-write inventory, and ordered activation journal. Presence of an incomplete transaction fences
+    every ordinary scheduler, node mutation, handoff, task-mirror refresh, archive, and Finalization
+    path. `kaola-workflow-replan.js resume --project <project>` is the only legal mutation.
+  - `replan-planner-packet.json`, `replan-planner-attestation.json`, and `workflow-plan.next.md` —
+    the planner-only child-authoring channel. The harness seeds the exact child path; the main session
+    supplies evidence and reason only. The packet carries the exact `snapshot_authority_projection`
+    and its digest; a genuine `workflow-planner` dispatch writes the semantic child and attestation,
+    and the child copies that digest into its historically named `parent_snapshot_manifest_digest`
+    field. None of these artifacts replaces the active frozen parent before journaled activation.
+  - `epochs/<parent-plan-epoch>/manifest.json` plus `epochs/<parent-plan-epoch>/files/**` — an
+    immutable, recursively verified copy of the complete parent proof tree. The snapshot includes the
+    exact plan/Ledger/state, authoritative review journal, every attempt's complete `rebind` ledger,
+    findings, node evidence, contexts, receipts, certifiers, validation vectors, child packet and
+    attestation, task mirror, and dispatch provenance. Its schema-2 manifest re-derives the earlier
+    projection and separately seals the exact child/attestation, sorted file rows, manifest
+    self-digest, and exact manifest bytes. Historical schema-1 `pending` children are accepted only
+    when every external seal proves `legacy_external_binding`. Epoch snapshots are never epoch-local
+    cleanup targets and every epoch remains in the final archive.
+  - `epoch-consent-extensions.json` — the hash-chained claim-level liveness extension ledger. Each
+    verified entry binds one user-turn reference and increases `authorized_epoch_ceiling` by exactly
+    one. Hand-edited state cannot create capacity; the cached ceiling must equal the verified chain.
   - `running-set.json` — tracks which nodes are currently in the running set
     (`{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`; per-node fields: `id`, `role`, `kind`,
     `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at
@@ -252,8 +283,9 @@ here for the full contract.
   to the #324 rewrites, the archived `workflow-state.md` gets `next_command`/`next_skill` rewritten
   to `none (archived)` (an archived run must not advertise an active resume command — an adaptive
   archive would otherwise keep `/kaola-workflow-plan-run {project}` forever); the Planning Evidence
-  `plan_hash` refreshed from the FINAL `workflow-plan.md` frozen `<!-- plan_hash: … -->` comment (a
-  mid-run re-freeze re-stamps only the plan file, leaving the state on the claim-time hash); and the
+  `plan_hash` refreshed from the FINAL `workflow-plan.md` frozen `<!-- plan_hash: … -->` comment
+  (schema-2 re-plan activation updates the plan and state through its journal; this archive refresh
+  remains the backstop for verified legacy state whose hash pointer predates that contract); and the
   `## Last Updated` line refreshed to the archive timestamp. After the rename, a compact `## Closure`
   block is appended recording `archived_at`, `issue_disposition`, `claim_label_removed`,
   `worktree_removed`, `closure_invariants`, and (issue #653 / D-653-01) `claim_planner_attested` /
@@ -442,6 +474,154 @@ check). It is deliberately NOT `local-fallback-*`: inline sink execution is the 
 not a fallback. This row is distinct from the Finalization-phase mechanical bookkeeping, which is
 delegated to the `contractor` and attested separately via the closure receipt's
 `finalize_contractor_attested` field.
+
+## Epoch Lineage and Re-plan State (schema 2; #699 / D-699-01)
+
+Fresh claims persist an `## Epoch Lineage` block in `workflow-state.md`. It is claim-scoped rather
+than plan-scoped: a child DAG may change `active_plan_hash` and `plan_epoch`, but it cannot change
+the identity/root fields or reset the review-replan budget.
+
+Epoch 1 has exactly two legal active-authority representations:
+
+| Form | State authority | Filesystem authority |
+|---|---|---|
+| `planless` | `plan_epoch: 1`; `active_plan_hash`, Planning Evidence `plan_hash`, `first_node_id`, and `first_node_role` are all `none`; no active snapshot | `workflow-plan.md` absent and zero numeric epoch directories |
+| `planned` | `plan_epoch: 1`; `active_plan_hash` equals Planning Evidence `plan_hash`; first-node id/role equal the frozen plan's first row; no active snapshot | exactly one valid frozen `workflow-plan.md`; task mirror, when present, names the same source hash |
+
+Claim writes only `planless`; initial adaptive handoff publishes `planned` by replacing the active
+hash and complete Planning Evidence tuple in one state-file operation. A mixed tuple refuses rather
+than guessing which half is current. Epoch activation likewise replaces the complete child tuple and
+verifies the task mirror, preventing a parent's first-node metadata from surviving child promotion.
+
+| Field | Contract |
+|---|---|
+| `epoch_schema_version` | `2` for the claim/epoch contract. Missing on a verified legacy v1 parent is handled only by the explicit compatibility path. |
+| `claim_repository_id` / `claim_identity_digest` | Canonical claim identity over repository, sorted issues, primary issue/bundle, closure policy, branch, resolved authority-root path (the repo root when offline/no worktree), claim timestamp, and session marker. The user-facing offline `worktree_path` remains absent/empty. |
+| `claim_root_object_format` / `claim_root_base_commit` / `claim_root_base_tree` / `claim_root_base_digest` | Immutable claim-time Git root. With history, commit/tree are exact Git objects. In a no-history repo, commit is all zeroes at the object-id width and tree is the locally recomputed canonical empty-tree id. Later epochs never derive authority from mutable HEAD, main, a moving merge-base, or the current DAG. |
+| `epoch_lineage_id` | SHA-256 of schema version, claim identity digest, and claim-root digest. Plan hashes, gate ids, node ids, candidate digests, and epoch ordinal are deliberately excluded. |
+| `plan_epoch` / `active_plan_hash` | Current authoritative child ordinal and frozen hash. Both advance only at committed activation. |
+| `inherited_frontier_digest` / `inherited_frontier_classes` | Current candidate-derived inherited code/security frontier and validation obligations, not a planner-authored assertion. |
+| `automatic_review_replans` / `authorized_epoch_ceiling` | Committed claim-level review-driven transition count and verified ceiling. The base ceiling is 2; the state value must agree with the hash-chained consent ledger. |
+| `case_b_exemption_consumed` | Whether the one strictly proven diagnosis-to-build zero-cost transition has already been used. |
+| `replan_status` | `none`, `in_progress`, `candidate_changed`, or `consent_halt`. |
+| `replan_transaction_id` / `replan_phase` | Active transaction identity and `none`, `prepared`, `planner_pending`, `child_frozen`, `parent_archived`, or `committed`. |
+| `active_snapshot_manifest_digest` | Exact manifest digest of the most recently archived parent epoch, or `none` before the first transition. |
+
+**Current-epoch verification (independent of any re-plan transaction).**
+`verifyCurrentEpochAuthority` is the one shared check every prepare, resume, archive, finalize, and
+watch caller composes for the *active* epoch. It separates three authority tiers so legal execution
+progress is never mistaken for authoring tamper:
+
+| Tier | Surface | Check | Typed refusal |
+|---|---|---|---|
+| Epoch envelope | `epoch_schema_version`, `epoch_lineage_id`, and their identity/root-digest basis | Recomputed and compared; a fully absent envelope reads as pre-epoch legacy state | `state_epoch_schema_missing`, `state_epoch_schema_unsupported`, `state_epoch_lineage_missing`, `state_epoch_lineage_invalid`, `state_epoch_lineage_basis_invalid`, `state_epoch_lineage_mismatch` |
+| Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs` | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
+| Legal runtime progress | `## Node Ledger`, `## Required Agent Compliance`, `workflow-tasks.json` mirror | Parsed and consistency-checked, not byte-compared; closed-node evidence and dependency-consistent status required | `state_ledger_authority_invalid`, `state_ledger_progress_invalid`, `state_compliance_authority_invalid`, `state_compliance_progress_invalid`, `state_task_mirror_mismatch` |
+
+A stale first-node tuple refuses `state_planning_evidence_stale_first_node`; a plan-declared epoch
+position that disagrees with `plan_epoch` refuses `state_epoch_position_mismatch`; and, while a
+transaction is fenced, a mismatched committed receipt refuses `state_epoch_receipt_mismatch`.
+`kaola-workflow-claim.js` composes this result with `verifyAllEpochSnapshots` as
+`verifyArchiveEpochAuthority`, run once before archive and again against the archived destination and
+closure receipt.
+
+`KAOLA_WORKFLOW_OFFLINE=1` has precedence over `KAOLA_WORKTREE_NATIVE=0|1`: offline claims create
+neither a worktree nor an in-place feature branch. The no-history zero/empty pair is valid only in an
+initialized repository that still has no history; a nonzero sentinel digit, wrong empty-tree id,
+object-format mismatch, history appearing after claim, or missing Git root fails closed. Candidate
+observation uses an empty base so every present non-workflow file remains inherited candidate work.
+
+The active `workflow-state.md`, claim pointer/label, branch, worktree, and product candidate are not
+moved into `.cache/epochs/`. The frozen parent `workflow-plan.md` and its Ledger remain byte-identical
+and authoritative through `parent_archived`; only promotion of an already frozen, attested child
+changes the active plan. `workflow-planner` exclusively authors `workflow-plan.next.md`. The main
+orchestrator passes repository/project, typed reason/source evidence, bindings, and the exact child
+path; it must not provide nodes, roles, dependencies, write sets, shape, or model.
+
+The transaction's four CAS seams are `prepare`, `pre_freeze`, `pre_snapshot`, and
+`pre_activation`. Each recomputes and compares the same candidate, claim-root, and inherited-frontier
+tuple. `replan_candidate_changed` before promotion keeps the parent authoritative and fenced, records
+the old attempt, and requires a fresh planner child without incrementing `plan_epoch` or
+`automatic_review_replans`. The conformance matrix covers all 12 seam/axis pairs and permits no
+epoch, counter, dispatch, snapshot, task-mirror, Case-B, or activation effect beyond the durable
+mismatch receipt.
+
+Activation is a journaled multi-file roll-forward, not one filesystem-atomic write. The prefix order
+is `child_plan_promoted`, `child_state_promoted_fenced`, `task_mirror_promoted`,
+`active_cache_cleaned`, `transaction_committed`, then `state_unfenced`. A crash after any prefix is
+recovered by the same command:
+
+```bash
+node scripts/kaola-workflow-replan.js resume --project <project> --json
+```
+
+While any prefix is incomplete, `orient` may report the exact phase/hashes but every ordinary
+scheduler, close/reopen/repair/revert, normal handoff, task-mirror refresh, archive, and Finalization
+path refuses `replan_in_progress` (or a narrower integrity refusal). Resume is the only legal mutation.
+After plan promotion, recovery rolls forward; it never silently restores the parent or clears the
+fence around an unverified prefix.
+
+The inherited frontier remains a validation obligation, not harmless baseline. Schema-2 child Meta
+binds the parent, lineage, claim root, frontier, source evidence, planner dispatch, and designated G4
+code/security certifiers. A nonempty inherited frontier keeps a reachable virtual producer plus real
+role-specific certifier receipts bound to the relevant final digest, even when the child declares no
+new writer. Later relevant mutation stales those receipts.
+
+Every committed parent epoch remains in `.cache/epochs/<ordinal>/` and the final archive. Before
+planner dispatch, the transaction freezes `snapshot_authority_projection` over stable parent
+plan/task/ledger/state, typed source, and entry CAS authority; its digest is what the schema-2 child
+field `parent_snapshot_manifest_digest` means. The later full snapshot manifest embeds/recomputes
+that projection and separately seals the exact child, attestation, complete file index,
+`manifest_self_digest`, and exact manifest-file digest. It also preserves the complete review
+journal and every attempt's `rebind` ledger (including an explicit empty array), findings, evidence,
+contexts, receipts, certifiers, validation vectors, task mirror, and dispatch provenance.
+Digest-proven cleanup may remove only snapshotted epoch-local active caches. It never removes
+`epochs/**`, the active transaction, consent ledger, claim/lineage anchors, or dispatch log.
+`verify-snapshots` and Finalization recursively verify both seals, epoch sequence,
+lineage/root/state bindings, manifest contents, and the consent ceiling before closure.
+
+Crash coverage is state contract, not an implementation detail. `REPLAN_DURABLE_WRITE_LABELS`
+contains 41 ordered base families. Snapshot-stage file, cleanup-intent, and cache-unlink mutations
+append deterministic `<sorted-ordinal>:<path-digest>` suffixes; candidate-change transaction/state
+receipts append `<cas-seam>`. Durable helpers fire after their operations. Tests lock the full
+inventory/dynamic grammar and exercise every discovered main-path prefix for one-resume convergence
+and an exact no-effect second resume; they do not yet directly execute every registered
+consent/failure side-path label.
+
+Two automatic review-driven replacement epochs may commit for one lineage. A further automatic
+attempt writes a durable consent halt before planner dispatch. Each accepted user action adds exactly
+one hash-chained ceiling slot; labels, issue prose, or a hand-edited state line do not count. A
+one-shot diagnosis-to-build transition is a typed no-review source: neither a review journal nor a
+repair-outcome file may exist; the parent must be complete and bind exact schema-2
+`diagnosis_complete` root-cause, falsified-alternatives, acceptance-contract, and recommendation
+artifacts; all writers must be limited to those artifact paths; and the child must cite the exact
+proof and recommendation digests. A second use, untyped/incomplete evidence, a product/config/test
+writer, missing citation, or any review-driven reason consumes the normal budget or refuses.
+
+Legacy v1 state is never silently upgraded in place. A verified v1 parent may complete under its
+existing recovery contract. Its only route to v2 is the explicit compatibility transaction: prove a
+corroborated immutable claim root, preserve exact v1 plan/state/journal/evidence/rebind bytes, derive
+the inherited frontier against that root, dispatch a fresh planner, and snapshot the v1 authority
+before activating a schema-2 child. Missing or ambiguous legacy proof refuses
+`legacy_claim_root_unprovable`. A historical schema-1 snapshot whose child field remains `pending`
+is accepted only when the immutable manifest self/exact digests, copied child row, committed
+transaction child, planner attestation, promoted plan, and descendant state all agree; that proven
+read-only result is `legacy_external_binding`. Any missing seal refuses
+`legacy_snapshot_binding_unsealed`; new schema-2 commits cannot use this compatibility branch.
+
+Archive callers are fail-closed state consumers. Only `archived:true` and the idempotent
+`skipped:"source-missing"` result satisfy `archiveSucceeded`; every other finalize, release, merged
+watch, or closed watch result stops before roadmap, issue/label, worktree/branch, receipt, or success
+side effects. `epoch_lineage_preserved` is derived only after successful archive and recursive
+snapshot verification.
+
+**Verification status:** this is the normative schema-2 contract, not a claim that the current
+candidate has completed all runtime certification. The versioned-authority engine and current-epoch
+authority split above are implemented, and focused claim/bundle/handoff/node/re-plan, resume, sync,
+and forbidden-token checks are green. The lifecycle/publication caller repair and the packaged-edition
+fixture repair are separate, still-in-progress write surfaces; integrated PASS is withheld until the
+named certifiers and the three read-only falsification nodes each record a pass. The project's Node
+Ledger and per-node gate evidence are the current source of truth, not this paragraph.
 
 ## Bundle Project State Fields (issue #328)
 

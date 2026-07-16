@@ -503,6 +503,7 @@ function testWatchMrAbandonedClosureInvariantsClean() {
 function testGitlabClaimReclaimsStatelessOrphanDir() {
   const root = tempRoot('kw-gl-claim-orphan-');
   try {
+    initGitRepo(root);
     // Positive: orphan dir with no state file
     const orphanDir = path.join(root, 'kaola-workflow', 'issue-888');
     fs.mkdirSync(orphanDir, { recursive: true });
@@ -1060,6 +1061,7 @@ withForge({
   }
 }, () => {
   const root = tempRoot('kw-gl-claim-');
+  initGitRepo(root);
   const result = claim.claimExplicitTarget(root, { targetIssue: 23 });
   assert.strictEqual(result.status, 'acquired');
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'issue-23', 'workflow-state.md'), 'utf8');
@@ -2487,6 +2489,7 @@ withForge({
 {
   const root = tempRoot('kw-gl-t5-offline-bypass-');
   try {
+    initGitRepo(root);
     const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapDir, { recursive: true });
     // Plant roadmap entry for issue 202 so classifier finds local evidence (not target_unverified)
@@ -4930,6 +4933,197 @@ function testGitlabBoundary2FetchRetry507() {
   console.log('testGitlabBoundary2FetchRetry507 (#507/#511/#519): PASSED');
 }
 
+function testGitlabReplanEditionContract699() {
+  const repoRoot = path.resolve(gitlabPluginRoot, '..', '..');
+  const replanScript = path.join(__dirname, 'kaola-gitlab-workflow-replan.js');
+  const adaptiveNodeScript = path.join(__dirname, 'kaola-gitlab-workflow-adaptive-node.js');
+  const handoffScript = path.join(__dirname, 'kaola-gitlab-workflow-adaptive-handoff.js');
+  const schema = require('./kaola-workflow-adaptive-schema');
+  const replan = require(replanScript);
+  const adaptiveNode = require(adaptiveNodeScript);
+  const handoff = require(handoffScript);
+  const manifest = require(path.join(repoRoot, 'scripts', 'kaola-workflow-install-manifest.js'));
+  const parseLast = run => JSON.parse(String(run.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+
+  assert.deepStrictEqual(manifest.supportScripts('gitlab').filter(name => /workflow-replan\.js$/.test(name)),
+    ['kaola-gitlab-workflow-replan.js'],
+    'GitLab re-plan smoke: manifest must install exactly the renamed aggregator');
+  assert.deepStrictEqual(schema.REPLAN_PHASES,
+    ['prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed']);
+  assert.deepStrictEqual(schema.REPLAN_STATUSES,
+    ['none', 'in_progress', 'candidate_changed', 'consent_halt']);
+  assert.deepStrictEqual(schema.REPLAN_CAS_SEAMS,
+    ['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation']);
+
+  const missingCli = spawnSync(process.execPath,
+    [replanScript, 'status', '--project', 'n5-missing-gitlab-smoke', '--json'],
+    { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  assert.notStrictEqual(missingCli.status, 0);
+  assert.strictEqual(parseLast(missingCli).reason, 'replan_authority_path_invalid',
+    'GitLab re-plan smoke: renamed aggregator must execute its typed missing-authority refusal');
+
+  // R6-699-03: buildPlannerPacket reads transaction.snapshot.{authority_projection,authority_digest},
+  // so the fixture transaction must carry a real projection built the way prepareReplan does (via the
+  // exported buildSnapshotAuthorityProjection) and its canonical digest, not a hand-typed placeholder.
+  const n5Transaction = {
+    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
+    parent: {
+      claim_identity: { repository_id: 'repo', worktree_path: repoRoot },
+      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+      plan_epoch: 1, plan_hash: '3'.repeat(64),
+      plan_digest: schema.sha256Hex(Buffer.from('n5-gitlab-plan')),
+      task_mirror_exact_digest: schema.sha256Hex(Buffer.from('n5-gitlab-task-mirror')),
+      ledger_digest: schema.sha256Hex(Buffer.from('n5-gitlab-ledger')),
+      state_authority_digest: schema.sha256Hex(Buffer.from('n5-gitlab-state-authority')),
+    },
+    epoch_lineage_id: '4'.repeat(64),
+    source: {
+      source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
+      source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
+      inherited_frontier_classes: ['code'], validation_obligations: [],
+      journal_digest: schema.sha256Hex(Buffer.from('n5-gitlab-journal')),
+    },
+    cas: { prepare: { candidate_digest: '6'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+      inherited_frontier_digest: '7'.repeat(64) } },
+    budget: {
+      count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
+      case_b_proof: null, consent_ledger_digest: '9'.repeat(64),
+    },
+    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-n5' },
+  };
+  n5Transaction.snapshot = {
+    authority_projection: replan.buildSnapshotAuthorityProjection(n5Transaction),
+  };
+  n5Transaction.snapshot.authority_digest = schema.sha256Canonical(n5Transaction.snapshot.authority_projection);
+  const packet = replan.buildPlannerPacket({ project: 'issue-n5-gitlab' }, n5Transaction);
+  const packetKeys = new Set();
+  (function collect(value) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) return value.forEach(collect);
+    for (const [key, child] of Object.entries(value)) { packetKeys.add(key); collect(child); }
+  })(packet);
+  for (const forbiddenKey of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
+    'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
+    assert(!packetKeys.has(forbiddenKey),
+      'GitLab re-plan smoke: planner packet must omit main-authored DAG key ' + forbiddenKey);
+  }
+  assert.strictEqual(packet.child_output_path, 'workflow-plan.next.md');
+
+  const childPath = path.join(os.tmpdir(), 'kw-n5-gitlab-attestation', 'workflow-plan.next.md');
+  let unattestedWrites = 0;
+  const unattested = handoff.runReplanHandoff({
+    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: 'a'.repeat(64), child_path: childPath,
+      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
+    },
+    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
+    writeFile: () => { unattestedWrites++; },
+  });
+  assert.strictEqual(unattested.reason, 'replan_child_authority_unverified');
+  assert.strictEqual(unattestedWrites, 0,
+    'GitLab re-plan smoke: missing planner attestation must refuse before writing');
+
+  const orientation = adaptiveNode.replanOrientation({
+    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
+    legal_mutation: 'replan resume', transaction: {
+      transaction_id: 'a'.repeat(64), phase: 'planner_pending',
+      parent: { plan_hash: 'b'.repeat(64) }, child: {}, cas: {},
+    },
+  }, 'issue-n5-gitlab');
+  assert.strictEqual(orientation.resume_command,
+    'node scripts/kaola-gitlab-workflow-replan.js resume --project issue-n5-gitlab --json');
+
+  const fenceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-gitlab-fence-')));
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: fenceRoot, encoding: 'utf8' });
+    const project = 'issue-n5-gitlab-fence';
+    const projectDir = path.join(fenceRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const stateBytes = Buffer.from([
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Epoch Lineage', 'replan_status: in_progress', 'replan_phase: planner_pending',
+      'replan_transaction_id: ' + 'c'.repeat(64), '',
+    ].join('\n'));
+    const planBytes = Buffer.from('# deliberately invalid frozen parent\n');
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), stateBytes);
+    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), planBytes);
+    fs.writeFileSync(path.join(cacheDir, 'replan-transaction.json'), '{}\n');
+    const beforeCache = new Map(fs.readdirSync(cacheDir).map(name =>
+      [name, fs.readFileSync(path.join(cacheDir, name))]));
+    const calls = [
+      [adaptiveNodeScript, ['open-next', '--project', project, '--json']],
+      [handoffScript, ['--project', project, '--json']],
+      [planValidatorScript, [path.join(projectDir, 'workflow-plan.md'), '--finalize-check', '--json']],
+      [claimScript, ['finalize', '--project', project, '--json']],
+    ];
+    for (const [script, args] of calls) {
+      const run = spawnSync(process.execPath, [script, ...args], {
+        cwd: fenceRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      });
+      assert.notStrictEqual(run.status, 0,
+        'GitLab re-plan smoke: half-transition must refuse ' + path.basename(script));
+      assert.strictEqual(parseLast(run).reason, 'replan_transaction_invalid');
+    }
+    assert(fs.readFileSync(path.join(projectDir, 'workflow-state.md')).equals(stateBytes));
+    assert(fs.readFileSync(path.join(projectDir, 'workflow-plan.md')).equals(planBytes));
+    assert.deepStrictEqual(fs.readdirSync(cacheDir).sort(), [...beforeCache.keys()].sort(),
+      'GitLab re-plan smoke: half-transition refusals must not add cache side effects');
+    for (const [name, bytes] of beforeCache) {
+      assert(fs.readFileSync(path.join(cacheDir, name)).equals(bytes),
+        'GitLab re-plan smoke: half-transition refusal mutated cache file ' + name);
+    }
+    assert(!fs.existsSync(path.join(cacheDir, 'scheduler.lock'))
+        && !fs.existsSync(path.join(cacheDir, 'orient-envelope.json'))
+        && !fs.existsSync(path.join(fenceRoot, 'kaola-workflow', 'archive')),
+    'GitLab re-plan smoke: scheduler/finalize fence must create no lock, envelope, or archive');
+  } finally { fs.rmSync(fenceRoot, { recursive: true, force: true }); }
+
+  const archiveRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-gitlab-archive-')));
+  try {
+    const project = 'issue-n5-gitlab-archive';
+    const projectDir = path.join(archiveRoot, 'kaola-workflow', project);
+    const epochDir = path.join(projectDir, '.cache', 'epochs', '1');
+    const filesDir = path.join(epochDir, 'files', '.cache');
+    fs.mkdirSync(filesDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Sink', 'issue_number: 699', 'sink: merge', '',
+    ].join('\n'));
+    const rebindBytes = Buffer.from('{"attempts":[{"attempt_id":"review:1","rebind":[]}]}\n');
+    const rebindPath = path.join(filesDir, 'review-attempts.json');
+    fs.writeFileSync(rebindPath, rebindBytes);
+    const stat = fs.statSync(rebindPath);
+    const snapshot = {
+      schema_version: 1, parent_plan_epoch: 1, epoch_lineage_id: 'd'.repeat(64),
+      transaction_id: 'e'.repeat(64), claim_root_base_digest: 'f'.repeat(64),
+      files: [{ path: '.cache/review-attempts.json', size: stat.size,
+        mode: (stat.mode & 0o777).toString(8).padStart(3, '0'), digest: schema.sha256Hex(rebindBytes) }],
+    };
+    snapshot.manifest_self_digest = schema.snapshotManifestDigest(snapshot);
+    fs.writeFileSync(path.join(epochDir, 'manifest.json'), schema.canonicalJson(snapshot) + '\n');
+    // Fail-closed edition contract: a schema-1 manifest with no external-seal chain cannot
+    // digest-verify (a genuine schema-2 snapshot is only ever produced by the full replan
+    // lifecycle, exercised end to end in test-replan.js). The forge port must refuse this
+    // unverifiable epoch snapshot at BOTH the shared verifier and the archive preflight, and
+    // must never delete a live project whose epoch-snapshot authority does not verify.
+    const verified = replan.verifyAllEpochSnapshots(projectDir);
+    assert(!verified.ok && verified.reason === 'legacy_snapshot_binding_unsealed',
+      'GitLab re-plan smoke: an unsealed epoch snapshot must refuse digest verification, got ' + JSON.stringify(verified));
+    const archived = claim.archiveProjectDir(archiveRoot, project, 'closed');
+    assert(archived.archived !== true && archived.archive_incomplete === true
+      && archived.snapshot_error === 'legacy_snapshot_binding_unsealed',
+    'GitLab re-plan smoke: archive must refuse an unverifiable epoch snapshot before any delete, got ' + JSON.stringify(archived));
+    assert(fs.existsSync(projectDir) && !fs.existsSync(path.join(archiveRoot, 'kaola-workflow', 'archive')),
+      'GitLab re-plan smoke: a refused archive must preserve the live project and create no archive dir');
+  } finally { fs.rmSync(archiveRoot, { recursive: true, force: true }); }
+
+  console.log('testGitlabReplanEditionContract699: PASSED');
+}
+
+testGitlabReplanEditionContract699();
 testGitlabFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitlab();
 testGitlabPreflight266();

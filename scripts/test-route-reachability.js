@@ -637,6 +637,151 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T17: claim-preserving re-plan control plane. Every routing family must expose
+// the same single legal resume mutation while a transaction fence is active,
+// and every workflow-planner profile must keep semantic child authorship and
+// its digest-bound attestation inside the planner dispatch.
+// ---------------------------------------------------------------------------
+{
+  const routeFamilies = {
+    'plan-run': [
+      'commands/kaola-workflow-plan-run.md',
+      'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+      'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+      'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+      'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+      'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+    ],
+    adapt: [
+      'commands/kaola-workflow-adapt.md',
+      'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+      'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+      'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+      'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
+      'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+    ],
+    finalize: [
+      'commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+      'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+      'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+      'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+    ],
+    next: [
+      'commands/workflow-next.md',
+      'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
+      'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
+      'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
+      'plugins/kaola-workflow-gitea/commands/workflow-next.md',
+      'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md',
+    ],
+  };
+  const markers = {
+    'plan-run': '<!-- PIN: replan-plan-run -->',
+    adapt: '<!-- PIN: replan-adapt -->',
+    finalize: '<!-- PIN: replan-finalize -->',
+    next: '<!-- PIN: replan-next -->',
+  };
+  const commonTokens = [
+    '`replan_in_progress`',
+    '`replan_phase`',
+    '`parent_plan_hash`',
+    '`child_plan_hash`',
+    '`last_cas_result`',
+    'resume --project {project} --json',
+    '`replan_planner_dispatch_required`',
+    '`.cache/replan-planner-packet.json`',
+    '`workflow-plan.next.md`',
+    '`.cache/replan-planner-attestation.json`',
+    '`planner_control_boundary_violation`',
+    'No role sequence, node ids, dependencies, write sets, cardinality, shape, model, or exact DAG fragment',
+    'single legal mutation',
+    '`decision:ask` remains advisory',
+  ];
+  const scriptFor = file => file.includes('kaola-workflow-gitlab')
+    ? 'kaola-gitlab-workflow-replan.js'
+    : file.includes('kaola-workflow-gitea')
+      ? 'kaola-gitea-workflow-replan.js'
+      : 'kaola-workflow-replan.js';
+
+  for (const [topic, files] of Object.entries(routeFamilies)) {
+    for (const file of files) {
+      const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+      const normalized = norm(content);
+      assert(normalized.includes(norm(markers[topic])),
+        `T17: ${file} must carry ${markers[topic]}`);
+      for (const token of commonTokens) {
+        assert(normalized.includes(norm(token)),
+          `T17: ${file} must carry re-plan control token ${JSON.stringify(token)}`);
+      }
+      assert(content.includes(scriptFor(file)),
+        `T17: ${file} must name its edition-local re-plan aggregator ${scriptFor(file)}`);
+
+      const markerAt = content.indexOf(markers[topic]);
+      const nextHeading = markerAt < 0 ? -1 : content.indexOf('\n## ', markerAt + markers[topic].length);
+      const pinned = markerAt < 0 ? '' : content.slice(markerAt, nextHeading < 0 ? content.length : nextHeading);
+      assert(!/discard\s*(?:\+|\/|and)?\s*restart/i.test(pinned),
+        `T17: ${file} re-plan block must not introduce discard/restart fallback`);
+      assert(!/approval gate/i.test(pinned),
+        `T17: ${file} re-plan block must not introduce an approval gate`);
+    }
+  }
+
+  const profileFiles = [
+    'agents/workflow-planner.md',
+    'plugins/kaola-workflow/agents/workflow-planner.toml',
+    'plugins/kaola-workflow-gitlab/agents/workflow-planner.toml',
+    'plugins/kaola-workflow-gitea/agents/workflow-planner.toml',
+  ];
+  const profileTokens = [
+    '## Re-plan dispatch mode',
+    '`workflow-planner-replan-v1`',
+    '`.cache/replan-planner-packet.json`',
+    '`workflow-plan.next.md`',
+    '`.cache/replan-planner-attestation.json`',
+    '`replan_planner_dispatch_required`',
+    '`replan_planner_attestation_invalid`',
+    '`planner_control_boundary_violation`',
+    'exact-DAG/control-boundary instructions',
+    'semantic authoring target is only the seeded `workflow-plan.next.md`',
+    'never mutate the frozen parent `workflow-plan.md`',
+    'do not run claim/startup',
+    'bounded unfrozen child-repair loop',
+    'the main session never repairs the child DAG',
+    '`transaction_id`', '`packet_digest`', '`dispatch_nonce`', '`profile_identity`',
+    '`child_path`', '`child_digest`', '`worktree_path`', '`attestation_digest`',
+    'resume --project {project} --json',
+  ];
+  const profileModeValid = content => {
+    const normalized = norm(content);
+    return profileTokens.every(token => normalized.includes(norm(token)));
+  };
+  for (const file of profileFiles) {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    assert(profileModeValid(content),
+      `T17 profile: ${file} must carry the complete planner-only re-plan mode`);
+    for (const legacyToken of ['--attest-planner-spawn', 'adaptive-handoff', 'workflow-plan.md']) {
+      assert(content.includes(legacyToken),
+        `T17 profile: ${file} must preserve normal startup token ${legacyToken}`);
+    }
+    for (const [label, mutated] of [
+      ['parent overwrite', content.replaceAll('workflow-plan.next.md', 'workflow-plan.md')],
+      ['attestation omission', content.replaceAll('.cache/replan-planner-attestation.json', '.cache/attestation-removed.json')],
+      ['control-boundary omission', content.replaceAll('exact-DAG/control-boundary instructions', 'ordinary instructions')],
+    ]) {
+      assert(!profileModeValid(mutated),
+        `T17 profile mutation: ${file} must reject ${label}`);
+    }
+  }
+  const canonicalToml = fs.readFileSync(path.join(REPO, profileFiles[1]), 'utf8');
+  for (const file of profileFiles.slice(2)) {
+    assert(fs.readFileSync(path.join(REPO, file), 'utf8') === canonicalToml,
+      `T17 profile parity: ${file} must byte-match the canonical Codex planner profile`);
+  }
+}
+
 // ===========================================================================
 // #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
 // bidirectional orphan-sentinel, the superset proof, and the by-construction

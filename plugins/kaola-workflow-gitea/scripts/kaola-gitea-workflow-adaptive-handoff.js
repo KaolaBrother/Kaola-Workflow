@@ -45,14 +45,65 @@
 // ---------------------------------------------------------------------------
 
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+
+function lastReplanCas(transaction) {
+  let found = null;
+  for (const seam of adaptiveSchema.REPLAN_CAS_SEAMS) {
+    const row = transaction && transaction.cas && transaction.cas[seam];
+    if (row) found = { seam, result: row.result || 'unknown' };
+  }
+  return found || { seam: 'none', result: 'none' };
+}
+
+function replanOrientation(fence, project, extra) {
+  const tx = fence && fence.transaction;
+  const cas = lastReplanCas(tx);
+  const out = {
+    result: 'refuse',
+    reason: (fence && fence.reason) || 'replan_in_progress',
+    replan_phase: (fence && fence.phase) || (tx && tx.phase) || 'unknown',
+    transaction_id: (fence && fence.transaction_id) || (tx && tx.transaction_id) || 'none',
+    parent_plan_hash: (tx && tx.parent && tx.parent.plan_hash) || 'none',
+    child_plan_hash: (tx && tx.child && tx.child.plan_hash) || 'none',
+    last_cas_seam: cas.seam,
+    last_cas_result: cas.result,
+    legal_mutation: (fence && fence.legal_mutation) || 'none',
+  };
+  if (tx && tx.child) {
+    out.first_node_id = tx.child.first_node_id || 'none';
+    out.first_node_role = tx.child.first_node_role || 'none';
+  }
+  if (fence && fence.legal_mutation === 'replan resume') {
+    out.resume_command = 'node scripts/kaola-gitea-workflow-replan.js resume --project ' + project + ' --json';
+  }
+  return Object.assign(out, extra || {});
+}
+
+function readHandoffReplanFence(opts, stateContent) {
+  if (opts.replanFence) return opts.replanFence;
+  // Legacy pure-core callers predate the cache existence seam and commonly
+  // return plan bytes for every unknown read path. Preserve their behavior;
+  // the CLI always supplies cacheExists and therefore always enforces the
+  // filesystem fence.
+  if (typeof opts.cacheExists !== 'function') return { ok: true, fenced: false };
+  const txPath = path.join(path.dirname(opts.planPath), '.cache', adaptiveSchema.REPLAN_TRANSACTION_NAME);
+  let transaction = null;
+  if (opts.cacheExists(txPath)) {
+    try { transaction = JSON.parse(opts.readFile(txPath)); }
+    catch (_) { transaction = {}; }
+  }
+  return adaptiveSchema.readReplanFence(stateContent, transaction);
+}
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the USER-REPO root via git rev-parse --show-toplevel
 // (process.cwd() fallback). Used ONLY for --project plan/state derivation.
 // Mirrors the exact convention in kaola-gitea-workflow-active-folders.js and
 // kaola-gitea-workflow-roadmap.js so the user-repo root resolves correctly even
-// when this script is installed under $HOME/.claude/kaola-workflow/scripts/.
+// when this script is launched from an installed runtime script directory.
 // ---------------------------------------------------------------------------
 function getRoot() {
   try {
@@ -254,6 +305,54 @@ function runHandoff(opts) {
       result: 'refuse',
       errors: ['workflow-state.md missing — planner did not claim'],
       validator_verdict: null,
+    };
+  }
+
+  // #699: the claim-preserving re-plan transaction is the sole mutation
+  // authority. This preflight precedes validator/freeze/task-mirror/roadmap and
+  // state writes; it exposes only a sanitized orientation, never transaction
+  // payloads (which contain parent plan/state bytes).
+  const replanFence = readHandoffReplanFence(opts, stateContent);
+  if (!replanFence.ok || replanFence.fenced) {
+    return replanOrientation(replanFence, project, { handoff_status: replanFence.reason || 'replan_in_progress' });
+  }
+  if (replanFence.committed) {
+    let currentAuthority;
+    try {
+      const verify = opts.verifyEpochAuthority
+        || (projectDir => require('./kaola-gitea-workflow-replan').verifyCurrentEpochAuthority(projectDir));
+      currentAuthority = verify(path.dirname(planPath));
+    } catch (error) {
+      currentAuthority = { ok: false, reason: 'current_epoch_authority_unavailable', detail: error.message };
+    }
+    if (!currentAuthority || currentAuthority.ok !== true) {
+      const refusedFence = Object.assign({}, replanFence, { ok: false, fenced: true,
+        reason: currentAuthority && currentAuthority.reason || 'current_epoch_authority_invalid' });
+      return replanOrientation(refusedFence, project, {
+        handoff_status: refusedFence.reason,
+        ...(currentAuthority && currentAuthority.detail ? { detail: currentAuthority.detail } : {}),
+      });
+    }
+    const child = replanFence.transaction && replanFence.transaction.child || {};
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(child.first_node_id || ''))
+        || !/^[a-z][a-z0-9-]*$/.test(String(child.first_node_role || ''))) {
+      return replanOrientation(Object.assign({}, replanFence, { ok: false, fenced: true,
+        reason: 'replan_child_first_node_invalid' }), project,
+      { handoff_status: 'replan_child_first_node_invalid' });
+    }
+    let model;
+    try { model = resolveModel(child.first_node_role); } catch (_) { model = undefined; }
+    const modelDisplay = adaptiveSchema.modelDisplay(model);
+    return {
+      handoff_status: 'ready_to_run',
+      committed_replan: true,
+      checklist: { claim_acquired: true, plan_in_grammar: true, plan_frozen: true,
+        resume_check_ok: true, roadmap_staged: true },
+      first_node: { id: child.first_node_id, role: child.first_node_role, model,
+        ...(modelDisplay ? { model_display: modelDisplay } : {}) },
+      decision: child.decision || 'auto-run',
+      risk: child.risk_line || null,
+      worktree_mirror: { status: 'skipped', reason: 'committed_replan_authority' },
     };
   }
 
@@ -502,7 +601,16 @@ function runHandoff(opts) {
   ];
 
   let currentState = readFile(statePath);
-  const updatedState = splicePlanningEvidence(currentState, peFields, stateMtime);
+  let updatedState = splicePlanningEvidence(currentState, peFields, stateMtime);
+  // #699: the initial handoff is the single publication boundary from the
+  // legal planless epoch-1 state to the legal planned epoch-1 state.  Publish
+  // the active hash and the complete Planning Evidence replacement in ONE
+  // crash-safe state-file write so a stale first-node tuple cannot survive.
+  if (/^epoch_schema_version:[ \t]*2[ \t]*$/m.test(currentState)) {
+    updatedState = adaptiveSchema.writeEpochStateBlock(updatedState, {
+      active_plan_hash: planHash,
+    });
+  }
   writeFile(statePath, updatedState);
 
   // -------------------------------------------------------------------------
@@ -555,6 +663,75 @@ function runHandoff(opts) {
   };
 }
 
+// #699: narrow child-freeze primitive. The n2 transaction engine remains the
+// sole owner of planner attestation and all CAS observations. It calls this
+// helper only with a verified authority receipt while holding its scheduler
+// lock; this helper validates exactly workflow-plan.next.md and writes no other
+// path. Keeping the authority receipt explicit prevents this API from becoming
+// a competing transaction state machine.
+function runReplanHandoff(opts) {
+  const refuse = (reason, extra) => Object.assign({ result: 'refuse', reason }, extra || {});
+  const expected = opts && opts.expected || {};
+  const exactChildPath = String(expected.child_path || '');
+  if (!opts || !path.isAbsolute(exactChildPath)
+      || path.basename(exactChildPath) !== adaptiveSchema.REPLAN_PLAN_NEXT_NAME
+      || path.resolve(String(opts.childPath || '')) !== path.resolve(exactChildPath)
+      || String(opts.authority && opts.authority.child_path || '') !== exactChildPath) {
+    return refuse('replan_child_path_invalid');
+  }
+  const authority = opts.authority || {};
+  const content = String(opts.childContent || '');
+  const authoredDigest = crypto.createHash('sha256').update(content).digest('hex');
+  if (authority.verified !== true || authority.candidate_match !== true
+      || authority.claim_root_match !== true || authority.inherited_frontier_match !== true
+      || !/^[0-9a-f]{64}$/.test(String(opts.transactionId || ''))
+      || authority.transaction_id !== opts.transactionId
+      || authority.child_digest !== authoredDigest
+      || authority.dispatch_nonce !== (opts.expected && opts.expected.planner_binding)
+      || !/^[0-9a-f]{64}$/.test(String(authority.planner_attestation_digest || ''))) {
+    return refuse('replan_child_authority_unverified');
+  }
+  const metaBody = (() => {
+    const match = /(?:^|\n)## Meta[ \t]*\n([\s\S]*?)(?=\n## |$)/.exec(content);
+    return match ? match[1] : '';
+  })();
+  const meta = Object.create(null);
+  for (const line of metaBody.split(/\r?\n/)) {
+    const match = /^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$/.exec(line);
+    if (match) meta[match[1]] = match[2].trim();
+  }
+  for (const key of ['epoch_lineage_id', 'parent_plan_hash', 'claim_root_base_digest',
+    'inherited_frontier_digest', 'planner_binding']) {
+    if (String(meta[key] || '') !== String(expected[key] || '')) {
+      return refuse('replan_child_binding_mismatch', { field: key });
+    }
+  }
+  if (Number(meta.plan_epoch) !== Number(expected.plan_epoch)
+      || meta.contract_version !== '2' || meta.epoch_schema_version !== '2') {
+    return refuse('replan_child_binding_mismatch', { field: 'epoch_contract' });
+  }
+  const freeze = opts.freezePlan || (input => require('./kaola-gitea-workflow-plan-validator').freezePlan(input, opts.validatorOptions || {}));
+  const frozen = freeze(content);
+  if (!frozen || frozen.frozen !== true || frozen.result !== 'in-grammar'
+      || !/^[0-9a-f]{64}$/.test(String(frozen.planHash || '')) || typeof frozen.content !== 'string') {
+    return refuse('replan_child_invalid', { errors: frozen && frozen.errors || [] });
+  }
+  if (frozen.content !== content) opts.writeFile(opts.childPath, frozen.content);
+  const frozenNodes = require('./kaola-gitea-workflow-plan-validator').parseNodes(frozen.content);
+  if (!Array.isArray(frozenNodes) || frozenNodes.length === 0) {
+    return refuse('replan_child_invalid', { errors: ['child plan has no parseable first node'] });
+  }
+  return {
+    result: 'child_frozen', phase: 'child_frozen', transaction_id: opts.transactionId,
+    child_plan_hash: frozen.planHash,
+    authored_child_digest: authoredDigest,
+    frozen_child_digest: crypto.createHash('sha256').update(frozen.content).digest('hex'),
+    planner_attestation_digest: authority.planner_attestation_digest,
+    first_node_id: frozenNodes[0].id,
+    first_node_role: frozenNodes[0].role,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // CLI — thin wrapper; all process I/O and FS live here.
 // ---------------------------------------------------------------------------
@@ -600,7 +777,7 @@ function main() {
   const fs   = require('fs');
   // Use git rev-parse --show-toplevel (cwd fallback) for the --project branch so
   // the script resolves the USER-REPO root even when installed under
-  // $HOME/.claude/kaola-workflow/scripts/ (where __dirname/.. would be the install dir).
+  // a runtime script directory (where __dirname/.. would be the install dir).
   const repoRoot = getRoot();
 
   let planPath, statePath, project;
@@ -666,12 +843,15 @@ function main() {
     computeNextAction: require('./kaola-gitea-workflow-next-action').computeNextAction,
     resolveModel,
     readFile:  fpath => fs.readFileSync(fpath, 'utf8'),
+    cacheExists: fpath => fs.existsSync(fpath),
     // #389: the workflow-state.md Planning Evidence write must route through the crash-safe
     // atomic replace (tmp + fsync + rename). #354 claimed "no torn workflow-state.md" after
     // routing repair-state/sink-pr, but this handoff writer was never routed.
     writeFile: (fpath, content) => require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(fpath, content),
     stateMtime,
     findDecisionIdHits,
+    verifyEpochAuthority: projectDir =>
+      require('./kaola-gitea-workflow-replan').verifyCurrentEpochAuthority(projectDir),
   });
 
   process.stdout.write(JSON.stringify(result) + '\n');
@@ -684,4 +864,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runHandoff, shellHandoff, extractDecisionIdCandidates };
+module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates };

@@ -105,6 +105,99 @@ Behavior that intentionally exercises a real network or installed forge client b
   Per-edition fields (gitlab `mr_*`/`project_id`; gitea `full_name`/`pr_*`) are deliberately
   NOT in `SHARED_STATE_FIELDS` and are not pinned by this gate.
 
+## Planner-owned re-plan epochs and proof discipline (#699 / D-699-01)
+
+A frozen adaptive plan is immutable parent evidence. When direct review repair returns
+`repair_requires_replan`, do not edit/re-freeze `workflow-plan.md`, reset the project, establish a
+fresh writer baseline over the inherited candidate, or prescribe a replacement DAG from the main
+session. The legal recovery is the claim-scoped re-plan transaction:
+
+1. The real `repair-node` call mechanically persists the schema-2 `repair_outcome` envelope as
+   `.cache/replan-source.json` before returning `repair_requires_replan`. Never create, patch, or
+   substitute this file by hand.
+2. `kaola-workflow-replan.js prepare` recomputes the envelope/journal/attempt/evidence/candidate
+   digests, proves the attempt is still failed, settled, and unconsumed, then records the parent,
+   claim root, candidate/frontier, source hashes, and budget under `scheduler.lock`.
+3. `resume` seeds the exact child path and packet, including the pre-dispatch snapshot-authority
+   projection, then returns
+   `replan_planner_dispatch_required` until a genuine `workflow-planner` dispatch authors and
+   attests `workflow-plan.next.md`.
+4. Only the re-plan handoff validates/freezes the child. The parent remains authoritative through
+   snapshot, and activation rolls forward through its six journaled prefixes.
+5. Any crash or intermediate fence resumes through the same `resume` command; ordinary scheduler,
+   handoff, repair, archive, and Finalization mutations remain forbidden.
+
+The main orchestrator may pass repository/project, reason, source evidence, bindings, and the exact
+child path. It may not pass nodes, roles, dependencies, write sets, cardinality, shape, model, or
+build order. The planner profile owns the child DAG. Preserve this boundary in agent-facing prose
+without issue/ADR provenance; provenance belongs here, in `CHANGELOG.md`, and in the decision record.
+
+Fresh schema-2 claims must remain in one of two exact epoch-1 forms. `planless` has no plan/snapshot
+and `none` for active/Planning Evidence hashes and first-node fields; `planned` has one frozen plan
+whose hashes and first-node tuple agree with state and the task mirror. Publish the complete tuple in
+one state write—never patch only the hash. Offline mode creates no worktree and no in-place branch,
+regardless of the native setting.
+
+Verifying the active (non-transaction) epoch is not a byte comparison. Every prepare/resume/archive/
+finalize/watch caller must compose the one shared `verifyCurrentEpochAuthority` result rather than
+re-derive a partial check: the authored `Meta`/`Nodes`/`Node Briefs` surface is hash-verified, while
+`Node Ledger`, `Required Agent Compliance`, and the task mirror are runtime surfaces that legally
+progress after commitment and are parse/consistency-checked instead. Do not add a second, private
+authority check to a new caller. For no-history repositories, preserve the exact object-width
+zero-commit/canonical-empty-tree root; never invent a path/time/file hash substitute.
+
+Re-plan identity and liveness are claim-scoped. `epoch_lineage_id` derives from the durable claim
+identity and claim-root base, never from the plan hash or logical gate. Four CAS seams recompute the
+candidate/root/frontier tuple. The focused matrix covers all 12 seam/axis combinations; a mismatch
+does not advance the epoch or counter. Two committed
+automatic review-driven transitions are allowed; a further attempt consent-halts before dispatch.
+One user action may extend the hash-chained ceiling by exactly one slot. The only zero-cost path is
+the one-shot typed no-review Case-B exemption: review journal/source authority must be absent, the
+parent complete, all four exact schema-2 `diagnosis_complete` artifacts valid, writers limited to
+those artifact paths, and child proof/recommendation citations exact. Review-driven outcomes always
+count; untyped, repeated, writer-bearing, or missing-citation variants count or refuse.
+
+Every parent epoch snapshot and the complete lineage evidence remain in the final archive, including
+the authoritative review journal and every attempt's full `rebind` array. Do not clean an epoch-local
+file until its exact snapshot entry is durable and verified; cleanup is manifest-allowlisted and
+digest-bound. A child inherits the candidate frontier and G4 certifier obligations, so no new baseline
+may hide already-present code or sensitive changes.
+
+Do not conflate the two snapshot digests. A schema-2 child's
+`parent_snapshot_manifest_digest` binds the stable pre-dispatch
+`snapshot_authority_projection`; the later full manifest separately seals that projection, exact
+child/attestation, file index, self-digest, and exact manifest bytes. A historical schema-1 child may
+retain `pending` only when every external seal proves `legacy_external_binding`; new schema-2 work
+never uses that compatibility branch. The central inventory has exactly 41 base durable-write label
+families and five deterministic dynamic suffix forms. Tests lock the inventory and execute every
+discovered main-path prefix; do not overstate this as direct failpoint execution of every side-path
+label unless a later test proves it.
+
+Verified v1 plans are explicit legacy authority. They may finish as v1 or enter v2 through the sole
+compatibility path that proves an immutable legacy root, snapshots exact parent bytes/evidence/rebind
+history, and dispatches a fresh planner. Never silently add schema-2 fields to the v1 parent, and
+never accept a newly authored missing-schema child as legacy.
+
+Every archive caller uses `archiveSucceeded`: only `archived:true` or idempotent
+`skipped:"source-missing"` permits roadmap/remote/claim/worktree/branch/receipt cleanup. A refusal
+must leave live authority inspectable. Activation and initial handoff replace the complete Planning
+Evidence tuple; `state_planning_evidence_stale_first_node`, hash mismatch, and task-mirror mismatch
+are blockers, not fields to hand-edit around.
+
+**Evidence wording is part of correctness.** A structural contract validator proves only the path it
+executes. Say exactly what the current focused suites prove and route every still-open write surface
+(lifecycle/publication callers, packaged-edition fixtures, pending reviews/falsifiers) to its owning
+node rather than folding it into a blanket PASS. Do not upgrade a focused-green result to
+cross-edition or terminal-runtime completion, and do not describe a partially repaired defect as
+still wholly unrepaired once its owning node's evidence shows otherwise — check the current Node
+Ledger and gate evidence before writing a status claim into prose docs, since embedded status text
+goes stale the moment the next node closes.
+
+Hosted CI/CD is not a Kaola completion gate and must not be used to waive, replace, or delay the
+candidate-bound local transaction tests, all relevant edition validators/walkthroughs, gate-role
+reviews, or frozen falsification nodes. The workflow owns its verdict locally even when a hosted
+pipeline also exists.
+
 ## Adaptive is the Default; Fast/Full are Install-Time Opt-ins (issue #538)
 
 Adaptive is the unconditional default path — there is no on/off switch and no path-selection step.
@@ -128,8 +221,11 @@ authority. The router does not read `installed_paths` or perform a soft fall-thr
 is no switch to be OFF.
 
 **No automatic fallback between paths.** Adaptive never silently downgrades to `fast` or `full`.
-The exhaustion floor is inside adaptive: bounded planner repair (~2x) → discard+restart a fresh
-adaptive run → stop+ask with a concrete blocker and validator evidence.
+Before the first freeze, invalid authoring uses the existing bounded planner-only repair loop. After
+freeze, a settled `repair_requires_replan` routes through the claim-preserving planner-owned epoch
+transaction: the parent stays immutable, the claim/branch/worktree/candidate survive, and only
+`workflow-planner` authors a child. Automatic review-driven replacements are claim-budgeted; budget
+exhaustion consent-halts. There is no hidden discard/restart fallback and no main-authored DAG repair.
 
 **Bundle lane.** The bundle lane is adaptive-only; a bundle claim on any other path returns
 `bundle_requires_adaptive` (`result: refuse`).

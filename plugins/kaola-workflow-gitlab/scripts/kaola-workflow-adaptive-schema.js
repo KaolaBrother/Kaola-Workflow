@@ -353,6 +353,799 @@ const REVIEW_REPAIR_LIMIT = 5;
 // cap is a defensive belt over an already-bounded quantity. Byte-identical ×4 with the limits above.
 const REVIEW_REBIND_LIMIT = 5;
 
+// Claim-scoped epoch lineage and re-plan transaction contract. These helpers
+// stay forge-neutral and side-effect-free so every edition hashes and guards
+// the same bytes. Filesystem/Git observation lives in the replan/claim scripts;
+// this module owns only normalization, validation, and digest domains.
+const EPOCH_SCHEMA_VERSION = 2;
+// Schema 1 is a read-only compatibility receipt. New writers emit schema 2,
+// whose predecessor/source receipts make every epoch transition recursively
+// verifiable after the active transaction rotates.
+const REPLAN_TRANSACTION_SCHEMA_VERSION = 2;
+const REPLAN_TRANSACTION_SCHEMA_VERSIONS = Object.freeze([1, 2]);
+const REVIEW_REPLAN_LIMIT = 2;
+const REPLAN_TRANSACTION_NAME = 'replan-transaction.json';
+const REPLAN_PLAN_NEXT_NAME = 'workflow-plan.next.md';
+const REPLAN_PLANNER_PACKET_NAME = 'replan-planner-packet.json';
+const REPLAN_PLANNER_ATTESTATION_NAME = 'replan-planner-attestation.json';
+const EPOCH_CONSENT_EXTENSIONS_NAME = 'epoch-consent-extensions.json';
+const REPLAN_PHASES = Object.freeze([
+  'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
+]);
+const REPLAN_STATUSES = Object.freeze(['none', 'in_progress', 'candidate_changed', 'consent_halt']);
+const REPLAN_CAS_SEAMS = Object.freeze(['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation']);
+const REPLAN_ACTIVATION_STEPS = Object.freeze([
+  'child_plan_promoted',
+  'child_state_promoted_fenced',
+  'task_mirror_promoted',
+  'active_cache_cleaned',
+  'transaction_committed',
+  'state_unfenced',
+]);
+const REPLAN_DURABLE_WRITE_LABELS = Object.freeze([
+  'after_tx_prepared', 'after_state_prepared_fence', 'after_packet_written', 'after_child_seeded',
+  'after_tx_planner_pending', 'after_state_planner_pending_fence', 'after_tx_pre_freeze_cas',
+  'after_child_frozen_bytes', 'after_tx_child_frozen', 'after_state_child_frozen_fence',
+  'after_tx_pre_snapshot_cas', 'after_snapshot_stage_created', 'after_snapshot_stage_file',
+  'after_snapshot_manifest_written', 'after_snapshot_epoch_renamed', 'after_tx_parent_archived',
+  'after_state_parent_archived_fence', 'after_tx_pre_activation_cas', 'after_plan_child_promoted',
+  'after_tx_child_plan_promoted', 'after_state_child_promoted_fenced',
+  'after_tx_child_state_promoted_fenced', 'after_tasks_child_promoted', 'after_tx_task_mirror_promoted',
+  'after_tx_cleanup_intent', 'after_cache_unlinked', 'after_tx_active_cache_cleaned', 'after_tx_committed',
+  'after_state_unfenced', 'after_tx_state_unfenced', 'after_tx_candidate_changed',
+  'after_state_candidate_changed', 'after_tx_reauthored', 'after_child_reauthor_seeded',
+  'after_state_reauthor_fence', 'after_consent_ledger', 'after_state_consent_ceiling',
+  'after_tx_consent_resumed', 'after_tx_failure_snapshot', 'after_tx_failure_task_mirror',
+  'after_tx_failure_cleanup',
+  'after_predecessor_history', 'after_source_history',
+]);
+const REPLAN_DURABLE_WRITE_LABELS_DYNAMIC = Object.freeze({
+  after_snapshot_stage_file: 'after_snapshot_stage_file:<sorted-ordinal>:<path-digest>',
+  after_tx_cleanup_intent: 'after_tx_cleanup_intent:<sorted-ordinal>:<path-digest>',
+  after_cache_unlinked: 'after_cache_unlinked:<sorted-ordinal>:<path-digest>',
+  after_tx_candidate_changed: 'after_tx_candidate_changed:<cas-seam>',
+  after_state_candidate_changed: 'after_state_candidate_changed:<cas-seam>',
+});
+const EPOCH_STATE_FIELD_ORDER = Object.freeze([
+  'epoch_schema_version',
+  'claim_repository_id',
+  'claim_identity_digest',
+  'claim_root_object_format',
+  'claim_root_base_commit',
+  'claim_root_base_tree',
+  'claim_root_base_digest',
+  'epoch_lineage_id',
+  'plan_epoch',
+  'active_plan_hash',
+  'inherited_frontier_digest',
+  'inherited_frontier_classes',
+  'automatic_review_replans',
+  'authorized_epoch_ceiling',
+  'case_b_exemption_consumed',
+  'replan_status',
+  'replan_transaction_id',
+  'replan_phase',
+  'active_snapshot_manifest_digest',
+]);
+const HEX64_RE = /^[0-9a-f]{64}$/;
+const OBJECT_ID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+// Canonical JSON accepts only the closed semantic value domain used by epoch
+// identities. It never invokes toJSON or silently maps an unsupported value to
+// null, because either behavior can collapse two distinct authority objects.
+function canonicalJson(value) {
+  const visit = (input, stack) => {
+    if (input === null || typeof input === 'string' || typeof input === 'boolean') return input;
+    if (typeof input === 'number') {
+      if (!Number.isSafeInteger(input)) throw new Error('canonical_json_number_not_integer');
+      return input;
+    }
+    if (Array.isArray(input)) {
+      if (stack.has(input)) throw new Error('canonical_json_cycle');
+      stack.add(input);
+      const out = [];
+      for (let index = 0; index < input.length; index++) {
+        if (!Object.prototype.hasOwnProperty.call(input, index) || input[index] === undefined) {
+          throw new Error('canonical_json_sparse_or_undefined');
+        }
+        out.push(visit(input[index], stack));
+      }
+      stack.delete(input);
+      return out;
+    }
+    if (!isPlainObject(input)) throw new Error('canonical_json_non_plain_object');
+    if (stack.has(input)) throw new Error('canonical_json_cycle');
+    stack.add(input);
+    const out = {};
+    for (const key of Object.keys(input).sort()) {
+      if (input[key] === undefined) throw new Error('canonical_json_undefined');
+      out[key] = visit(input[key], stack);
+    }
+    stack.delete(input);
+    return out;
+  };
+  return JSON.stringify(visit(value, new Set()));
+}
+
+function sha256Hex(bytes) {
+  return require('crypto').createHash('sha256').update(bytes).digest('hex');
+}
+
+function sha256Canonical(value) {
+  return sha256Hex(Buffer.from(canonicalJson(value), 'utf8'));
+}
+
+function nonEmptyString(value, reason) {
+  const text = String(value == null ? '' : value);
+  if (!text || /[\r\n\0]/.test(text)) throw new Error(reason);
+  return text;
+}
+
+function normalizeIssueNumbers(values) {
+  if (!Array.isArray(values)) throw new Error('claim_issue_numbers_invalid');
+  const out = Array.from(new Set(values.map(value => {
+    const number = typeof value === 'number' ? value : Number(String(value));
+    if (!Number.isSafeInteger(number) || number <= 0) throw new Error('claim_issue_numbers_invalid');
+    return number;
+  }))).sort((a, b) => a - b);
+  if (!out.length) throw new Error('claim_issue_numbers_invalid');
+  return out;
+}
+
+function buildClaimIdentity(input) {
+  if (!isPlainObject(input)) throw new Error('claim_identity_invalid');
+  if (input.schema_version != null && input.schema_version !== EPOCH_SCHEMA_VERSION) {
+    throw new Error('claim_identity_schema_invalid');
+  }
+  const issueNumbers = normalizeIssueNumbers(input.issue_numbers);
+  const primaryIssue = Number(input.primary_issue);
+  if (!Number.isSafeInteger(primaryIssue) || !issueNumbers.includes(primaryIssue)) {
+    throw new Error('claim_primary_issue_invalid');
+  }
+  const bundleId = input.bundle_id == null || input.bundle_id === ''
+    ? null : nonEmptyString(input.bundle_id, 'claim_bundle_id_invalid');
+  const worktreePath = nonEmptyString(input.worktree_path, 'claim_worktree_path_invalid');
+  if (!require('path').isAbsolute(worktreePath)) throw new Error('claim_worktree_path_invalid');
+  return {
+    schema_version: EPOCH_SCHEMA_VERSION,
+    repository_id: nonEmptyString(input.repository_id, 'claim_repository_id_invalid'),
+    issue_numbers: issueNumbers,
+    primary_issue: primaryIssue,
+    bundle_id: bundleId,
+    closure_policy: nonEmptyString(input.closure_policy, 'claim_closure_policy_invalid'),
+    branch: nonEmptyString(input.branch, 'claim_branch_invalid'),
+    worktree_path: worktreePath,
+    claim_ts: nonEmptyString(input.claim_ts, 'claim_ts_invalid'),
+    session_marker: nonEmptyString(input.session_marker, 'claim_session_marker_invalid'),
+  };
+}
+
+function buildClaimRootBase(input) {
+  if (!isPlainObject(input)) throw new Error('claim_root_base_invalid');
+  if (input.schema_version != null && input.schema_version !== EPOCH_SCHEMA_VERSION) {
+    throw new Error('claim_root_schema_invalid');
+  }
+  const objectFormat = String(input.object_format || '').toLowerCase();
+  if (!['sha1', 'sha256'].includes(objectFormat)) throw new Error('claim_root_object_format_invalid');
+  const commit = String(input.commit || '').toLowerCase();
+  const tree = String(input.tree || '').toLowerCase();
+  const objectLength = objectFormat === 'sha1' ? 40 : 64;
+  const re = new RegExp('^[0-9a-f]{' + objectLength + '}$');
+  if (!re.test(commit) || !re.test(tree)) throw new Error('claim_root_object_id_invalid');
+  return {
+    schema_version: EPOCH_SCHEMA_VERSION,
+    object_format: objectFormat,
+    commit,
+    tree,
+    branch: nonEmptyString(input.branch, 'claim_root_branch_invalid'),
+  };
+}
+
+function buildEpochLineage(identityInput, rootInput) {
+  const claim_identity = buildClaimIdentity(identityInput);
+  const claim_root_base = buildClaimRootBase(rootInput);
+  const claim_identity_digest = sha256Canonical(claim_identity);
+  const claim_root_base_digest = sha256Canonical(claim_root_base);
+  const epoch_lineage_id = sha256Canonical({
+    schema_version: EPOCH_SCHEMA_VERSION,
+    claim_identity_digest,
+    claim_root_base_digest,
+  });
+  return {
+    claim_identity,
+    claim_identity_digest,
+    claim_root_base,
+    claim_root_base_digest,
+    epoch_lineage_id,
+  };
+}
+
+// #699: the canonical scalar epoch envelope shared by current-state and
+// recursive-snapshot authority readers. A schema-2 state is not identified by
+// field width alone: its lineage id is the canonical digest of the persisted
+// claim-identity/root digests. Keep this pure so every destructive consumer can
+// compose the same typed refusal through its shared verifier instead of
+// reimplementing partial presence checks.
+function validateEpochStateAuthority(fields) {
+  const reject = reason => ({ ok: false, reason });
+  if (!isPlainObject(fields)) return reject('state_epoch_authority_invalid');
+  if (!Object.prototype.hasOwnProperty.call(fields, 'epoch_schema_version')
+      || !String(fields.epoch_schema_version || '').trim()
+      || String(fields.epoch_schema_version).trim() === 'none') {
+    // Pre-epoch workflow states carry none of the epoch-envelope scalars and
+    // remain readable through the historical archive compatibility path. A
+    // partially stripped schema-2 state still carries at least one such scalar
+    // and is therefore a malformed current authority, not legacy input.
+    const hasEpochEnvelope = EPOCH_STATE_FIELD_ORDER.slice(1)
+      .some(key => Object.prototype.hasOwnProperty.call(fields, key));
+    if (!hasEpochEnvelope) return { ok: true, legacy: true };
+    return reject('state_epoch_schema_missing');
+  }
+  if (String(fields.epoch_schema_version).trim() !== String(EPOCH_SCHEMA_VERSION)) {
+    return reject('state_epoch_schema_unsupported');
+  }
+  if (!Object.prototype.hasOwnProperty.call(fields, 'epoch_lineage_id')
+      || !String(fields.epoch_lineage_id || '').trim()
+      || String(fields.epoch_lineage_id).trim() === 'none') {
+    return reject('state_epoch_lineage_missing');
+  }
+  const epochLineageId = String(fields.epoch_lineage_id).trim();
+  if (!HEX64_RE.test(epochLineageId)) return reject('state_epoch_lineage_invalid');
+  const claimIdentityDigest = String(fields.claim_identity_digest || '').trim();
+  const claimRootBaseDigest = String(fields.claim_root_base_digest || '').trim();
+  if (!HEX64_RE.test(claimIdentityDigest) || !HEX64_RE.test(claimRootBaseDigest)) {
+    return reject('state_epoch_lineage_basis_invalid');
+  }
+  const expectedLineageId = sha256Canonical({
+    schema_version: EPOCH_SCHEMA_VERSION,
+    claim_identity_digest: claimIdentityDigest,
+    claim_root_base_digest: claimRootBaseDigest,
+  });
+  if (epochLineageId !== expectedLineageId) return reject('state_epoch_lineage_mismatch');
+  return {
+    ok: true,
+    epoch_schema_version: EPOCH_SCHEMA_VERSION,
+    epoch_lineage_id: epochLineageId,
+    claim_identity_digest: claimIdentityDigest,
+    claim_root_base_digest: claimRootBaseDigest,
+  };
+}
+
+function normalizeDigestList(values, reason) {
+  if (!Array.isArray(values)) throw new Error(reason);
+  const out = Array.from(new Set(values.map(value => String(value || '').toLowerCase()))).sort();
+  if (out.some(value => !HEX64_RE.test(value))) throw new Error(reason);
+  return out;
+}
+
+function safeRelativePath(value) {
+  const p = String(value || '').replace(/\\/g, '/');
+  if (!p || p.startsWith('/') || p.includes('\0')) return null;
+  const parts = p.split('/');
+  if (parts.some(part => !part || part === '.' || part === '..')) return null;
+  return p;
+}
+
+function buildCandidateView(input) {
+  if (!isPlainObject(input) || input.schema_version !== EPOCH_SCHEMA_VERSION
+      || !HEX64_RE.test(String(input.claim_root_base_digest || '').toLowerCase())
+      || !OBJECT_ID_RE.test(String(input.base_tree || '').toLowerCase())
+      || !Array.isArray(input.entries)) {
+    throw new Error('candidate_view_invalid');
+  }
+  const entries = input.entries.map(entry => {
+    if (!isPlainObject(entry)) throw new Error('candidate_entry_invalid');
+    const path = safeRelativePath(entry.path);
+    const kind = String(entry.kind || '');
+    const mode = entry.mode == null ? null : String(entry.mode);
+    const blobDigest = entry.blob_digest == null ? null : String(entry.blob_digest).toLowerCase();
+    if (!path || !['added', 'modified', 'deleted', 'symlink', 'gitlink'].includes(kind)
+        || (mode !== null && !/^[0-7]{6}$/.test(mode))
+        || (blobDigest !== null && !HEX64_RE.test(blobDigest))
+        || typeof entry.code_relevant !== 'boolean'
+        || typeof entry.security_relevant !== 'boolean') {
+      throw new Error('candidate_entry_invalid');
+    }
+    return { path, kind, mode, blob_digest: blobDigest,
+      code_relevant: entry.code_relevant, security_relevant: entry.security_relevant };
+  }).sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind));
+  const keys = entries.map(entry => entry.path + '\0' + entry.kind);
+  if (new Set(keys).size !== keys.length) throw new Error('candidate_entry_duplicate');
+  return {
+    schema_version: EPOCH_SCHEMA_VERSION,
+    claim_root_base_digest: String(input.claim_root_base_digest).toLowerCase(),
+    base_tree: String(input.base_tree).toLowerCase(),
+    entries,
+  };
+}
+
+function digestCandidateView(input) {
+  const candidate_view = buildCandidateView(input);
+  return { candidate_view, candidate_digest: sha256Canonical(candidate_view) };
+}
+
+function buildInheritedFrontierView(input) {
+  if (!isPlainObject(input) || input.schema_version !== EPOCH_SCHEMA_VERSION) {
+    throw new Error('inherited_frontier_invalid');
+  }
+  const classes = Array.from(new Set((input.inherited_frontier_classes || []).map(String))).sort();
+  if (classes.some(value => !['code', 'security'].includes(value))) {
+    throw new Error('inherited_frontier_classes_invalid');
+  }
+  const view = {
+    schema_version: EPOCH_SCHEMA_VERSION,
+    claim_root_base_digest: String(input.claim_root_base_digest || '').toLowerCase(),
+    candidate_digest: String(input.candidate_digest || '').toLowerCase(),
+    code_digest: String(input.code_digest || '').toLowerCase(),
+    security_digest: String(input.security_digest || '').toLowerCase(),
+    inherited_frontier_classes: classes,
+    changed_entry_digests: normalizeDigestList(input.changed_entry_digests || [], 'inherited_frontier_entry_digests_invalid'),
+    validation_obligation_digests: normalizeDigestList(input.validation_obligation_digests || [], 'inherited_frontier_validation_digests_invalid'),
+    scope_lineage_ids: normalizeDigestList(input.scope_lineage_ids || [], 'inherited_frontier_scope_ids_invalid'),
+  };
+  if (!['claim_root_base_digest', 'candidate_digest', 'code_digest', 'security_digest']
+    .every(key => HEX64_RE.test(view[key]))) throw new Error('inherited_frontier_digest_invalid');
+  return view;
+}
+
+function digestInheritedFrontierView(input) {
+  const inherited_frontier_view = buildInheritedFrontierView(input);
+  return { inherited_frontier_view, inherited_frontier_digest: sha256Canonical(inherited_frontier_view) };
+}
+
+function buildScopeLineageId(input) {
+  if (!isPlainObject(input)) throw new Error('scope_lineage_invalid');
+  const view = {
+    schema_version: EPOCH_SCHEMA_VERSION,
+    epoch_lineage_id: String(input.epoch_lineage_id || '').toLowerCase(),
+    claim_identity_digest: String(input.claim_identity_digest || '').toLowerCase(),
+    claim_root_base_digest: String(input.claim_root_base_digest || '').toLowerCase(),
+    acceptance_contract_digest: String(input.acceptance_contract_digest || '').toLowerCase(),
+    reviewed_surface_digest: String(input.reviewed_surface_digest || '').toLowerCase(),
+  };
+  if (Object.values(view).slice(1).some(value => !HEX64_RE.test(value))) {
+    throw new Error('scope_lineage_digest_invalid');
+  }
+  return sha256Canonical(view);
+}
+
+function parseStateFields(content) {
+  const out = Object.create(null);
+  for (const line of String(content || '').split(/\r?\n/)) {
+    const match = /^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$/.exec(line);
+    if (match) out[match[1]] = match[2].trim();
+  }
+  return out;
+}
+
+function writeEpochStateBlock(content, values) {
+  const original = String(content || '');
+  const current = parseStateFields(original);
+  const merged = Object.assign({}, current, values || {});
+  // Epoch fields have one canonical home. Strip duplicate scalar lines from
+  // legacy/adversarial sections before inserting the authoritative block so a
+  // later duplicate cannot override the cache/transaction fence parser.
+  const epochKeys = new Set(EPOCH_STATE_FIELD_ORDER);
+  const text = original.split(/\r?\n/).filter(line => {
+    const match = /^([A-Za-z][A-Za-z0-9_]*):/.exec(line);
+    return !match || !epochKeys.has(match[1]);
+  }).join('\n');
+  const lines = ['## Epoch Lineage'];
+  for (const key of EPOCH_STATE_FIELD_ORDER) {
+    let value = merged[key];
+    if (value === undefined || value === null || value === '') value = 'none';
+    if (Array.isArray(value)) value = value.length ? value.join(',') : 'none';
+    if (typeof value === 'boolean') value = value ? 'true' : 'false';
+    lines.push(key + ': ' + value);
+  }
+  const block = lines.join('\n') + '\n';
+  const heading = /^## Epoch Lineage[ \t]*$/m;
+  const match = heading.exec(text);
+  if (match) {
+    const next = /^## [^\n]+$/gm;
+    next.lastIndex = match.index + match[0].length;
+    const nextMatch = next.exec(text);
+    const end = nextMatch ? nextMatch.index : text.length;
+    return text.slice(0, match.index) + block + (nextMatch ? '\n' : '') + text.slice(end);
+  }
+  const sink = /^## Sink[ \t]*$/m.exec(text);
+  if (sink) return text.slice(0, sink.index) + block + '\n' + text.slice(sink.index);
+  return text.replace(/\s*$/, '\n\n') + block;
+}
+
+function validateReplanTransaction(value) {
+  const refuse = (reason, step) => ({ ok: false, reason, step: step || null });
+  try {
+    if (!isPlainObject(value) || !REPLAN_TRANSACTION_SCHEMA_VERSIONS.includes(value.schema_version)
+        || !HEX64_RE.test(String(value.transaction_id || ''))
+        || !HEX64_RE.test(String(value.epoch_lineage_id || ''))
+        || !REPLAN_PHASES.includes(value.phase)
+        || !['in_progress', 'candidate_changed', 'consent_halt', 'committed'].includes(value.outcome)
+        || !Number.isSafeInteger(value.planner_attempt) || value.planner_attempt < 1
+        || !Number.isSafeInteger(value.transition_cost) || ![0, 1].includes(value.transition_cost)
+        || typeof value.transition_reason !== 'string' || !value.transition_reason
+        || !isPlainObject(value.parent) || !isPlainObject(value.source) || !isPlainObject(value.cas)
+        || !isPlainObject(value.budget) || !isPlainObject(value.planner) || !isPlainObject(value.child)
+        || !isPlainObject(value.snapshot) || !isPlainObject(value.activation)
+        || !Array.isArray(value.attempts)) return refuse('replan_transaction_invalid');
+
+    const lineage = buildEpochLineage(value.parent.claim_identity, value.parent.claim_root_base);
+    if (lineage.epoch_lineage_id !== value.epoch_lineage_id
+        || lineage.claim_identity_digest !== value.parent.claim_identity_digest
+        || lineage.claim_root_base_digest !== value.parent.claim_root_base_digest
+        || !Number.isSafeInteger(value.parent.plan_epoch) || value.parent.plan_epoch < 1
+        || !HEX64_RE.test(String(value.parent.plan_hash || ''))
+        || !HEX64_RE.test(String(value.parent.plan_digest || ''))
+        || !HEX64_RE.test(String(value.parent.ledger_digest || ''))
+        || !HEX64_RE.test(String(value.parent.state_pre_fence_digest || ''))
+        || !HEX64_RE.test(String(value.parent.state_authority_digest || ''))
+        || typeof value.parent.plan_bytes_base64 !== 'string'
+        || typeof value.parent.state_bytes_base64 !== 'string'
+        || sha256Hex(Buffer.from(value.parent.plan_bytes_base64, 'base64')) !== value.parent.plan_digest
+        || sha256Hex(Buffer.from(value.parent.state_bytes_base64, 'base64')) !== value.parent.state_pre_fence_digest) {
+      return refuse('replan_transaction_parent_invalid');
+    }
+    const expectedId = sha256Canonical({
+      schema_version: value.schema_version,
+      epoch_lineage_id: value.epoch_lineage_id,
+      parent_plan_epoch: value.parent.plan_epoch,
+      parent_plan_hash: value.parent.plan_hash,
+      source_reason: value.source.source_reason,
+      source_attempt_ids: Array.isArray(value.source.source_attempt_ids)
+        ? value.source.source_attempt_ids.slice().sort() : [],
+      prepare_candidate_digest: value.cas.prepare && value.cas.prepare.candidate_digest,
+      prepare_inherited_frontier_digest: value.cas.prepare && value.cas.prepare.inherited_frontier_digest,
+    });
+    if (expectedId !== value.transaction_id) return refuse('replan_transaction_identity_mismatch');
+    if (value.schema_version === 2) {
+      const predecessor = value.predecessor;
+      const predecessorRequired = value.parent.plan_epoch > 1;
+      if ((predecessorRequired && !isPlainObject(predecessor))
+          || (!predecessorRequired && predecessor !== null)) {
+        return refuse('replan_transaction_predecessor_invalid');
+      }
+      if (predecessorRequired && (!REPLAN_TRANSACTION_SCHEMA_VERSIONS.includes(predecessor.schema_version)
+          || !HEX64_RE.test(String(predecessor.transaction_id || ''))
+          || predecessor.transaction_id === value.transaction_id
+          || predecessor.path !== '.cache/committed-transactions/' + predecessor.transaction_id + '.json'
+          || !HEX64_RE.test(String(predecessor.digest || ''))
+          || !Number.isSafeInteger(predecessor.size) || predecessor.size < 1)) {
+        return refuse('replan_transaction_predecessor_invalid');
+      }
+    }
+    const sourceIds = value.source.source_attempt_ids;
+    const sourceKind = value.source.authority_kind || 'review_outcome';
+    if (!Array.isArray(sourceIds) || !sourceIds.length
+        || sourceIds.some(id => typeof id !== 'string' || !id)
+        || JSON.stringify(sourceIds) !== JSON.stringify(Array.from(new Set(sourceIds)).sort())
+        || typeof value.source.source_reason !== 'string' || !value.source.source_reason
+        || !HEX64_RE.test(String(value.source.source_evidence_digest || ''))
+        || !['review_outcome', 'diagnosis_to_build'].includes(sourceKind)
+        || (sourceKind === 'review_outcome' && (!HEX64_RE.test(String(value.source.journal_digest || ''))
+          || !HEX64_RE.test(String(value.source.handoff_digest || ''))))
+        || (sourceKind === 'diagnosis_to_build'
+          && !(value.source.journal_digest === null && value.source.handoff_digest === null))) {
+      return refuse('replan_transaction_source_invalid');
+    }
+    if (value.schema_version === 2 && value.source.rotated_from != null) {
+      const rotated = value.source.rotated_from;
+      if (!isPlainObject(rotated)
+          || rotated.path !== '.cache/replan-sources/' + rotated.digest + '.json'
+          || !HEX64_RE.test(String(rotated.digest || ''))
+          || !Number.isSafeInteger(rotated.size) || rotated.size < 1
+          || !HEX64_RE.test(String(rotated.transaction_id || ''))) {
+        return refuse('replan_transaction_source_invalid');
+      }
+    }
+    if (!Number.isSafeInteger(value.budget.count_before) || value.budget.count_before < 0
+        || !Number.isSafeInteger(value.budget.prospective_count_after)
+        || value.budget.prospective_count_after !== value.budget.count_before + value.transition_cost
+        || !Number.isSafeInteger(value.budget.ceiling) || value.budget.ceiling < REVIEW_REPLAN_LIMIT
+        || value.budget.transition_cost !== value.transition_cost
+        || !(value.budget.consent_ledger_digest === null
+          || HEX64_RE.test(String(value.budget.consent_ledger_digest || '')))
+        || typeof value.budget.case_b_exemption !== 'boolean'
+        || typeof value.budget.case_b_exemption_consumed_before !== 'boolean'
+        || typeof value.budget.case_b_exemption_consumed_after !== 'boolean') {
+      return refuse('replan_transaction_budget_invalid');
+    }
+    if (value.transition_cost === 0 && (!value.budget.case_b_exemption
+        || !isPlainObject(value.budget.case_b_proof)
+        || !HEX64_RE.test(String(value.budget.case_b_proof.proof_digest || ''))
+        || sha256Canonical(value.budget.case_b_proof.payload) !== value.budget.case_b_proof.proof_digest)) {
+      return refuse('replan_transaction_budget_invalid');
+    }
+    if (typeof value.planner.packet_path !== 'string' || typeof value.planner.child_path !== 'string'
+        || typeof value.planner.dispatch_nonce !== 'string' || !value.planner.dispatch_nonce
+        || typeof value.planner.profile_identity !== 'string' || !value.planner.profile_identity
+        || !(value.planner.packet_digest === null || HEX64_RE.test(String(value.planner.packet_digest || '')))
+        || !(value.planner.attestation_digest === null || HEX64_RE.test(String(value.planner.attestation_digest || '')))) {
+      return refuse('replan_transaction_planner_invalid');
+    }
+    const expectedDispatchNonce = sha256Canonical({
+      transaction_id: value.transaction_id,
+      role: 'workflow-planner',
+      planner_attempt: value.planner_attempt,
+    }).slice(0, 12);
+    if (value.planner.dispatch_nonce !== expectedDispatchNonce) {
+      return refuse('replan_transaction_planner_invalid');
+    }
+
+    const casNames = ['prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation'];
+    for (const seam of casNames) {
+      const record = value.cas[seam];
+      if (record == null) {
+        if (seam === 'prepare') return refuse('replan_transaction_cas_invalid', seam);
+        continue;
+      }
+      if (!isPlainObject(record) || record.seam !== seam || !['match', 'mismatch'].includes(record.result)
+          || !HEX64_RE.test(String(record.candidate_digest || ''))
+          || record.claim_root_base_digest !== value.parent.claim_root_base_digest
+          || !HEX64_RE.test(String(record.inherited_frontier_digest || ''))) {
+        return refuse('replan_transaction_cas_invalid', seam);
+      }
+    }
+    if (value.cas.prepare.result !== 'match') return refuse('replan_transaction_cas_invalid', 'prepare');
+
+    const phaseByFailedSeam = {
+      prepare: 'prepared',
+      pre_freeze: 'planner_pending',
+      pre_snapshot: 'child_frozen',
+      pre_activation: 'parent_archived',
+    };
+    if (value.planner_attempt !== value.attempts.length + 1) {
+      return refuse('replan_transaction_attempt_invalid');
+    }
+    for (let index = 0; index < value.attempts.length; index++) {
+      const attempt = value.attempts[index];
+      const failure = attempt && attempt.failure;
+      const prepareCas = attempt && attempt.prepare_cas;
+      const failedCas = attempt && attempt.failed_cas;
+      if (!isPlainObject(attempt) || attempt.schema_version !== 1
+          || !HEX64_RE.test(String(attempt.transaction_id || ''))
+          || attempt.outcome !== 'candidate_changed'
+          || attempt.planner_attempt !== index + 1
+          || !isPlainObject(failure) || failure.reason !== 'replan_candidate_changed'
+          || phaseByFailedSeam[failure.seam] !== attempt.phase
+          || !isPlainObject(prepareCas) || !isPlainObject(failedCas)
+          || !isPlainObject(failure.expected) || !isPlainObject(failure.actual)) {
+        return refuse('replan_transaction_attempt_invalid', String(index));
+      }
+      const tuples = [prepareCas, failedCas, failure.expected, failure.actual];
+      if (tuples.some(tuple => !HEX64_RE.test(String(tuple.candidate_digest || ''))
+          || tuple.claim_root_base_digest !== value.parent.claim_root_base_digest
+          || !HEX64_RE.test(String(tuple.inherited_frontier_digest || '')))
+          || canonicalJson(prepareCas) !== canonicalJson(failure.expected)
+          || canonicalJson(failedCas) !== canonicalJson(failure.actual)) {
+        return refuse('replan_transaction_attempt_invalid', String(index));
+      }
+      let priorFrontier;
+      try { priorFrontier = digestInheritedFrontierView(attempt.prepare_inherited_frontier_view); }
+      catch (_) { return refuse('replan_transaction_attempt_invalid', String(index)); }
+      if (priorFrontier.inherited_frontier_digest !== prepareCas.inherited_frontier_digest) {
+        return refuse('replan_transaction_attempt_invalid', String(index));
+      }
+      const expectedPriorId = sha256Canonical({
+        schema_version: value.schema_version,
+        epoch_lineage_id: value.epoch_lineage_id,
+        parent_plan_epoch: value.parent.plan_epoch,
+        parent_plan_hash: value.parent.plan_hash,
+        source_reason: value.source.source_reason,
+        source_attempt_ids: sourceIds.slice().sort(),
+        prepare_candidate_digest: prepareCas.candidate_digest,
+        prepare_inherited_frontier_digest: prepareCas.inherited_frontier_digest,
+      });
+      if (attempt.transaction_id !== expectedPriorId) {
+        return refuse('replan_transaction_attempt_invalid', String(index));
+      }
+      for (const artifact of [attempt.child, attempt.attestation]) {
+        if (artifact === null) continue;
+        if (!isPlainObject(artifact) || !HEX64_RE.test(String(artifact.digest || ''))
+            || typeof artifact.bytes_base64 !== 'string'
+            || sha256Hex(Buffer.from(artifact.bytes_base64, 'base64')) !== artifact.digest) {
+          return refuse('replan_transaction_attempt_invalid', String(index));
+        }
+      }
+    }
+
+    let sawNotStarted = false;
+    let completed = 0;
+    for (const step of REPLAN_ACTIVATION_STEPS) {
+      const record = value.activation[step];
+      if (!isPlainObject(record) || !['not_started', 'complete'].includes(record.status)) {
+        return refuse('replan_activation_journal_invalid', step);
+      }
+      if (record.status === 'not_started') sawNotStarted = true;
+      else {
+        if (sawNotStarted || !HEX64_RE.test(String(record.digest || ''))) {
+          return refuse('replan_activation_journal_invalid', step);
+        }
+        completed++;
+      }
+    }
+    if (['prepared', 'planner_pending', 'child_frozen'].includes(value.phase) && completed !== 0) {
+      return refuse('replan_activation_journal_invalid');
+    }
+    if (value.phase === 'committed' && completed < REPLAN_ACTIVATION_STEPS.indexOf('transaction_committed') + 1) {
+      return refuse('replan_activation_journal_invalid', 'transaction_committed');
+    }
+    if (value.phase !== 'committed' && completed >= REPLAN_ACTIVATION_STEPS.indexOf('transaction_committed') + 1) {
+      return refuse('replan_activation_journal_invalid', 'transaction_committed');
+    }
+    if (['child_frozen', 'parent_archived', 'committed'].includes(value.phase)) {
+      if (!HEX64_RE.test(String(value.child.digest || ''))
+          || !HEX64_RE.test(String(value.child.plan_hash || ''))
+          || !HEX64_RE.test(String(value.child.semantic_digest || ''))
+          || !HEX64_RE.test(String(value.child.ledger_digest || ''))
+          || value.child.all_pending !== true || typeof value.child.bytes_base64 !== 'string'
+          || sha256Hex(Buffer.from(value.child.bytes_base64, 'base64')) !== value.child.digest) {
+        return refuse('replan_transaction_child_invalid');
+      }
+      if (value.schema_version === 2
+          && (typeof value.child.first_node_id !== 'string' || !value.child.first_node_id
+            || typeof value.child.first_node_role !== 'string' || !value.child.first_node_role)) {
+        return refuse('replan_transaction_child_invalid');
+      }
+    }
+    if (['parent_archived', 'committed'].includes(value.phase)) {
+      if (!HEX64_RE.test(String(value.snapshot.manifest_digest || ''))
+          || !HEX64_RE.test(String(value.snapshot.manifest_self_digest || ''))
+          || value.snapshot.verified !== true) return refuse('replan_transaction_snapshot_invalid');
+    }
+    const authorityProjection = value.snapshot.authority_projection;
+    const authorityDigest = value.snapshot.authority_digest;
+    if (authorityProjection != null || authorityDigest != null) {
+      if (!isPlainObject(authorityProjection) || authorityProjection.schema_version !== 2
+          || !HEX64_RE.test(String(authorityDigest || ''))
+          || sha256Canonical(authorityProjection) !== authorityDigest
+          || authorityProjection.transaction_id !== value.transaction_id
+          || authorityProjection.epoch_lineage_id !== value.epoch_lineage_id
+          || authorityProjection.parent_plan_epoch !== value.parent.plan_epoch) {
+        return refuse('replan_snapshot_authority_invalid');
+      }
+    } else if (value.phase !== 'committed') {
+      return refuse('replan_snapshot_authority_invalid');
+    }
+    if (value.phase === 'committed') {
+      if (!value.cas.pre_activation || value.cas.pre_activation.result !== 'match') {
+        return refuse('replan_transaction_cas_invalid', 'pre_activation');
+      }
+      const expectedCommit = sha256Canonical({
+        epoch: value.parent.plan_epoch + 1,
+        plan_hash: value.child.plan_hash,
+        count: value.budget.prospective_count_after,
+        snapshot: value.snapshot.manifest_digest,
+      });
+      if (value.activation.transaction_committed.digest !== expectedCommit) {
+        return refuse('replan_activation_journal_invalid', 'transaction_committed');
+      }
+    }
+    return { ok: true, transaction: value };
+  } catch (_) {
+    return refuse('replan_transaction_invalid');
+  }
+}
+
+function readReplanFence(stateContent, transaction) {
+  const state = parseStateFields(stateContent);
+  const stateStatus = state.replan_status || 'none';
+  const stateTx = state.replan_transaction_id || 'none';
+  if (!transaction) {
+    if (stateStatus === 'none' && stateTx === 'none') return { ok: true, fenced: false, state };
+    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch', state };
+  }
+  const checked = validateReplanTransaction(transaction);
+  if (!checked.ok) return { ok: false, fenced: true, reason: checked.reason, state };
+  const preFenceCrash = transaction.phase === 'prepared' && stateStatus === 'none' && stateTx === 'none';
+  if (!preFenceCrash && stateTx !== transaction.transaction_id) {
+    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch', state, transaction };
+  }
+  const committed = transaction.phase === 'committed'
+    && transaction.activation.transaction_committed.status === 'complete'
+    && transaction.activation.state_unfenced.status === 'complete';
+  if (committed && stateStatus === 'none'
+      && stateTx === transaction.transaction_id
+      && state.replan_phase === 'committed'
+      && state.epoch_lineage_id === transaction.epoch_lineage_id
+      && Number(state.plan_epoch) === transaction.parent.plan_epoch + 1
+      && state.active_plan_hash === transaction.child.plan_hash
+      && state.active_snapshot_manifest_digest === transaction.snapshot.manifest_digest) {
+    return { ok: true, fenced: false, committed: true, state, transaction };
+  }
+  if (committed) {
+    return { ok: false, fenced: true, reason: 'replan_integrity_mismatch',
+      phase: transaction.phase, transaction_id: transaction.transaction_id,
+      legal_mutation: 'replan resume', state, transaction };
+  }
+  return {
+    ok: true,
+    fenced: true,
+    reason: 'replan_in_progress',
+    phase: transaction.phase,
+    transaction_id: transaction.transaction_id,
+    legal_mutation: 'replan resume',
+    state,
+    transaction,
+  };
+}
+
+function projectMutationGuard(stateContent, transaction, action) {
+  const fence = readReplanFence(stateContent, transaction);
+  if (!fence.ok) return refuse(fence.reason, { action: action || null });
+  if (!fence.fenced) return { ok: true };
+  if (action === 'replan resume') return { ok: true, fenced: true, phase: fence.phase };
+  return refuse('replan_in_progress', {
+    phase: fence.phase,
+    transaction_id: fence.transaction_id,
+    legal_mutation: fence.legal_mutation,
+    action: action || null,
+  });
+}
+
+function snapshotManifestDigest(manifest) {
+  if (!isPlainObject(manifest)) throw new Error('snapshot_manifest_invalid');
+  const copy = Object.assign({}, manifest);
+  delete copy.manifest_self_digest;
+  return sha256Canonical(copy);
+}
+
+function validateSnapshotManifestShape(manifest) {
+  if (!isPlainObject(manifest) || ![1, 2].includes(manifest.schema_version)
+      || !Number.isSafeInteger(manifest.parent_plan_epoch) || manifest.parent_plan_epoch < 1
+      || !HEX64_RE.test(String(manifest.epoch_lineage_id || ''))
+      || !HEX64_RE.test(String(manifest.transaction_id || ''))
+      || !Array.isArray(manifest.files)
+      || manifest.files.some(file => !isPlainObject(file) || !safeRelativePath(file.path)
+        || !Number.isSafeInteger(file.size) || file.size < 0
+        || !/^[0-7]{3,4}$/.test(String(file.mode || ''))
+        || !HEX64_RE.test(String(file.digest || '')))
+      || !HEX64_RE.test(String(manifest.manifest_self_digest || ''))
+      || snapshotManifestDigest(manifest) !== manifest.manifest_self_digest) {
+    return { ok: false, reason: 'snapshot_manifest_invalid' };
+  }
+  if (manifest.schema_version === 2) {
+    if (!isPlainObject(manifest.snapshot_authority_projection)
+        || manifest.snapshot_authority_projection.schema_version !== 2
+        || !HEX64_RE.test(String(manifest.snapshot_authority_digest || ''))
+        || sha256Canonical(manifest.snapshot_authority_projection) !== manifest.snapshot_authority_digest
+        || !isPlainObject(manifest.child)
+        || manifest.child.path !== REPLAN_PLAN_NEXT_NAME
+        || !HEX64_RE.test(String(manifest.child.digest || ''))
+        || !HEX64_RE.test(String(manifest.child.plan_hash || ''))
+        || !HEX64_RE.test(String(manifest.child.attestation_digest || ''))) {
+      return { ok: false, reason: 'snapshot_authority_shape_invalid' };
+    }
+    const receiptShape = (receipt, kind) => receipt === null || (isPlainObject(receipt)
+      && HEX64_RE.test(String(receipt.digest || ''))
+      && Number.isSafeInteger(receipt.size) && receipt.size > 0
+      && HEX64_RE.test(String(receipt.transaction_id || ''))
+      && (kind === 'transaction'
+        ? REPLAN_TRANSACTION_SCHEMA_VERSIONS.includes(receipt.schema_version)
+          && receipt.path === '.cache/committed-transactions/' + receipt.transaction_id + '.json'
+        : receipt.path === '.cache/replan-sources/' + receipt.digest + '.json'));
+    if ((Object.prototype.hasOwnProperty.call(manifest, 'transaction_predecessor')
+          && !receiptShape(manifest.transaction_predecessor, 'transaction'))
+        || (Object.prototype.hasOwnProperty.call(manifest, 'rotated_source')
+          && !receiptShape(manifest.rotated_source, 'source'))) {
+      return { ok: false, reason: 'snapshot_history_receipt_invalid' };
+    }
+  }
+  const paths = manifest.files.map(file => file.path);
+  const folded = paths.map(file => file.toLocaleLowerCase('en-US'));
+  if (new Set(paths).size !== paths.length
+      || new Set(folded).size !== folded.length
+      || JSON.stringify(paths) !== JSON.stringify(paths.slice().sort())) {
+    return { ok: false, reason: 'snapshot_manifest_index_invalid' };
+  }
+  return { ok: true, manifest };
+}
+
 // #579: single staleness constant for the lane liveness marker. A claim_ts newer than
 // this threshold (from the current wall-clock) could be a live co-tenant — classified
 // 'ambiguous' (ask). Older (or absent) → 'stale' (resumable leftover / backward compat).
@@ -738,9 +1531,10 @@ function effectiveProducerBinding(attempt, writer) {
   return (attempt && attempt.producer_bindings) ? attempt.producer_bindings[writer] : undefined;
 }
 
-// Pure, fail-closed structural validation for the authoritative review journal. Runtime code may
-// perform additional plan-relative proofs, but no caller is allowed to accept malformed durable state.
-function validateReviewJournal(journal, expectedPlanHash) {
+// Pure, fail-closed structural validation for the authoritative review journal. Schema-2
+// code/security fanout reduction is plan-owned: callers pass the canonical adapter rows from
+// plan-validator, while metadata-absent legacy fanouts retain their historical majority rule.
+function validateReviewJournal(journal, expectedPlanHash, options) {
   const refuseJournal = (reason, detail) => ({ ok: false, reason, detail: detail || null });
   if (!journal || typeof journal !== 'object' || Array.isArray(journal)) {
     return refuseJournal('review_journal_malformed', 'journal must be an object');
@@ -756,6 +1550,54 @@ function validateReviewJournal(journal, expectedPlanHash) {
   }
   if (!Array.isArray(journal.attempts)) {
     return refuseJournal('review_journal_malformed', 'attempts must be an array');
+  }
+  const hasSchema2Contracts = !!options && typeof options === 'object' && !Array.isArray(options)
+    && Object.prototype.hasOwnProperty.call(options, 'schema2_review_gates');
+  const schema2Contracts = hasSchema2Contracts ? options.schema2_review_gates : [];
+  if (!Array.isArray(schema2Contracts)) {
+    return refuseJournal('review_journal_schema2_contract_invalid', 'schema2_review_gates must be an array');
+  }
+  const contractKeys = new Set();
+  const contractMembers = new Set();
+  let priorContractKey = null;
+  const exactContractKeys = ['aggregation', 'logical_gate_key', 'members', 'role'];
+  for (const contract of schema2Contracts) {
+    if (!contract || typeof contract !== 'object' || Array.isArray(contract)
+        || JSON.stringify(Object.keys(contract).sort()) !== JSON.stringify(exactContractKeys)
+        || typeof contract.logical_gate_key !== 'string'
+        || !['code-reviewer', 'security-reviewer'].includes(contract.role)
+        || !['replicated_majority', 'partitioned_all'].includes(contract.aggregation)
+        || !Array.isArray(contract.members) || contract.members.length < 1
+        || contract.members.some(member => typeof member !== 'string' || !member)
+        || JSON.stringify(contract.members) !== JSON.stringify(Array.from(new Set(contract.members)).sort())) {
+      return refuseJournal('review_journal_schema2_contract_invalid', 'schema-2 review contract shape is not canonical');
+    }
+    let keyView;
+    try { keyView = JSON.parse(contract.logical_gate_key); }
+    catch (_) { return refuseJournal('review_journal_schema2_contract_invalid', 'logical_gate_key must be canonical JSON'); }
+    if (!keyView || typeof keyView !== 'object' || Array.isArray(keyView)
+        || JSON.stringify(Object.keys(keyView)) !== JSON.stringify(['kind', 'origin', 'members'])
+        || keyView.kind !== 'fanout'
+        || !Array.isArray(keyView.origin) || !Array.isArray(keyView.members)
+        || keyView.origin.some(member => typeof member !== 'string' || !member)
+        || keyView.members.some(member => typeof member !== 'string' || !member)
+        || JSON.stringify(keyView.origin) !== JSON.stringify(Array.from(new Set(keyView.origin)).sort())
+        || JSON.stringify(keyView.members) !== JSON.stringify(contract.members)
+        || canonicalLogicalGateIdentity(keyView).key !== contract.logical_gate_key) {
+      return refuseJournal('review_journal_schema2_contract_invalid', 'logical_gate_key/member identity is not canonical');
+    }
+    if (contractKeys.has(contract.logical_gate_key)
+        || (priorContractKey !== null && priorContractKey.localeCompare(contract.logical_gate_key) >= 0)) {
+      return refuseJournal('review_journal_schema2_contract_invalid', 'schema-2 review contracts must have unique sorted keys');
+    }
+    contractKeys.add(contract.logical_gate_key);
+    priorContractKey = contract.logical_gate_key;
+    for (const member of contract.members) {
+      if (contractMembers.has(member)) {
+        return refuseJournal('review_journal_schema2_contract_invalid', 'schema-2 review contract members overlap');
+      }
+      contractMembers.add(member);
+    }
   }
   const ids = new Set();
   const txKeys = new Set();
@@ -795,6 +1637,19 @@ function validateReviewJournal(journal, expectedPlanHash) {
       || JSON.stringify(attempt.logical_gate.origin) !== JSON.stringify(canonical.origin)
       || JSON.stringify(attempt.logical_gate.members) !== JSON.stringify(canonical.members)) {
       return refuseJournal('review_journal_identity_mismatch');
+    }
+    const intersectingContracts = schema2Contracts.filter(contract =>
+      contract.logical_gate_key === canonical.key
+      || contract.members.some(member => canonical.members.includes(member)));
+    let schema2Contract = null;
+    if (intersectingContracts.length) {
+      const exactContracts = intersectingContracts.filter(contract =>
+        contract.logical_gate_key === canonical.key
+        && JSON.stringify(contract.members) === JSON.stringify(canonical.members));
+      if (canonical.kind !== 'fanout' || exactContracts.length !== 1 || intersectingContracts.length !== 1) {
+        return refuseJournal('review_journal_schema2_gate_mismatch');
+      }
+      schema2Contract = exactContracts[0];
     }
     if (!Number.isInteger(attempt.ordinal) || attempt.ordinal < 1) return refuseJournal('review_journal_malformed', 'ordinal must be a positive integer');
     const ordinalKey = canonical.key + '\n' + attempt.ordinal;
@@ -864,8 +1719,19 @@ function validateReviewJournal(journal, expectedPlanHash) {
       if (attempt.receipts.length !== canonical.members.length) {
         return refuseJournal('review_journal_fanout_quorum_mismatch');
       }
-      const passCount = attempt.receipts.filter(receipt => evaluateEffectiveVerdict(receipt.body).pass).length;
-      const expectedOutcome = passCount > canonical.members.length / 2 ? 'pass' : 'fail';
+      const evaluatedReceipts = attempt.receipts.map(receipt => evaluateEffectiveVerdict(receipt.body));
+      const passCount = evaluatedReceipts.filter(evaluated => evaluated.pass).length;
+      const blockerVeto = evaluatedReceipts.some(evaluated =>
+        evaluated.findings_blocking > 0 || evaluated.unresolved_fixes.length > 0);
+      let passes;
+      if (!schema2Contract) {
+        passes = passCount > canonical.members.length / 2;
+      } else if (schema2Contract.aggregation === 'replicated_majority') {
+        passes = !blockerVeto && passCount > canonical.members.length / 2;
+      } else {
+        passes = !blockerVeto && passCount === canonical.members.length;
+      }
+      const expectedOutcome = passes ? 'pass' : 'fail';
       const expectedReason = expectedOutcome === 'pass' ? null : 'fanout_refuted';
       if (attempt.outcome !== expectedOutcome || attempt.reason !== expectedReason) {
         return refuseJournal('review_journal_outcome_mismatch');
@@ -1694,6 +2560,43 @@ module.exports = {
   MERGE_CONFLICT_REPAIR_LIMIT,
   REVIEW_REPAIR_LIMIT,
   REVIEW_REBIND_LIMIT,
+  EPOCH_SCHEMA_VERSION,
+  REPLAN_TRANSACTION_SCHEMA_VERSION,
+  REPLAN_TRANSACTION_SCHEMA_VERSIONS,
+  REVIEW_REPLAN_LIMIT,
+  REPLAN_TRANSACTION_NAME,
+  REPLAN_PLAN_NEXT_NAME,
+  REPLAN_PLANNER_PACKET_NAME,
+  REPLAN_PLANNER_ATTESTATION_NAME,
+  EPOCH_CONSENT_EXTENSIONS_NAME,
+  REPLAN_PHASES,
+  REPLAN_STATUSES,
+  REPLAN_CAS_SEAMS,
+  REPLAN_ACTIVATION_STEPS,
+  REPLAN_DURABLE_WRITE_LABELS,
+  REPLAN_DURABLE_WRITE_LABELS_DYNAMIC,
+  EPOCH_STATE_FIELD_ORDER,
+  isPlainObject,
+  canonicalJson,
+  sha256Hex,
+  sha256Canonical,
+  normalizeIssueNumbers,
+  buildClaimIdentity,
+  buildClaimRootBase,
+  buildEpochLineage,
+  validateEpochStateAuthority,
+  buildCandidateView,
+  digestCandidateView,
+  buildInheritedFrontierView,
+  digestInheritedFrontierView,
+  buildScopeLineageId,
+  parseStateFields,
+  writeEpochStateBlock,
+  validateReplanTransaction,
+  readReplanFence,
+  projectMutationGuard,
+  snapshotManifestDigest,
+  validateSnapshotManifestShape,
   MAX_NODES,
   OPTIMIZE_ITER_CAP,
   OPTIMIZE_WALLCLOCK_CAP,

@@ -26,7 +26,7 @@ fs.writeFileSync(
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
-const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag } = require('./kaola-workflow-claim.js');
+const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag, buildClaimAnchors } = require('./kaola-workflow-claim.js');
 const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
 
 let passed = 0, failed = 0;
@@ -1120,6 +1120,17 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 
     // (2) Create the feature branch and set up the worktree to simulate it.
     g(mainRoot, ['checkout', '-b', 'workflow/' + project]);
+    // Establish the synthetic linked-worktree identity at CLAIM time so the
+    // schema-2 claim identity binds the same absolute worktree path persisted
+    // below. The feature commit updates only this synthetic HEAD later.
+    const mainGitDir = path.join(mainRoot, '.git');
+    const wtGitLinkDir = path.join(mainGitDir, 'worktrees', 'kw-522-wt');
+    fs.mkdirSync(wtGitLinkDir, { recursive: true });
+    fs.writeFileSync(path.join(wtGitLinkDir, 'commondir'), '../..\n');
+    fs.writeFileSync(path.join(wtGitLinkDir, 'gitdir'), path.join(wtRoot, '.git') + '\n');
+    const claimHead522 = spawnS522('git', ['-C', mainRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), claimHead522 + '\n');
+    fs.writeFileSync(path.join(wtRoot, '.git'), 'gitdir: ' + wtGitLinkDir + '\n');
     // Write project folder in the worktree (simulating worktree-finalize having already run).
     const projDir = path.join(wtRoot, 'kaola-workflow', project);
     fs.mkdirSync(projDir, { recursive: true });
@@ -1159,7 +1170,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       'issue_number: 522',
       'sink: merge',
       'run_posture: worktree',
-      'worktree_path: ' + wtRoot
+      'worktree_path: ' + wtRoot,
+      'main_root: ' + mainRoot,
+      'session_marker: fixture-522',
+      'claim_ts: 2026-01-01T00:00:00Z'
     ].join('\n') + '\n');
 
     // (4) Write a minimal valid workflow-plan.md with a complete node covering impl.txt.
@@ -1187,6 +1201,14 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '| impl | complete |',
       '| rv | complete |',
       '| done | complete |',
+      '',
+      '## Required Agent Compliance',
+      '',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|---|---|---|---|',
+      '| implementer (impl) | invoked | fixture | |',
+      '| code-reviewer (rv) | invoked | fixture | |',
+      '| finalize (done) | invoked | fixture | |',
       ''
     ].join('\n');
 
@@ -1201,6 +1223,45 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) { /* freeze may fail in this minimal repo; gate still needs the plan */ }
 
+    const frozenPlan522 = fs.readFileSync(planPath, 'utf8');
+    const planHash522 = (frozenPlan522.match(/<!-- plan_hash: ([0-9a-f]{64}) -->/) || [])[1];
+    assert(!!planHash522, '#522 fixture: adaptive plan freezes with a plan hash');
+    const anchors522 = buildClaimAnchors(wtRoot, {
+      issue_number: 522,
+      branch: 'workflow/' + project,
+      worktree_path: wtRoot,
+      claim_ts: '2026-01-01T00:00:00Z',
+      session_marker: 'fixture-522',
+    });
+    let authorityState522 = fs.readFileSync(path.join(mainProjDir, 'workflow-state.md'), 'utf8');
+    authorityState522 = authorityState522.replace('\n## Sink', [
+      '', '## Planning Evidence', 'plan_hash: ' + planHash522, 'decision: auto-run',
+      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
+      'first_node_id: impl', 'first_node_role: implementer', '',
+      '## Epoch Lineage', 'epoch_schema_version: ' + anchors522.epoch_schema_version,
+      'claim_repository_id: ' + anchors522.claim_repository_id,
+      'claim_identity_digest: ' + anchors522.claim_identity_digest,
+      'claim_root_object_format: ' + anchors522.claim_root_object_format,
+      'claim_root_base_commit: ' + anchors522.claim_root_base_commit,
+      'claim_root_base_tree: ' + anchors522.claim_root_base_tree,
+      'claim_root_base_digest: ' + anchors522.claim_root_base_digest,
+      'epoch_lineage_id: ' + anchors522.epoch_lineage_id, 'plan_epoch: 1',
+      'active_plan_hash: ' + planHash522, 'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none', 'automatic_review_replans: 0',
+      'authorized_epoch_ceiling: 2', 'case_b_exemption_consumed: false',
+      'replan_status: none', 'replan_transaction_id: none', 'replan_phase: none',
+      'active_snapshot_manifest_digest: none', '', '## Sink',
+    ].join('\n'));
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), authorityState522);
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-tasks.json'), JSON.stringify({
+      source_plan_hash: planHash522,
+      tasks: [
+        { id: 'impl', role: 'implementer', ledger_status: 'complete', status: 'completed' },
+        { id: 'rv', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+        { id: 'done', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+      ],
+    }) + '\n');
+
     // (5) Write the plan into the worktree project dir too.
     const wtPlanPath = path.join(projDir, 'workflow-plan.md');
     fs.writeFileSync(wtPlanPath, fs.readFileSync(planPath, 'utf8'));
@@ -1208,6 +1269,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     // (6) Write workflow-state.md into the worktree project dir.
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'),
       fs.readFileSync(path.join(mainProjDir, 'workflow-state.md'), 'utf8'));
+    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'),
+      fs.readFileSync(path.join(mainProjDir, 'workflow-tasks.json'), 'utf8'));
 
     // (7) Commit the plan + state + impl.txt onto the feature branch in main.
     //     impl.txt is an attributed change (declared in `impl` node's write_set).
@@ -1218,19 +1281,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     // (8) Point the worktree gitdir at main (simulate git worktree linkage).
     //     For the gate we just need `git rev-parse HEAD` to resolve from the worktree.
     //     We use --git-dir pointing to main's .git to simulate a linked worktree.
-    const mainGitDir = path.join(mainRoot, '.git');
-    // Write a .git FILE (not dir) in wtRoot to point to main's worktrees dir.
-    // This is a proper git worktree linkage simulation.
-    const wtGitLinkDir = path.join(mainGitDir, 'worktrees', 'kw-522-wt');
-    fs.mkdirSync(wtGitLinkDir, { recursive: true });
-    // Write commondir to link back
-    fs.writeFileSync(path.join(wtGitLinkDir, 'commondir'), '../..\n');
-    fs.writeFileSync(path.join(wtGitLinkDir, 'gitdir'), path.join(wtRoot, '.git') + '\n');
-    // Write the worktree HEAD to track same branch
+    // Advance only the synthetic worktree HEAD to the feature commit. Its
+    // persisted claim-root tuple remains the real claim-time commit/tree.
     const headSha = spawnS522('git', ['-C', mainRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), headSha + '\n');
-    // Write .git file in wt
-    fs.writeFileSync(path.join(wtRoot, '.git'), 'gitdir: ' + path.join(wtGitLinkDir) + '\n');
 
     // In a real git linked worktree the working tree is a full checkout of the branch, so
     // package.json (committed on main before branching) is present. Mirror that here so the
@@ -3007,6 +3061,104 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
       if (projDirChmod691) { try { fs.chmodSync(projDirChmod691, 0o755); } catch (_) {} }
       fs.rmSync(mainRoot691, { recursive: true, force: true });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #699: a fresh claim persists one immutable claim/root/epoch identity. The
+// helper reads Git objects once and never derives lineage from a plan hash.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+  const root699 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-claim-')));
+  const noHistoryRoot699 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-no-history-')));
+  const noGitRoot699 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-no-git-')));
+  const classifier699 = path.join(root699, 'classifier-green.js');
+  const env699 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_PATH: 'adaptive',
+    KAOLA_CLASSIFIER_BACKOFF_MS: '0'
+  });
+  const g699 = args => execFileSync('git', ['-C', root699].concat(args), { encoding: 'utf8', env: env699, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const runFreshClaim699 = cwd => {
+    try {
+      const stdout = execFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-claim.js'),
+        'startup', '--target-issue', '699'], { cwd, encoding: 'utf8', env: Object.assign({}, env699, {
+          KAOLA_CLASSIFIER_MOCK_SCRIPT: classifier699
+        }), stdio: ['ignore', 'pipe', 'pipe'] });
+      return { code: 0, stdout };
+    } catch (error) {
+      return { code: error.status == null ? 1 : error.status, stdout: String(error.stdout || ''), stderr: String(error.stderr || '') };
+    }
+  };
+  try {
+    g699(['init', '-b', 'main']);
+    g699(['config', 'user.name', 'Test']);
+    g699(['config', 'user.email', 't@example.com']);
+    fs.writeFileSync(path.join(root699, 'README.md'), 'fixture\n');
+    fs.writeFileSync(classifier699, 'process.stdout.write(JSON.stringify({ verdict: "green", reasoning: "fixture" }) + "\\n");\n');
+    g699(['add', 'README.md']);
+    g699(['commit', '-m', 'root']);
+    g699(['checkout', '-b', 'workflow/issue-699']);
+    const anchors = buildClaimAnchors(root699, {
+      project: 'issue-699', issue_number: 699, issue_numbers: [699], branch: 'workflow/issue-699',
+      worktree_path: root699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
+      session_marker: 'claim-test'
+    });
+    assert(anchors.epoch_schema_version === 2, '#699: fresh claim anchors use epoch schema 2');
+    assert(/^[0-9a-f]{64}$/.test(anchors.claim_identity_digest), '#699: claim_identity_digest is canonical SHA-256');
+    assert(/^[0-9a-f]{40}$/.test(anchors.claim_root_base_commit) && /^[0-9a-f]{40}$/.test(anchors.claim_root_base_tree), '#699: claim root captures full immutable commit/tree object ids');
+    assert(/^[0-9a-f]{64}$/.test(anchors.claim_root_base_digest) && /^[0-9a-f]{64}$/.test(anchors.epoch_lineage_id), '#699: root and epoch lineage digests are canonical SHA-256');
+    const planNoise = Object.assign({}, anchors, { active_plan_hash: 'f'.repeat(64) });
+    assert(planNoise.epoch_lineage_id === anchors.epoch_lineage_id, '#699: active plan hash is metadata and cannot change epoch lineage');
+
+    g699(['checkout', 'main']);
+    let branchChangedAnchors699 = null;
+    try {
+      branchChangedAnchors699 = buildClaimAnchors(root699, {
+        project: 'issue-699', issue_number: 699, issue_numbers: [699], branch: 'workflow/issue-699',
+        worktree_path: root699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
+        session_marker: 'claim-test'
+      });
+    } catch (_) {}
+    assert(branchChangedAnchors699 && branchChangedAnchors699.claim_root_base_commit === anchors.claim_root_base_commit
+      && branchChangedAnchors699.claim_root_base_tree === anchors.claim_root_base_tree,
+    '#699: immutable claim-root authority survives a current-branch change; target branch identity is bound separately');
+    const acquired = runFreshClaim699(root699);
+    const persistedPath = path.join(root699, 'kaola-workflow', 'issue-699', 'workflow-state.md');
+    const persisted = fs.existsSync(persistedPath) ? fs.readFileSync(persistedPath, 'utf8') : '';
+    assert(acquired.code === 0, '#699: a fresh claim with provable Git anchors succeeds, got code=' + acquired.code + ' stderr=' + String(acquired.stderr || '').trim());
+    assert(/^## Epoch Lineage$/m.test(persisted) && /^epoch_schema_version: 2$/m.test(persisted), '#699: a successful fresh claim persists the schema-2 Epoch Lineage block');
+    assert(/^claim_identity_digest: [0-9a-f]{64}$/m.test(persisted) && /^claim_root_base_digest: [0-9a-f]{64}$/m.test(persisted) && /^epoch_lineage_id: [0-9a-f]{64}$/m.test(persisted), '#699: a successful fresh claim persists claim/root/lineage digests');
+    assert(/^active_plan_hash: none$/m.test(persisted) && /^## Planning Evidence$/m.test(persisted)
+      && /^plan_hash: none$/m.test(persisted) && /^first_node_id: none$/m.test(persisted)
+      && /^first_node_role: none$/m.test(persisted),
+    '#699: a fresh epoch-1 claim persists the complete legal planless authority tuple');
+
+    execFileSync('git', ['-C', noHistoryRoot699, 'init', '-b', 'main'], { env: env699, stdio: ['ignore', 'ignore', 'pipe'] });
+    fs.writeFileSync(path.join(noHistoryRoot699, 'untracked.txt'), 'candidate\n');
+    const noHistory = buildClaimAnchors(noHistoryRoot699, {
+      project: 'issue-700', issue_number: 700, issue_numbers: [700], branch: 'workflow/issue-700',
+      worktree_path: noHistoryRoot699, closure_policy: 'all_or_nothing', claim_ts: '2026-07-16T00:00:00.000Z',
+      session_marker: 'claim-test-no-history'
+    });
+    const emptyTree = execFileSync('git', ['-C', noHistoryRoot699, 'hash-object', '-t', 'tree', '--stdin'], {
+      input: '', encoding: 'utf8', env: env699, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    assert(/^0{40}$/.test(noHistory.claim_root_base_commit)
+      && noHistory.claim_root_base_tree === emptyTree
+      && /^[0-9a-f]{64}$/.test(noHistory.claim_root_base_digest),
+    '#699: an initialized no-history repository gets the exact zero-commit/canonical-empty-tree claim root');
+
+    const refused = runFreshClaim699(noGitRoot699);
+    const legacyPath = path.join(noGitRoot699, 'kaola-workflow', 'issue-699', 'workflow-state.md');
+    assert(refused.code !== 0, '#699: a fresh claim whose immutable Git anchors cannot be built fails closed');
+    assert(!fs.existsSync(legacyPath), '#699: anchor failure must not downgrade a fresh claim into a legacy workflow-state.md');
+  } finally {
+    fs.rmSync(root699, { recursive: true, force: true });
+    fs.rmSync(noHistoryRoot699, { recursive: true, force: true });
+    fs.rmSync(noGitRoot699, { recursive: true, force: true });
   }
 }
 

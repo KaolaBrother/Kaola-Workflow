@@ -23,6 +23,49 @@ complete `dispatch:{...}` object — needs `--json` without `--summary`, or the 
 dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`.
 Never dispatch without the card in view.
 
+## In-progress re-plan control plane
+
+<!-- PIN: replan-plan-run -->
+
+This fence outranks every normal startup, mirror, scheduler, handoff, validation, and
+finalization route. Before any such action, read the project state and transaction status. When
+either reports `replan_in_progress`, do not mutate or replace the frozen parent
+`workflow-plan.md`. Read-only orientation must report the exact `replan_phase`,
+`transaction_id`, `parent_plan_hash`, `child_plan_hash` (or `none`), and
+`last_cas_result`; never reconstruct them from memory.
+
+The single legal mutation while the fence is active is the edition-local re-plan resume command:
+
+```bash
+REPLAN_SCRIPT=""
+for _p in "./scripts/kaola-workflow-replan.js" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kaola-workflow-replan.js}" "$HOME/.claude/kaola-workflow/scripts/kaola-workflow-replan.js"; do
+  [ -f "$_p" ] && { REPLAN_SCRIPT="$_p"; break; }
+done
+[ -n "$REPLAN_SCRIPT" ] || { echo "BLOCKED: kaola-workflow-replan.js unavailable" >&2; exit 1; }
+node "$REPLAN_SCRIPT" resume --project {project} --json
+```
+
+The installed aggregator is `kaola-workflow-replan.js`. Do not run mirror/open/record/close/run-chains,
+ordinary adaptive handoff, claim archive, task-mirror refresh, or finalize while an intermediate
+phase remains. `decision:ask` remains advisory and never adds a pause or gate.
+
+If resume returns `replan_planner_dispatch_required`, dispatch the genuine
+`workflow-planner` profile in its Re-plan dispatch mode with an isolated brief containing only
+the repository root, project, `transaction_id`, `dispatch_nonce`, profile identity, the exact
+`.cache/replan-planner-packet.json` path, and the packet's reason/source evidence. No role
+sequence, node ids, dependencies, write sets, cardinality, shape, model, or exact DAG fragment may
+be supplied by the orchestrator; an attempt earns `planner_control_boundary_violation`. The
+planner alone writes the seeded `workflow-plan.next.md` and
+`.cache/replan-planner-attestation.json`, then returns through this same resume command. Missing,
+stale, replayed, or mismatched dispatch proof/attestation is
+`replan_planner_attestation_invalid`; main must never synthesize either artifact.
+
+An invalid unfrozen child uses the bounded unfrozen child-repair loop: re-dispatch the same planner
+with the verbatim validator errors and its own child draft, then resume. The main session never
+repairs the child DAG. At the retry bound, stop with the typed evidence; do not create a competing
+plan, restart the claim, or route to another path. A verified legacy-v1 parent follows this same
+transaction into a schema-2 child; legacy normal startup behavior otherwise stays unchanged.
+
 ## Agent Model Badge
 
 Every role dispatch carries an explicit `model=` line. Always pass it exactly as shown.

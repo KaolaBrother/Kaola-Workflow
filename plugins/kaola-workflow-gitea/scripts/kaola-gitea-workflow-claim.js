@@ -535,6 +535,102 @@ function writeFile(file, content) {
   fs.writeFileSync(file, content);
 }
 
+function repositoryIdentity(root) {
+  try {
+    const remote = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    if (remote) return remote;
+  } catch (_) {}
+  try {
+    return 'local:' + fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+  } catch (_) {
+    return 'local:' + path.resolve(root);
+  }
+}
+
+// Capture claim identity and immutable Git root exactly once. The returned
+// scalar fields are persisted in workflow-state.md; the typed payloads remain
+// available to tests/replan callers but are not serialized as ad-hoc JSON.
+function buildClaimAnchors(root, data) {
+  const anchorRoot = fs.realpathSync(data.worktree_path || root);
+  let objectFormat = '';
+  try {
+    objectFormat = execFileSync('git', ['-C', anchorRoot, 'rev-parse', '--show-object-format'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+    }).trim().toLowerCase();
+  } catch (_) {}
+  if (!objectFormat) objectFormat = 'sha1';
+  const objectLength = objectFormat === 'sha256' ? 64 : 40;
+  let commit;
+  let tree;
+  try {
+    if (hasGitHistory(anchorRoot)) {
+      commit = execFileSync('git', ['-C', anchorRoot, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+      }).trim().toLowerCase();
+      tree = execFileSync('git', ['-C', anchorRoot, 'rev-parse', 'HEAD^{tree}'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+      }).trim().toLowerCase();
+    } else {
+      execFileSync('git', ['-C', anchorRoot, 'rev-parse', '--git-dir'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+      });
+      commit = '0'.repeat(objectLength);
+      tree = execFileSync('git', ['-C', anchorRoot, 'hash-object', '-t', 'tree', '--stdin'], {
+        input: '', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']
+      }).trim().toLowerCase();
+    }
+  } catch (_) {
+    throw new Error('claim_root_unavailable');
+  }
+  const issues = Array.isArray(data.issue_numbers) && data.issue_numbers.length
+    ? data.issue_numbers : [data.issue_iid];
+  const identity = adaptiveSchema.buildClaimIdentity({
+    schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
+    repository_id: repositoryIdentity(anchorRoot),
+    issue_numbers: issues,
+    primary_issue: data.issue_iid,
+    bundle_id: data.bundle_id || null,
+    closure_policy: data.closure_policy || 'all_or_nothing',
+    branch: data.branch,
+    worktree_path: anchorRoot,
+    claim_ts: data.claim_ts,
+    session_marker: data.session_marker,
+  });
+  const rootBase = adaptiveSchema.buildClaimRootBase({
+    schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
+    object_format: objectFormat,
+    commit,
+    tree,
+    branch: data.branch,
+  });
+  const lineage = adaptiveSchema.buildEpochLineage(identity, rootBase);
+  return {
+    epoch_schema_version: adaptiveSchema.EPOCH_SCHEMA_VERSION,
+    claim_repository_id: identity.repository_id,
+    claim_identity_digest: lineage.claim_identity_digest,
+    claim_root_object_format: rootBase.object_format,
+    claim_root_base_commit: rootBase.commit,
+    claim_root_base_tree: rootBase.tree,
+    claim_root_base_digest: lineage.claim_root_base_digest,
+    epoch_lineage_id: lineage.epoch_lineage_id,
+    plan_epoch: 1,
+    active_plan_hash: 'none',
+    inherited_frontier_digest: 'none',
+    inherited_frontier_classes: 'none',
+    automatic_review_replans: 0,
+    authorized_epoch_ceiling: adaptiveSchema.REVIEW_REPLAN_LIMIT,
+    case_b_exemption_consumed: false,
+    replan_status: 'none',
+    replan_transaction_id: 'none',
+    replan_phase: 'none',
+    active_snapshot_manifest_digest: 'none',
+    claim_identity: identity,
+    claim_root_base: rootBase,
+  };
+}
+
 function discoverProjectSafe() {
   try {
     return forge.discoverProject();
@@ -555,6 +651,19 @@ function writeState(root, data) {
   // #579: liveness-marker guards.
   const computedMainRoot = resolveMainRoot(root);
   assertNoNewline(computedMainRoot, 'main_root');
+  if (data.issue_iid == null) {
+    const inferredIssue = /^issue-([1-9][0-9]*)$/.exec(String(data.project || ''));
+    if (inferredIssue) data.issue_iid = parseInt(inferredIssue[1], 10);
+  }
+  const claimTs = data.claim_ts || new Date().toISOString();
+  const sessionMarker = data.session_marker || resolveSessionMarker(process.env);
+  data.claim_ts = claimTs;
+  data.session_marker = sessionMarker;
+  // Fresh claims have exactly one legal representation: schema-2 anchors
+  // captured from immutable Git objects. Propagate any observation/validation
+  // failure before workflow-state.md is written; missing-schema compatibility
+  // belongs exclusively to the verified legacy re-plan import path.
+  const claimAnchors = buildClaimAnchors(root, data);
   const workflowPath = data.workflow_path || 'full';
   const isFast = workflowPath === 'fast';
   // issue #227: adaptive runs resume via the plan-run executor, not the phaseN ladder.
@@ -591,6 +700,13 @@ function writeState(root, data) {
     'last_command: startup',
     'last_result: ' + (data.last_result || 'folder_claimed'),
     '',
+    '## Planning Evidence',
+    'plan_hash: none',
+    'decision: none',
+    'risk: none',
+    'first_node_id: none',
+    'first_node_role: none',
+    '',
     '## Last Updated',
     new Date().toISOString(),
     '',
@@ -606,8 +722,8 @@ function writeState(root, data) {
     'run_posture: ' + deriveRunPosture(data.worktree_path),
     // #579 liveness-marker fields.
     'main_root: ' + computedMainRoot,
-    'session_marker: ' + resolveSessionMarker(process.env),
-    'claim_ts: ' + new Date().toISOString()
+    'session_marker: ' + sessionMarker,
+    'claim_ts: ' + claimTs
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
   // #603: persist the Codex dispatch mode so the adaptive dispatch cards read it at open time. Written
@@ -630,7 +746,9 @@ function writeState(root, data) {
     lines.push('bundle_id: ' + data.bundle_id);
     lines.push('closure_policy: ' + (data.closure_policy || 'all_or_nothing'));
   }
-  writeFile(stateFile(root, data.project), lines.join('\n') + '\n');
+  let stateContent = lines.join('\n') + '\n';
+  stateContent = adaptiveSchema.writeEpochStateBlock(stateContent, claimAnchors);
+  writeFile(stateFile(root, data.project), stateContent);
 }
 
 function updateState(root, project, updater) {
@@ -810,6 +928,7 @@ function claimProject(root, args) {
 
   let worktreePath = '';
   let worktreeError = '';
+  const worktreeBranchExisted = branchExists(root, branch);
   // Worktree provisioning is ON by default. All workflow paths (full, fast, adaptive) provision a
   // repo-local hidden worktree at <root>/.kw/worktrees/<project> (#264). The executor (plan-run)
   // operates in the worktree via the ACTIVE_WORKTREE_PATH resolver, so adaptive runs now provision
@@ -840,23 +959,31 @@ function claimProject(root, args) {
   }
 
   const projectInfo = discoverProjectSafe();
-  writeState(root, {
-    project,
-    issue_iid: issueIid,
-    branch,
-    sink: args.sink || process.env.KAOLA_SINK || 'merge',
-    worktree_path: worktreePath,
-    worktree_error: worktreeError,
-    base_branch: baseBranch,
-    workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
-    runtime: args.runtime || 'claude',
-    // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
-    // was absent → writeState omits the field).
-    codex_dispatch_mode: args.codexDispatchMode,
-    status: 'active',
-    full_name: projectInfo.full_name,
-    project_html_url: projectInfo.html_url
-  });
+  try {
+    writeState(root, {
+      project,
+      issue_iid: issueIid,
+      branch,
+      sink: args.sink || process.env.KAOLA_SINK || 'merge',
+      worktree_path: worktreePath,
+      worktree_error: worktreeError,
+      base_branch: baseBranch,
+      workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
+      runtime: args.runtime || 'claude',
+      // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
+      // was absent → writeState omits the field).
+      codex_dispatch_mode: args.codexDispatchMode,
+      status: 'active',
+      full_name: projectInfo.full_name,
+      project_html_url: projectInfo.html_url
+    });
+  } catch (error) {
+    const rollbackWorktree = worktreePath || worktreePathFor(root, project);
+    if (fs.existsSync(rollbackWorktree)) removeWorktree(root, project, { worktree_path: rollbackWorktree });
+    if (!worktreeBranchExisted && branchExists(root, branch)) removeBranch(root, branch);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+    throw error;
+  }
   const remoteClaim = postAdvisoryClaim(issueIid, project, projectInfo); // #356: surface footprint status
   // #280/#347: planner self-attest back-fill (mirror of the canonical claimProject block). The
   // SubagentStart dispatch-log hook cannot log the planner's OWN spawn (this claim creates the
@@ -930,7 +1057,8 @@ function claimBundle(root, opts) {
   // #398.1: guard the bundle branch BEFORE any provisioning.
   assertSafeBranchArg(branch, 'claimBundle');
   // applied: track what was provisioned so rollback can undo exactly what succeeded
-  const applied = { dir: false, worktree: false, worktreePath: '', labeled: [], inPlaceBranch: false, baseBranch: '' };
+  const applied = { dir: false, worktree: false, worktreeAttempted: false, worktreePath: '', worktreeBranchExisted: false,
+    labeled: [], inPlaceBranch: false, baseBranch: '' };
 
   // #370: bundle runs now get the SAME provisioning hardening as single-issue claimProject.
   // Dirty-tree gate (NATIVE=0 in-place mode): refuse BEFORE any mutation.
@@ -960,7 +1088,9 @@ function claimBundle(root, opts) {
     // single-issue" suppression was false (claimProject provisions for ALL paths incl. adaptive, #264).
     let worktreePath = '';
     let worktreeError = '';
+    applied.worktreeBranchExisted = branchExists(root, branch);
     if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
+      applied.worktreeAttempted = true;
       try {
         worktreePath = provisionWorktree(root, project, branch).path;
         applied.worktree = true;
@@ -1066,9 +1196,11 @@ function claimBundle(root, opts) {
       }
     }
     // b. Remove worktree if provisioned
-    if (applied.worktree) {
+    if (applied.worktree || applied.worktreeAttempted) {
       try {
-        removeWorktree(root, project, { worktree_path: applied.worktreePath });
+        const rollbackWorktree = applied.worktreePath || worktreePathFor(root, project);
+        if (fs.existsSync(rollbackWorktree)) removeWorktree(root, project, { worktree_path: rollbackWorktree });
+        if (!applied.worktreeBranchExisted && branchExists(root, branch)) removeBranch(root, branch);
       } catch (_) {
         rollbackOk = false;
       }
@@ -1694,10 +1826,34 @@ function sanitizeBarrierTag(name) {
   return String(name).replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
+function verifyArchiveEpochAuthority(projectPath) {
+  let replan;
+  let current;
+  let snapshots;
+  try {
+    replan = require('./kaola-gitea-workflow-replan');
+    current = replan.verifyCurrentEpochAuthority(projectPath);
+    snapshots = current && current.ok ? replan.verifyAllEpochSnapshots(projectPath) : null;
+  } catch (error) {
+    return { ok: false, reason: 'snapshot_verifier_unavailable', detail: error.message };
+  }
+  if (!current || current.ok !== true) return current || { ok: false, reason: 'current_epoch_authority_invalid' };
+  if (!snapshots || snapshots.ok !== true) return snapshots || { ok: false, reason: 'snapshot_authority_invalid' };
+  return { ok: true, current, snapshots };
+}
+
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
   if (!fs.existsSync(src)) return { skipped: 'source-missing' };
+  if (process.env.KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL === '1') {
+    return { archived: false, reason: 'archive_forced_refusal' };
+  }
+  const snapshots = verifyArchiveEpochAuthority(src);
+  if (!snapshots.ok) {
+    return { skipped: undefined, archived: false, archive_incomplete: true,
+      missing: [], snapshot_error: snapshots.reason || snapshots.detail || 'snapshot_invalid' };
+  }
   const state = stateFile(root, project);
   let archiveIssueNumber = null;
   // #328: read issue_numbers early (before rename) so we have the full member list
@@ -1854,6 +2010,25 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   };
 }
 
+function archiveProjectDirSafely(root, project, statusValue, suffix, opts) {
+  try {
+    return archiveProjectDir(root, project, statusValue, suffix, opts);
+  } catch (error) {
+    return { archived: false, reason: 'archive_exception', detail: error && error.message ? error.message : String(error) };
+  }
+}
+
+function archiveEpochLineagePreserved(result) {
+  if (!closureContract.archiveSucceeded(result)) return 'failed';
+  if (!result.dest) return 'absent';
+  const epochCheck = verifyArchiveEpochAuthority(result.dest);
+  if (!epochCheck.ok) return 'failed';
+  let schema2 = false;
+  try { schema2 = field(fs.readFileSync(path.join(result.dest, 'workflow-state.md'), 'utf8'),
+    'epoch_schema_version') === '2'; } catch (_) {}
+  return fs.existsSync(path.join(result.dest, '.cache', 'epochs')) || schema2 ? 'preserved' : 'absent';
+}
+
 // #617: opts.implRef/opts.sinkTarget let a merge-lane caller (sink-merge — the seam that
 // performs the real merge + close) wire the remote-closed-after-publish invariant declared in
 // kaola-workflow-closure-contract.js but never evaluated anywhere. When supplied, verifies the
@@ -1865,6 +2040,18 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
   const violations = [];
   const issueNumber = receipt.issue_number;
   const abandoned = receipt && receipt.archive === 'abandoned';
+  // Some closure transports (notably the merge sink) construct their final
+  // receipt after cmdFinalize has already archived the project. Rebind the
+  // seeded failure token to a fresh recursive verification of that archive so
+  // those callers neither report a false lineage failure nor trust a copied
+  // success token. A malformed/missing archive remains `failed` and therefore
+  // still trips the invariant below.
+  if (receipt && archiveDest && (receipt.archive === 'closed' || abandoned)) {
+    receipt.epoch_lineage_preserved = archiveEpochLineagePreserved({
+      archived: fs.existsSync(archiveDest),
+      dest: archiveDest,
+    });
+  }
   // #328: for a bundle project, loop roadmap-source-absent + roadmap-mirror-clean checks
   // over ALL members; fall back to scalar issue_number for single-issue (AC#1 unchanged).
   const memberNumbers = Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length
@@ -1956,6 +2143,10 @@ function checkClosureInvariants(root, receipt, archiveDest, opts) {
   if (receipt.worktree_removed === 'failed' || receipt.branch_removed === 'failed') {
     const invBw = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'branch-worktree-resolved'; });
     violations.push({ id: 'branch-worktree-resolved', description: invBw ? invBw.description : 'worktree or branch removal failed during closure' });
+  }
+  if (receipt.epoch_lineage_preserved === 'failed') {
+    const invEpoch = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'epoch-lineage-preserved'; });
+    violations.push({ id: 'epoch-lineage-preserved', description: invEpoch ? invEpoch.description : 'epoch lineage was not preserved' });
   }
   // #369 remote-members-closed: for a bundle, a member left in failed_issue_closures or open_issues
   // (recorded while online) flags this WARN-FIRST-but-VISIBLE invariant so a partial close is never
@@ -2062,6 +2253,49 @@ function cmdFinalize() {
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
   const folder = activeByProject(root, args.project);
+  // Re-plan fencing is a pre-side-effect finalization gate. A partial epoch
+  // transition may be resumed only by the transaction authority; archive,
+  // issue, branch, and worktree mutation remain forbidden until it commits and
+  // every durable parent snapshot re-verifies.
+  {
+    const liveDir = projectDir(root, args.project);
+    const authorityCandidates = [];
+    if (fs.existsSync(liveDir)) authorityCandidates.push(liveDir);
+    if (authorityCandidates.length === 0) {
+      authorityCandidates.push(path.join(root, 'kaola-workflow', 'archive', args.project));
+      try {
+        const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+        const mainArchive = path.join(main, 'kaola-workflow', 'archive', args.project);
+        if (!authorityCandidates.includes(mainArchive)) authorityCandidates.push(mainArchive);
+      } catch (_) {}
+    }
+    const authorityDir = authorityCandidates.find(candidate => fs.existsSync(candidate)) || null;
+    const authorityState = authorityDir ? path.join(authorityDir, 'workflow-state.md') : null;
+    const txPath = authorityDir
+      ? path.join(authorityDir, '.cache', adaptiveSchema.REPLAN_TRANSACTION_NAME) : null;
+    let stateContent = '';
+    let transaction = null;
+    if (authorityDir) {
+      try { stateContent = fs.readFileSync(authorityState, 'utf8'); } catch (_) {}
+      try { transaction = JSON.parse(fs.readFileSync(txPath, 'utf8')); }
+      catch (_) { transaction = txPath && fs.existsSync(txPath) ? {} : null; }
+      const fence = adaptiveSchema.readReplanFence(stateContent, transaction);
+      if (!fence.ok || fence.fenced) {
+        output({ result: 'refuse', reason: fence.reason || 'replan_in_progress',
+          phase: fence.phase || null, transaction_id: fence.transaction_id || null,
+          legal_mutation: fence.legal_mutation || 'replan resume' });
+        process.exitCode = 1;
+        return;
+      }
+      const snapshots = verifyArchiveEpochAuthority(authorityDir);
+      if (!snapshots.ok) {
+        output({ result: 'refuse', reason: 'replan_snapshot_incomplete',
+          detail: snapshots.reason || snapshots.detail || null });
+        process.exitCode = 1;
+        return;
+      }
+    }
+  }
   const projectInfo = folder ? { full_name: folder.full_name, html_url: folder.project_html_url } : discoverProjectSafe();
   // #336: keep-open terminal mode — explicit flag OR the durable ## Sink issue_action field.
   // State-field derivation makes the durable record the source of truth (a contractor that
@@ -2135,7 +2369,13 @@ function cmdFinalize() {
       }
     }
   }
-  const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
+  const result = archiveProjectDirSafely(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
+  if (!closureContract.archiveSucceeded(result) && result.archive_incomplete !== true) {
+    output({ result: 'refuse', reason: result.reason || result.snapshot_error || 'archive_refused',
+      project: args.project, detail: result.detail,
+      reasoning: 'archival did not return an explicit success result; no roadmap, issue, label, worktree, or branch cleanup was performed.' }, 1);
+    return;
+  }
   // #676: receipt honesty — a lossy archive copy (verifyArchiveComplete refused BEFORE deleting
   // the live copy/copies because the DEST dropped an evidence file the live SOURCE held) must halt
   // finalize here, before any downstream side effect (roadmap source removal, issue close,
@@ -2391,6 +2631,7 @@ function cmdFinalize() {
     // #396.4 (D2): suppress the premature remote-members-closed alarm on the merge lane.
     close_disposition: closePendingFinalize ? 'close_pending' : undefined
   });
+  closureReceipt.epoch_lineage_preserved = archiveEpochLineagePreserved(result);
   // #416: attach probe_degraded AFTER buildClosureReceipt (the builder filters by
   // CLOSURE_RECEIPT_FIELDS; probe_degraded is not in the schema yet, so attach post-build).
   if (probeDegraded) closureReceipt.probe_degraded = true;
@@ -2537,7 +2778,14 @@ function cmdRelease() {
   let savedBaseBranch = '';
   try { savedBaseBranch = field(fs.readFileSync(folder.state_file, 'utf8'), 'base_branch'); } catch (_) {}
 
-  const result = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+  const result = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+  if (!closureContract.archiveSucceeded(result)) {
+    output({ released: false, result: 'refuse', project: folder.project,
+      reason: result.reason || result.snapshot_error || (result.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
+      detail: result.detail, missing: result.missing,
+      reasoning: 'archival did not return an explicit success result; worktree, branch, and claim-label cleanup was not attempted.' }, 1);
+    return;
+  }
   try { removeWorktree(root, folder.project, folder); } catch (_) {}
 
   // In-place branch restore: if this project created a feature branch (NATIVE=0 path),
@@ -2854,6 +3102,7 @@ function watchMergeRequests(root, args) {
   const warnings = [];
   const cleanups = [];
   const probeErrors = []; // #396.6: visible probe errors (a viewPullRequest failure was swallowed)
+  const archiveRefusals = [];
   for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
     // #396.6: bundle-aware --issue filter (match primary OR any bundle member, not the primary only).
     if (args.issue && folder.issue_iid !== args.issue &&
@@ -2870,7 +3119,13 @@ function watchMergeRequests(root, args) {
     }
     watched++;
     if (state === 'merged') {
-      const archiveResult = archiveProjectDir(root, folder.project, 'closed');
+      const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
+      if (!closureContract.archiveSucceeded(archiveResult)) {
+        archiveRefusals.push({ folder: folder.project,
+          reason: archiveResult.reason || archiveResult.snapshot_error || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
+          detail: archiveResult.detail, missing: archiveResult.missing });
+        continue;
+      }
       if (archiveResult && (archiveResult.roadmap_source_removed === 'failed' || archiveResult.roadmap_regenerated === 'failed')) {
         warnings.push({ folder: folder.project, roadmap_source_removed: archiveResult.roadmap_source_removed, roadmap_regenerated: archiveResult.roadmap_regenerated });
       }
@@ -2917,6 +3172,7 @@ function watchMergeRequests(root, args) {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
+        epoch_lineage_preserved: archiveEpochLineagePreserved(archiveResult),
         remote_issue_closed: mergedRemoteToken,
         claim_label_removed: claimLabelStatus,
         worktree_removed: worktreeRemoved,
@@ -2949,7 +3205,13 @@ function watchMergeRequests(root, args) {
       }
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     } else if (state === 'closed') {
-      const archiveResult = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+      const archiveResult = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+      if (!closureContract.archiveSucceeded(archiveResult)) {
+        archiveRefusals.push({ folder: folder.project,
+          reason: archiveResult.reason || archiveResult.snapshot_error || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
+          detail: archiveResult.detail, missing: archiveResult.missing });
+        continue;
+      }
       let worktreeRemoved = 'failed';
       try {
         const wtResult = removeWorktree(root, folder.project, folder);
@@ -2972,6 +3234,7 @@ function watchMergeRequests(root, args) {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
+        epoch_lineage_preserved: archiveEpochLineagePreserved(archiveResult),
         remote_issue_closed: 'skipped_offline',
         claim_label_removed: claimLabelStatus2,
         worktree_removed: worktreeRemoved,
@@ -2989,19 +3252,20 @@ function watchMergeRequests(root, args) {
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus2, receipt: folderReceipt, closure_invariants: folderInvariants });
     }
   }
-  return { watched, warnings, cleanups, probeErrors };
+  return { watched, warnings, cleanups, probeErrors, archiveRefusals };
 }
 
 function cmdWatchPr() {
   if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
-  const { watched, warnings, cleanups, probeErrors } = watchMergeRequests(root, args);
+  const { watched, warnings, cleanups, probeErrors, archiveRefusals } = watchMergeRequests(root, args);
   const emit = { watched };
   if (warnings && warnings.length > 0) emit.warnings = warnings;
   if (cleanups && cleanups.length > 0) emit.cleanups = cleanups;
   if (probeErrors && probeErrors.length > 0) emit.probe_errors = probeErrors; // #396.6
-  output(emit);
+  if (archiveRefusals && archiveRefusals.length > 0) emit.archive_refusals = archiveRefusals;
+  output(emit, archiveRefusals && archiveRefusals.length > 0 ? 1 : 0);
 }
 
 function copyDir(src, dest) {
@@ -3065,14 +3329,64 @@ function listSourceEvidenceFiles(srcDir) {
 // it is the single #426 archive-integrity invariant (a state-less source is malformed and must not
 // be deleted before its archive is proven to carry the state file).
 function verifyArchiveComplete(srcDir, destDir) {
-  if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'] };
+  if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'], mismatched: [] };
+  try {
+    const srcRoot = fs.lstatSync(srcDir);
+    const destRoot = fs.lstatSync(destDir);
+    if (!srcRoot.isDirectory() || srcRoot.isSymbolicLink()
+        || !destRoot.isDirectory() || destRoot.isSymbolicLink()) {
+      return { ok: false, missing: [], mismatched: ['<root>'] };
+    }
+  } catch (_) { return { ok: false, missing: ['<root>'], mismatched: [] }; }
+  const sourceFiles = new Map();
+  const invalid = [];
+  const walk = function(absDir, relDir) {
+    let entries;
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); }
+    catch (_) { invalid.push(relDir || '<source>'); return; }
+    entries.sort(function(a, b) { return a.name.localeCompare(b.name); });
+    for (const entry of entries) {
+      const rel = relDir ? relDir + '/' + entry.name : entry.name;
+      // Preserve the long-standing archive contract: fixed finalize/machinery
+      // markdown sidecars are optional, while authored plans, state, summaries,
+      // node evidence, authority receipts, and every other source file remain
+      // byte-checked recursively.
+      if (relDir === '.cache' && entry.isFile() && ARCHIVE_CACHE_SIDECAR_MD.has(entry.name)) continue;
+      const abs = path.join(absDir, entry.name);
+      let stat;
+      try { stat = fs.lstatSync(abs); } catch (_) { invalid.push(rel); continue; }
+      if (stat.isSymbolicLink()) { invalid.push(rel); continue; }
+      if (stat.isDirectory()) { walk(abs, rel); continue; }
+      if (!stat.isFile()) { invalid.push(rel); continue; }
+      sourceFiles.set(rel, {
+        size: stat.size,
+        mode: stat.mode & 0o777,
+        digest: require('crypto').createHash('sha256').update(fs.readFileSync(abs)).digest('hex')
+      });
+    }
+  };
+  walk(srcDir, '');
+  // Retain the historical identity/evidence floor even if an unreadable source
+  // subtree prevented the recursive enumerator from observing it.
   const required = new Set(listSourceEvidenceFiles(srcDir));
   required.add('workflow-state.md');
+  for (const rel of sourceFiles.keys()) required.add(rel);
   const missing = [];
-  for (const rel of required) {
-    if (!fs.existsSync(path.join(destDir, rel))) missing.push(rel);
+  const mismatched = invalid.slice();
+  for (const rel of Array.from(required).sort()) {
+    const dest = path.join(destDir, ...String(rel).split('/'));
+    if (!fs.existsSync(dest)) { missing.push(rel); continue; }
+    const expected = sourceFiles.get(rel);
+    if (!expected) continue;
+    let stat;
+    try { stat = fs.lstatSync(dest); } catch (_) { missing.push(rel); continue; }
+    if (!stat.isFile() || stat.isSymbolicLink()) { mismatched.push(rel); continue; }
+    const digest = require('crypto').createHash('sha256').update(fs.readFileSync(dest)).digest('hex');
+    if (stat.size !== expected.size || (stat.mode & 0o777) !== expected.mode || digest !== expected.digest) {
+      mismatched.push(rel);
+    }
   }
-  return { ok: missing.length === 0, missing };
+  return { ok: missing.length === 0 && mismatched.length === 0, missing, mismatched };
 }
 
 function cmdWorktreeFinalize() {
@@ -3690,6 +4004,7 @@ module.exports = {
   claimExplicitBundle,
   claimExplicitTarget,
   claimProject,
+  buildClaimAnchors,
   clearAdvisoryClaim,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,

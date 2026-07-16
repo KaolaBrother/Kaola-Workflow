@@ -42,7 +42,7 @@ const { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, checkByteIdenticalGroup } = requi
 const REPO = path.resolve(__dirname, '..');
 const FORGES = ['gitlab', 'gitea'];
 
-// The five forge aggregator ports generated from canonical (issue #365 scope).
+// Forge aggregator ports generated from canonical (issue #365 scope).
 const GENERATED_AGGREGATORS = [
   'kaola-workflow-adaptive-node.js',
   'kaola-workflow-next-action.js',
@@ -52,6 +52,7 @@ const GENERATED_AGGREGATORS = [
   // agentRegistrationSurface entries are segment-joined in source (the `pv` indirection) so the
   // rename pass keeps the canonical+codex names; the header/usage strings render to the forge name.
   'kaola-workflow-plan-validator.js',
+  'kaola-workflow-replan.js',
 ];
 
 const canonRel = base => 'scripts/' + base;

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "source": {
+    "project": "bundle-693-696-697-698",
+    "parent_plan_hash": "d2f4efb603e4952a861c2387d979a2df2d2f317de3e48d273a80aeba5ce40f05",
+    "parent_plan_file_sha256": "c47f1e9503058540faf198f06e12f4ea08d9a6a21078d1978e7ed2f9187f3a03",
+    "parent_state_file_sha256": "11446ca004006bbe1ce0eb7a73e078928627b9dd6775084b487b7fe610e1396a",
+    "review_journal_file_sha256": "5d83afb9541ab5f0505bc9055fd4587f0cae0022034ac982083b7eba0ef735dc",
+    "review_evidence_file_sha256": "322a08424aaab734b49520dcf8411e7cfbbfef436a56cace46d2e6d8d095d80b",
+    "attempt_id": "n8-code-review:1",
+    "ordinal": 1,
+    "generation_nonce": "3516a7f36db8",
+    "candidate_digest": "5343174e3ca15c98a09c6d52387e52b4730d4c043c0fff37812d42c604ead1e2",
+    "candidate_residue_digest": "f070d108113d647c2632ff0356dc200ef059ad2ae98714c8c885d15a967638ae",
+    "lifecycle_settled": true,
+    "gate_outcome": "verdict_not_pass",
+    "repair_result": "repair_requires_replan",
+    "rebind": [],
+    "consumed_by": null,
+    "producer_slice": [
+      "n2-profile-contracts",
+      "n3-validation-runner",
+      "n4-review-engine",
+      "n5-runtime-guidance",
+      "n6-installed-contract-proof",
+      "n7-documentation"
+    ],
+    "findings": [
+      { "id": "R1", "scope": "in_scope", "action": "fix", "status": "open", "severity": "high", "rationale": "fabricated-resolution-digests-count-as-current-candidate-progress" },
+      { "id": "R2", "scope": "in_scope", "action": "fix", "status": "open", "severity": "high", "rationale": "current-candidate-validation-obligations-cannot-be-satisfied-after-repair" },
+      { "id": "R3", "scope": "in_scope", "action": "fix", "status": "open", "severity": "high", "rationale": "G4-omits-test-consumed-prose-producers" },
+      { "id": "R4", "scope": "in_scope", "action": "fix", "status": "open", "severity": "high", "rationale": "review-lineage-is-keyed-by-plan-and-gate-rather-than-scope-lineage" },
+      { "id": "R5", "scope": "in_scope", "action": "fix", "status": "open", "severity": "high", "rationale": "schema2-security-context-is-runtime-specific-and-silently-downgraded-to-v1" },
+      { "id": "R6", "scope": "in_scope", "action": "fix", "status": "open", "severity": "medium", "rationale": "required-deterministic-conformance-corpus-is-represented-by-labels-not-executable-cases" }
+    ]
+  },
+  "versioned_epoch_history": {
+    "writer_schema_version": 2,
+    "readable_transaction_versions": [1, 2],
+    "live_project": "issue-699",
+    "minimum_snapshot_count": 2,
+    "legacy_committed_receipt": {
+      "transaction_id": "31ae45e492001bf6c8d3a44f0f95f0299f4570998af6996dcd47ed9ec6fac3df",
+      "schema_version": 1,
+      "path": ".cache/committed-transactions/31ae45e492001bf6c8d3a44f0f95f0299f4570998af6996dcd47ed9ec6fac3df.json",
+      "digest": "2367a0c92bd0e41d2810d5bec25b3b6882ae53fa24e775a4cfcfe06b2929ce90",
+      "size": 213613
+    },
+    "snapshot_bindings": {
+      "1": "legacy_committed_receipt_binding",
+      "2": "schema2_projection_bound"
+    }
+  },
+  "legacy_root_proof": {
+    "object_format": "sha1",
+    "commit": "d59b191c925c634a36a74592ac9a9d21dfc93982",
+    "tree": "841877eba1df357bf5f03ada92ec7fa3ba5da17d",
+    "branch": "workflow/bundle-693-696-697-698",
+    "first_runnable_frontier": ["n1-architecture"],
+    "barrier_open_commits": ["d59b191c925c634a36a74592ac9a9d21dfc93982"]
+  }
+}

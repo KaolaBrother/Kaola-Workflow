@@ -46,7 +46,7 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, REPLAN_TRANSACTION_NAME, REPLAN_CAS_SEAMS, readReplanFence, validateReplanTransaction, canonicalJson, sha256Hex, validateSnapshotManifestShape, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, codexProfilePolicy, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, parseNodeFindings, evaluateEffectiveVerdict, canonicalLogicalGateIdentity, validateReviewJournal, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, REVIEW_REPAIR_LIMIT, REVIEW_REBIND_LIMIT, nonAbortedRebinds, effectiveCandidate, effectiveProducerBinding, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -84,6 +84,59 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   // drop + running-set removal) and must run from the worktree like every other mutator.
   'discard-speculative',
 ]);
+
+// #699: every filesystem-mutating lifecycle entry is fenced by the same
+// claim-preserving re-plan transaction. mirror-project is intentionally here:
+// it is ledger-read-only but copies project bytes into another worktree.
+const REPLAN_GUARDED_SUBCOMMANDS = new Set([
+  'open-next', 'open-ready', 'close-node', 'close-and-open-next',
+  'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
+  'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
+  'discard-speculative', 'mirror-project',
+]);
+
+function lastReplanCas(transaction) {
+  let found = null;
+  for (const seam of REPLAN_CAS_SEAMS) {
+    const row = transaction && transaction.cas && transaction.cas[seam];
+    if (row) found = { seam, result: row.result || 'unknown' };
+  }
+  return found || { seam: 'none', result: 'none' };
+}
+
+function replanOrientation(fence, project) {
+  const tx = fence && fence.transaction;
+  const cas = lastReplanCas(tx);
+  const out = {
+    result: 'refuse', reason: (fence && fence.reason) || 'replan_in_progress',
+    replan_phase: (fence && fence.phase) || (tx && tx.phase) || 'unknown',
+    transaction_id: (fence && fence.transaction_id) || (tx && tx.transaction_id) || 'none',
+    parent_plan_hash: (tx && tx.parent && tx.parent.plan_hash) || 'none',
+    child_plan_hash: (tx && tx.child && tx.child.plan_hash) || 'none',
+    last_cas_seam: cas.seam, last_cas_result: cas.result,
+    legal_mutation: (fence && fence.legal_mutation) || 'none',
+  };
+  if (tx && tx.child) {
+    out.first_node_id = tx.child.first_node_id || 'none';
+    out.first_node_role = tx.child.first_node_role || 'none';
+  }
+  if (fence && fence.legal_mutation === 'replan resume') {
+    out.resume_command = 'node scripts/kaola-gitlab-workflow-replan.js resume --project ' + project + ' --json';
+  }
+  return out;
+}
+
+function readProjectReplanFence(statePath, cacheDir, readFile) {
+  let stateContent = '';
+  try { stateContent = readFile(statePath); } catch (_) {}
+  const txPath = path.join(cacheDir, REPLAN_TRANSACTION_NAME);
+  let transaction = null;
+  try { transaction = JSON.parse(readFile(txPath)); }
+  catch (_) {
+    try { readFile(txPath); transaction = {}; } catch (_) { transaction = null; }
+  }
+  return readReplanFence(stateContent, transaction);
+}
 
 // #605: the subcommands that flip ## Node Ledger ROW STATUS — exactly the set that refreshes the
 // derived run-progress mirror after a successful ledger write. A strict subset of the split-guarded
@@ -613,6 +666,91 @@ function upstreamReadStubIds(planPath, nodeId, role) {
   } catch (_) { return []; }
 }
 
+// #699: schema-2 G4 receipts bind a declared logical certifier to the exact inherited epoch
+// frontier and code candidate that existed when that reviewer was opened. These fields are
+// runtime authority, not agent-authored prose: open-time seeding supplies the values and
+// record-evidence preserves them for read-only reviewer returns.
+const G4_CERTIFIER_BINDING_FIELDS = Object.freeze([
+  'certifier_kind',
+  'certifier_aggregation',
+  'certifier_gate_digest',
+  'certifier_epoch_lineage_id',
+  'certifier_inherited_frontier_digest',
+  'certified_candidate_digest',
+]);
+
+function g4CertifierSeedContext(planPath, nodeId, role) {
+  try {
+    const fs = require('fs');
+    const validator = require('./kaola-gitlab-workflow-plan-validator');
+    const content = fs.readFileSync(planPath, 'utf8');
+    const contract = validator.parseEpochContract(content);
+    if (!contract.active) return null;
+    const nodes = validator.parseNodes(content);
+    let matched = null;
+    for (const [kind, field, expectedRole] of [
+      ['code', 'code_certifier', 'code-reviewer'],
+      ['security', 'security_certifier', 'security-reviewer'],
+    ]) {
+      if (role !== expectedRole) continue;
+      const resolved = validator.resolveNamedCertifier(nodes, contract.fields[field], expectedRole);
+      if (resolved && resolved.members.some(member => member.id === nodeId)) {
+        matched = { kind, resolved };
+        break;
+      }
+    }
+    if (!matched) return null;
+
+    const projectDir = path.dirname(path.resolve(planPath));
+    const workflowDir = path.dirname(projectDir);
+    const project = path.basename(projectDir);
+    const root = path.basename(workflowDir) === 'kaola-workflow' ? path.dirname(workflowDir) : null;
+    const candidate = root
+      ? validator.computeCodeTreeHash(root, project, validator.parseValidationTestConsumes(content))
+      : null;
+    const values = {
+      certifier_kind: matched.kind,
+      certifier_aggregation: matched.resolved.aggregation,
+      certifier_gate_digest: sha256Hex(Buffer.from(canonicalJson(matched.resolved.identity), 'utf8')),
+      certifier_epoch_lineage_id: String(contract.fields.epoch_lineage_id || ''),
+      certifier_inherited_frontier_digest: String(contract.fields.inherited_frontier_digest || ''),
+      certified_candidate_digest: /^[0-9a-f]{64}$/.test(String(candidate || '')) ? candidate : '',
+    };
+    return { tokens: G4_CERTIFIER_BINDING_FIELDS.slice(), values };
+  } catch (_) { return null; }
+}
+
+function readSeededG4Bindings(content) {
+  const source = String(content || '');
+  const patterns = {
+    certifier_kind: /^(?:code|security)$/,
+    certifier_aggregation: /^(?:sequence|replicated_majority|partitioned_all)$/,
+    certifier_gate_digest: /^[0-9a-f]{64}$/,
+    certifier_epoch_lineage_id: /^[0-9a-f]{64}$/,
+    certifier_inherited_frontier_digest: /^[0-9a-f]{64}$/,
+    certified_candidate_digest: /^[0-9a-f]{64}$/,
+  };
+  const values = {};
+  for (const name of G4_CERTIFIER_BINDING_FIELDS) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = Array.from(source.matchAll(new RegExp('^' + escaped + ':[ \\t]*(.*?)[ \\t]*$', 'gm')));
+    if (matches.length !== 1 || !patterns[name].test(matches[0][1])) return null;
+    values[name] = matches[0][1];
+  }
+  return values;
+}
+
+function preserveSeededG4Bindings(content, bindings) {
+  let out = String(content || '');
+  for (const name of G4_CERTIFIER_BINDING_FIELDS) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp('^' + escaped + ':[^\\r\\n]*(?:\\r?\\n|$)', 'gm'), '');
+  }
+  if (out && !out.endsWith('\n')) out += '\n';
+  for (const name of G4_CERTIFIER_BINDING_FIELDS) out += name + ': ' + bindings[name] + '\n';
+  return out;
+}
+
 function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
   try {
     const fs = require('fs');
@@ -621,9 +759,14 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
       ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitlab-workflow-plan-validator'));
     } catch (_) { ROLE_TOKEN_REGISTRY = {}; }
 
-    const tokens = (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
+    const g4Seed = g4CertifierSeedContext(planPath, nodeId, role);
+    const baseTokens = (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
+    const tokens = baseTokens.slice();
+    if (g4Seed) {
+      for (const token of g4Seed.tokens) if (!tokens.includes(token)) tokens.push(token);
+    }
     // Remove 'evidence-binding' from the stub list — it becomes line 1 directly.
-    const stubTokens = tokens.filter(t => t !== 'evidence-binding');
+    const stubTokens = baseTokens.filter(t => t !== 'evidence-binding');
     // The durable node channel: an IMPLEMENT-role consumer with ≥1 PRODUCER-role upstream gets one EMPTY
     // `upstream_read: <up-id>` stub per producer upstream — the KEY that makes the close-time consumed-proof
     // enforceable (present-key ⇒ nonce required) while the value stays EMPTY (anti-fabrication: the opener
@@ -653,6 +796,10 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
       for (const upId of upstreamStubIds) {
         freshContent += '<!-- OPEN ' + upId + '\'s evidence file and append its line-1 binding nonce as the value below -->\n';
         freshContent += 'upstream_read: ' + upId + '\n';
+      }
+      if (g4Seed) {
+        freshContent += '<!-- schema-2 G4 runtime binding: preserve these open-time values verbatim -->\n';
+        for (const name of g4Seed.tokens) freshContent += name + ': ' + g4Seed.values[name] + '\n';
       }
       return freshContent;
     };
@@ -858,13 +1005,47 @@ function complianceRowExists(content, requirementCell, nodeId) {
   return false;
 }
 
-function addCloseCompliance(planContent, nodeId, role, evidenceContent) {
-  const requirementCell = (role === 'code-reviewer' || role === 'security-reviewer')
-    ? role : role + ' (' + nodeId + ')';
-  if (complianceRowExists(planContent, requirementCell, nodeId)) return planContent;
-  const evidenceSummary = evidenceContent
+function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker) {
+  const canonicalRequirement = role + ' (' + nodeId + ')';
+  const legacyRequirement = (role === 'code-reviewer' || role === 'security-reviewer') ? role : null;
+  let evidenceSummary = evidenceContent
     ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
+  if (barrierMarker) evidenceSummary += '; barrier: ' + barrierMarker;
   const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+
+  // Schema-2 plans pre-seed the exact one-row-per-node compliance set at
+  // freeze time.  Presence is therefore not proof of completion: advance the
+  // canonical pending row in place, preserve a resolved row byte-for-byte on
+  // replay, and append only for a legacy plan that has no row yet.
+  const sec = locateSection(planContent, 'Required Agent Compliance');
+  if (sec.start >= 0) {
+    const end = sec.next >= 0 ? sec.next : planContent.length;
+    const block = planContent.slice(sec.start, end);
+    const lines = block.split('\n');
+    const parsed = lines.map((line, index) => ({
+      index,
+      line,
+      cells: line.trim().startsWith('|')
+        ? line.split('|').slice(1, -1).map(cell => cell.trim()) : [],
+    }));
+    let matched = parsed.find(row => row.cells[0] === canonicalRequirement);
+    if (!matched && legacyRequirement) {
+      matched = parsed.find(row => {
+        if (row.cells[0] !== legacyRequirement) return false;
+        const binding = row.cells.find(cell => cell.includes('evidence-binding:')) || '';
+        return !binding || binding.includes('evidence-binding: ' + nodeId + ' ');
+      });
+    }
+    if (matched) {
+      if (String(matched.cells[1] || '').toLowerCase() !== 'pending') return planContent;
+      const requirementCell = matched.cells[0];
+      lines[matched.index] = '| ' + requirementCell + ' | ' + complianceStatus
+        + ' | ' + evidenceSummary + ' | |';
+      return planContent.slice(0, sec.start) + lines.join('\n') + planContent.slice(end);
+    }
+  }
+
+  const requirementCell = legacyRequirement || canonicalRequirement;
   return spliceComplianceRow(planContent,
     '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
 }
@@ -1539,9 +1720,12 @@ function qualifiedEvidenceFile(project, nodeId) {
 //   upstream_evidence  for each of the node's depends_on ids, { node_id, role, path }. The normal path is
 //                   PROJECT-QUALIFIED. While an upstream isolated-leg member is complete-but-unmerged,
 //                   options.planPath + options.runningSet route to that member's absolute leg artifact;
-//                   the merge fence keeps the leg alive until the dependent read drains. NEVER a nonce
-//                   (anti-fabrication: the read-proof nonce lives only on line 1 of the upstream file).
-//                   Absent for a root node (empty deps) ⇒ no field attached.
+//                   the merge fence keeps the leg alive until the dependent read drains. #692: when the
+//                   CURRENT node opens into an isolated leg (options.openIntoLeg), a parent-sourced
+//                   upstream is absolutized to the parent worktree's evidence location too — the leg
+//                   worktree carries no sibling .cache, so a project-relative hint would resolve empty
+//                   from the briefed `cd <leg_path>` cwd. NEVER a nonce (anti-fabrication: the read-proof
+//                   nonce lives only on line 1 of the upstream file). Absent for a root node (empty deps).
 // Deps are re-looked-up from the frozen plan (parseNodesFromContent) so the channel never relies on the
 // scheduler carrying deps forward. Fail-soft: any parse miss yields an empty channel (byte-identical).
 // ---------------------------------------------------------------------------
@@ -1570,7 +1754,14 @@ function deriveDispatchChannel(planContent, node, project, options) {
         if (options.planPath && options.runningSet) {
           const resolved = resolveEvidenceCachePath(
             options.planPath, upId, null, null, options.runningSet);
-          if (resolved.evidenceSource === 'leg') evidencePath = resolved.cachePath;
+          // An upstream that resolves to a live unmerged leg → its absolute leg-mirror artifact.
+          // #692: when the CURRENT node opens into an isolated leg (options.openIntoLeg), a
+          // parent-sourced upstream must ALSO be absolutized. A fresh leg worktree carries no sibling
+          // .cache evidence, so the project-relative hint resolves (empty) from the briefed `cd
+          // <leg_path>` cwd; resolved.cachePath is the absolute parent-worktree evidence location by
+          // construction (path.dirname(planPath) is the parent worktree's project dir). No consumer
+          // depends on the project-relative string (close-side nonce resolution is independent).
+          if (resolved.evidenceSource === 'leg' || options.openIntoLeg) evidencePath = resolved.cachePath;
         }
         return { node_id: upId, role: up ? up.role : null, path: evidencePath };
       });
@@ -1775,10 +1966,38 @@ function planHashFromContent(content) {
   return m ? m[1].toLowerCase() : null;
 }
 
-function nextReviewAttemptOrdinal(attempts, logicalGateKey) {
+function validateReviewJournalForPlan(journal, expectedPlanHash, planContent) {
+  let schema2ReviewGates = [];
+  try {
+    const { schema2ReviewGateContracts } = require('./kaola-gitlab-workflow-plan-validator');
+    schema2ReviewGates = schema2ReviewGateContracts(planContent);
+  } catch (error) {
+    return { ok: false, reason: 'review_journal_schema2_contract_invalid',
+      detail: String(error && error.message || error) };
+  }
+  // The current v1 validator ignores the additive third argument. The n2
+  // handback makes it authoritative for schema-2 group outcomes without
+  // changing legacy journal behavior.
+  return validateReviewJournal(journal, expectedPlanHash,
+    { schema2_review_gates: schema2ReviewGates });
+}
+
+function reviewAttemptOrdinalScope(logicalGate) {
+  if (!logicalGate || typeof logicalGate !== 'object') return null;
+  return logicalGate.kind === 'sequence'
+    ? 'sequence\n' + String(logicalGate.id || '')
+    : 'gate\n' + String(logicalGate.key || '');
+}
+
+function nextReviewAttemptOrdinal(attempts, logicalGateOrKey) {
+  const requestedScope = reviewAttemptOrdinalScope(logicalGateOrKey);
+  const logicalGateKey = requestedScope ? null : logicalGateOrKey;
   let max = 0;
   for (const a of (Array.isArray(attempts) ? attempts : [])) {
-    if (a && a.logical_gate && a.logical_gate.key === logicalGateKey && Number.isInteger(a.ordinal)) {
+    const matches = a && a.logical_gate && (requestedScope
+      ? reviewAttemptOrdinalScope(a.logical_gate) === requestedScope
+      : a.logical_gate.key === logicalGateKey);
+    if (matches && Number.isInteger(a.ordinal)) {
       max = Math.max(max, a.ordinal);
     }
   }
@@ -1791,12 +2010,27 @@ function consumedReviewRepairs(attempts, logicalGateKey) {
     && a.repair && a.repair.settled === true && a.consumed_by != null).length;
 }
 
+// Claim-scoped lookup view: current schema-1 attempts remain writable in the
+// active journal, while verified legacy-parent attempts are attached as a
+// non-enumerable read-only projection on every read. JSON persistence therefore
+// stores only the digest-bound legacy_import pointer, never a rewritten copy of
+// immutable parent history.
+function reviewJournalAttempts(journal) {
+  const legacy = journal && Array.isArray(journal.__legacy_attempts) ? journal.__legacy_attempts : [];
+  const current = journal && Array.isArray(journal.attempts) ? journal.attempts : [];
+  return legacy.concat(current);
+}
+
 function reviewJournalBlocker(journal) {
-  const blocked = (journal && Array.isArray(journal.attempts) ? journal.attempts : []).filter(a => a && (
-    a.lifecycle_settled === false
-    || (a.outcome === 'fail' && a.lifecycle_settled === true && a.consumed_by == null)
-    || (a.repair && a.repair.settled === false)
-  ));
+  const legacy = new Set(journal && Array.isArray(journal.__legacy_attempts)
+    ? journal.__legacy_attempts.map(attempt => attempt.attempt_id) : []);
+  const consumed = new Set(journal && Array.isArray(journal.__legacy_consumed_ids)
+    ? journal.__legacy_consumed_ids : []);
+  const blocked = reviewJournalAttempts(journal).filter(a => a
+    && !(legacy.has(a.attempt_id) && consumed.has(a.attempt_id))
+    && (a.lifecycle_settled === false
+      || (a.outcome === 'fail' && a.lifecycle_settled === true && a.consumed_by == null)
+      || (a.repair && a.repair.settled === false)));
   if (!blocked.length) return null;
   return {
     reason: 'review_attempt_unresolved',
@@ -2014,6 +2248,23 @@ function normalizeCandidate(value) {
   return { digest: undefined, declared: null, residue_digest: null };
 }
 
+// One canonical adapter for the durable review-candidate triple.  Older unit
+// seams return only the whole-tree digest; keep their historical empty
+// partition values byte-compatible while ensuring close and rolling top-up
+// compare the exact same representation.
+function currentReviewCandidate(opts, nodes) {
+  const value = opts.computeReviewCandidateDigest
+    ? opts.computeReviewCandidateDigest()
+    : computeReviewCandidateDigest(opts.planPath, opts.project, opts.repoRoot, declaredUnionPaths(nodes));
+  const candidate = normalizeCandidate(value);
+  return {
+    digest: candidate.digest,
+    declared: candidate.declared || {},
+    residue_digest: candidate.residue_digest
+      || require('crypto').createHash('sha256').update('').digest('hex'),
+  };
+}
+
 // The PRODUCTION (non-exempt) paths of diff(anchored_base(writer), now) that lie OUTSIDE the writer's own
 // declared write set — i.e. EXACTLY the set the per-node barrier would put in `outOfAllow`. Reuses the
 // validator's own barrierCheck so the repair proof and the barrier can never drift apart. Returns null
@@ -2152,7 +2403,74 @@ function logicalGateForNode(nodes, node) {
       if (g) return canonicalLogicalGateIdentity({ kind: 'fanout', id: g.group || node.shape.group, origin: g.origin || node.dependsOn, members: g.members });
     } catch (_) {}
   }
+  // #698/#699 schema-2 code/security fanouts are declared logical review
+  // groups. Keep legacy metadata-free reviewer fanouts byte-compatible as
+  // independent sequence gates; only the explicit group aggregations opt in.
+  if (node && ['code-reviewer', 'security-reviewer'].includes(node.role)
+      && node.shape && node.shape.kind === 'fanout'
+      && ['replicated_majority', 'partitioned_all'].includes(node.gateAggregation)) {
+    const origin = (node.dependsOn || []).slice().sort();
+    const members = (nodes || []).filter(candidate => candidate.role === node.role
+      && candidate.shape && candidate.shape.kind === 'fanout'
+      && candidate.shape.group === node.shape.group
+      && ['replicated_majority', 'partitioned_all'].includes(candidate.gateAggregation)
+      && JSON.stringify((candidate.dependsOn || []).slice().sort()) === JSON.stringify(origin))
+      .map(candidate => candidate.id);
+    return canonicalLogicalGateIdentity({ kind: 'fanout', id: node.shape.group,
+      origin, members });
+  }
   return canonicalLogicalGateIdentity({ kind: 'sequence', id: node.id, origin: node.dependsOn || [], members: [node.id] });
+}
+
+// Pure schema-2 logical review reducer used by both close transactions. The
+// durable plan supplies the aggregation authority; journal receipt bodies are
+// re-evaluated rather than trusting cached effective_pass fields.
+function reduceLogicalReviewAttempt(nodes, logicalGate, receipts) {
+  const members = logicalGate && Array.isArray(logicalGate.members) ? logicalGate.members : [];
+  const byId = new Map((nodes || []).map(node => [node.id, node]));
+  const rows = members.map(id => byId.get(id));
+  if (!members.length || rows.some(row => !row)) {
+    return { complete: false, pass: false, reason: 'logical_review_group_invalid', blocker_veto: false };
+  }
+  const role = rows[0].role;
+  if (rows.some(row => row.role !== role)) {
+    return { complete: false, pass: false, reason: 'logical_review_group_invalid', blocker_veto: false };
+  }
+  const receiptByMember = new Map();
+  for (const receipt of (Array.isArray(receipts) ? receipts : [])) {
+    const id = receipt && String(receipt.node_id || '');
+    if (!members.includes(id) || receiptByMember.has(id) || typeof receipt.body !== 'string') {
+      return { complete: false, pass: false, reason: 'logical_review_receipt_invalid', blocker_veto: false };
+    }
+    receiptByMember.set(id, receipt);
+  }
+  if (receiptByMember.size !== members.length) {
+    return { complete: false, pass: false, reason: 'logical_review_receipt_missing', blocker_veto: false };
+  }
+  const effective = members.map(id => evaluateEffectiveVerdict(receiptByMember.get(id).body));
+  const blockerVeto = effective.some(verdict => Number(verdict.findings_blocking || 0) > 0
+    || (Array.isArray(verdict.unresolved_fixes) && verdict.unresolved_fixes.length > 0));
+  const approvals = effective.filter(verdict => verdict.pass === true).length;
+  const approvalRole = ['code-reviewer', 'security-reviewer'].includes(role);
+  let aggregation = 'replicated_majority'; // verified legacy AV fanout fallback
+  if (approvalRole) {
+    const aggregations = new Set(rows.map(row => row.gateAggregation));
+    if (aggregations.size !== 1
+        || !['replicated_majority', 'partitioned_all'].includes([...aggregations][0])) {
+      return { complete: false, pass: false, reason: 'logical_review_aggregation_invalid',
+        blocker_veto: blockerVeto };
+    }
+    aggregation = [...aggregations][0];
+  } else if (role === 'adversarial-verifier') {
+    const declared = new Set(rows.map(row => row.gateAggregation).filter(Boolean));
+    if (declared.size === 1 && ['replicated_majority', 'partitioned_all'].includes([...declared][0])) {
+      aggregation = [...declared][0];
+    }
+  }
+  const pass = (!approvalRole || !blockerVeto) && (aggregation === 'partitioned_all'
+    ? approvals === effective.length : approvals > effective.length / 2);
+  return { complete: true, pass, reason: pass ? null : 'fanout_refuted',
+    blocker_veto: blockerVeto, aggregation, approvals, members: members.length };
 }
 
 function reviewJournalRoutesMatchPlan(journal, nodes) {
@@ -2182,7 +2500,19 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
   const crypto = require('crypto');
   const byId = new Map((nodes || []).map(node => [node.id, node]));
   const ordinalsByGate = new Map();
+  const importedAttempts = journal && Array.isArray(journal.__legacy_attempts) ? journal.__legacy_attempts : [];
+  const importedIds = new Set(importedAttempts.map(attempt => attempt && attempt.attempt_id).filter(Boolean));
+  const importedTransactions = new Set(importedAttempts.map(attempt => attempt && attempt.transaction_key).filter(Boolean));
+  for (const attempt of importedAttempts) {
+    if (!attempt || !attempt.logical_gate || !Number.isInteger(attempt.ordinal)) continue;
+    const ordinalScope = reviewAttemptOrdinalScope(attempt.logical_gate);
+    if (!ordinalsByGate.has(ordinalScope)) ordinalsByGate.set(ordinalScope, []);
+    ordinalsByGate.get(ordinalScope).push(attempt.ordinal);
+  }
   for (const attempt of (journal.attempts || [])) {
+    if (importedIds.has(attempt.attempt_id) || importedTransactions.has(attempt.transaction_key)) {
+      return { ok: false, reason: 'review_journal_attempt_identity_mismatch' };
+    }
     let expectedGate = null;
     for (const receipt of (attempt.receipts || [])) {
       const source = byId.get(receipt.node_id);
@@ -2256,8 +2586,9 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
         }
       }
     }
-    if (!ordinalsByGate.has(expectedGate.key)) ordinalsByGate.set(expectedGate.key, []);
-    ordinalsByGate.get(expectedGate.key).push(attempt.ordinal);
+    const ordinalScope = reviewAttemptOrdinalScope(expectedGate);
+    if (!ordinalsByGate.has(ordinalScope)) ordinalsByGate.set(ordinalScope, []);
+    ordinalsByGate.get(ordinalScope).push(attempt.ordinal);
   }
   for (const ordinals of ordinalsByGate.values()) {
     ordinals.sort((a, b) => a - b);
@@ -2268,12 +2599,241 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
   return { ok: true };
 }
 
+function canonicalLegacyImportPointer(transaction, parentJournal) {
+  const attempts = reviewJournalAttempts(parentJournal);
+  const attemptIds = attempts.map(attempt => attempt.attempt_id).slice().sort();
+  const consumedIds = Array.from(new Set((parentJournal.__legacy_consumed_ids || [])
+    .concat(transaction.source.source_attempt_ids || []))).sort();
+  return {
+    schema_version: 1,
+    epoch_lineage_id: transaction.epoch_lineage_id,
+    claim_identity_digest: transaction.parent.claim_identity_digest,
+    parent_plan_hash: transaction.parent.plan_hash,
+    parent_plan_epoch: transaction.parent.plan_epoch,
+    transaction_id: transaction.transaction_id,
+    snapshot_manifest_digest: transaction.snapshot.manifest_digest,
+    snapshot_path: transaction.snapshot.epoch_path + '/files/.cache/' + REVIEW_JOURNAL_NAME,
+    journal_digest: transaction.source.journal_digest,
+    attempt_ids: attemptIds,
+    attempts_digest: sha256Hex(Buffer.from(JSON.stringify(attempts), 'utf8')),
+    consumed_attempt_ids: consumedIds,
+  };
+}
+
+function deepFrozenJsonClone(value) {
+  const clone = JSON.parse(JSON.stringify(value));
+  const freeze = input => {
+    if (input && typeof input === 'object' && !Object.isFrozen(input)) {
+      for (const child of Object.values(input)) freeze(child);
+      Object.freeze(input);
+    }
+    return input;
+  };
+  return freeze(clone);
+}
+
+function attachLegacyImport(journal, parentJournal, pointer) {
+  journal.legacy_import = pointer;
+  const attempts = deepFrozenJsonClone(reviewJournalAttempts(parentJournal));
+  const consumed = Array.from(new Set((parentJournal.__legacy_consumed_ids || [])
+    .concat(pointer.consumed_attempt_ids || []))).sort();
+  Object.defineProperty(journal, '__legacy_attempts', {
+    value: attempts, enumerable: false, writable: false, configurable: true,
+  });
+  Object.defineProperty(journal, '__legacy_consumed_ids', {
+    value: Object.freeze(consumed), enumerable: false, writable: false, configurable: true,
+  });
+  return journal;
+}
+
+function validateLegacyImportPointerShape(pointer) {
+  if (!pointer || typeof pointer !== 'object' || Array.isArray(pointer) || pointer.schema_version !== 1) return false;
+  const hex = value => /^[0-9a-f]{64}$/.test(String(value || ''));
+  const expectedKeys = ['attempt_ids', 'attempts_digest', 'claim_identity_digest', 'consumed_attempt_ids',
+    'epoch_lineage_id', 'journal_digest', 'parent_plan_epoch', 'parent_plan_hash', 'schema_version',
+    'snapshot_manifest_digest', 'snapshot_path', 'transaction_id'].sort();
+  if (JSON.stringify(Object.keys(pointer).sort()) !== JSON.stringify(expectedKeys)
+      || !hex(pointer.epoch_lineage_id) || !hex(pointer.claim_identity_digest)
+      || !hex(pointer.parent_plan_hash) || !hex(pointer.transaction_id)
+      || !hex(pointer.snapshot_manifest_digest) || !hex(pointer.journal_digest)
+      || !hex(pointer.attempts_digest) || !Number.isSafeInteger(pointer.parent_plan_epoch)
+      || pointer.parent_plan_epoch < 1 || !Array.isArray(pointer.attempt_ids)
+      || !Array.isArray(pointer.consumed_attempt_ids)) return false;
+  const canonical = values => values.every(value => typeof value === 'string' && value)
+    && JSON.stringify(values) === JSON.stringify(Array.from(new Set(values)).sort());
+  return canonical(pointer.attempt_ids) && canonical(pointer.consumed_attempt_ids)
+    && pointer.consumed_attempt_ids.every(id => pointer.attempt_ids.includes(id))
+    && pointer.snapshot_path === '.cache/epochs/' + pointer.parent_plan_epoch
+      + '/files/.cache/' + REVIEW_JOURNAL_NAME;
+}
+
+function loadArchivedLegacyImport(opts, pointer, seen) {
+  if (!validateLegacyImportPointerShape(pointer)) {
+    return { ok: false, reason: 'review_journal_legacy_import_mismatch' };
+  }
+  const key = [pointer.transaction_id, pointer.parent_plan_hash, pointer.snapshot_manifest_digest].join(':');
+  const visited = seen || new Set();
+  if (visited.has(key)) {
+    return { ok: false, reason: 'review_journal_legacy_import_mismatch' };
+  }
+  visited.add(key);
+  const projectDir = path.dirname(opts.planPath);
+  const epochDir = path.join(projectDir, '.cache', 'epochs', String(pointer.parent_plan_epoch));
+  let manifestBytes;
+  let manifest;
+  let parentBytes;
+  let parentJournal;
+  try {
+    manifestBytes = opts.readFile(path.join(epochDir, 'manifest.json'));
+    manifest = JSON.parse(manifestBytes);
+    const validManifest = validateSnapshotManifestShape(manifest);
+    if (!validManifest.ok
+        || sha256Hex(Buffer.from(manifestBytes, 'utf8')) !== pointer.snapshot_manifest_digest
+        || manifest.epoch_lineage_id !== pointer.epoch_lineage_id
+        || manifest.claim_identity_digest !== pointer.claim_identity_digest
+        || manifest.parent_plan_epoch !== pointer.parent_plan_epoch
+        || manifest.transaction_id !== pointer.transaction_id
+        || !manifest.parent || manifest.parent.plan_hash !== pointer.parent_plan_hash) {
+      return { ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    const row = manifest.files.find(file => file.path === '.cache/' + REVIEW_JOURNAL_NAME);
+    if (!row || row.digest !== pointer.journal_digest) {
+      return { ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    parentBytes = opts.readFile(path.join(epochDir, 'files', '.cache', REVIEW_JOURNAL_NAME));
+    if (sha256Hex(Buffer.from(parentBytes, 'utf8')) !== row.digest) {
+      return { ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    parentJournal = JSON.parse(parentBytes);
+    const planRow = manifest.files.find(file => file.path === 'workflow-plan.md');
+    const parentPlan = opts.readFile(path.join(epochDir, 'files', 'workflow-plan.md'));
+    if (!planRow || sha256Hex(Buffer.from(parentPlan, 'utf8')) !== planRow.digest
+        || planHashFromContent(parentPlan) !== pointer.parent_plan_hash) {
+      return { ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    const validParent = validateReviewJournalForPlan(parentJournal, pointer.parent_plan_hash, parentPlan);
+    if (!validParent.ok) return { ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+  } catch (_) {
+    return { ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+  }
+
+  if (pointer.parent_plan_epoch > 1) {
+    if (!Object.prototype.hasOwnProperty.call(parentJournal, 'legacy_import')) {
+      return { ok: false, reason: 'review_journal_legacy_import_mismatch' };
+    }
+    const nestedPointer = parentJournal.legacy_import;
+    if (!validateLegacyImportPointerShape(nestedPointer)
+        || nestedPointer.epoch_lineage_id !== pointer.epoch_lineage_id
+        || nestedPointer.claim_identity_digest !== pointer.claim_identity_digest
+        || nestedPointer.parent_plan_epoch !== pointer.parent_plan_epoch - 1) {
+      return { ok: false, reason: 'review_journal_legacy_import_mismatch' };
+    }
+    const nested = loadArchivedLegacyImport(opts, nestedPointer, visited);
+    if (!nested.ok) return nested;
+    attachLegacyImport(parentJournal, nested.parentJournal, nestedPointer);
+  } else if (Object.prototype.hasOwnProperty.call(parentJournal, 'legacy_import')) {
+    return { ok: false, reason: 'review_journal_legacy_import_mismatch' };
+  }
+
+  const attempts = reviewJournalAttempts(parentJournal);
+  const ids = attempts.map(attempt => attempt.attempt_id).slice().sort();
+  if (JSON.stringify(ids) !== JSON.stringify(pointer.attempt_ids)
+      || sha256Hex(Buffer.from(JSON.stringify(attempts), 'utf8')) !== pointer.attempts_digest) {
+    return { ok: false, reason: 'review_journal_legacy_import_mismatch' };
+  }
+  return { ok: true, parentJournal };
+}
+
+function loadCommittedLegacyImport(opts, planHash, suppliedPointer) {
+  const projectDir = path.dirname(opts.planPath);
+  const txPath = path.join(projectDir, '.cache', REPLAN_TRANSACTION_NAME);
+  const declared = typeof opts.cacheExists === 'function' ? opts.cacheExists(txPath) : null;
+  if (declared === false) return { applicable: false };
+  let transaction;
+  try { transaction = JSON.parse(opts.readFile(txPath)); }
+  catch (_) {
+    return declared === true
+      ? { applicable: true, ok: false, reason: 'review_journal_legacy_import_transaction_invalid' }
+      : { applicable: false };
+  }
+  const checked = validateReplanTransaction(transaction);
+  if (!checked.ok) return { applicable: true, ok: false, reason: 'review_journal_legacy_import_transaction_invalid' };
+  const committedChild = transaction.phase === 'committed'
+    && transaction.activation && transaction.activation.transaction_committed
+    && transaction.activation.transaction_committed.status === 'complete'
+    && transaction.activation.state_unfenced
+    && transaction.activation.state_unfenced.status === 'complete'
+    && transaction.child.plan_hash === planHash;
+  if (!committedChild) return { applicable: false };
+  const epochDir = path.join(projectDir, '.cache', 'epochs', String(transaction.parent.plan_epoch));
+  let manifest;
+  let parentJournal;
+  try {
+    const manifestBytes = opts.readFile(path.join(epochDir, 'manifest.json'));
+    manifest = JSON.parse(manifestBytes);
+    const validManifest = validateSnapshotManifestShape(manifest);
+    if (!validManifest.ok
+        || sha256Hex(Buffer.from(manifestBytes, 'utf8')) !== transaction.snapshot.manifest_digest
+        || manifest.manifest_self_digest !== transaction.snapshot.manifest_self_digest
+        || manifest.transaction_id !== transaction.transaction_id
+        || manifest.parent.plan_hash !== transaction.parent.plan_hash) {
+      return { applicable: true, ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    const row = manifest.files.find(file => file.path === '.cache/' + REVIEW_JOURNAL_NAME);
+    if (!row) return { applicable: true, ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    const parentBytes = opts.readFile(path.join(epochDir, 'files', '.cache', REVIEW_JOURNAL_NAME));
+    if (sha256Hex(Buffer.from(parentBytes, 'utf8')) !== row.digest
+        || row.digest !== transaction.source.journal_digest) {
+      return { applicable: true, ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    parentJournal = JSON.parse(parentBytes);
+    const planRow = manifest.files.find(file => file.path === 'workflow-plan.md');
+    const parentPlan = opts.readFile(path.join(epochDir, 'files', 'workflow-plan.md'));
+    if (!planRow || sha256Hex(Buffer.from(parentPlan, 'utf8')) !== planRow.digest
+        || planHashFromContent(parentPlan) !== transaction.parent.plan_hash) {
+      return { applicable: true, ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+    }
+    const validParent = validateReviewJournalForPlan(parentJournal, transaction.parent.plan_hash, parentPlan);
+    if (!validParent.ok) return { applicable: true, ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+  } catch (_) {
+    return { applicable: true, ok: false, reason: 'review_journal_legacy_import_snapshot_invalid' };
+  }
+  if (transaction.parent.plan_epoch > 1) {
+    if (!Object.prototype.hasOwnProperty.call(parentJournal, 'legacy_import')) {
+      return { applicable: true, ok: false, reason: 'review_journal_legacy_import_mismatch' };
+    }
+    const nested = loadArchivedLegacyImport(opts, parentJournal.legacy_import, new Set());
+    if (!nested.ok) return { applicable: true, ok: false, reason: nested.reason };
+    attachLegacyImport(parentJournal, nested.parentJournal, parentJournal.legacy_import);
+  }
+  const pointer = canonicalLegacyImportPointer(transaction, parentJournal);
+  if (pointer.consumed_attempt_ids.some(id => !pointer.attempt_ids.includes(id))) {
+    return { applicable: true, ok: false, reason: 'review_journal_legacy_import_transaction_invalid' };
+  }
+  if (suppliedPointer !== undefined
+      && (() => { try { return canonicalJson(suppliedPointer) !== canonicalJson(pointer); } catch (_) { return true; } })()) {
+    return { applicable: true, ok: false, reason: 'review_journal_legacy_import_mismatch' };
+  }
+  return { applicable: true, ok: true, transaction, parentJournal, pointer };
+}
+
 function readReviewJournal(opts, planContent) {
   const planHash = planHashFromContent(planContent);
   if (!planHash) return { ok: true, legacy: true, plan_hash: null, journal: null };
   const journalPath = path.join(path.dirname(opts.planPath), '.cache', REVIEW_JOURNAL_NAME);
   const exists = opts.cacheExists ? opts.cacheExists(journalPath) : (() => { try { opts.readFile(journalPath); return true; } catch (_) { return false; } })();
   if (!exists) {
+    const imported = loadCommittedLegacyImport(opts, planHash, undefined);
+    if (imported.applicable) {
+      if (!imported.ok) return { ok: false, reason: imported.reason, journalPath };
+      const journal = attachLegacyImport({
+        schema_version: 1, plan_hash: planHash, attempts: [],
+        epoch_lineage_id: imported.transaction.epoch_lineage_id,
+        claim_identity_digest: imported.transaction.parent.claim_identity_digest,
+        plan_epoch: imported.transaction.parent.plan_epoch + 1,
+      }, imported.parentJournal, imported.pointer);
+      return { ok: true, plan_hash: planHash, journalPath, journal };
+    }
     const nodes = parseNodesFromContent(planContent);
     const statuses = readLedgerStatuses(planContent);
     const evidenceByNode = new Map();
@@ -2311,6 +2871,19 @@ function readReviewJournal(opts, planContent) {
   let journal;
   try { journal = JSON.parse(opts.readFile(journalPath)); }
   catch (_) { return { ok: false, reason: 'review_journal_malformed', journalPath }; }
+  if (journal && journal.plan_hash !== planHash) {
+    const imported = loadCommittedLegacyImport(opts, planHash, undefined);
+    if (imported.applicable) {
+      if (!imported.ok) return { ok: false, reason: imported.reason, journalPath };
+      const childJournal = attachLegacyImport({
+        schema_version: 1, plan_hash: planHash, attempts: [],
+        epoch_lineage_id: imported.transaction.epoch_lineage_id,
+        claim_identity_digest: imported.transaction.parent.claim_identity_digest,
+        plan_epoch: imported.transaction.parent.plan_epoch + 1,
+      }, imported.parentJournal, imported.pointer);
+      return { ok: true, plan_hash: planHash, journalPath, journal: childJournal };
+    }
+  }
   // A journal written before the candidate-partition keys existed is STRUCTURALLY fine — it is simply
   // older than this code. Do not surface that as `review_journal_malformed` (which reads like corruption
   // and invites a discard). Name it, and name the recovery: a frozen plan's journal is per-project,
@@ -2328,8 +2901,14 @@ function readReviewJournal(opts, planContent) {
         + 'finish or discard the active run before upgrading (a frozen plan\'s review journal is per-project, '
         + 'non-durable state and never crosses a release boundary)' };
   }
-  const valid = validateReviewJournal(journal, planHash);
+  const valid = validateReviewJournalForPlan(journal, planHash, planContent);
   if (!valid.ok) return { ok: false, reason: valid.reason, detail: valid.detail, journalPath };
+  const imported = loadCommittedLegacyImport(opts, planHash,
+    Object.prototype.hasOwnProperty.call(journal, 'legacy_import') ? journal.legacy_import : null);
+  if (imported.applicable) {
+    if (!imported.ok) return { ok: false, reason: imported.reason, journalPath };
+    attachLegacyImport(journal, imported.parentJournal, imported.pointer);
+  }
   const nodes = parseNodesFromContent(planContent);
   const identity = reviewJournalIdentityMatchesPlan(journal, nodes, readLedgerStatuses(planContent));
   if (!identity.ok) return { ok: false, reason: identity.reason, journalPath };
@@ -2359,6 +2938,179 @@ function journalFence(opts, planContent) {
       ? 'retry the recorded settlement command' : 'repair-node --attempt-id <attempt> --node-id <agent-selected-writer>' } : null;
 }
 
+function reviewTransactionKey(planHash, logicalGate, candidateDigest, generations) {
+  return require('crypto').createHash('sha256').update(JSON.stringify({
+    plan_hash: planHash, logical_gate_key: logicalGate.key,
+    candidate_digest: candidateDigest, generations,
+  })).digest('hex');
+}
+
+// A logical fanout attempt must be structurally valid immediately after its
+// first receipt.  Capacity-bounded dispatch means some exact members can still
+// be pending then, so reserve their real barrier identities before journal
+// creation.  `--record-base` owns the complete base/ref/open-token triple and is
+// idempotent across a crash between any two reservations.  Never synthesize a
+// nonce and never snapshot an already-open member: the latter would launder its
+// work into a fresh baseline.
+function reserveLogicalReviewGenerations(opts, logicalGate, ledgerStatuses) {
+  const generations = [];
+  for (const member of logicalGate.members) {
+    const status = ledgerStatuses[member];
+    let nonce = readNonce(opts.planPath, member, opts.readFile);
+    if (status === 'pending') {
+      if (typeof opts.shell !== 'function') {
+        return { ok: false, reason: 'review_generation_reservation_failed', node_id: member };
+      }
+      const recorded = opts.shell(validatorPath,
+        [opts.planPath, '--record-base', '--node-id', member, '--json']);
+      const record = recorded && recorded.recordBase ? recorded.recordBase : recorded;
+      if (!recorded || recorded.exitCode !== 0 || recorded.result !== 'ok'
+          || (record && record.stale === true)) {
+        return { ok: false, reason: record && record.stale === true
+          ? 'review_generation_reservation_stale' : 'review_generation_reservation_failed',
+        node_id: member };
+      }
+      nonce = readNonce(opts.planPath, member, opts.readFile);
+      const identity = typeof opts.captureReviewBarrierIdentity === 'function'
+        ? opts.captureReviewBarrierIdentity(member)
+        : captureWriterBarrierIdentity(opts, member);
+      const recordedBase = record && record.base ? String(record.base) : '';
+      if (!nonce || !identity || identity.generation !== nonce
+          || (recordedBase && identity.baseline !== recordedBase)) {
+        return { ok: false, reason: 'review_generation_reservation_identity_mismatch', node_id: member };
+      }
+    } else if (!nonce) {
+      return { ok: false, reason: 'review_generation_missing', node_id: member };
+    }
+    generations.push({ member, nonce });
+  }
+  generations.sort((a, b) => a.member.localeCompare(b.member));
+  return { ok: true, generations };
+}
+
+function reviewTopUpRefusal(blocked, reason, detail, repair) {
+  if (!repair && blocked && blocked.attempts && blocked.attempts.length) {
+    const provisional = blocked.attempts.find(attempt => attempt.outcome === null);
+    const unsettled = blocked.attempts.find(attempt => attempt.lifecycle_settled === false
+      && attempt.outcome !== null);
+    const repairing = blocked.attempts.find(attempt => attempt.repair
+      && attempt.repair.settled === false);
+    repair = provisional
+      ? 'close remaining live members: ' + provisional.logical_gate.members.join(', ')
+      : unsettled
+        ? 'retry ' + unsettled.settlement_command + ' for ' + unsettled.logical_gate.members.join(', ')
+        : repairing
+          ? 'repair-node --attempt-id ' + repairing.attempt_id + ' --node-id '
+            + repairing.repair.selected_writer
+          : 'repair-node --attempt-id ' + blocked.attempts[0].attempt_id
+            + ' --node-id <agent-selected-writer>';
+  }
+  return { ok: false, refusal: {
+    result: 'refuse', reason: reason || 'review_attempt_unresolved',
+    attempt_ids: blocked ? blocked.attempt_ids : [],
+    ...(detail ? { detail } : {}),
+    ...(repair ? { repair } : {}),
+  } };
+}
+
+function journalOwnedReviewGenerationMembers(opts, planContent) {
+  const owned = new Set();
+  const state = readReviewJournal(opts, planContent);
+  if (!state.ok || state.legacy) return owned;
+  for (const attempt of (state.journal.attempts || [])) {
+    if (attempt.lifecycle_settled !== false) continue;
+    for (const generation of (attempt.generations || [])) {
+      if (generation && generation.member) owned.add(generation.member);
+    }
+  }
+  return owned;
+}
+
+// Narrow exception to the global unresolved-review mutation fence.  It permits
+// only the still-missing members of one schema-2 code/security fanout to consume
+// their already-reserved generations.  Every other opener/mutator remains
+// fenced.  The candidate and the complete reservation identity are re-proved
+// before next-action can cause a baseline, ledger, running-set, or evidence
+// mutation.
+function reviewFanoutTopUpAllowance(opts, planContent) {
+  const state = readReviewJournal(opts, planContent);
+  if (!state.ok) return reviewTopUpRefusal(null, state.reason, state.detail || null);
+  if (state.legacy) return { ok: true, topUp: null };
+  const blocked = reviewJournalBlocker(state.journal);
+  if (!blocked) return { ok: true, topUp: null, state };
+  if (blocked.attempts.length !== 1) {
+    return reviewTopUpRefusal(blocked, 'review_attempt_unresolved', null,
+      'settle or repair every recorded review attempt before opening more work');
+  }
+  const attempt = blocked.attempts[0];
+  const gate = attempt && attempt.logical_gate;
+  if (!attempt || attempt.lifecycle_settled !== false || attempt.outcome !== null
+      || !gate || gate.kind !== 'fanout'
+      || !attempt.repair || attempt.repair.selected_writer !== null
+      || attempt.repair.settled !== null
+      || !Array.isArray(attempt.receipts) || attempt.receipts.length < 1
+      || attempt.receipts.length >= gate.members.length) {
+    return reviewTopUpRefusal(blocked, 'review_attempt_unresolved');
+  }
+  const nodes = parseNodesFromContent(planContent);
+  const memberRows = gate.members.map(id => nodes.find(node => node.id === id));
+  const roles = new Set(memberRows.map(node => node && node.role));
+  const aggregations = new Set(memberRows.map(node => node && node.gateAggregation));
+  if (memberRows.some(node => !node || !isReadOnlyNode(node)) || roles.size !== 1
+      || !['code-reviewer', 'security-reviewer'].includes(memberRows[0].role)
+      || aggregations.size !== 1
+      || !['replicated_majority', 'partitioned_all'].includes(memberRows[0].gateAggregation)
+      || memberRows.some(node => logicalGateForNode(nodes, node).key !== gate.key)) {
+    return reviewTopUpRefusal(blocked, 'review_attempt_unresolved',
+      'only the exact declared schema-2 code/security fanout may top up');
+  }
+  const statuses = readLedgerStatuses(planContent);
+  const receiptMembers = new Set(attempt.receipts.map(receipt => receipt.node_id));
+  if (attempt.receipts.some(receipt => !['complete', 'n/a'].includes(statuses[receipt.node_id]))) {
+    return reviewTopUpRefusal(blocked, 'review_attempt_unresolved', null,
+      'retry ' + attempt.settlement_command + ' for the receipt-bearing member before top-up');
+  }
+  const missing = gate.members.filter(id => !receiptMembers.has(id));
+  if (missing.some(id => !['pending', 'in_progress'].includes(statuses[id]))) {
+    return reviewTopUpRefusal(blocked, 'review_attempt_unresolved',
+      'a missing logical-review member is neither pending nor in_progress');
+  }
+  const generationByMember = new Map(attempt.generations.map(row => [row.member, row.nonce]));
+  for (const member of gate.members) {
+    if (readNonce(opts.planPath, member, opts.readFile) !== generationByMember.get(member)) {
+      return reviewTopUpRefusal(blocked, 'review_generation_reservation_identity_mismatch',
+        'a journal-owned review generation no longer matches its reserved baseline');
+    }
+  }
+  for (const member of missing.filter(id => statuses[id] === 'pending')) {
+    const identity = typeof opts.captureReviewBarrierIdentity === 'function'
+      ? opts.captureReviewBarrierIdentity(member)
+      : captureWriterBarrierIdentity(opts, member);
+    if (!identity || identity.generation !== generationByMember.get(member)) {
+      return reviewTopUpRefusal(blocked, 'review_generation_reservation_identity_mismatch',
+        'the pending review member lost its reserved base/ref/open-token identity');
+    }
+  }
+  let candidate;
+  try { candidate = currentReviewCandidate(opts, nodes); }
+  catch (_) {
+    return reviewTopUpRefusal(blocked, 'candidate_digest_unavailable');
+  }
+  if (candidate.digest !== attempt.candidate_digest
+      || JSON.stringify(candidate.declared) !== JSON.stringify(attempt.candidate_declared)
+      || candidate.residue_digest !== attempt.candidate_residue_digest) {
+    return reviewTopUpRefusal(blocked, 'review_candidate_changed',
+      'the reviewed candidate changed before the bounded fanout could top up');
+  }
+  const pending = missing.filter(id => statuses[id] === 'pending');
+  if (!pending.length) {
+    return reviewTopUpRefusal(blocked, 'review_attempt_unresolved', null,
+      'close remaining live members: ' + missing.join(', '));
+  }
+  return { ok: true, state, topUp: { attempt, nodes, pending_members: pending,
+    generation_by_member: generationByMember } };
+}
+
 function beginReviewAttempt(opts, ctx) {
   const crypto = require('crypto');
   const creatingGeneration = readNonce(opts.planPath, ctx.nodeInfo.id, opts.readFile) || '';
@@ -2366,32 +3118,55 @@ function beginReviewAttempt(opts, ctx) {
   const state = readReviewJournal({ ...opts, allowReviewJournalCreate: true,
     creatingNodeId: ctx.nodeInfo.id, creatingGeneration, creatingMembers: logicalGate.members }, ctx.planContent);
   if (!state.ok || state.legacy) return state;
+  // A settled failure is a terminal, replay-only transaction.  Re-emit its
+  // original envelope without requiring the folded-pending members to reserve
+  // new generations (which would mutate state before the replay).
+  const replayReceiptSha = crypto.createHash('sha256')
+    .update(String(ctx.evidenceContent || '')).digest('hex');
+  const settledFailure = state.journal.attempts.find(candidate => candidate
+    && candidate.lifecycle_settled === true && candidate.outcome === 'fail'
+    && candidate.consumed_by == null && candidate.logical_gate
+    && candidate.logical_gate.key === logicalGate.key
+    && (candidate.receipts || []).some(receipt => receipt.node_id === ctx.nodeInfo.id
+      && receipt.receipt_sha256 === replayReceiptSha));
+  if (settledFailure) return { ok: true, state, attempt: settledFailure };
   let candidate;
-  try {
-    candidate = normalizeCandidate(opts.computeReviewCandidateDigest
-      ? opts.computeReviewCandidateDigest()
-      : computeReviewCandidateDigest(opts.planPath, opts.project, opts.repoRoot, declaredUnionPaths(ctx.nodes)));
-  } catch (_) { return { ok: false, reason: 'candidate_digest_unavailable' }; }
+  try { candidate = currentReviewCandidate(opts, ctx.nodes); }
+  catch (_) { return { ok: false, reason: 'candidate_digest_unavailable' }; }
   const candidateDigest = candidate.digest;
-  // A legacy string-returning seam carries no partition data; record the empty/degenerate partition so the
-  // attempt stays schema-valid. Such an attempt simply never satisfies the rebind proof (P1/P2 compare
-  // against a map that cannot match a real tree), so it fails closed to the pre-existing gate order.
-  const candidateDeclared = candidate.declared || {};
-  const candidateResidue = candidate.residue_digest || require('crypto').createHash('sha256').update('').digest('hex');
+  const candidateDeclared = candidate.declared;
+  const candidateResidue = candidate.residue_digest;
   const generation = readNonce(opts.planPath, ctx.nodeInfo.id, opts.readFile) || '';
-  const generations = logicalGate.members.map(member => ({
-    member, nonce: readNonce(opts.planPath, member, opts.readFile) || '',
-  })).sort((a, b) => a.member.localeCompare(b.member));
-  const transactionKey = crypto.createHash('sha256').update(JSON.stringify({
-    plan_hash: state.plan_hash, logical_gate_key: logicalGate.key, candidate_digest: candidateDigest, generations,
-  })).digest('hex');
-  let attempt = state.journal.attempts.find(a => a.transaction_key === transactionKey);
-  const incompatibleUnsettled = state.journal.attempts.filter(a => a.lifecycle_settled === false
-    && a.logical_gate && a.logical_gate.key === logicalGate.key && a.transaction_key !== transactionKey);
-  if (!attempt && incompatibleUnsettled.length) {
+  const unsettledForGate = state.journal.attempts.filter(a => a.lifecycle_settled === false
+    && a.logical_gate && a.logical_gate.key === logicalGate.key);
+  if (unsettledForGate.length > 1) {
     return { ok: false, reason: 'review_attempt_unresolved',
-      attempt_ids: incompatibleUnsettled.map(a => a.attempt_id).sort() };
+      attempt_ids: unsettledForGate.map(a => a.attempt_id).sort() };
   }
+  let generations;
+  let attempt = unsettledForGate[0] || null;
+  if (attempt) {
+    // Existing provisional history is immutable.  A later member may append
+    // only when every reserved generation and the candidate triple still
+    // match; never rotate or repair a journal-owned generation here.
+    generations = attempt.generations;
+    if (candidateDigest !== attempt.candidate_digest
+        || JSON.stringify(candidateDeclared) !== JSON.stringify(attempt.candidate_declared)
+        || candidateResidue !== attempt.candidate_residue_digest
+        || generations.some(row => readNonce(opts.planPath, row.member, opts.readFile) !== row.nonce)) {
+      return { ok: false, reason: 'review_attempt_unresolved', attempt_ids: [attempt.attempt_id] };
+    }
+  } else {
+    const reserved = reserveLogicalReviewGenerations(opts, logicalGate,
+      readLedgerStatuses(ctx.planContent));
+    if (!reserved.ok) return reserved;
+    generations = reserved.generations;
+  }
+  const transactionKey = reviewTransactionKey(state.plan_hash, logicalGate, candidateDigest, generations);
+  if (attempt && attempt.transaction_key !== transactionKey) {
+    return { ok: false, reason: 'review_attempt_unresolved', attempt_ids: [attempt.attempt_id] };
+  }
+  if (!attempt) attempt = state.journal.attempts.find(a => a.transaction_key === transactionKey) || null;
   const effective = evaluateEffectiveVerdict(ctx.evidenceContent);
   const receipt = { node_id: ctx.nodeInfo.id, generation,
     receipt_sha256: crypto.createHash('sha256').update(String(ctx.evidenceContent || '')).digest('hex'),
@@ -2399,7 +3174,7 @@ function beginReviewAttempt(opts, ctx) {
     findings_blocking: effective.findings_blocking, body: String(ctx.evidenceContent || '') };
   const parsedFindings = parseNodeFindings(ctx.evidenceContent).filter(f => f && f.id);
   if (!attempt) {
-    const ordinal = nextReviewAttemptOrdinal(state.journal.attempts, logicalGate.key);
+    const ordinal = nextReviewAttemptOrdinal(reviewJournalAttempts(state.journal), logicalGate);
     const attemptPrefix = logicalGate.kind === 'fanout'
       ? 'fanout-' + crypto.createHash('sha256').update(logicalGate.key).digest('hex')
       : String(ctx.nodeInfo.id).replace(/[^A-Za-z0-9_-]/g, '_');
@@ -2517,9 +3292,10 @@ function prepareReviewClose(opts, ctx) {
           attempt_id: attempt.attempt_id, lifecycle_settled: false,
           taskTransitions: [buildTransition(ctx.nodeInfo.id, 'complete', ctx.command)] } };
       }
-      // Re-evaluate every exact stored body at settlement; cached verdict fields are audit data only.
-      const passCount = (attempt.receipts || []).filter(r => evaluateEffectiveVerdict(r.body).pass === true).length;
-      const aggregatePass = passCount > gate.members.length / 2 && gate.members.every(id => (attempt.receipts || []).some(r => r.node_id === id));
+      // Re-evaluate every exact stored body under the frozen logical-group
+      // aggregation; cached verdict fields are audit data only.
+      const reduced = reduceLogicalReviewAttempt(ctx.nodes, gate, attempt.receipts || []);
+      const aggregatePass = reduced.complete && reduced.pass;
       attempt.outcome = aggregatePass ? 'pass' : 'fail';
       attempt.reason = aggregatePass ? null : 'fanout_refuted';
       writeReviewJournal(opts, begun.state);
@@ -2556,6 +3332,38 @@ function prepareReviewClose(opts, ctx) {
 function runOrient(opts) {
   const { planPath, statePath, project, shell, readFile, cacheExists } = opts;
 
+  // CLI callers are already fenced before lock acquisition. Pure-core callers
+  // opt in with an injected fence (the established unit-test seam); this avoids
+  // treating legacy readFile stubs that return plan bytes for every unknown path
+  // as a malformed transaction file.
+  const replanFence = opts.replanFence || { ok: true, fenced: false };
+  if (!replanFence.ok || replanFence.fenced) return replanOrientation(replanFence, project);
+  let epochFirstNode = null;
+  if (replanFence.committed) {
+    let currentAuthority = replanFence.current_authority || null;
+    if (!currentAuthority) {
+      try {
+        const verify = opts.verifyEpochAuthority
+          || (projectDir => require('./kaola-gitlab-workflow-replan').verifyCurrentEpochAuthority(projectDir));
+        currentAuthority = verify(path.dirname(planPath));
+      } catch (error) {
+        currentAuthority = { ok: false, reason: 'current_epoch_authority_unavailable', detail: error.message };
+      }
+    }
+    if (!currentAuthority || currentAuthority.ok !== true) {
+      return replanOrientation(Object.assign({}, replanFence, { ok: false, fenced: true,
+        reason: currentAuthority && currentAuthority.reason || 'current_epoch_authority_invalid' }), project,
+      currentAuthority && currentAuthority.detail ? { detail: currentAuthority.detail } : null);
+    }
+    const child = replanFence.transaction && replanFence.transaction.child || {};
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(child.first_node_id || ''))
+        || !/^[a-z][a-z0-9-]*$/.test(String(child.first_node_role || ''))) {
+      return replanOrientation(Object.assign({}, replanFence, { ok: false, fenced: true,
+        reason: 'replan_child_first_node_invalid' }), project);
+    }
+    epochFirstNode = { id: child.first_node_id, role: child.first_node_role };
+  }
+
   // #335: fail-closed when the plan file itself is absent. Distinguish an
   // unmirrored worktree (the MAIN checkout has the frozen project folder) from a
   // truly unauthored plan. The probe is CLI-wired; an absent probe (unit tests /
@@ -2578,21 +3386,9 @@ function runOrient(opts) {
 
   let orientPlanContent = '';
   try { orientPlanContent = readFile(planPath); } catch (_) {}
-  const orientJournal = readReviewJournal(opts, orientPlanContent);
-  if (!orientJournal.ok) return { result: 'refuse', reason: orientJournal.reason, detail: orientJournal.detail || null };
-  if (!orientJournal.legacy) {
-    const blocked = reviewJournalBlocker(orientJournal.journal);
-    if (blocked) {
-      const provisional = blocked.attempts.find(a => a.outcome === null);
-      const unsettled = blocked.attempts.find(a => a.lifecycle_settled === false && a.outcome !== null);
-      const repairing = blocked.attempts.find(a => a.repair && a.repair.settled === false);
-      return { result: 'refuse', reason: 'review_attempt_unresolved', attempt_ids: blocked.attempt_ids,
-        repair: provisional ? 'close remaining live members: ' + provisional.logical_gate.members.join(', ')
-          : unsettled ? 'retry ' + unsettled.settlement_command + ' for ' + unsettled.logical_gate.members.join(', ')
-          : repairing ? 'repair-node --attempt-id ' + repairing.attempt_id + ' --node-id ' + repairing.repair.selected_writer
-          : 'repair-node --attempt-id ' + blocked.attempts[0].attempt_id + ' --node-id <agent-selected-writer>' };
-    }
-  }
+  const orientReviewOpen = reviewFanoutTopUpAllowance(opts, orientPlanContent);
+  if (!orientReviewOpen.ok) return orientReviewOpen.refusal;
+  const orientReviewTopUp = orientReviewOpen.topUp;
 
   const resumeCheck = shell(validatorPath, [planPath, '--resume-check', '--json']);
   const nextAction  = shell(nextActionPath, [planPath, '--json']);
@@ -2926,7 +3722,13 @@ function runOrient(opts) {
     runningSet,
     allDone,
     dispatchFidelity,
+    ...(epochFirstNode ? { epochFirstNode } : {}),
     enterBatch,
+    ...(orientReviewTopUp ? { reviewTopUp: {
+      attempt_id: orientReviewTopUp.attempt.attempt_id,
+      pending_members: orientReviewTopUp.pending_members,
+      command: orientReviewTopUp.pending_members.length > 1 ? 'open-ready' : 'open-next',
+    } } : {}),
     // #434: present only when an in_progress node needs re-dispatch (absent or incomplete evidence).
     ...(requires_redispatch ? { requires_redispatch: true } : {}),
     frontier: enterBatch
@@ -3075,8 +3877,9 @@ function runOpenNext(opts) {
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['scheduler'] });
   if (guard) return guard;
 
-  const reviewFence = journalFence(opts, readFile(planPath));
-  if (reviewFence) return reviewFence;
+  const reviewOpen = reviewFanoutTopUpAllowance(opts, readFile(planPath));
+  if (!reviewOpen.ok) return reviewOpen.refusal;
+  const reviewTopUp = reviewOpen.topUp;
 
   // Shell NEXT_ACTION.
   const nextAction = shell(nextActionPath, [planPath, '--json']);
@@ -3095,6 +3898,11 @@ function runOpenNext(opts) {
 
   if (requestedId) {
     targetNode = readySet.find(n => n.id === requestedId);
+    if (reviewTopUp && !reviewTopUp.pending_members.includes(requestedId)) {
+      return { result: 'refuse', reason: 'review_attempt_unresolved',
+        attempt_ids: [reviewTopUp.attempt.attempt_id],
+        repair: 'open only the pending logical-review member: ' + reviewTopUp.pending_members.join(', ') };
+    }
     if (!targetNode) {
       // #439 (D-419 Part 4, settlement 5): if the node is not ready ONLY because its sole unsatisfied
       // dependency is a currently-OPEN gate (it is speculative-eligible), refuse with the more specific
@@ -3116,6 +3924,13 @@ function runOpenNext(opts) {
         nodeId: requestedId,
         readySet: readySet.map(n => n.id),
       };
+    }
+  } else if (reviewTopUp) {
+    targetNode = readySet.find(n => reviewTopUp.pending_members.includes(n.id));
+    if (!targetNode) {
+      return { result: 'refuse', reason: 'review_attempt_unresolved',
+        attempt_ids: [reviewTopUp.attempt.attempt_id],
+        repair: 'open one pending logical-review member: ' + reviewTopUp.pending_members.join(', ') };
     }
   } else {
     // #472 (dispatch fidelity): at a fresh INDEPENDENT ≥2 delegable frontier, do NOT silently
@@ -3161,6 +3976,16 @@ function runOpenNext(opts) {
       nodeId: targetNode.id,
       baselineResult,
     };
+  }
+
+  if (reviewTopUp) {
+    const record = baselineResult.recordBase || baselineResult;
+    const actualNonce = record && record.base ? String(record.base).slice(0, 12) : null;
+    const expectedNonce = reviewTopUp.generation_by_member.get(targetNode.id);
+    if (!actualNonce || actualNonce !== expectedNonce || record.stale === true) {
+      return { result: 'refuse', reason: 'review_generation_reservation_identity_mismatch',
+        nodeId: targetNode.id, attempt_ids: [reviewTopUp.attempt.attempt_id] };
+    }
   }
 
   // spliceLedgerNode: pending → in_progress (AFTER the baseline is on disk).
@@ -3338,6 +4163,9 @@ function runRecordEvidence(opts) {
     };
   }
 
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const cachePath = path.join(cacheDir, nodeId + '.md');
+
   const recordReadFile0 = opts.readFile || require('fs').readFileSync;
   let recordPlan = '';
   try { recordPlan = recordReadFile0(planPath, 'utf8'); } catch (_) {}
@@ -3377,9 +4205,6 @@ function runRecordEvidence(opts) {
     }
   }
 
-  const cacheDir = path.join(path.dirname(planPath), '.cache');
-  const cachePath = path.join(cacheDir, nodeId + '.md');
-
   if (mkdirp) mkdirp(cacheDir);
 
   // #546 G3 (DECISION A): a verbatim write of the role agent's stdin overwrites the
@@ -3405,6 +4230,24 @@ function runRecordEvidence(opts) {
   // consumed check requires a non-empty value), never a pass. Old in-flight nodes (whose record-evidence
   // already ran under old code) never re-enter here ⇒ exempt.
   contentToWrite = reinjectMissingRequiredKeys(contentToWrite, planPath, nodeId, recordReadFile);
+
+  // #699: read-only certifier bodies arrive through stdin and replace the seeded file. Preserve the
+  // authoritative OPEN-TIME G4 tuple rather than trusting/recomputing agent-supplied bindings at
+  // persistence time. A later code mutation must stale the receipt; it must never silently move the
+  // certified candidate forward. Missing/malformed seed state fails closed with zero writes.
+  const recordNodes = parseNodesFromContent(recordPlan);
+  const recordNode = recordNodes.find(node => node.id === nodeId);
+  const g4Context = recordNode ? g4CertifierSeedContext(planPath, nodeId, recordNode.role) : null;
+  if (g4Context) {
+    let seededBody = '';
+    try { seededBody = recordReadFile(cachePath, 'utf8'); } catch (_) {}
+    const seededBindings = readSeededG4Bindings(seededBody);
+    if (!seededBindings) {
+      return { result: 'refuse', reason: 'certifier_binding_seed_missing', nodeId,
+        detail: 'schema-2 certifier evidence lacks the authoritative open-time G4 binding tuple' };
+    }
+    contentToWrite = preserveSeededG4Bindings(contentToWrite, seededBindings);
+  }
 
   writeFile(cachePath, contentToWrite);
 
@@ -4812,7 +5655,7 @@ function reconcilePendingRebind(opts, attempt, state, nodeId, writerPaths, now) 
       + ') nor base_after (' + record.base_after + ') of the unsettled rebind — restore it from the recorded pair' };
 }
 
-function runRepairNode(opts) {
+function runRepairNodeCore(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir, attemptId } = opts;
 
   if (!nodeId) return { result: 'refuse', errors: ['--node-id required for repair-node'] };
@@ -5283,6 +6126,306 @@ function runRepairNode(opts) {
     ],
     taskMirror: refreshTaskMirror(project, shell),
   };
+}
+
+function scalarStateField(content, key) {
+  const re = new RegExp('^' + String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':[ \\t]*(.*)$', 'gm');
+  const values = [];
+  let match;
+  while ((match = re.exec(String(content || ''))) !== null) values.push(match[1].trim());
+  return values.length === 1 ? values[0] : null;
+}
+
+function fsyncRepairSourceDirectory(dir) {
+  const fs = require('fs');
+  let fd;
+  try { fd = fs.openSync(dir, 'r'); fs.fsyncSync(fd); } catch (_) {}
+  finally { if (fd !== undefined) try { fs.closeSync(fd); } catch (_) {} }
+}
+
+function readRegularRepairSource(filePath) {
+  const fs = require('fs');
+  let stat;
+  try { stat = fs.lstatSync(filePath); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') return { ok: true, bytes: null };
+    return { ok: false, reason: 'replan_source_authority_invalid', detail: error.message };
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+    return { ok: false, reason: 'replan_source_authority_invalid', detail: 'source_file_type_invalid' };
+  }
+  try { return { ok: true, bytes: fs.readFileSync(filePath) }; }
+  catch (error) { return { ok: false, reason: 'replan_source_authority_invalid', detail: error.message }; }
+}
+
+// Resolve the predecessor source only through E2's exported current/snapshot
+// authority. The immutable bytes come from the committed transaction's parent
+// snapshot, never from the mutable live source path being replaced.
+function resolveCommittedRepairSourceAuthority(sourcePath) {
+  const fs = require('fs');
+  const cacheDir = path.dirname(sourcePath);
+  const projectDir = path.dirname(cacheDir);
+  const transactionPath = path.join(cacheDir, REPLAN_TRANSACTION_NAME);
+  const transactionFile = readRegularRepairSource(transactionPath);
+  if (!transactionFile.ok) return transactionFile;
+  if (transactionFile.bytes === null) return { ok: true, source_bytes: null, receipt: null };
+  let transaction;
+  try { transaction = JSON.parse(transactionFile.bytes.toString('utf8')); }
+  catch (_) { return { ok: false, reason: 'replan_transaction_invalid' }; }
+  const checked = validateReplanTransaction(transaction);
+  if (!checked.ok || transaction.phase !== 'committed' || transaction.outcome !== 'committed'
+      || !transaction.activation || !transaction.activation.state_unfenced
+      || transaction.activation.state_unfenced.status !== 'complete') {
+    return { ok: false, reason: checked.reason || 'replan_transaction_invalid' };
+  }
+  if (!transaction.source || transaction.source.authority_kind === 'diagnosis_to_build'
+      || !/^[0-9a-f]{64}$/.test(String(transaction.source.handoff_digest || ''))) {
+    return { ok: false, reason: 'replan_source_authority_invalid' };
+  }
+  let current;
+  let snapshots;
+  try {
+    const replan = require('./kaola-gitlab-workflow-replan');
+    current = replan.verifyCurrentEpochAuthority(projectDir);
+    snapshots = current && current.ok ? replan.verifyAllEpochSnapshots(projectDir) : current;
+  } catch (error) {
+    return { ok: false, reason: 'replan_source_authority_invalid', detail: error.message };
+  }
+  if (!current || current.ok !== true || !snapshots || snapshots.ok !== true) {
+    return { ok: false, reason: current && current.reason || snapshots && snapshots.reason
+      || 'replan_source_authority_invalid' };
+  }
+  const snapshotSourcePath = path.join(cacheDir, 'epochs', String(transaction.parent.plan_epoch),
+    'files', '.cache', 'replan-source.json');
+  const snapshotSource = readRegularRepairSource(snapshotSourcePath);
+  if (!snapshotSource.ok || snapshotSource.bytes === null) {
+    return { ok: false, reason: 'replan_source_history_unreadable', detail: snapshotSource.detail || null };
+  }
+  const digest = sha256Hex(snapshotSource.bytes);
+  if (digest !== transaction.source.handoff_digest) {
+    return { ok: false, reason: 'replan_source_history_mismatch' };
+  }
+  return { ok: true, source_bytes: snapshotSource.bytes, receipt: {
+    transaction_id: transaction.transaction_id,
+    path: '.cache/replan-sources/' + digest + '.json',
+    digest,
+    size: snapshotSource.bytes.length,
+  } };
+}
+
+function persistRepairSourceHistory(sourcePath, authority, allowCreate) {
+  const fs = require('fs');
+  const projectDir = path.dirname(path.dirname(sourcePath));
+  const receipt = authority.receipt;
+  const historyPath = path.join(projectDir, ...receipt.path.split('/'));
+  const historyDir = path.dirname(historyPath);
+  try {
+    fs.mkdirSync(historyDir, { recursive: true });
+    const dirStat = fs.lstatSync(historyDir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('source_history_directory_invalid');
+    const existing = readRegularRepairSource(historyPath);
+    if (!existing.ok) return { ok: false, reason: 'replan_source_history_mismatch', detail: existing.detail || null };
+    if (existing.bytes === null) {
+      if (!allowCreate) return { ok: false, reason: 'replan_source_history_mismatch' };
+      const fd = fs.openSync(historyPath, 'wx', 0o600);
+      try { fs.writeFileSync(fd, authority.source_bytes); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
+      fsyncRepairSourceDirectory(historyDir);
+    }
+    const reread = readRegularRepairSource(historyPath);
+    if (!reread.ok || reread.bytes === null || reread.bytes.length !== receipt.size
+        || sha256Hex(reread.bytes) !== receipt.digest
+        || !reread.bytes.equals(Buffer.from(authority.source_bytes))) {
+      return { ok: false, reason: 'replan_source_history_mismatch' };
+    }
+    return { ok: true, path: historyPath };
+  } catch (error) {
+    return { ok: false, reason: error && error.code === 'EEXIST'
+      ? 'replan_source_history_mismatch' : 'replan_source_history_write_failed', detail: error.message };
+  }
+}
+
+// Crash-safe producer-side source settlement. `isNextSource` deliberately
+// compares semantic envelope fields so an idempotent retry preserves the first
+// persisted_at timestamp instead of rewriting an already-published successor.
+function publishRepairReplanSource(opts) {
+  const fs = require('fs');
+  const sourcePath = String(opts && opts.sourcePath || '');
+  const nextBytes = Buffer.isBuffer(opts && opts.nextBytes)
+    ? opts.nextBytes : Buffer.from(String(opts && opts.nextBytes || ''), 'utf8');
+  if (!path.isAbsolute(sourcePath) || nextBytes.length === 0 || typeof opts.isNextSource !== 'function') {
+    return { ok: false, reason: 'replan_source_authority_invalid' };
+  }
+  const live = readRegularRepairSource(sourcePath);
+  if (!live.ok) return live;
+  let liveIsNext = false;
+  if (live.bytes !== null) {
+    try { liveIsNext = opts.isNextSource(live.bytes) === true; } catch (_) { liveIsNext = false; }
+  }
+  let authority;
+  try {
+    const resolve = opts.resolveCommittedSourceAuthority || resolveCommittedRepairSourceAuthority;
+    authority = resolve(sourcePath);
+  } catch (error) {
+    return { ok: false, reason: 'replan_source_authority_invalid', detail: error.message };
+  }
+  if (!authority || authority.ok !== true) return authority || { ok: false, reason: 'replan_source_authority_invalid' };
+  const hasPredecessor = !!(authority.receipt && authority.source_bytes);
+  if (hasPredecessor) {
+    const receipt = authority.receipt;
+    const oldBytes = Buffer.from(authority.source_bytes);
+    if (receipt.path !== '.cache/replan-sources/' + receipt.digest + '.json'
+        || !/^[0-9a-f]{64}$/.test(String(receipt.transaction_id || ''))
+        || receipt.digest !== sha256Hex(oldBytes) || receipt.size !== oldBytes.length) {
+      return { ok: false, reason: 'replan_source_authority_invalid' };
+    }
+    if (liveIsNext) {
+      const history = persistRepairSourceHistory(sourcePath, authority, false);
+      if (!history.ok) return history;
+      return { ok: true, idempotent: true, rotated_from: receipt };
+    }
+    if (live.bytes !== null && !live.bytes.equals(oldBytes)) {
+      return { ok: false, reason: 'replan_source_conflict' };
+    }
+    const history = persistRepairSourceHistory(sourcePath, authority, live.bytes !== null);
+    if (!history.ok) return history;
+    if (typeof opts.failpoint === 'function') opts.failpoint('after_replan_source_archived');
+    if (live.bytes !== null) {
+      const stillLive = readRegularRepairSource(sourcePath);
+      if (!stillLive.ok || stillLive.bytes === null || !stillLive.bytes.equals(oldBytes)) {
+        return { ok: false, reason: 'replan_source_conflict' };
+      }
+      fs.unlinkSync(sourcePath);
+      fsyncRepairSourceDirectory(path.dirname(sourcePath));
+    }
+    if (typeof opts.failpoint === 'function') opts.failpoint('after_replan_source_unlinked');
+  } else {
+    if (liveIsNext) return { ok: true, idempotent: true, rotated_from: null };
+    if (live.bytes !== null) return { ok: false, reason: 'replan_source_conflict' };
+  }
+
+  const cacheDir = path.dirname(sourcePath);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const tmpPath = sourcePath + '.tmp-' + process.pid + '-' + sha256Hex(nextBytes).slice(0, 12);
+  try {
+    const fd = fs.openSync(tmpPath, 'wx', 0o600);
+    try { fs.writeFileSync(fd, nextBytes); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    const installCheck = readRegularRepairSource(sourcePath);
+    if (!installCheck.ok || installCheck.bytes !== null) throw new Error('replan_source_conflict');
+    fs.renameSync(tmpPath, sourcePath);
+    fsyncRepairSourceDirectory(cacheDir);
+  } catch (error) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    return { ok: false, reason: error.message === 'replan_source_conflict'
+      ? 'replan_source_conflict' : 'replan_source_write_failed', detail: error.message };
+  }
+  const published = readRegularRepairSource(sourcePath);
+  if (!published.ok || published.bytes === null || !published.bytes.equals(nextBytes)) {
+    return { ok: false, reason: 'replan_source_write_failed' };
+  }
+  if (typeof opts.failpoint === 'function') opts.failpoint('after_replan_source_published');
+  return { ok: true, idempotent: false, rotated_from: hasPredecessor ? authority.receipt : null };
+}
+
+function persistRepairReplanSource(opts, result) {
+  const planContent = opts.readFile(opts.planPath);
+  const parentPlanHash = planHashFromContent(planContent);
+  const statePath = opts.statePath || path.join(path.dirname(opts.planPath), 'workflow-state.md');
+  let stateContent;
+  try { stateContent = opts.readFile(statePath); } catch (_) { return result; }
+
+  // Compatibility is deliberately narrow: legacy states retain the historical
+  // return-only behavior.  Every schema-2 state must publish and bind the
+  // source authority before repair-node returns its outcome.
+  if (scalarStateField(stateContent, 'epoch_schema_version') !== '2') return result;
+  const hex = value => /^[0-9a-f]{64}$/.test(String(value || '').toLowerCase());
+  const epochLineageId = scalarStateField(stateContent, 'epoch_lineage_id');
+  const claimIdentityDigest = scalarStateField(stateContent, 'claim_identity_digest');
+  const claimRootBaseDigest = scalarStateField(stateContent, 'claim_root_base_digest');
+  if (!parentPlanHash || scalarStateField(stateContent, 'active_plan_hash') !== parentPlanHash
+      || !hex(epochLineageId) || !hex(claimIdentityDigest) || !hex(claimRootBaseDigest)) {
+    return { result: 'refuse', reason: 'replan_source_authority_invalid' };
+  }
+
+  const journalState = readReviewJournal(opts, planContent);
+  if (!journalState.ok || !journalState.journal || !journalState.journalPath) {
+    return { result: 'refuse', reason: 'replan_source_authority_invalid',
+      detail: journalState.reason || 'review_journal_missing' };
+  }
+  const attemptId = result.attempt_id || opts.attemptId;
+  const attempt = journalState.journal.attempts.find(row => row && row.attempt_id === attemptId);
+  if (!attempt || attempt.outcome !== 'fail' || attempt.lifecycle_settled !== true
+      || attempt.consumed_by != null || String(attempt.plan_hash || journalState.journal.plan_hash || '') !== parentPlanHash) {
+    return { result: 'refuse', reason: 'replan_source_attempt_unsettled', attempt_id: attemptId || null };
+  }
+  let journalBytes;
+  try { journalBytes = opts.readFile(journalState.journalPath); }
+  catch (_) { return { result: 'refuse', reason: 'replan_source_authority_invalid' }; }
+  const candidate = effectiveCandidate(attempt);
+  if (!candidate || !hex(candidate.digest)) {
+    return { result: 'refuse', reason: 'replan_source_authority_invalid', detail: 'effective_candidate_digest_invalid' };
+  }
+  const reason = result.reason == null ? 'repair_requires_replan' : String(result.reason);
+  if (!/^[a-z][a-z0-9_]*$/.test(reason)) {
+    return { result: 'refuse', reason: 'replan_source_authority_invalid', detail: 'repair_reason_invalid' };
+  }
+  const producerSlice = Array.isArray(result.producer_slice)
+    ? [...new Set(result.producer_slice.map(String))].sort() : [];
+  if (producerSlice.some(id => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))) {
+    return { result: 'refuse', reason: 'replan_source_authority_invalid', detail: 'producer_slice_invalid' };
+  }
+  const payload = {
+    schema_version: 2,
+    kind: 'repair_outcome',
+    result: 'repair_requires_replan',
+    attempt_id: attemptId,
+    reason,
+    producer_slice: producerSlice,
+    parent_plan_hash: parentPlanHash,
+    epoch_lineage_id: epochLineageId,
+    claim_identity_digest: claimIdentityDigest,
+    claim_root_base_digest: claimRootBaseDigest,
+    review_journal_digest: sha256Hex(Buffer.from(journalBytes, 'utf8')),
+    review_attempt_digest: sha256Hex(Buffer.from(canonicalJson(attempt), 'utf8')),
+    effective_candidate_digest: String(candidate.digest).toLowerCase(),
+  };
+  const outcomeDigest = sha256Hex(Buffer.from(canonicalJson(payload), 'utf8'));
+  const sourcePath = path.join(path.dirname(opts.planPath), '.cache', 'replan-source.json');
+  const envelope = Object.assign({}, payload, {
+    outcome_digest: outcomeDigest,
+    persisted_at: typeof opts.now === 'function' ? opts.now() : new Date().toISOString(),
+  });
+  const sameEnvelope = bytes => {
+    let existing;
+    try { existing = JSON.parse(Buffer.from(bytes).toString('utf8')); } catch (_) { return false; }
+    const existingPayload = {};
+    for (const key of Object.keys(payload)) existingPayload[key] = existing[key];
+    try {
+      return canonicalJson(existingPayload) === canonicalJson(payload)
+        && existing.outcome_digest === outcomeDigest
+        && typeof existing.persisted_at === 'string' && Number.isFinite(Date.parse(existing.persisted_at));
+    } catch (_) { return false; }
+  };
+  const published = publishRepairReplanSource({
+    sourcePath,
+    nextBytes: Buffer.from(canonicalJson(envelope) + '\n', 'utf8'),
+    isNextSource: sameEnvelope,
+    ...(typeof opts.resolveCommittedSourceAuthority === 'function'
+      ? { resolveCommittedSourceAuthority: opts.resolveCommittedSourceAuthority } : {}),
+    failpoint: name => reviewFailpoint(opts, name),
+  });
+  if (!published.ok) return { result: 'refuse', reason: published.reason,
+    attempt_id: attemptId, ...(published.detail ? { detail: published.detail } : {}) };
+  reviewFailpoint(opts, 'after_replan_source_outcome');
+  return Object.assign({}, result, { source_persisted: true, source_path: sourcePath,
+    ...(published.rotated_from ? { rotated_from: published.rotated_from } : {}) });
+}
+
+function runRepairNode(opts) {
+  const result = runRepairNodeCore(opts);
+  return result && result.result === 'repair_requires_replan'
+    ? persistRepairReplanSource(opts, result) : result;
 }
 
 // ===========================================================================
@@ -6154,8 +7297,9 @@ function runOpenReady(opts) {
   const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'] });
   if (guard) return guard;
 
-  const reviewFence = journalFence(opts, readFile(planPath));
-  if (reviewFence) return reviewFence;
+  const reviewOpen = reviewFanoutTopUpAllowance(opts, readFile(planPath));
+  if (!reviewOpen.ok) return reviewOpen.refusal;
+  const reviewTopUp = reviewOpen.topUp;
 
   // Crash-safe precondition: an 'opening' running set (or any opening:true node) is an
   // interrupted open-ready — refuse with a reconcile pointer (never silently overwrite).
@@ -6204,6 +7348,10 @@ function runOpenReady(opts) {
   let frontier = (nextAction.readyPending || [])
     .filter(n => n.role !== 'main-session-gate')
     .filter(n => !liveIds.has(n.id));
+  if (reviewTopUp) {
+    const allowed = new Set(reviewTopUp.pending_members);
+    frontier = frontier.filter(node => allowed.has(node.id));
+  }
 
   // #439 (D-419 Part 4): SPECULATIVE fallback. When the NORMAL frontier is empty — the only thing
   // blocking forward progress is an open gate — AND the frozen plan's speculative_open_policy AUTHORIZES
@@ -6221,7 +7369,7 @@ function runOpenReady(opts) {
   const specPolicy = resolveSpeculativePolicy(readFile(planPath));
   const speculativeAuthorized = specPolicy === 'auto' || (specPolicy === 'consent' && opts.speculativeConsent);
   let openingSpeculative = false;
-  if (frontier.length === 0 && speculativeAuthorized) {
+  if (!reviewTopUp && frontier.length === 0 && speculativeAuthorized) {
     const specFrontier = (nextAction.speculativePending || [])
       .filter(n => n.role !== 'main-session-gate')
       .filter(n => !liveIds.has(n.id));
@@ -6498,6 +7646,12 @@ function runOpenReady(opts) {
     };
   }
 
+  if (reviewTopUp && toOpen.some(node => !reviewTopUp.pending_members.includes(node.id))) {
+    return { result: 'refuse', reason: 'review_attempt_unresolved',
+      attempt_ids: [reviewTopUp.attempt.attempt_id],
+      repair: 'open only pending logical-review members: ' + reviewTopUp.pending_members.join(', ') };
+  }
+
   const openedAt = (typeof now === 'function') ? now() : null;
   // Session proof is valid only for this immediate parent turn. Retain it in a transient lookup for
   // card construction, but never persist it in running-set.json or reuse it during reconciliation.
@@ -6553,8 +7707,14 @@ function runOpenReady(opts) {
   // it is a clean no-op when no group formed. --drop-base is idempotent (a missing file/ref/token is a
   // no-op), so a member dropped by both a Phase-1 and a Phase-2 path is safe.
   const recordedBaselineIds = [];
+  const journalOwnedReviewBaselines = new Set(reviewTopUp
+    ? reviewTopUp.attempt.generations.map(row => row.member) : []);
   const dropRecordedBaselines = (ids) => {
-    for (const id of ids) shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+    for (const id of ids) {
+      if (!journalOwnedReviewBaselines.has(id)) {
+        shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+      }
+    }
   };
   const dropGroupBaseline = () => {
     if (groupBaselineSha) shell(validatorPath, [planPath, '--drop-base', '--node-id', groupForm.group_id, '--json']);
@@ -6768,6 +7928,17 @@ function runOpenReady(opts) {
       dropGroupBaseline();
       return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: baseline };
     }
+    if (reviewTopUp) {
+      const record = baseline.recordBase || baseline;
+      const actualNonce = record && record.base ? String(record.base).slice(0, 12) : null;
+      const expectedNonce = reviewTopUp.generation_by_member.get(n.id);
+      if (!actualNonce || actualNonce !== expectedNonce || record.stale === true) {
+        dropRecordedBaselines(recordedBaselineIds);
+        dropGroupBaseline();
+        return { result: 'refuse', reason: 'review_generation_reservation_identity_mismatch',
+          nodeId: n.id, attempt_ids: [reviewTopUp.attempt.attempt_id] };
+      }
+    }
     // Track this member's recorded baseline so the aborts below reach it. Group members were already
     // pushed in Phase 1; the includes-guard keeps the id list dup-free while still covering the
     // serial/read path (which records here for the first time). --drop-base is idempotent regardless.
@@ -6853,8 +8024,11 @@ function runOpenReady(opts) {
           // no-op for every other role ⇒ byte-identical dispatch card).
           ...optimizeDispatchCtx(planContent, n.role, n.id),
           // The durable node channel — per-member (each co-opened member gets its OWN brief + upstream
-          // list). {} for a briefless/root member ⇒ byte-identical dispatch card.
-          ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet }),
+          // list). {} for a briefless/root member ⇒ byte-identical dispatch card. #692: openIntoLeg is
+          // set when THIS member provisioned a leg (legInfo) so deriveDispatchChannel absolutizes its
+          // parent-sourced upstream_evidence to the parent worktree (the leg carries no sibling .cache);
+          // a legless read/serial member keeps the project-relative hint (byte-identical to pre-#692).
+          ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet, openIntoLeg: !!legInfo }),
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
@@ -7299,10 +8473,7 @@ function closeGroupMember(ctx) {
     }
     if (closeResult.changed) currentPlan = closeResult.content;
     // Compliance row carrying the literal `deferred_to_group` marker in the Evidence cell (grep/audit).
-    const requirementCell = role + ' (' + nodeId + ')';
-    if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
-      currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | subagent-invoked | deferred_to_group | |');
-    }
+    currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'deferred_to_group');
     writeFile(planPath, currentPlan);
     appendNodeTiming(planPath, nodeId, 'closed');
     appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -7416,10 +8587,7 @@ function closeGroupMember(ctx) {
     return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
   }
   if (closeResult.changed) currentPlan = closeResult.content;
-  const requirementCell = role + ' (' + nodeId + ')';
-  if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
-    currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | subagent-invoked | group_passed | |');
-  }
+  currentPlan = addCloseCompliance(currentPlan, nodeId, role, evidenceContent, 'group_passed');
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
   appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
@@ -7585,6 +8753,15 @@ function runReconcileRunningSet(opts) {
       // signal that a `barrier-base-lg-*` might be live is the presence of an in_progress row.
       let hasInProgressB = false;
       for (const id of Object.keys(ledgerB)) { if (ledgerB[id] === 'in_progress') { keep.add(sanB(id)); hasInProgressB = true; } }
+      // A bounded logical review can legitimately own a real reservation for
+      // a still-pending member.  The immutable journal generation is its live
+      // owner just as surely as an in_progress ledger row; dropping it here
+      // would make the provisional attempt unreadable and force a nonce
+      // rotation before top-up.  Only a fully validated current-plan journal
+      // contributes keep entries, so malformed/stale bytes cannot pin bases.
+      for (const member of journalOwnedReviewGenerationMembers(opts, readFile(planPath))) {
+        keep.add(sanB(member));
+      }
       if (running) {
         for (const n of (running.nodes || [])) { if (n && n.id) keep.add(sanB(n.id)); }
         if (running.lane_group) {
@@ -7783,8 +8960,11 @@ function runReconcileRunningSet(opts) {
   // (a missing file/ref is a clean no-op). Mirrors runReopenNode ~1505. The roll-FORWARD survivors
   // (kept) keep their fresh baselines.
   if (typeof shell === 'function') {
+    const journalOwned = journalOwnedReviewGenerationMembers(opts, readFile(planPath));
     for (const id of new Set([...dropped, ...cappedOut, ...closed, ...stale])) {
-      shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+      if (!journalOwned.has(id)) {
+        shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+      }
     }
   }
 
@@ -8319,6 +9499,39 @@ function main() {
   const writeFile = (fpath, content) => { writeFileAtomicReplace(fpath, content); };
   const cacheExists = (fpath) => fs.existsSync(fpath);
 
+  // #699: fence before worktree mirroring, any scheduler-lock creation, stdin
+  // consumption, or summary-envelope caching. record-evidence --verify and
+  // orient are read-only; orient is still projected through the fence so the
+  // operator sees the exact one-command recovery path.
+  let projectReplanFence = { ok: true, fenced: false };
+  {
+    const guardedMutation = REPLAN_GUARDED_SUBCOMMANDS.has(subcommand)
+      && !(subcommand === 'record-evidence' && args.includes('--verify'));
+    if (subcommand === 'orient' || guardedMutation) {
+      projectReplanFence = readProjectReplanFence(statePath, cacheDir, readFile);
+      if (!projectReplanFence.ok || projectReplanFence.fenced) {
+        const out = replanOrientation(projectReplanFence, project);
+        process.stdout.write(JSON.stringify(out) + '\n');
+        process.exitCode = 1;
+        return;
+      }
+      if (projectReplanFence.committed) {
+        let authority;
+        try { authority = require('./kaola-gitlab-workflow-replan').verifyCurrentEpochAuthority(projectDir); }
+        catch (error) { authority = { ok: false, reason: 'current_epoch_authority_unavailable', detail: error.message }; }
+        if (!authority || authority.ok !== true) {
+          const out = replanOrientation(Object.assign({}, projectReplanFence, { ok: false, fenced: true,
+            reason: authority && authority.reason || 'current_epoch_authority_invalid' }), project);
+          if (authority && authority.detail) out.detail = authority.detail;
+          process.stdout.write(JSON.stringify(out) + '\n');
+          process.exitCode = 1;
+          return;
+        }
+        projectReplanFence.current_authority = authority;
+      }
+    }
+  }
+
   // #335: resolve the MAIN checkout root even when cwd is a linked worktree.
   // realpath both sides so a macOS /var vs /private/var divergence under
   // os.tmpdir() never false-positives the linked-worktree comparison.
@@ -8428,7 +9641,8 @@ function main() {
       mainPlanExists: fs.existsSync(mainPlanPath),
       mainPlanPath,
     };
-    result = runOrient({ planPath, statePath, project, shell, readFile, writeFile, cacheExists, planProbe });
+    result = runOrient({ planPath, statePath, project, shell, readFile, writeFile, cacheExists,
+      planProbe, replanFence: projectReplanFence });
   } else if (subcommand === 'mirror-project') {
     result = runMirrorProject({
       project,
@@ -8563,7 +9777,9 @@ function main() {
       result = { result: 'refuse', errors: ['--node-id required for repair-node'] };
     } else {
       result = runRepairNode({
-        planPath, project, nodeId, attemptId, shell, readFile, writeFile, cacheExists,
+        planPath, statePath, project, nodeId, attemptId, shell, readFile, writeFile, cacheExists,
+        repoRoot,
+        now: () => new Date().toISOString(),
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
         // #665 R1: mirror reopen-node's dispatch — without readdir, a resumed LEGACY (role-prefix,
         // cardinality>1) adversarial-verifier fan-out's (4c) receipt purge branch is silently dead.
@@ -8681,6 +9897,8 @@ module.exports = {
   // #434 (D-434-01): repair primitives.
   runRevertOverflow,
   runRepairNode,
+  // #699: focused crash-safe review-outcome source publication proof.
+  publishRepairReplanSource,
   // #439 (D-419 Part 4): speculative-read discard primitive.
   runDiscardSpeculative,
   shellNode,
@@ -8715,6 +9933,10 @@ module.exports = {
   routeCanonicalFindings,
   reviewJournalBlocker,
   readReviewJournal,
+  reviewJournalAttempts,
+  reduceLogicalReviewAttempt,
+  readProjectReplanFence,
+  replanOrientation,
   uniqueMaximalReviewProducer,
   captureWriterBarrierIdentity,
   verifyWriterBarrierIdentity,
