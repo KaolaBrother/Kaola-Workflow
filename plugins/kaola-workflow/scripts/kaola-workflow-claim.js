@@ -3997,5 +3997,8 @@ module.exports = {
   // (sweepBarrierRefs, cmdBarrierRefSweep) — exported for direct unit coverage.
   sanitizeBarrierTag,
   sweepBarrierRefs,
-  cmdBarrierRefSweep
+  cmdBarrierRefSweep,
+  // #700: terminal archive-metadata writers reused by sink-merge's SOLE-archiver finalize path.
+  appendClosureBlock,
+  persistAttestationToSummary
 };

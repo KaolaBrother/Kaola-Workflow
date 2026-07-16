@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary } = require('./kaola-workflow-claim.js');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
@@ -69,6 +69,14 @@ function probeIssueClosed(issueNumber, opts) {
     const out = ghExec(['issue', 'view', String(issueNumber), '--json', 'state', '--jq', '.state'], opts);
     return String(out || '').trim().toLowerCase() === 'closed';
   } catch (_) { return false; }
+}
+
+// #517/#694: reopen issue N on the forge. The single forge-noun site for reopen — used by the
+// push_main #517 auto-close reopen AND the #694 keep-open END-STATE guard. Throws on failure so the
+// caller can distinguish a confirmed reopen from a failed one.
+function reopenIssue(issueNumber, opts) {
+  if (OFFLINE || issueNumber == null) return;
+  ghExec(['issue', 'reopen', String(issueNumber)], opts || {});
 }
 
 function getRoot() {
@@ -806,13 +814,31 @@ function writeSinkReceipt(receiptPath, receipt) {
 // fallback) since either may be stale residue from an earlier cycle. Per-file try/catch: a failed
 // unlink must never fail an otherwise-successful sink — the deliverable already landed on
 // defBranch by the time this runs. Returns true iff no candidate journal remains on disk afterward.
-function disposeSinkJournals(mainRoot, project) {
+function disposeSinkJournals(mainRoot, project, archiveDestRel) {
   const candidates = [
     path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json'),
     path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-fallback.json'),
     path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'),
     path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-fallback.json'),
   ];
+  // #700/#694: the actual archive destination is collision-suffixed (archive/<project>.archived-<ts>/)
+  // when archive/<project>/ already exists; its .cache journals escape the four plain candidates above
+  // (the one live way a receipt survives into an archive — the shared root cause with #694's stale
+  // cross-run resume). Add the recorded dest AND sweep EVERY suffixed archive folder so a prior
+  // cycle's residual receipt is disposed too, not just the current run's.
+  if (archiveDestRel) {
+    candidates.push(path.join(mainRoot, archiveDestRel, '.cache', 'sink-receipt.json'));
+    candidates.push(path.join(mainRoot, archiveDestRel, '.cache', 'sink-fallback.json'));
+  }
+  try {
+    const archiveBase = path.join(mainRoot, 'kaola-workflow', 'archive');
+    for (const entry of fs.readdirSync(archiveBase)) {
+      if (entry.startsWith(project + '.archived-')) {
+        candidates.push(path.join(archiveBase, entry, '.cache', 'sink-receipt.json'));
+        candidates.push(path.join(archiveBase, entry, '.cache', 'sink-fallback.json'));
+      }
+    }
+  } catch (_) { /* archive dir absent — nothing suffixed to sweep */ }
   let allDisposed = true;
   for (const p of candidates) {
     try {
@@ -838,6 +864,47 @@ function resolveSinkReceiptPath(mainRoot, project) {
   return archive;
 }
 
+// #694: read the CURRENT run's claim_ts from workflow-state.md. The claim block (## Sink) carries a
+// per-run `claim_ts:` written at claim time (kaola-workflow-claim.js). A project name is stable
+// across runs (derived from the roadmap's workflow_project field), so the SAME project can be
+// re-claimed by a later run; the newest claim_ts across every state location is the current run's.
+// Scans the live folder, the plain archive, AND every collision-suffixed archive
+// (archive/<project>.archived-<ts>/) so a resumed cross-cycle receipt can be told apart from the
+// current claim. Returns the newest ISO claim_ts string (ISO-8601 sorts lexicographically) or null.
+function readCurrentClaimTs(mainRoot, project, branch) {
+  if (!isSafeName(project)) return null;
+  const stamps = [];
+  const collect = (raw) => {
+    if (!raw) return;
+    const m = raw.match(/^claim_ts:\s*(.+?)\s*$/m);
+    if (m && m[1].trim()) stamps.push(m[1].trim());
+  };
+  // At --sink time the CURRENT run's state lives on the feature branch (the live folder for a
+  // sole-archiver sink, or the archived folder for a pre-finalized sink) — main's working tree still
+  // reflects the default branch. Read the branch ref FIRST so the current claim_ts is seen even
+  // before the merge lands it in the working tree.
+  if (branch) {
+    for (const rel of ['kaola-workflow/' + project + '/workflow-state.md', 'kaola-workflow/archive/' + project + '/workflow-state.md']) {
+      try { collect(execFileSync('git', ['-C', mainRoot, 'show', branch + ':' + rel], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch (_) {}
+    }
+  }
+  // Working-tree state files (live, plain archive, and every collision-suffixed archive).
+  const wtFiles = [
+    path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, 'workflow-state.md'),
+  ];
+  try {
+    const archiveBase = path.join(mainRoot, 'kaola-workflow', 'archive');
+    for (const entry of fs.readdirSync(archiveBase)) {
+      if (entry.startsWith(project + '.archived-')) wtFiles.push(path.join(archiveBase, entry, 'workflow-state.md'));
+    }
+  } catch (_) { /* archive dir absent — only live/plain candidates */ }
+  for (const f of wtFiles) { try { collect(fs.readFileSync(f, 'utf8')); } catch (_) {} }
+  let newest = null;
+  for (const ts of stamps) if (!newest || ts > newest) newest = ts; // ISO-8601 sorts lexicographically
+  return newest;
+}
+
 // #429: load or initialize the sink receipt.
 // #518: cycle-identity guard — stamp branch_head at init; on resume, if steps.merge is 'done'
 // and branch_head diverges from the current tip (new cycle, same branch name reused), reinitialize
@@ -848,17 +915,59 @@ function resolveSinkReceiptPath(mainRoot, project) {
 // receipt may be a committed tracked file on both main and the feature branch; modifying it before
 // `git checkout <branch>` causes a checkout conflict. The first disk write is deferred to the
 // merge step, after which the checked-out content matches main and the overwrite is safe.
-function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch) {
+function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch, keepIssueOpen) {
   const receiptPath = resolveSinkReceiptPath(mainRoot, project);
+  // #694: the current run's claim_ts — used to detect a receipt left behind by an EARLIER run of
+  // the same (reused) project name, so we never replay its recorded steps (incl. closure).
+  const currentClaimTs = readCurrentClaimTs(mainRoot, project, branch);
+  const resolveBranchHead = () => {
+    try { return execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { return null; }
+  };
+  // DRY fresh-receipt builder — one shape for the no-receipt init, the #518 cycle-identity reinit,
+  // and the #694 cross-run reinit. Always stamps keep_open_requested (this run's intent) + claim_ts
+  // so a later resume can detect BOTH a keep-open flag flip and a cross-run resume.
+  const makeFresh = (currentHead, priorReceipt, extra) => {
+    const steps = {};
+    for (const s of SINK_STEPS) steps[s] = 'pending';
+    const pr = priorReceipt || {};
+    return Object.assign({
+      project, branch,
+      issue_number: issueNumber || pr.issue_number || null,
+      issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : (pr.issue_numbers || [])),
+      resolved_default_branch: defBranch || pr.resolved_default_branch,
+      branch_head: currentHead || null,
+      keep_open_requested: !!keepIssueOpen,
+      claim_ts: currentClaimTs || null,
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      stash_ref: null,
+      removed_duplicates: [],
+      steps
+    }, extra || {});
+  };
   if (fs.existsSync(receiptPath)) {
     try {
       const r = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
       if (r && r.steps) {
+        // #694: cross-run staleness FIRST. A receipt whose recorded claim_ts (or, for a pre-#694
+        // receipt shape, its started_at) PREDATES the current run's claim_ts belongs to an earlier
+        // run of the same project — reinitialize so the pipeline re-runs fresh under THIS run's
+        // flags (its recorded steps, including a prior `closure: done`, are NOT replayed). Fail
+        // loud on stderr. Gated on a resolvable current claim_ts (no marker → fall through to the
+        // #518 guard, no regression). newCycle:true defers the first disk write past the merge
+        // checkout (the stale receipt may be a tracked file shared by both branches).
+        const receiptStamp = r.claim_ts || r.started_at || null;
+        if (currentClaimTs && receiptStamp && receiptStamp < currentClaimTs) {
+          process.stderr.write('sink-merge --sink: cross-run stale receipt detected — receipt stamp ' + receiptStamp +
+            ' predates the current claim_ts ' + currentClaimTs + '. Reinitializing sink steps; the prior run\'s recorded ' +
+            'steps (including closure) are NOT replayed and this run\'s --keep-issue-open intent is honored.\n');
+          const freshReceipt = makeFresh(resolveBranchHead(), r, { cross_run_reinit: true });
+          return { receipt: freshReceipt, receiptPath, newCycle: true };
+        }
         // #518: cycle-identity check — only applies when merge is already recorded as done
         // (the stale-receipt scenario: prior cycle completed, new cycle reuses same branch name).
         if (r.steps.merge === 'done') {
-          let currentHead = null;
-          try { currentHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
+          const currentHead = resolveBranchHead();
           const priorHead = r.branch_head || null;
           const isNewCycle = !currentHead || !priorHead || currentHead !== priorHead;
           if (isNewCycle) {
@@ -867,20 +976,7 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
             // disk write until after the merge-step checkout (the stale file remains on disk,
             // unmodified, so git checkout <branch> does not abort with "local changes would be
             // overwritten" when the receipt is a tracked file shared by both branches).
-            const freshSteps = {};
-            for (const s of SINK_STEPS) freshSteps[s] = 'pending';
-            const freshReceipt = {
-              project, branch,
-              issue_number: issueNumber || r.issue_number || null,
-              issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : (r.issue_numbers || [])),
-              resolved_default_branch: defBranch || r.resolved_default_branch,
-              branch_head: currentHead || null,
-              started_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              stash_ref: null,
-              removed_duplicates: [],
-              steps: freshSteps
-            };
+            const freshReceipt = makeFresh(currentHead, r);
             return { receipt: freshReceipt, receiptPath, newCycle: true };
           }
         }
@@ -889,24 +985,7 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
     } catch (_) {}
   }
   // No existing receipt — initialize fresh. Stamp branch_head for future cycle-identity checks.
-  let branchHead = null;
-  try { branchHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
-  const steps = {};
-  for (const s of SINK_STEPS) steps[s] = 'pending';
-  const receipt = {
-    project,
-    branch,
-    issue_number: issueNumber || null,
-    issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : []),
-    resolved_default_branch: defBranch,
-    branch_head: branchHead,
-    started_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    stash_ref: null,
-    removed_duplicates: [],
-    steps
-  };
-  return { receipt, receiptPath };
+  return { receipt: makeFresh(resolveBranchHead(), null), receiptPath };
 }
 
 // #429: copy a directory tree (inline, same as copyDir in claim.js — no import needed).
@@ -1109,6 +1188,48 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   return { ok: true, stashRef, removedDuplicates };
 }
 
+// #700: persist the SAME terminal metadata cmdFinalize writes — the ## Closure state block
+// (appendClosureBlock) + the ## Attestation summary block (persistAttestationToSummary) — into the
+// archive dest, for a --sink that is the SOLE archiver (no prior cmdFinalize --keep-worktree already
+// wrote them). Without this, the sink's own archiveProjectDir archives a folder with NO terminal
+// metadata (a latent gap that bites exactly when the sink is the only archiver). Attestation reflects
+// the REAL dispatch-log probe (checkDispatchAttestations) — never a fabricated contractor attestation
+// for inline execution. Both writers are presence-guarded / idempotent (a dest already carrying the
+// blocks is a no-op), and the disposition/label/invariant fields are honestly PENDING here: the sink's
+// own closure + verify steps (later) perform the real close and record the authoritative verdict.
+// Fail-soft — metadata persistence must never abort an otherwise-successful sink; only a programmer
+// error (a missing/renamed claim.js export, the #550 cross-edition drift class) rethrows.
+function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) {
+  const dest = archiveResult && archiveResult.dest;
+  if (!dest) return;
+  try {
+    const keepOpen = !!args.keepIssueOpen || sinkReceipt.keep_open_requested === true;
+    const closureReceipt = buildClosureReceipt(args.project, args.issue != null ? args.issue : null, {
+      archive: 'closed',
+      roadmap_source_removed: archiveResult.roadmap_source_removed,
+      roadmap_regenerated: archiveResult.roadmap_regenerated,
+    });
+    // Real attestation probe — archive .cache first (archiveProjectDir already moved the live cache
+    // there), live .cache fallback. NO fabrication: an inline-executed sink with no dispatch-log
+    // records 'missing', exactly as cmdFinalize would.
+    checkDispatchAttestations([
+      path.join(dest, '.cache'),
+      path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
+    ], closureReceipt);
+    persistAttestationToSummary(dest, closureReceipt);
+    appendClosureBlock(dest, {
+      issueDisposition: keepOpen ? 'kept-open' : 'close-pending',
+      claimLabelRemoved: 'close-pending',
+      worktreeRemoved: 'removed',
+      closureInvariants: 'pending',
+      claimPlannerAttested: closureReceipt.claim_planner_attested,
+      finalizeContractorAttested: closureReceipt.finalize_contractor_attested
+    });
+  } catch (e) {
+    if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+  }
+}
+
 // #429: the main --sink transaction.
 function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   const args = rawArgs;
@@ -1118,7 +1239,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // stale file remains on disk (unmodified) so git checkout <branch> in the merge step does not
   // abort; the first disk write is therefore deferred to stepDone('merge').
   const { receipt, receiptPath, newCycle } = loadOrInitReceipt(mainRoot, args.project, args.branch,
-    args.issue, args.issueNumbers, defBranch);
+    args.issue, args.issueNumbers, defBranch, args.keepIssueOpen);
 
   // Helper: mark a step done and persist
   const stepDone = (step) => {
@@ -1141,7 +1262,22 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
 
   // Walk SINK_STEPS in order; skip 'done' steps
   for (const step of SINK_STEPS) {
-    if (receipt.steps[step] === 'done') continue;
+    if (receipt.steps[step] === 'done') {
+      // #694: a recorded `closure: done` from a prior invocation is NOT evidence about THIS run's
+      // keep-open intent. If the receipt recorded a keep-open intent that differs from the current
+      // invocation's, the closure step must be re-evaluated live (never replay a stale close/keep
+      // decision). Every other done step is skipped as before. (The cross-run reinit in
+      // loadOrInitReceipt already covers a full cross-run resume; this covers a same-cycle flag flip.)
+      // Both sides are boolean-normalized: a legacy receipt with NO keep_open_requested field
+      // (undefined) must read as false so a plain close resume is not spuriously re-run.
+      if (step === 'closure' && !!receipt.keep_open_requested !== !!args.keepIssueOpen) {
+        process.stderr.write('sink-merge --sink: keep-open intent changed since the recorded closure step (receipt ' +
+          (!!receipt.keep_open_requested) + ' -> current ' + !!args.keepIssueOpen + ') — re-evaluating closure live.\n');
+        receipt.keep_open_requested = !!args.keepIssueOpen;
+      } else {
+        continue;
+      }
+    }
 
     if (step === 'preflight') {
       // Re-derive issue numbers in case they changed
@@ -1285,7 +1421,20 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // (already_finalized early-return when archive exists).
       try {
         const { archiveProjectDir } = require('./kaola-workflow-claim.js');
-        archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false });
+        const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false });
+        // #700: carry the ACTUAL archive destination (possibly collision-suffixed to
+        // archive/<project>.archived-<ts>/ when archive/<project>/ already exists) through the
+        // receipt, so archive_commit stages/commits the exact dir — not a hardcoded plain path that
+        // stages nothing — and disposeSinkJournals / the receipt-exclusion pathspec target it too.
+        // A source-missing return (the keep-worktree flow already archived + committed on the branch)
+        // has no dest; archive_commit then falls back to the plain path (already at HEAD post-merge).
+        if (archiveResult && archiveResult.dest) {
+          receipt.archive_dest = path.relative(mainRoot, archiveResult.dest).split(path.sep).join('/');
+          // #700: this sink is the SOLE archiver — persist the same ## Closure + ## Attestation blocks
+          // cmdFinalize writes (real attestation probe, no fabrication) so the archive is not left
+          // without terminal metadata. No-op when the dest already carries them (keep-worktree flow).
+          persistSinkClosureMetadata(mainRoot, args, receipt, archiveResult);
+        }
       } catch (e) {
         // #555: a missing/renamed export (TypeError) or undefined reference (ReferenceError) is a PROGRAMMER
         // error (the #550 cross-edition export-drift class — a forge port could omit archiveProjectDir) and
@@ -1316,42 +1465,103 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
 
     if (step === 'archive_commit') {
-      // Stage and commit the archive folder on main (analogous to cmdWorktreeFinalize's commit)
-      const archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+      // #700: stage/commit the ACTUAL archive destination recorded by the finalize step. A
+      // collision-suffixed archive/<project>.archived-<ts>/ (chosen when archive/<project>/ already
+      // exists) escapes the hardcoded plain path: `git add` of the plain path stages nothing, the
+      // diff-quiet guard then skips the commit, yet stepDone ran unconditionally — so the suffixed
+      // archive + roadmap-source removal + regenerated ROADMAP.md never got committed.
+      const archiveRel = (receipt.archive_dest || ('kaola-workflow/archive/' + args.project)).replace(/\/+$/, '');
+      const archiveDir = path.join(mainRoot, archiveRel);
+      const projectPathspec = archiveRel + '/';
+      // #520/#700: exclude crash-resume journals from staging — disposable scratch files that must
+      // persist on disk for crash-resume (#429) and the #484 freshness guard but must NEVER be
+      // committed into main. Scoped to the ACTUAL dest .cache (the plain path missed a suffixed one).
+      // Exclude BOTH the archive-dest journals AND the live-folder journals: the resolved receipt
+      // path can sit in the live project .cache (which the sole-archiver staging below sweeps via
+      // livePathspec), and a journal must never be committed into the tracked tree (#520).
+      const excludeReceipt = ':(exclude)' + projectPathspec + '.cache/sink-receipt.json';
+      const excludeFallback = ':(exclude)' + projectPathspec + '.cache/sink-fallback.json';
+      const excludeLiveReceipt = ':(exclude)kaola-workflow/' + args.project + '/.cache/sink-receipt.json';
+      const excludeLiveFallback = ':(exclude)kaola-workflow/' + args.project + '/.cache/sink-fallback.json';
+      // #700: the archive commit must also carry the roadmap-source removal + regenerated ROADMAP.md
+      // that archiveProjectDir performed in the working tree (the sole-archiver case), so main's HEAD
+      // is not left dirty. Scope to THIS sink's own roadmap files (never a foreign issue's): each
+      // member source (staged as a deletion for a close, preserved for keep-open) + the mirror. A
+      // member with no roadmap source is filtered out so a stale pathspec can't abort staging.
+      const memberNums = (Array.isArray(args.issueNumbers) && args.issueNumbers.length)
+        ? args.issueNumbers
+        : (args.issue != null ? [args.issue] : []);
+      const roadmapPathspecs = [];
+      for (const n of memberNums) roadmapPathspecs.push('kaola-workflow/.roadmap/issue-' + n + '.md');
+      roadmapPathspecs.push('kaola-workflow/ROADMAP.md');
+      // #700: the sole-archiver rename moves the LIVE folder (kaola-workflow/<project>/) into the
+      // suffixed archive. When that live folder was tracked (committed on the branch, then merged into
+      // main), its removal must be committed too — else main is left with a staged/unstaged deletion
+      // after status:sinked. Include the live pathspec only when tracked at HEAD (the keep-worktree
+      // flow's live folder was in the worktree, never main-tracked → nothing to stage).
+      const livePathspec = 'kaola-workflow/' + args.project + '/';
+      let liveTracked = false;
+      try { const t = execFileSync('git', ['-C', mainRoot, 'ls-tree', '--name-only', 'HEAD', '--', livePathspec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); liveTracked = t.length > 0; } catch (_) { liveTracked = false; }
+      // Only stage a roadmap path that is present (keep-open / regenerated mirror) OR tracked at HEAD
+      // (a close deletion) — a bare pathspec that matches nothing would abort `git add`/`git commit`.
+      const stagedRoadmap = roadmapPathspecs.filter(rp => {
+        if (fs.existsSync(path.join(mainRoot, rp))) return true;
+        try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + rp], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch (_) { return false; }
+      });
+      const commitPaths = [projectPathspec].concat(stagedRoadmap, liveTracked ? [livePathspec] : []);
+      const excludes = [excludeReceipt, excludeFallback, excludeLiveReceipt, excludeLiveFallback];
       if (fs.existsSync(archiveDir)) {
-        const projectPathspec = 'kaola-workflow/archive/' + args.project + '/';
-        // #520: exclude crash-resume journals from staging — they are disposable scratch files that
-        // must persist on disk for crash-resume (#429) and the #484 freshness guard, but must NEVER
-        // be committed into main (they pollute the tracked tree and require recurring manual cleanup).
-        const excludeReceipt = ':(exclude)kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json';
-        const excludeFallback = ':(exclude)kaola-workflow/archive/' + args.project + '/.cache/sink-fallback.json';
         try {
-          execFileSync('git', ['-C', mainRoot, 'add', '--', projectPathspec, excludeReceipt, excludeFallback], { encoding: 'utf8' });
+          execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' });
         } catch (_) {}
         let hasStaged = false;
         try {
-          execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', projectPathspec], { stdio: 'ignore' });
+          execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ...commitPaths, ...excludes], { stdio: 'ignore' });
         } catch (e) {
           if (e && e.status === 1) hasStaged = true;
         }
         if (hasStaged) {
-          // #521: the COMMIT-side :(exclude) below is defensive against a state the live --sink flow
-          // cannot currently reach. `git commit -- <ps>` would re-sweep an already-tracked, modified
-          // journal even after an exclude-aware `git add` — but a pre-tracked archive band makes
-          // archiveProjectDir suffix the dest (.archived-<ts>), so no non-receipt change lands in
-          // this pathspec and the commit never fires with a tracked journal. Kept (do NOT drop as
-          // redundant) so the guard still holds if a future change ever modifies a tracked
-          // non-receipt band file at archive_commit. See #521 for the full reachability matrix.
+          // #521: the COMMIT-side :(exclude) is defensive — `git commit -- <ps>` would re-sweep an
+          // already-tracked modified journal even after an exclude-aware `git add`. Kept so the guard
+          // holds if a future change ever modifies a tracked non-receipt band file at archive_commit.
           try {
-            execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', projectPathspec, excludeReceipt, excludeFallback],
+            execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', ...commitPaths, ...excludes],
               { encoding: 'utf8' });
           } catch (_) {}
         }
       }
-      // Update receipt path to archive location if it moved
-      const archiveReceiptPath = path.join(mainRoot, 'kaola-workflow', 'archive', args.project, '.cache', 'sink-receipt.json');
+      // #700: do NOT stepDone unless the archive THIS sink produced is COMMITTED or ALREADY present
+      // at HEAD. The guard is scoped to receipt.archive_dest being set — i.e. the finalize step's
+      // archiveProjectDir actually archived a folder (the sole-archiver case). When it is unset, this
+      // sink archived nothing: the keep-worktree flow legitimately has the archive at HEAD from the
+      // merge, and a genuinely-absent archive (no live folder, nothing to archive) must proceed as
+      // before #700 — never a false refusal. A set dest that is neither committed nor at HEAD means
+      // the archive/roadmap changes never landed (a collision-suffixed dest escaping the commit) →
+      // resumable sink_incomplete (leave the step NOT done so a re-run retries it).
+      let archiveAtHead = false;
+      try {
+        const t = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', 'HEAD:' + archiveRel], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        archiveAtHead = (t === 'tree');
+      } catch (_) { archiveAtHead = false; }
+      if (receipt.archive_dest && !archiveAtHead) {
+        receipt.archive_commit = 'failed';
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        process.stdout.write(JSON.stringify({
+          result: 'refuse',
+          reason: 'sink_incomplete',
+          step: 'archive_commit',
+          archive_dest: archiveRel,
+          branch: args.branch,
+          default_branch: defBranch,
+          detail: 'the archive directory (' + archiveRel + ') is neither committed nor present at ' + defBranch + ' HEAD — the archive + roadmap-source removal + regenerated ROADMAP.md never landed in a commit (a collision-suffixed dest escaping the archive commit, #700). Refusing to report status:sinked. The archive_commit step is left NOT done so a re-run retries it.',
+        }) + '\n');
+        process.exitCode = 1;
+        return;
+      }
+      // Update receipt path to archive location if it moved (now the ACTUAL, possibly suffixed dest).
+      const archiveReceiptPath = path.join(archiveDir, '.cache', 'sink-receipt.json');
       if (!fs.existsSync(receiptPath) && fs.existsSync(path.dirname(archiveReceiptPath))) {
-        // Re-write receipt to archive location
         writeSinkReceipt(archiveReceiptPath, receipt);
       }
       stepDone('archive_commit');
@@ -1396,7 +1606,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       if (!OFFLINE && args.keepIssueOpen && args.issue != null) {
         try {
           if (probeIssueClosed(args.issue, {})) {
-            ghExec(['issue', 'reopen', String(args.issue)], {});
+            reopenIssue(args.issue, {});
             receipt.remote_issue_closed = 'reopened_after_autoclose';
             receipt.updated_at = new Date().toISOString();
             writeSinkReceipt(receiptPath, receipt);
@@ -1562,6 +1772,66 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
   }
 
+  // #694: keep-open END-STATE guard — the keep-open mirror of the remote_closed_after_publish
+  // verification. Runs on EVERY path to terminal success regardless of which steps were skipped: a
+  // stale/resumed receipt could skip the closure step's live keep-open handling AND the push_main
+  // #517 auto-close reopen, so neither alone is sufficient. If keep-open is in force and the issue is
+  // CONFIRMED closed on the forge at this point (a close-keyword commit auto-closed it, or a replayed
+  // close ran), reopen it; if it is STILL closed after the reopen attempt, refuse sink_incomplete
+  // (resumable) rather than report a clean sink over a silently-retired epic. Intent is determined
+  // defense-in-depth: the live flag OR the receipt's recorded keep_open_requested OR the archived
+  // issue_action: comment_keep_open (mirrors postMergeCleanup's archived-state honor). Probe error /
+  // not-confirmed-closed proceeds (an unprobeable forge must not block a legitimate sink); only a
+  // POSITIVE still-closed after reopen refuses.
+  {
+    let keepOpen = !!args.keepIssueOpen || receipt.keep_open_requested === true;
+    if (!keepOpen && args.issue != null) {
+      const stateCandidates = [];
+      if (receipt.archive_dest) stateCandidates.push(path.join(mainRoot, receipt.archive_dest, 'workflow-state.md'));
+      stateCandidates.push(path.join(mainRoot, 'kaola-workflow', 'archive', args.project, 'workflow-state.md'));
+      for (const sc of stateCandidates) {
+        try {
+          if (/^issue_action:\s*comment_keep_open\s*$/m.test(fs.readFileSync(sc, 'utf8'))) { keepOpen = true; break; }
+        } catch (_) {}
+      }
+    }
+    // Trust the push_main #517 reopen when it already ran this invocation (receipt already records
+    // reopened_after_autoclose): that is the DESIGNATED reopen point. This terminal guard is a
+    // BACKSTOP for paths that SKIPPED push_main — a stale/resumed receipt where the #517 reopen never
+    // ran — so it only re-probes + refuses when push_main did not already handle the auto-close.
+    if (!OFFLINE && keepOpen && args.issue != null && receipt.remote_issue_closed !== 'reopened_after_autoclose') {
+      let stillClosed = false;
+      try {
+        if (probeIssueClosed(args.issue, {})) {
+          try { reopenIssue(args.issue, {}); } catch (_) {}
+          stillClosed = probeIssueClosed(args.issue, {});
+          if (!stillClosed) {
+            receipt.remote_issue_closed = 'reopened_after_autoclose';
+            receipt.updated_at = new Date().toISOString();
+            writeSinkReceipt(receiptPath, receipt);
+          }
+        }
+      } catch (_) { stillClosed = false; } // probe/reopen fault: cannot PROVE closed → do not refuse
+      if (stillClosed) {
+        receipt.remote_issue_closed = 'failed';
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        process.stdout.write(JSON.stringify({
+          result: 'refuse',
+          reason: 'sink_incomplete',
+          step: 'keep_open_verify',
+          keep_open_requested: true,
+          remote_issue_closed: 'failed',
+          issue: args.issue,
+          branch: args.branch,
+          detail: 'keep-open was in force but issue #' + args.issue + ' is CLOSED on the forge after push (a close-keyword commit likely auto-closed it) and could not be reopened. Refusing to report status:sinked — a kept-open epic must not be silently retired. Reopen the issue (or resolve the forge fault), then re-run --sink.',
+        }) + '\n');
+        process.exitCode = 1;
+        return;
+      }
+    }
+  }
+
   // All steps done — remove the worktree
   try {
     const { removeWorktree: removeWt, readActiveFolders: readAF } = require('./kaola-workflow-claim.js');
@@ -1589,7 +1859,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // captured into memory. This sits strictly after every SINK_STEPS entry, the #484 ancestry
   // guard, and worktree/branch teardown, so any earlier crash (or the freshness-guard refusal
   // above) leaves the journal untouched on disk for a resumed run to find.
-  const journalDisposed = disposeSinkJournals(mainRoot, args.project);
+  const journalDisposed = disposeSinkJournals(mainRoot, args.project, receipt.archive_dest);
   process.stdout.write(JSON.stringify({ result: 'ok', status: 'sinked', journal_disposed: journalDisposed, receipt: finalReceipt }) + '\n');
 }
 
