@@ -2174,8 +2174,8 @@ function testCodexFinalizeArchiveVerifiesBeforeDelete() {
       'codex #426 verify-before-delete: archiveProjectDir must return archive_incomplete:true, got: ' + JSON.stringify(result)
     );
     assert(
-      Array.isArray(result.missing) && result.missing.includes('workflow-state.md'),
-      'codex #426 verify-before-delete: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing)
+      result.snapshot_error === 'state_missing',
+      'codex #426 verify-before-delete: malformed source must fail the authority preflight (same contract as the canonical twin), got: ' + JSON.stringify(result)
     );
     console.log('testCodexFinalizeArchiveVerifiesBeforeDelete: PASSED');
   } finally {
