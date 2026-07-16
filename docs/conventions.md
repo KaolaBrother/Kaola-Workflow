@@ -409,17 +409,23 @@ cross-node / parallel-group disjointness proof:
   `classifier.normalizeRepoPath` case-exact (a global fold would corrupt display/error strings and
   break the case-exact per-node barrier match) and does not change the existing same-node sibling
   `case_collision` check (#388).
-- **Parallel-group allowband rule.** The `.md` allowband (`docs/**`, `CHANGELOG.md`, `README.md`
-  — see "`.md` files as production surfaces" above) is barrier-invisible: the per-node barrier
-  never flags a write inside it, and `git merge` silently both-applies two legs' edits. Freeze now
-  requires that allowband be declared on **exactly one leg** of any parallel group — a declared
-  fan-out group or an inferred antichain-sibling pair — refusing with `parallel_allowband_collision`
-  when 2 or more legs each declare an allowband surface, even different ones (e.g. `CHANGELOG.md`
-  on one leg, `README.md` on another). The `kaola-workflow/{project}/**` workflow-state band is
-  deliberately excluded (per-node `.cache` evidence legitimately differs per leg). Serial runs are
-  unaffected — this is a parallel-group-only freeze check.
+- **Parallel-group allowband rule (file-granular since #702).** The `.md` allowband (`docs/**`,
+  `CHANGELOG.md`, `README.md` — see "`.md` files as production surfaces" above) is barrier-invisible
+  for attribution: the per-node barrier never flags a write inside it, and `git merge` silently
+  both-applies two legs' edits. The freeze guard is **file-granular**: a **HARD** surface — a shared
+  aggregation index (`CHANGELOG.md` / `README.md`) or a glob/dir-shaped `docs/` token — on 2 or more
+  legs still refuses `parallel_allowband_collision`, even different ones (`CHANGELOG.md` on one leg,
+  `README.md` on another). A **SOFT** surface — an exact-file `docs/**` token — is per-leg-attributable,
+  so exact-file-disjoint docs siblings under a post-dominating `code-reviewer` are **admitted**
+  (a pure-docs `fanout()` group relaxes its coarse-RED verdict via the same `writeOverlapRelaxable`
+  net the runtime uses; an inferred antichain docs pair is admitted per-pair). The runtime per-leg
+  barrier makes the docs allowband visible in leg scope (`opts.legScoped`), so a stray in-leg docs
+  write refuses `write_set_overflow`; `README.md` is now PROTECTED (stays single-leg via NET-2). The
+  `kaola-workflow/{project}/**` workflow-state band is deliberately excluded (per-node `.cache`
+  evidence legitimately differs per leg — exempt even in leg scope). Serial runs are unaffected —
+  this is a parallel-group-only freeze check.
 
-See `docs/decisions/D-587-01.md`.
+See `docs/decisions/D-587-01.md` and `docs/decisions/D-702-01.md`.
 
 ## Write co-open eligibility: exact-path is the granularity of truth (#593)
 

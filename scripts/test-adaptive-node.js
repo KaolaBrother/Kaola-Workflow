@@ -9698,6 +9698,21 @@ function rtHarness(initialFiles, opts) {
       legB: path.join(repoRoot, '.kw', 'legs', 'test-project', 'B'),
     };
   }
+  // #702: same as provisionedRepo but A/B declare EXACT-FILE-DISJOINT docs/** surfaces (the population the
+  // file-granular allowband co-open unblocks). The plan freezes in-grammar (exact-file docs under the
+  // code-reviewer gate) and open-ready co-opens the legs — proving the docs frontier is a real leg group,
+  // not a serial degrade. Used to exercise the leg-scoped docs write-set-overflow barrier.
+  function provisionedDocsRepo() {
+    const { repoRoot, cacheDir } = makeLaneRepo({ aSet: 'docs/a.md', bSet: 'docs/b.md' });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.laneGroup, 'LEG-BARRIER-DOCS setup: exact-file-disjoint docs frontier co-opens as a leg group, got ' + JSON.stringify(r));
+    const rs = readRS(cacheDir);
+    return {
+      repoRoot, cacheDir, rs,
+      legA: path.join(repoRoot, '.kw', 'legs', 'test-project', 'A'),
+      legB: path.join(repoRoot, '.kw', 'legs', 'test-project', 'B'),
+    };
+  }
 
   // LEG-BARRIER-REF-ANCHORED (advisor landmine: producer + consumer ref names must AGREE). The ref the
   // provision side anchored must RESOLVE under the name the validator derives, and equal the manifest base.
@@ -9743,6 +9758,68 @@ function rtHarness(initialFiles, opts) {
     const rBad = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
     assert(rBad.result === 'refuse' && rBad.reason === 'write_set_overflow', 'LEG-BARRIER-COMMITTED: committed overflow still refuses, got ' + JSON.stringify(rBad));
     cleanup(repoRoot);
+  }
+
+  // #702 LEG-BARRIER-DOCS-DECLARED: a leg that writes its OWN declared docs/** file closes clean. The
+  // #702 leg-scope drops the docs allowband from the barrier exemption, but the DECLARED file is in the
+  // node's write set, so it is attributed to the leg, not overflow.
+  {
+    const { repoRoot, legA, rs } = provisionedDocsRepo();
+    fs.mkdirSync(path.join(legA, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(legA, 'docs', 'a.md'), '# A declared docs write\n');
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
+    assert(r.result === 'pass', 'LEG-BARRIER-DOCS-DECLARED: an in-lane DECLARED docs write passes the leg barrier, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // ★ #702 LEG-BARRIER-DOCS-OVERFLOW (the leg-visibility fix): a leg writing an UNDECLARED docs/** file —
+  // which the per-node barrier used to EXEMPT (docs are barrier-invisible), silently both-applying it at
+  // the synthesis merge — now refuses write_set_overflow in LEG scope. This is the runtime half of the
+  // file-granular allowband co-open: declared docs are attributed per-leg; a stray docs write is caught.
+  {
+    const { repoRoot, legA, rs } = provisionedDocsRepo();
+    fs.mkdirSync(path.join(legA, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(legA, 'docs', 'a.md'), '# in-lane declared\n');
+    fs.writeFileSync(path.join(legA, 'docs', 'stray.md'), '# STRAY undeclared docs (not in A set {docs/a.md})\n');
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-DOCS-OVERFLOW: an UNDECLARED docs write in a leg refuses write_set_overflow (no silent both-apply), got ' + JSON.stringify(r));
+    assert((r.outOfAllow || []).some(p => p === 'docs/stray.md'), 'LEG-BARRIER-DOCS-OVERFLOW: the stray docs file is named in outOfAllow, got ' + JSON.stringify(r.outOfAllow));
+    cleanup(repoRoot);
+  }
+
+  // #702 LEG-BARRIER-DOCS-MODE-PARITY (the anti-leak guard): the leg-scope docs-visibility change is keyed
+  // STRICTLY on opts.legScoped, set ONLY by the --leg-barrier CLI. The GROUP/union barrier
+  // (opts.groupMembers) and the WHOLE-PLAN barrier (no nodeId, no legScoped) must STILL exempt docs — a
+  // stray docs write stays barrier-invisible in those modes (they back every serial close + finalize
+  // check). barrierCheck is a PURE function (no fs, no git — immune to the #292 io-shim trap), so a direct
+  // call is the exact mode-parity pin: same content + same stray docs path, docs visible ONLY when
+  // legScoped. The kaola-workflow/{project}/** state band stays exempt in leg scope too.
+  {
+    const pv = require('./kaola-workflow-plan-validator');
+    const planContent = [
+      '# Plan', '', '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| A | tdd-guide | — | docs/a.md | 1 | sequence |',
+      '| B | tdd-guide | — | docs/b.md | 1 | sequence |',
+      '| review | code-reviewer | A,B | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| A | in_progress |', '| B | pending |', '| review | pending |', '| done | pending |', '',
+    ].join('\n') + '\n';
+    const stray = ['docs/stray.md'];
+    const legScoped = pv.barrierCheck(planContent, stray, { nodeId: 'A', project: 'test-project', legScoped: true });
+    assert(legScoped.result === 'refuse' && legScoped.reason === 'write_set_overflow', 'LEG-BARRIER-DOCS-MODE-PARITY: leg-scoped per-node barrier refuses a stray docs write, got ' + JSON.stringify(legScoped));
+    const perNode = pv.barrierCheck(planContent, stray, { nodeId: 'A', project: 'test-project' });
+    assert(perNode.result === 'pass', 'LEG-BARRIER-DOCS-MODE-PARITY: the plain per-node barrier (no legScoped) STILL exempts docs, got ' + JSON.stringify(perNode));
+    const group = pv.barrierCheck(planContent, stray, { groupMembers: ['A', 'B'], project: 'test-project' });
+    assert(group.result === 'pass', 'LEG-BARRIER-DOCS-MODE-PARITY: the group/union barrier STILL exempts docs (no leak), got ' + JSON.stringify(group));
+    const wholePlan = pv.barrierCheck(planContent, stray, { project: 'test-project' });
+    assert(wholePlan.result === 'pass', 'LEG-BARRIER-DOCS-MODE-PARITY: the whole-plan barrier STILL exempts docs (no leak), got ' + JSON.stringify(wholePlan));
+    // and the workflow-state band stays exempt EVEN in leg scope (per-leg .cache evidence differs).
+    const legState = pv.barrierCheck(planContent, ['kaola-workflow/test-project/.cache/A.md'], { nodeId: 'A', project: 'test-project', legScoped: true });
+    assert(legState.result === 'pass', 'LEG-BARRIER-DOCS-MODE-PARITY: leg scope still exempts the kaola-workflow/{project}/** state band, got ' + JSON.stringify(legState));
   }
 
   // ★ LEG-BARRIER-VACUOUS-BASE (adversarial, the #368 cross-check): the laundering attack is to claim

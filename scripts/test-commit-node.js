@@ -649,6 +649,40 @@ function assert(condition, message) {
     cleanup(repoRoot);
   }
   // =========================================================================
+  // #702 (D-702-01): the file-granular ALLOWBAND co-open floor at --parallel-safe. Exact-file-disjoint
+  // docs/** legs (the allowband surface) are a COARSE frontier (top-level area `docs`, not shared-infra),
+  // so they relax by the SAME #593 coarse ladder ONCE a post-dominating code-reviewer covers the legs. The
+  // freeze grammar now ADMITS this population (previously refused); this pins the runtime side it feeds.
+  // README.md joins CHANGELOG.md/ROADMAP.md as a PROTECTED aggregation index — a coarse pair carrying it
+  // stays blocking at every tier (NET-2), so a shared readme can never co-open on two legs.
+  // =========================================================================
+  // T702-DOCS-FLOOR-relax: docs/a.md vs docs/b.md (exact-file-disjoint allowband) + a post-dominating
+  // code-reviewer, NO policy, NO consent → ok, relaxed[kind:'coarse'] (the co-open the freeze fix enables).
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'docs/a.md', bSet: 'docs/b.md', legRole: 'doc-updater' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'ok', 'T702-DOCS-FLOOR-relax: exact-file-disjoint docs legs co-open under the gate, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), 'T702-DOCS-FLOOR-relax: relaxed[] carries kind coarse (the co-open path), got ' + JSON.stringify(r.relaxed));
+    assert(Array.isArray(r.overlapping) && r.overlapping.length === 0, 'T702-DOCS-FLOOR-relax: overlapping empty (downgraded), got ' + JSON.stringify(r.overlapping));
+    cleanup(repoRoot);
+  }
+  // T702-DOCS-FLOOR-nogate: the SAME docs legs with NO post-dominating code-reviewer → refuse (NET-1 fails;
+  // the docs frontier serial-degrades). (Mirrors T463-FLOOR-docsgate under the #702 framing.)
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'docs/a.md', bSet: 'docs/b.md', legRole: 'doc-updater', noGate: true });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'refuse', 'T702-DOCS-FLOOR-nogate: docs legs with no post-dominating gate do NOT relax, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // T702-DOCS-FLOOR-readme-protected: README.md (newly PROTECTED, #702) in a coarse-disjoint pair blocks at
+  // every tier — the aggregation index can never co-open on two legs.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'crates/a/README.md', bSet: COARSE_B, policy: 'disjoint' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'refuse', 'T702-DOCS-FLOOR-readme-protected: README.md is PROTECTED (blocks at every tier), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // =========================================================================
   // #546-G2 (D-419 write-overlap, DECISION B accuracy-first): a kind:'shared-infra' frontier
   // (exact-file-disjoint by construction, same SHARED_INFRA area — two scripts/ files) co-opens BY
   // DEFAULT — NO write_overlap_policy:'coarse', NO --write-overlap-consent — PROVIDED the retained
@@ -822,6 +856,8 @@ function assert(condition, message) {
     assert(gr.verdict === 'green' && gr.kind === null, 'T463-PURITY: disjoint → verdict green (unchanged) + kind null');
     assert(classifier.isProtected('CHANGELOG.md') === true && classifier.isProtected('crates/a/x.rs') === false,
       'T463-PURITY: isProtected true for CHANGELOG.md, false for an ordinary file');
+    // #702: README.md joins the PROTECTED aggregation indexes (stays single-leg via NET-2).
+    assert(classifier.isProtected('README.md') === true, 'T702-PURITY: isProtected true for README.md (newly protected)');
   }
 
   // -------------------------------------------------------------------------
