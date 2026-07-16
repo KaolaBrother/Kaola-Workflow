@@ -2731,4 +2731,97 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// #703 replan resume tail: a post-dominating gate that failed on a finding spanning multiple upstream
+// writers (so repair-node refuses repair_requires_replan — no unique maximal routable producer) is
+// repaired by an inserted repair-writer through the committed epoch, and the child epoch RESUMES: the
+// imported failed attempt is consumed (does not re-block), and a real end-to-end `open-next` proceeds
+// to open the inserted writer instead of the in-place path's circular review_attempt_unresolved block.
+// This is the sanctioned recovery that replaces the hand-edited-journal exit the consumer was forced
+// into. childFor's fresh `child-impl` writer upstream of the `child-review` gate is exactly the
+// "insert a repair-writer upstream of the failed gate" plan shape.
+{
+  // The condition that forces repair_requires_replan (a finding spanning multiple upstream writers with
+  // no unique maximal routable producer — the real consumer bundle's n2..n7) is the DIAGNOSIS, covered by
+  // the #701 ownership tests and the live-conformance block above. This block proves the RESUME the
+  // in-place path lacked: after the sanctioned epoch commit, open-next proceeds instead of the circular
+  // review_attempt_unresolved block. childFor's fresh `child-impl` writer upstream of the `child-review`
+  // gate is exactly the "insert a repair-writer upstream of the failed gate" plan shape.
+  const fx = initFixture();
+  try {
+    advanceToAttestedChild(fx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      '#703 inserted-writer child epoch commits (no hand-edited journal, no --freeze --repair)');
+    const childContent = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const journal = adaptiveNode.readReviewJournal({
+      planPath: path.join(fx.projectDir, 'workflow-plan.md'),
+      readFile: p => fs.readFileSync(p, 'utf8'), cacheExists: p => fs.existsSync(p),
+    }, childContent);
+    ok(journal.ok && journal.journal.legacy_import && journal.journal.legacy_import.parent_plan_hash,
+      '#703 committed child receives a fresh epoch-local journal importing the immutable parent (no plan_hash-mismatch cascade)');
+    const imported = adaptiveNode.reviewJournalAttempts(journal.journal);
+    ok(imported.some(a => a.attempt_id === SOURCE_ATTEMPT_ID),
+      '#703 the failed source attempt is imported (its fail evidence is preserved, not laundered)');
+    equal(adaptiveNode.reviewJournalBlocker(journal.journal), null,
+      '#703 the imported source attempt is consumed by the transition, so open-next is NOT circularly blocked');
+
+    // The load-bearing regression: a REAL end-to-end open-next on the committed child epoch RESUMES —
+    // it opens the inserted repair-writer instead of dead-ending on review_attempt_unresolved (the exact
+    // in-place cascade the issue documents). Parse the last JSON line the CLI emits.
+    const opened = spawnSync(process.execPath,
+      [path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'open-next', '--project', fx.project, '--json'],
+      { cwd: fx.root, encoding: 'utf8', timeout: 180000, killSignal: 'SIGKILL',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    const openedOut = JSON.parse(String(opened.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}');
+    ok(openedOut.reason !== 'review_attempt_unresolved',
+      '#703 open-next on the committed child does NOT reproduce the in-place circular block: ' + JSON.stringify(openedOut));
+    ok(opened.status === 0 && openedOut.result === 'ok' && openedOut.opened && openedOut.opened.id === 'child-impl',
+      '#703 open-next resumes the child epoch by opening the inserted repair-writer (child-impl): ' + JSON.stringify(openedOut));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// #703 baseline retention: reconcile-running-set must NOT drop the barrier baseline of a COMPLETE
+// producer referenced by an unresolved (consumed_by: null) review attempt's producer_bindings — that
+// baseline is the repair-node non-discard recovery ref, not an orphan. A genuinely-orphaned baseline
+// (no live owner, not referenced by any attempt) still sweeps. Reproduces the issue's aggravator: a
+// mid-diagnosis `no_running_set` reconcile that deleted the exact files the repair needed.
+{
+  // sourceAttemptId 'review:1' keeps the journal plan-consistent (attempt id matches the `review` gate),
+  // so readReviewJournal returns ok — the live-run state in which a mid-diagnosis reconcile fired.
+  const fx = initFixture({ sourceAttemptId: 'review:1' });
+  try {
+    // Sanity: the settled-fail attempt is unresolved and references `impl` (a complete node) as a producer.
+    const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+    ok(journal.attempts[0].consumed_by === null
+      && Object.prototype.hasOwnProperty.call(journal.attempts[0].producer_bindings, 'impl'),
+      '#703 fixture has an unresolved settled-fail attempt referencing complete producer impl');
+    ok(fs.existsSync(path.join(fx.cacheDir, 'barrier-base-impl')),
+      '#703 the referenced producer baseline exists on disk before reconcile');
+    // A genuine orphan: no ledger row, not in the running set, not referenced by any attempt.
+    fs.writeFileSync(path.join(fx.cacheDir, 'barrier-base-ghost'), 'f'.repeat(40) + '\n');
+    const dropped = [];
+    const shell = (_script, args) => {
+      if (args.includes('--drop-base')) {
+        const idx = args.indexOf('--node-id');
+        const id = idx >= 0 ? args[idx + 1] : null;
+        dropped.push(id);
+        for (const prefix of ['barrier-base-', 'barrier-open-']) {
+          try { fs.unlinkSync(path.join(fx.cacheDir, prefix + id)); } catch (_) {}
+        }
+        return { exitCode: 0, result: 'ok', nodeId: id };
+      }
+      return { exitCode: 0, result: 'ok' };
+    };
+    const reconciled = adaptiveNode.runReconcileRunningSet({
+      planPath: path.join(fx.projectDir, 'workflow-plan.md'), project: fx.project, shell,
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, v) => fs.writeFileSync(p, v),
+      cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+    });
+    equal(reconciled.result, 'ok', '#703 reconcile completes on the pre-replan serial project');
+    ok(fs.existsSync(path.join(fx.cacheDir, 'barrier-base-impl')) && !dropped.includes('impl'),
+      '#703 reconcile PRESERVES the baseline referenced by the unresolved attempt (repair-node recovery ref)');
+    ok(!fs.existsSync(path.join(fx.cacheDir, 'barrier-base-ghost')) && (reconciled.orphanBaselinesDropped || []).includes('ghost'),
+      '#703 reconcile still sweeps a genuinely-orphaned baseline: ' + JSON.stringify(reconciled.orphanBaselinesDropped));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);

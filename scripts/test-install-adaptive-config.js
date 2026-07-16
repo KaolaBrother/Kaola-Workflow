@@ -39,6 +39,10 @@ function configPath(home) { return path.join(home, '.config', 'kaola-workflow', 
 function readConfig(home) { return JSON.parse(fs.readFileSync(configPath(home), 'utf8')); }
 function commandsDir(home) { return path.join(home, '.claude', 'commands'); }
 function commandExists(home, name) { return fs.existsSync(path.join(commandsDir(home), name)); }
+// #703: the plan-run reference cards ship under $SUPPORT_DIR/docs/plan-run-cards (github SUPPORT_DIR).
+function cardExists(home, name) {
+  return fs.existsSync(path.join(home, '.claude', 'kaola-workflow', 'docs', 'plan-run-cards', name));
+}
 
 const homes = [];
 function cleanup() { for (const h of homes) try { fs.rmSync(h, { recursive: true, force: true }); } catch (_) {} }
@@ -64,6 +68,10 @@ try {
                        'kaola-workflow-plan-run.md', 'kaola-workflow-finalize.md']) {
       assert(commandExists(home, cmd), `AC1: bare install must install adaptive command ${cmd}`);
     }
+    // #703: the plan-run reference cards ship into the install layout so operators can follow the
+    // barrier/repair/resume recovery recipes the plan-run command cites (repair-routing.md is canonical).
+    assert(cardExists(home, 'repair-routing.md'),
+      'AC1: bare install must ship docs/plan-run-cards/repair-routing.md into the support dir');
   }
 
   // AC2a: --with-fast -> installed_paths contains 'fast' AND kaola-workflow-fast.md is installed.

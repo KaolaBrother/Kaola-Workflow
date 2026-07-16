@@ -66,6 +66,36 @@ add exactly one ceiling slot. The one-shot diagnosis-to-build exemption applies 
 typed proof contract and never to a review-driven reason. A verified v1 parent stays byte-immutable
 and may enter v2 only through the explicit compatibility transaction; never rewrite it in place.
 
+#### Multi-writer gate findings — the resumable exit, NOT a hand-edited journal
+
+A post-dominating gate can fail on a finding that spans **two or more upstream writers** whose union
+is not one graph-maximal producer (e.g. a serial docs chain where `n8` is maximal but the defect lives
+in `n3` + `n5`). `repair-node` correctly refuses `repair_requires_replan`: no single routable writer
+owns the finding. **This is not a dead end, and it is never a reason to edit `review-attempts.json` by
+hand.** The sanctioned exit is one epoch transition:
+
+1. The planner authors a child that **inserts a repair-writer node** (write set = exactly the defective
+   files) upstream of the failed gate and re-points the gate's `depends_on` at it. The old writers'
+   committed work persists in the worktree; only the fix and the re-review are new.
+2. `prepare`/`resume` (above) freeze and activate that child. The child receives a fresh epoch-local
+   review journal that **imports the immutable parent journal** through a digest-bound `legacy_import`
+   pointer: the failed attempt (and its fail evidence) is preserved with ordinal continuity, and it is
+   marked **consumed** by the transition so it does not re-block.
+3. On the activated child, `open-next` **resumes**: it opens the inserted repair-writer instead of
+   dead-ending on `review_attempt_unresolved`. Run the child's normal frontier (writer → gate) to a
+   passing verdict, then finalize. Never re-stamp the parent journal's `plan_hash`, transaction keys,
+   gate identity, or `producer_bindings` — those mismatches are the framework telling you the in-place
+   `--freeze --repair` path is the wrong one; the epoch migrates all of it atomically.
+
+#### Mid-diagnosis `reconcile-running-set` preserves the repair's recovery baselines
+
+While a settled-fail attempt is still unresolved (`consumed_by: null`), `reconcile-running-set` **keeps**
+the barrier baselines of every COMPLETE producer that attempt references in its `producer_bindings` —
+they are the `repair-node` non-discard recovery refs (the `.cache/barrier-base-<writer>` files), not
+orphans. A genuinely-orphaned baseline (no live owner, referenced by no attempt) still sweeps. So a
+`reconcile-running-set` run mid-diagnosis (even one that reports `no_running_set`) no longer deletes the
+files the repair needs — the recovery above stays available.
+
 ### Diagnosis-to-build is a separate no-review source
 
 Do not relabel a failed review as Case B. `diagnosis_to_build` is considered only when both
