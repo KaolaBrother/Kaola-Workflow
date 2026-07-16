@@ -16,6 +16,8 @@ complete `dispatch:{...}` object — needs `--json` without `--summary`, or the 
 dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`.
 Never dispatch without the card in view.
 
+<!-- SLOT:pr-replan-control-plane -->
+
 <!-- REGION:command -->
 ## Agent Model Badge
 

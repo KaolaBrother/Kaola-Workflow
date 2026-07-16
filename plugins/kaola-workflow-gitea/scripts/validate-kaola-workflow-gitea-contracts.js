@@ -243,6 +243,7 @@ const scriptFiles = [
   'kaola-gitea-workflow-closure-audit.js',
   'kaola-gitea-workflow-compact-context.js',
   'kaola-gitea-workflow-plan-validator.js',
+  'kaola-gitea-workflow-replan.js',
   'kaola-gitea-workflow-repair-state.js',
   'kaola-gitea-workflow-roadmap.js',
   'kaola-gitea-workflow-sink-merge.js',
@@ -273,6 +274,7 @@ const installSupportScripts = [
   'kaola-gitea-workflow-closure-audit.js',
   'kaola-gitea-workflow-compact-context.js',
   'kaola-gitea-workflow-plan-validator.js',
+  'kaola-gitea-workflow-replan.js',
   'kaola-gitea-workflow-repair-state.js',
   'kaola-gitea-workflow-roadmap.js',
   'kaola-gitea-workflow-sink-merge.js',
@@ -288,6 +290,9 @@ const installSupportScripts = [
 for (const script of installSupportScripts) {
   assert(giteaManifestScripts.includes(script), 'install manifest must emit Gitea support script: ' + script);
 }
+assert(JSON.stringify(giteaManifestScripts.filter(name => /workflow-replan\.js$/.test(name)))
+    === JSON.stringify(['kaola-gitea-workflow-replan.js']),
+'Gitea install manifest must emit exactly the renamed re-plan aggregator');
 
 const uninstallScript = read('uninstall.sh');
 assert(uninstallScript.includes('github|gitlab|gitea|all'), 'uninstall.sh must accept --forge=gitea in case validation');
@@ -1115,6 +1120,100 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'roadmap
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'deriveMemberSet');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'readStateIssueNumbers');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'probeIssueClosed');
+
+// Re-plan edition contract: require the renamed port, execute its refusal path, prove planner
+// attestation is mandatory, and verify the manual installer exposes the same executable name.
+{
+  const scriptsDir = path.join(root, pluginRoot, 'scripts');
+  const replanName = 'kaola-gitea-workflow-replan.js';
+  const replanPath = path.join(scriptsDir, replanName);
+  const schema = require(path.join(scriptsDir, 'kaola-workflow-adaptive-schema.js'));
+  const replan = require(replanPath);
+  const handoff = require(path.join(scriptsDir, 'kaola-gitea-workflow-adaptive-handoff.js'));
+  const adaptiveNode = require(path.join(scriptsDir, 'kaola-gitea-workflow-adaptive-node.js'));
+
+  const cli = require('child_process').spawnSync(process.execPath,
+    [replanPath, 'status', '--project', 'n5-missing-gitea-project', '--json'],
+    { cwd: root, encoding: 'utf8' });
+  const cliResult = JSON.parse(String(cli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+  assert(cli.status !== 0 && cliResult.reason === 'replan_authority_path_invalid',
+    'Gitea renamed re-plan CLI must execute the typed missing-authority refusal');
+  assert(JSON.stringify(schema.REPLAN_PHASES) === JSON.stringify([
+    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
+  ]) && JSON.stringify(schema.REPLAN_STATUSES) === JSON.stringify([
+    'none', 'in_progress', 'candidate_changed', 'consent_halt',
+  ]) && JSON.stringify(schema.REPLAN_CAS_SEAMS) === JSON.stringify([
+    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
+  ]), 'Gitea schema must expose the canonical re-plan phases/statuses/CAS seams');
+
+  const childPath = path.join(require('os').tmpdir(), 'kw-n5-gitea-attestation', 'workflow-plan.next.md');
+  let writes = 0;
+  const unattested = handoff.runReplanHandoff({
+    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: 'a'.repeat(64), child_path: childPath,
+      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
+    },
+    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
+    writeFile: () => { writes++; },
+  });
+  assert(unattested.reason === 'replan_child_authority_unverified' && writes === 0,
+    'Gitea child handoff must refuse missing planner attestation before writing');
+  assert(typeof replan.buildPlannerPacket === 'function' && typeof replan.verifyAllEpochSnapshots === 'function',
+    'Gitea re-plan port must expose planner packet and recursive snapshot behavior');
+
+  const orientation = adaptiveNode.replanOrientation({
+    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
+    legal_mutation: 'replan resume', transaction: {
+      transaction_id: 'a'.repeat(64), phase: 'planner_pending', parent: { plan_hash: 'b'.repeat(64) },
+      child: {}, cas: {},
+    },
+  }, 'issue-n5-contract');
+  assert(orientation.resume_command ===
+    'node scripts/kaola-gitea-workflow-replan.js resume --project issue-n5-contract --json',
+  'Gitea orientation must expose only the renamed edition-local resume command');
+
+  const closure = require(path.join(scriptsDir, 'kaola-workflow-closure-contract.js'));
+  assert((closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('preserved')
+      && (closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('failed')
+      && closure.CLOSURE_INVARIANTS.some(row => row.id === 'epoch-lineage-preserved'),
+  'Gitea closure contract must preserve the recursive epoch-lineage receipt');
+
+  for (const file of [
+    pluginRoot + '/commands/kaola-workflow-plan-run.md', pluginRoot + '/commands/kaola-workflow-adapt.md',
+    pluginRoot + '/commands/kaola-workflow-finalize.md', pluginRoot + '/commands/workflow-next.md',
+    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md',
+    pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md', pluginRoot + '/skills/kaola-workflow-next/SKILL.md',
+  ]) {
+    const match = /(?:^|\n)## In-progress re-plan control plane\s*\n([\s\S]*?)(?=\n## |$)/.exec(read(file));
+    assert(match && match[1].includes(replanName) && match[1].includes('resume --project {project} --json')
+        && match[1].includes('workflow-plan.next.md') && match[1].includes('replan-planner-attestation.json'),
+    file + ' must route the renamed Gitea re-plan transaction');
+    for (const forbiddenRoute of ['kaola-workflow-claim.js discard --project',
+      'discard+restart a fresh adaptive run', 'auto-takeover', 'approval gate']) {
+      assert(!match[1].includes(forbiddenRoute), file + ' must not expose ' + forbiddenRoute + ' during re-plan');
+    }
+  }
+
+  const tempHome = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kw-n5-gitea-install-'));
+  try {
+    const installed = require('child_process').spawnSync('bash', [path.join(root, 'install.sh'),
+      '--yes', '--no-settings-merge', '--forge=gitea'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+    });
+    assert(installed.status === 0, 'Gitea installer must ship the renamed re-plan aggregator: ' + installed.stderr);
+    const installedScript = path.join(tempHome, '.claude', 'kaola-workflow-gitea', 'scripts', replanName);
+    assert(fs.existsSync(installedScript) && (fs.statSync(installedScript).mode & 0o111) !== 0,
+      'installed Gitea re-plan aggregator must be present and executable');
+    const installedCli = require('child_process').spawnSync(process.execPath,
+      [installedScript, 'status', '--project', 'n5-missing-gitea-project', '--json'],
+      { cwd: root, encoding: 'utf8', env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome } });
+    const installedResult = JSON.parse(String(installedCli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+    assert(installedCli.status !== 0 && installedResult.reason === 'replan_authority_path_invalid',
+      'installed Gitea re-plan aggregator must execute its typed refusal contract');
+  } finally { fs.rmSync(tempHome, { recursive: true, force: true }); }
+}
 
 // PROVENANCE_BAN: Gitea prompt surfaces (agents/*.toml, commands/*.md, skills/*/SKILL.md) must
 // not embed issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations,

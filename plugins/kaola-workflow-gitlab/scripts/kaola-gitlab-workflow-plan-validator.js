@@ -63,7 +63,7 @@ let editionSync = null;
 try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user install: no edition-sync module */ }
 
 // #445 (D-445-01): per-aggregator operator hint registry. One entry per typed reason this
-// script can emit; generated at emit time (never stored). Forge-neutral: no gh/glab/tea tokens.
+// script can emit; generated at emit time (never stored). Forge-neutral: refer only to the forge CLI.
 // Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow (the laundering anti-pattern is excluded);
 // crash-repair → repair-node; no forge CLI tokens in any hint.
 const OPERATOR_HINT_REGISTRY = {
@@ -478,6 +478,24 @@ function parseGoal(content) {
   const m = String(meta || '').match(/^goal:[ \t]*(.*)$/m);
   return { goal: m ? m[1].trim() : null };
 }
+
+// #699 schema-2 epoch contract. Presence of epoch_schema_version activates the
+// contract; legacy plans (including older Meta blocks that use an unrelated
+// contract_version field) remain byte-for-byte compatible.
+function parseEpochContract(content) {
+  const body = classifier.sectionBody(content, 'Meta');
+  const fields = Object.create(null);
+  for (const line of String(body || '').split(/\r?\n/)) {
+    const match = /^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$/.exec(line);
+    if (match) fields[match[1]] = match[2].trim();
+  }
+  if (!Object.prototype.hasOwnProperty.call(fields, 'epoch_schema_version')) {
+    return { active: false, fields, inherited: [] };
+  }
+  const raw = fields.inherited_frontier_classes || '';
+  const inherited = raw === 'none' ? [] : raw.split(',').map(value => value.trim()).filter(Boolean);
+  return { active: true, fields, inherited };
+}
 // #439 (D-419 Part 4): the per-plan `speculative_open_policy` lives in `## Meta` as a single
 // `speculative_open_policy: off | consent | auto` line — hash-covered for free (computePlanHash
 // normalizes the WHOLE `## Meta` body), Meta-SCOPED read (decoy-immune; same scoping as parseGoal/
@@ -646,6 +664,15 @@ function parseNodes(content) {
       // declares an adversarial-verifier READ gate whose verdict is rendered from .cache evidence + scratch
       // (never the worktree tree/diff), the contract that lets a LEGLESS parent writer co-open behind it (R2).
       observes: (() => { const v = get('observes'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
+      // #698/#699 schema-2 logical certifier metadata. Absent columns stay empty for verified legacy plans.
+      gateClaim: (() => { const v = get('gate_claim'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      gateSurface: (() => { const v = get('gate_surface'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      gateAggregation: (() => { const v = get('gate_aggregation'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
+      certifiesRaw: (() => { const v = get('certifies'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      certifies: (() => {
+        const v = get('certifies');
+        return (v && v !== '—' && v !== '-') ? v.split(',').map(value => value.trim()).filter(Boolean) : [];
+      })(),
     });
   }
   return nodes;
@@ -730,6 +757,64 @@ function parseLedger(content) {
     if (id) ledger.set(id, (cells[stIdx] || '').toLowerCase());
   }
   return ledger;
+}
+
+// #699: one structural authority for the mutable Required Agent Compliance
+// table. Schema-2 freeze and resume both require the exact one-row-per-node
+// requirement set (including the non-delegated finalize sink); lifecycle code
+// remains the sole owner of status/evidence advancement after freeze.
+const REQUIRED_AGENT_COMPLIANCE_STATUSES = new Set([
+  'pending', 'invoked', 'subagent-invoked', 'local-fallback-explicit',
+  'local-fallback-tool-unavailable', 'main-session-direct', 'n/a', 'na', 'skipped',
+]);
+function validateRequiredAgentCompliance(content, parsedNodes) {
+  const refuse = detail => ({ ok: false, result: 'refuse',
+    reason: 'required_agent_compliance_invalid', detail });
+  const nodes = Array.isArray(parsedNodes) ? parsedNodes : parseNodes(content);
+  const located = schema.locateSection(content, 'Required Agent Compliance');
+  if (located.start < 0) return refuse('## Required Agent Compliance section is missing');
+  const end = located.next >= 0 ? located.next : String(content).length;
+  const section = String(content).slice(located.start, end);
+  const lines = section.split(/\r?\n/);
+  const headingIndex = lines.findIndex(line => line.trim() === '## Required Agent Compliance');
+  if (headingIndex < 0) return refuse('## Required Agent Compliance section is malformed');
+  const body = lines.slice(headingIndex + 1);
+  if (body.some(line => line.trim() && !/^\|.*\|[ \t]*$/.test(line))) {
+    return refuse('## Required Agent Compliance contains non-table content');
+  }
+  const table = body.map(line => line.trim()).filter(line => line.startsWith('|'));
+  if (table.length < 2) return refuse('## Required Agent Compliance table is unparseable');
+  const cells = line => line.split('|').slice(1, -1).map(cell => cell.trim());
+  const header = cells(table[0]).map(cell => cell.toLowerCase());
+  const expectedHeader = ['requirement', 'status', 'evidence', 'skip reason'];
+  if (header.length !== expectedHeader.length
+      || header.some((cell, index) => cell !== expectedHeader[index])) {
+    return refuse('## Required Agent Compliance header must be Requirement, Status, Evidence, Skip Reason');
+  }
+  const separator = cells(table[1]);
+  if (separator.length !== expectedHeader.length
+      || separator.some(cell => !/^:?-{3,}:?$/.test(cell.replace(/\s/g, '')))) {
+    return refuse('## Required Agent Compliance separator is malformed');
+  }
+  const rows = [];
+  for (const line of table.slice(2)) {
+    const row = cells(line);
+    if (row.length !== expectedHeader.length || !row[0]) {
+      return refuse('## Required Agent Compliance row is malformed');
+    }
+    const status = String(row[1] || '').toLowerCase();
+    if (!REQUIRED_AGENT_COMPLIANCE_STATUSES.has(status)) {
+      return refuse('## Required Agent Compliance status is unsupported for ' + row[0]);
+    }
+    rows.push({ requirement: row[0], status, evidence: row[2], skip_reason: row[3] });
+  }
+  const expected = new Set(nodes.map(node => node.role + ' (' + node.id + ')'));
+  const actual = rows.map(row => row.requirement);
+  if (rows.length !== nodes.length || new Set(actual).size !== rows.length
+      || actual.some(requirement => !expected.has(requirement))) {
+    return refuse('## Required Agent Compliance must contain exactly one requirement for every node');
+  }
+  return { ok: true, rows };
 }
 
 // #425: the alias sets the planner mis-authors for the two required ledger columns. `| node |`,
@@ -936,6 +1021,339 @@ function gateUncovered(nodes, isTarget, gateRole, sink) {
   return violations;
 }
 
+// G4 is identity-specific: removing every reviewer of a role would let an
+// unrelated child reviewer certify an inherited parent obligation. Remove only
+// the certifier named by the schema-2 Meta contract.
+function namedGateUncovered(nodes, isTarget, gateIds, sink) {
+  const adj = adjacency(nodes);
+  const removed = new Set(Array.isArray(gateIds) ? gateIds : [gateIds]);
+  const violations = [];
+  for (const node of nodes) {
+    if (!isTarget(node) || removed.has(node.id)) continue;
+    const seen = new Set([node.id]);
+    const stack = [node.id];
+    let reaches = false;
+    while (stack.length) {
+      const current = stack.pop();
+      if (current === sink) { reaches = true; break; }
+      for (const next of adj.get(current) || []) {
+        if (!removed.has(next) && !seen.has(next)) { seen.add(next); stack.push(next); }
+      }
+    }
+    if (reaches) violations.push(node.id);
+  }
+  return violations;
+}
+
+const G4_CERTIFIER_AGGREGATIONS = Object.freeze(['sequence', 'replicated_majority', 'partitioned_all']);
+
+function g4CertifierIdentity(kind, members, aggregation) {
+  const ordered = members.slice().sort((a, b) => a.id.localeCompare(b.id));
+  const identity = {
+    kind,
+    members: ordered.map(member => member.id),
+    claim_digest: schema.sha256Hex(String(ordered[0] && ordered[0].gateClaim || '')),
+    surface_digests: ordered.map(member => schema.sha256Hex(String(member.gateSurface || ''))),
+    aggregation,
+    certified_producers: Array.from(new Set(ordered.flatMap(member => member.certifies || []))).sort(),
+  };
+  return { ordered, identity };
+}
+
+function resolveNamedCertifierDetailed(nodes, reference, role) {
+  const ref = String(reference || '').trim();
+  if (!ref || ref === 'none') return { ok: false, reason: 'missing' };
+  const direct = nodes.find(node => node.id === ref);
+  if (direct) {
+    if (direct.role !== role) return { ok: false, reason: 'role_mismatch' };
+    const aggregation = direct.gateAggregation || '';
+    if (aggregation !== 'sequence') return { ok: false, reason: 'aggregation_mismatch' };
+    const built = g4CertifierIdentity('sequence', [direct], aggregation);
+    return { ok: true, gate: direct, members: built.ordered, identity: built.identity,
+      aggregation, kind: 'sequence', reference: ref };
+  }
+  let label = ref;
+  const explicit = /^(?:group|fanout)\(([^)]+)\)$/.exec(ref);
+  if (explicit) label = explicit[1].trim();
+  const candidates = nodes.filter(node => node.shape && node.shape.kind === 'fanout'
+    && node.shape.group === label);
+  if (!candidates.length) return { ok: false, reason: 'missing' };
+  const origins = new Map();
+  for (const node of candidates) {
+    const origin = node.dependsOn.slice().sort().join('\u001f');
+    if (!origins.has(origin)) origins.set(origin, []);
+    origins.get(origin).push(node);
+  }
+  if (origins.size !== 1) return { ok: false, reason: 'ambiguous' };
+  const members = [...origins.values()][0];
+  if (members.some(node => node.role !== role)) return { ok: false, reason: 'role_mismatch' };
+  const claims = new Set(members.map(node => node.gateClaim));
+  const aggregations = new Set(members.map(node => node.gateAggregation));
+  if (claims.size !== 1) return { ok: false, reason: 'claim_mismatch' };
+  if (aggregations.size !== 1) return { ok: false, reason: 'aggregation_mismatch' };
+  const aggregation = [...aggregations][0];
+  if (!['replicated_majority', 'partitioned_all'].includes(aggregation)) {
+    return { ok: false, reason: 'aggregation_mismatch' };
+  }
+  const surfaces = members.map(node => node.gateSurface);
+  if (aggregation === 'replicated_majority' && new Set(surfaces).size !== 1) {
+    return { ok: false, reason: 'replica_surface_mismatch' };
+  }
+  if (aggregation === 'partitioned_all' && new Set(surfaces).size !== surfaces.length) {
+    return { ok: false, reason: 'partition_surface_duplicate' };
+  }
+  const built = g4CertifierIdentity('group', members, aggregation);
+  return { ok: true, gate: built.ordered[0], members: built.ordered, identity: built.identity,
+    aggregation, kind: 'group', reference: ref, label };
+}
+
+function resolveNamedCertifier(nodes, reference, role) {
+  const resolved = resolveNamedCertifierDetailed(nodes, reference, role);
+  return resolved.ok ? resolved : null;
+}
+
+const SCHEMA2_LOGICAL_REVIEW_ROLES = Object.freeze(['code-reviewer', 'security-reviewer']);
+const SCHEMA2_LOGICAL_REVIEW_AGGREGATIONS = Object.freeze(['replicated_majority', 'partitioned_all']);
+
+function hasSchema2GateMetadata(node) {
+  return [node && node.gateClaim, node && node.gateSurface, node && node.gateAggregation,
+    node && node.certifiesRaw].some(Boolean);
+}
+
+// One canonical analyzer owns both the freeze-time activation fence and the
+// plan-hash-bound runtime journal contracts. A legacy plan may keep historical
+// metadata-free reviewer fanouts, but explicit G4 metadata is schema-2-only.
+// Once active, every code/security fanout is either emitted exactly once or
+// rejected: malformed and mixed groups can never disappear from the adapter.
+function resolveSchema2ReviewGateContracts(contract, nodes) {
+  const rows = Array.isArray(nodes) ? nodes : [];
+  const errors = [];
+  if (!contract || !contract.active) {
+    const activated = rows.filter(hasSchema2GateMetadata).map(node => node.id).sort();
+    if (activated.length) {
+      errors.push('G4: schema-2 gate metadata requires epoch_schema_version: 2; found on node(s): '
+        + activated.join(', '));
+    }
+    return { contracts: [], errors };
+  }
+
+  const groups = new Map();
+  for (const node of rows) {
+    if (!SCHEMA2_LOGICAL_REVIEW_ROLES.includes(node.role)
+      || !node.shape || node.shape.kind !== 'fanout') continue;
+    const origin = (node.dependsOn || []).slice().sort();
+    const groupKey = [node.role, node.shape.group, origin.join('\u001f')].join('\u001e');
+    if (!groups.has(groupKey)) groups.set(groupKey, { role: node.role,
+      group: node.shape.group, origin, nodes: [] });
+    groups.get(groupKey).nodes.push(node);
+  }
+
+  const contracts = [];
+  for (const group of groups.values()) {
+    const prefix = 'G4: schema-2 logical review fanout "' + group.group + '" ('
+      + group.role + '; origin ' + (group.origin.length ? group.origin.join(',') : 'root') + ')';
+    const aggregations = new Set(group.nodes.map(node => node.gateAggregation));
+    if (aggregations.size !== 1
+      || !SCHEMA2_LOGICAL_REVIEW_AGGREGATIONS.includes([...aggregations][0])) {
+      errors.push(prefix + ' has inconsistent or invalid gate_aggregation: '
+        + Array.from(aggregations).map(value => value || 'missing').sort().join(', '));
+      continue;
+    }
+    const aggregation = [...aggregations][0];
+    const claims = new Set(group.nodes.map(node => node.gateClaim));
+    if (claims.size !== 1 || ![...claims][0]) {
+      errors.push(prefix + ' must declare one identical non-empty gate_claim');
+      continue;
+    }
+    const surfaces = group.nodes.map(node => node.gateSurface);
+    if (surfaces.some(surface => !surface)) {
+      errors.push(prefix + ' must declare a non-empty gate_surface on every member');
+      continue;
+    }
+    if (aggregation === 'replicated_majority' && new Set(surfaces).size !== 1) {
+      errors.push(prefix + ' replicated_majority members must declare one identical gate_surface');
+      continue;
+    }
+    if (aggregation === 'partitioned_all' && new Set(surfaces).size !== surfaces.length) {
+      errors.push(prefix + ' partitioned_all members must declare distinct gate_surface values');
+      continue;
+    }
+    const members = group.nodes.map(node => node.id).sort();
+    const logicalGate = schema.canonicalLogicalGateIdentity({ kind: 'fanout', id: group.group,
+      origin: group.origin, members });
+    contracts.push({ logical_gate_key: logicalGate.key, role: group.role,
+      aggregation, members });
+  }
+  return { contracts: contracts.sort((a, b) => a.logical_gate_key.localeCompare(b.logical_gate_key)),
+    errors };
+}
+
+// Canonical plan-bound adapter for the n2 journal validator. Keeping Markdown
+// parsing here lets every runtime caller pass pure data into adaptive-schema;
+// the plan_hash binds the aggregation authority, never the journal itself.
+function schema2ReviewGateContracts(content) {
+  const contract = parseEpochContract(content);
+  const nodes = parseNodes(content);
+  const resolved = resolveSchema2ReviewGateContracts(contract, nodes);
+  if (resolved.errors.length) {
+    const error = new Error(resolved.errors.join('; '));
+    error.code = 'schema2_review_gate_contract_invalid';
+    error.errors = resolved.errors.slice();
+    throw error;
+  }
+  return resolved.contracts;
+}
+
+function g4CodeWriter(node, content) {
+  if (producesCode(node)) return true;
+  const extra = parseValidationTestConsumes(content);
+  for (const file of node.writeSet || []) if (testConsumes(file, extra)) return true;
+  return false;
+}
+
+function parseG4CertifierReceipt(text) {
+  const source = String(text || '');
+  const one = (name, pattern) => {
+    const matches = Array.from(source.matchAll(new RegExp('^' + name + ':[ \\t]*(' + pattern + ')[ \\t]*$', 'gm')));
+    return matches.length === 1 ? matches[0][1] : null;
+  };
+  const binding = Array.from(source.matchAll(/^evidence-binding:[ \t]+([^ \t\n]+)[ \t]+([^ \t\n]+)[ \t]*$/gm));
+  return {
+    binding: binding.length === 1 ? { node_id: binding[0][1], nonce: binding[0][2] } : null,
+    kind: one('certifier_kind', 'code|security'),
+    aggregation: one('certifier_aggregation', 'sequence|replicated_majority|partitioned_all'),
+    gate_digest: one('certifier_gate_digest', '[0-9a-f]{64}'),
+    epoch_lineage_id: one('certifier_epoch_lineage_id', '[0-9a-f]{64}'),
+    inherited_frontier_digest: one('certifier_inherited_frontier_digest', '[0-9a-f]{64}'),
+    candidate_digest: one('certified_candidate_digest', '[0-9a-f]{64}'),
+    effective: schema.evaluateEffectiveVerdict(source),
+  };
+}
+
+function validateEpochContract(content, nodes, sink) {
+  const contract = parseEpochContract(content);
+  const reviewContracts = resolveSchema2ReviewGateContracts(contract, nodes);
+  if (!contract.active) return { active: false, contract, errors: reviewContracts.errors };
+  const fields = contract.fields;
+  const errors = reviewContracts.errors.slice();
+  const hex64 = value => /^[0-9a-f]{64}$/.test(String(value || ''));
+  const requiredHex = ['epoch_lineage_id', 'parent_plan_hash', 'claim_root_base_digest',
+    'inherited_frontier_digest', 'source_evidence_digest'];
+  if (fields.plan_schema_version !== '2' || fields.contract_version !== '2' || fields.epoch_schema_version !== '2') {
+    errors.push('G4: schema-2 child requires plan_schema_version: 2, contract_version: 2, and epoch_schema_version: 2');
+  }
+  if (!Number.isSafeInteger(Number(fields.plan_epoch)) || Number(fields.plan_epoch) < 2) {
+    errors.push('G4: schema-2 child plan_epoch must be an integer >= 2');
+  }
+  for (const key of requiredHex) if (!hex64(fields[key])) errors.push('G4: invalid or missing ' + key);
+  if (!(fields.parent_snapshot_manifest_digest === 'pending'
+      || hex64(fields.parent_snapshot_manifest_digest))) {
+    errors.push('G4: invalid or missing parent_snapshot_manifest_digest');
+  }
+  if (!fields.transition_reason) errors.push('G4: transition_reason is required');
+  if (!fields.planner_binding) errors.push('G4: planner_binding is required');
+  if (!fields.code_certifier) errors.push('G4: code_certifier is required (use none only when code is not inherited)');
+  if (!fields.security_certifier) errors.push('G4: security_certifier is required (use none only when security is not inherited)');
+  const legal = new Set(['code', 'security']);
+  if (contract.inherited.some(value => !legal.has(value))
+      || new Set(contract.inherited).size !== contract.inherited.length
+      || JSON.stringify(contract.inherited) !== JSON.stringify(contract.inherited.slice().sort())) {
+    errors.push('G4: inherited_frontier_classes must be none or a sorted unique subset of code,security');
+  }
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  for (const node of nodes) {
+    const gate = GATE_VERDICT_ROLES.has(node.role);
+    const hasMetadata = [node.gateClaim, node.gateSurface, node.gateAggregation, node.certifiesRaw].some(Boolean);
+    if (!gate && hasMetadata) {
+      errors.push('G4: gate metadata is forbidden on non-gate node ' + node.id);
+      continue;
+    }
+    if (!gate) continue;
+    if (!node.gateClaim || !node.gateSurface || !G4_CERTIFIER_AGGREGATIONS.includes(node.gateAggregation)) {
+      errors.push('G4: gate metadata missing or invalid on ' + node.id);
+      continue;
+    }
+    if ((node.gateAggregation === 'sequence') === (node.shape && node.shape.kind === 'fanout')) {
+      errors.push('G4: gate aggregation/shape mismatch on ' + node.id);
+    }
+    const canonicalCertifies = Array.from(new Set(node.certifies || [])).sort();
+    if (JSON.stringify(node.certifies || []) !== JSON.stringify(canonicalCertifies)
+        || canonicalCertifies.some(id => !byId.has(id))) {
+      errors.push('G4: gate certifies list is non-canonical or names an unknown producer on ' + node.id);
+    }
+    if (node.role !== 'adversarial-verifier' && canonicalCertifies.length) {
+      errors.push('G4: certifies is allowed only on adversarial-verifier nodes (' + node.id + ')');
+    }
+  }
+  // #698/#699 AV mode is graph-derived, and certifies is the explicit bridge
+  // from a change-gate verifier to the producers whose claim it falsifies.
+  // Investigation skeptics are analytical output and therefore declare no
+  // certified producer. A declaration is not authority by itself: every id
+  // must reach the verifier, and the verifier must reach the terminal sink.
+  const epochAdj = adjacency(nodes);
+  const epochLabels = parseLabels(classifier.sectionBody(content, 'Meta'));
+  for (const node of nodes.filter(candidate => candidate.role === 'adversarial-verifier')) {
+    const certifies = (node.certifies || []).filter(id => byId.has(id));
+    const verifierReachesSink = node.id === sink || reachableSet(epochAdj, node.id).has(sink);
+    const declaredChangeProducer = certifies.some(id => id !== node.id
+      && reachableSet(epochAdj, id).has(node.id));
+    const changeGate = advVerifierIsChangeGate(node, nodes, sink, epochLabels)
+      || (verifierReachesSink && declaredChangeProducer);
+    if (changeGate && certifies.length === 0) {
+      errors.push('G4: gate certifies missing on change-gate adversarial-verifier ' + node.id);
+    }
+    if (!changeGate && certifies.length !== 0) {
+      errors.push('G4: investigation certifies must be empty on adversarial-verifier ' + node.id);
+    }
+    for (const producer of certifies) {
+      if (producer === node.id || !reachableSet(epochAdj, producer).has(node.id)
+        || !verifierReachesSink) {
+        errors.push('G4: gate certifies unreachable producer ' + producer
+          + ' for adversarial-verifier ' + node.id);
+      }
+    }
+  }
+  const roots = nodes.filter(node => node.dependsOn.length === 0);
+  const sensitiveByLabel = labelsAreSensitive(parseLabels(classifier.sectionBody(content, 'Meta')));
+  const checkNamed = (kind, field, role, localTarget) => {
+    const gateRef = fields[field];
+    const localTargets = nodes.filter(localTarget);
+    const required = contract.inherited.includes(kind) || localTargets.length > 0;
+    if (!required && gateRef === 'none') return;
+    const detailed = resolveNamedCertifierDetailed(nodes, gateRef, role);
+    if (!detailed.ok) {
+      errors.push('G4: ' + kind + ' ' + field + ' "' + (gateRef || 'missing') + '" '
+        + detailed.reason + ' for role ' + role);
+      return;
+    }
+    const resolved = detailed;
+    // The inherited obligation is a virtual producer upstream of every child
+    // root, so even a zero-writer child must route through the named certifier.
+    const virtualTargets = new Set(contract.inherited.includes(kind) ? roots.map(node => node.id) : []);
+    for (const node of localTargets) virtualTargets.add(node.id);
+    const memberIds = resolved.members.map(member => member.id);
+    const uncovered = namedGateUncovered(nodes, node => virtualTargets.has(node.id), memberIds, sink);
+    if (uncovered.length) {
+      errors.push('G4: named ' + field + ' "' + gateRef
+        + '" does not post-dominate inherited/local ' + kind + ' producer(s): ' + uncovered.join(', '));
+    }
+    const adj = adjacency(nodes);
+    const branchLocal = localTargets.map(node => node.id).filter(producer => memberIds.some(member =>
+      producer !== member && !reachableSet(adj, producer).has(member)));
+    if (branchLocal.length) {
+      errors.push('G4: named ' + field + ' "' + gateRef
+        + '" is branch-local and not reachable from every ' + kind + ' producer: ' + branchLocal.join(', '));
+    }
+    const detached = resolved.members.filter(member => member.id !== sink
+      && !reachableSet(adj, member.id).has(sink)).map(member => member.id);
+    if (detached.length) errors.push('G4: named ' + field + ' member(s) do not feed the final sink: ' + detached.join(', '));
+  };
+  checkNamed('code', 'code_certifier', 'code-reviewer', node => g4CodeWriter(node, content));
+  checkNamed('security', 'security_certifier', 'security-reviewer', node =>
+    nodeIsSensitive(node) || (sensitiveByLabel && g4CodeWriter(node, content)));
+  return { active: true, contract, errors };
+}
+
 // #463 / #546-G2 / #593 (D-419 write-overlap): the SINGLE relaxation predicate — is an overlapping write
 // pair safe to DOWNGRADE from red/yellow to ok? Two retained-safety-net invariants gate EVERY relaxation,
 // at EVERY class and tier:
@@ -1116,6 +1534,81 @@ function verifyGateExecution(content, opts) {
       }
     }
   }
+  const epoch = validateEpochContract(content, nodes, sink);
+  for (const error of epoch.errors) unsatisfied.push({ requirement: 'G4 epoch contract', reason: error });
+  if (epoch.active) {
+    const fields = epoch.contract.fields;
+    const project = String(opts.project || fields.project
+      || (opts.planPath ? path.basename(path.dirname(path.resolve(opts.planPath))) : '')).trim();
+    let currentCandidateDigest = String(opts.currentCandidateDigest || '');
+    if (!/^[0-9a-f]{64}$/.test(currentCandidateDigest) && opts.root && project) {
+      currentCandidateDigest = computeCodeTreeHash(opts.root, project, parseValidationTestConsumes(content)) || '';
+    }
+    const cacheDir = opts.planPath
+      ? path.join(path.dirname(path.resolve(opts.planPath)), '.cache')
+      : (opts.root && project ? path.join(opts.root, 'kaola-workflow', project, '.cache') : null);
+    const readCache = opts.readCache || (cacheDir ? (name => {
+      try { return fs.readFileSync(path.join(cacheDir, name), 'utf8'); } catch (_) { return null; }
+    }) : (() => null));
+    for (const [kind, field, role] of [
+      ['code', 'code_certifier', 'code-reviewer'],
+      ['security', 'security_certifier', 'security-reviewer'],
+    ]) {
+      const localRequired = kind === 'code'
+        ? nodes.some(node => g4CodeWriter(node, content))
+        : nodes.some(node => nodeIsSensitive(node)
+          || (labelsAreSensitive(parseLabels(classifier.sectionBody(content, 'Meta'))) && g4CodeWriter(node, content)));
+      if (!epoch.contract.inherited.includes(kind) && !localRequired && fields[field] === 'none') continue;
+      const id = fields[field];
+      const resolved = resolveNamedCertifier(nodes, id, role);
+      if (!resolved) continue; // structural error already recorded above
+      if (!/^[0-9a-f]{64}$/.test(currentCandidateDigest)) {
+        unsatisfied.push({ requirement: 'G4 ' + kind + ' certifier execution',
+          reason: 'current candidate digest is unavailable; certifier freshness cannot be proved' });
+        continue;
+      }
+      const gateDigest = schema.sha256Canonical(resolved.identity);
+      const receipts = [];
+      let receiptSetComplete = true;
+      for (const member of resolved.members) {
+        if (!done(member.id)) {
+          unsatisfied.push({ requirement: 'G4 ' + kind + ' certifier execution',
+            reason: `${field} member ${member.id} must complete and cannot be pending or n/a` });
+          receiptSetComplete = false;
+          continue;
+        }
+        const receipt = parseG4CertifierReceipt(readCache(member.id + '.md'));
+        const valid = receipt.binding && receipt.binding.node_id === member.id
+          && receipt.kind === kind && receipt.aggregation === resolved.aggregation
+          && receipt.gate_digest === gateDigest
+          && receipt.epoch_lineage_id === fields.epoch_lineage_id
+          && receipt.inherited_frontier_digest === fields.inherited_frontier_digest
+          && receipt.candidate_digest === currentCandidateDigest;
+        if (!valid) {
+          unsatisfied.push({ requirement: 'G4 ' + kind + ' certifier receipt',
+            reason: `${field} member ${member.id} lacks a current-candidate, role-specific ${resolved.aggregation} receipt` });
+          receiptSetComplete = false;
+        } else {
+          receipts.push(receipt);
+        }
+      }
+      if (receiptSetComplete && receipts.length === resolved.members.length) {
+        const blockers = receipts.some(receipt => Number(receipt.effective.findings_blocking || 0) > 0
+          || (Array.isArray(receipt.effective.unresolved_fixes)
+            && receipt.effective.unresolved_fixes.length > 0));
+        const approved = receipts.filter(receipt => receipt.effective.pass === true).length;
+        const aggregatePass = resolved.aggregation === 'sequence'
+          ? approved === 1
+          : (resolved.aggregation === 'partitioned_all'
+            ? approved === receipts.length
+            : (!blockers && approved > receipts.length / 2));
+        if (!aggregatePass) {
+          unsatisfied.push({ requirement: 'G4 ' + kind + ' certifier reduction',
+            reason: `${field} ${resolved.aggregation} receipts do not produce a blocker-free approval` });
+        }
+      }
+    }
+  }
   return { ok: unsatisfied.length === 0, result: unsatisfied.length ? 'refuse' : 'pass', reasonCode: unsatisfied.length ? 'gate_unsatisfied' : null, operator_hint: unsatisfied.length ? getOperatorHint('gate_unsatisfied', { reason: unsatisfied[0] && unsatisfied[0].reason }) : undefined, unsatisfied };
 }
 
@@ -1248,8 +1741,67 @@ function verifyVerdictBlock(content, opts) {
   const ledger = parseLedger(content);
   const failures = [];
   const checked = [];
+  // Schema-2 code/security fanouts are ONE logical gate. The G4 execution
+  // reducer permits a non-blocking dissent under replicated_majority, so the
+  // whole-plan verdict layer must apply that same reduction exactly once
+  // instead of subsequently vetoing the dissent as an independent gate. AV
+  // fanouts retain their separate majority-refute semantics in checkOne.
+  const schema2GroupsByMember = new Map();
+  if (parseEpochContract(content).active) {
+    const groups = new Map();
+    for (const node of nodes) {
+      if (!['code-reviewer', 'security-reviewer'].includes(node.role)
+        || !node.shape || node.shape.kind !== 'fanout') continue;
+      const key = [node.role, node.shape.group, node.dependsOn.slice().sort().join('\u001f')].join('\u001e');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(node);
+    }
+    for (const members of groups.values()) {
+      members.sort((a, b) => a.id.localeCompare(b.id));
+      for (const member of members) schema2GroupsByMember.set(member.id, members);
+    }
+  }
+  const checkedGroups = new Set();
+  const checkSchema2Group = members => {
+    const aggregation = members[0] && members[0].gateAggregation;
+    if (!['replicated_majority', 'partitioned_all'].includes(aggregation)
+      || members.some(member => member.role !== members[0].role
+        || member.gateAggregation !== aggregation
+        || ledger.get(member.id) !== 'complete')) {
+      return { ok: false, reason: 'schema-2 logical review group is incomplete or inconsistent' };
+    }
+    const effective = [];
+    for (const member of members) {
+      const raw = readCache(member.id + '.md');
+      if (raw == null) return { ok: false, reason: `schema-2 logical review evidence missing for ${member.id}` };
+      const verdict = schema.evaluateEffectiveVerdict(raw);
+      if (verdict.verdict === null) {
+        return { ok: false, reason: `schema-2 logical review verdict missing or unparseable for ${member.id}` };
+      }
+      effective.push(verdict);
+    }
+    const blockerVeto = effective.some(verdict => Number(verdict.findings_blocking || 0) > 0
+      || (Array.isArray(verdict.unresolved_fixes) && verdict.unresolved_fixes.length > 0));
+    const approvals = effective.filter(verdict => verdict.pass === true).length;
+    const ok = !blockerVeto && (aggregation === 'partitioned_all'
+      ? approvals === effective.length : approvals > effective.length / 2);
+    return { ok, reason: ok ? undefined
+      : `schema-2 ${aggregation} logical review group did not produce a blocker-free approval` };
+  };
   for (const node of nodes) {
     if (!GATE_VERDICT_ROLES.has(node.role)) continue;
+    const group = schema2GroupsByMember.get(node.id);
+    if (group) {
+      const groupKey = group.map(member => member.id).join('\u001f');
+      if (checkedGroups.has(groupKey)) continue;
+      if (!group.some(member => ledger.get(member.id) === 'complete')) continue;
+      checkedGroups.add(groupKey);
+      checked.push(...group.map(member => member.id));
+      const reduced = checkSchema2Group(group);
+      if (!reduced.ok) failures.push({ nodeId: group[0].id, role: group[0].role,
+        reason: reduced.reason || 'logical verdict not pass' });
+      continue;
+    }
     if (ledger.get(node.id) !== 'complete') continue;
     checked.push(node.id);
     const r = checkOne(node);
@@ -1502,6 +2054,103 @@ function readStoredHash(content) {
   return m ? m[1] : null;
 }
 
+function finalizeReplanEnvelope(fence) {
+  const transaction = fence && fence.transaction;
+  return {
+    result: 'refuse', reason: (fence && fence.reason) || 'replan_in_progress',
+    replan_phase: (fence && fence.phase) || (transaction && transaction.phase) || 'unknown',
+    transaction_id: (fence && fence.transaction_id) || (transaction && transaction.transaction_id) || 'none',
+    parent_plan_hash: transaction && transaction.parent && transaction.parent.plan_hash || 'none',
+    child_plan_hash: transaction && transaction.child && transaction.child.plan_hash || 'none',
+    legal_mutation: (fence && fence.legal_mutation) || 'none',
+    ...(fence && fence.legal_mutation === 'replan resume'
+      ? { resume_command: 'node scripts/kaola-gitlab-workflow-replan.js resume --project '
+          + path.basename(path.dirname(fence.planPath || 'project')) + ' --json' }
+      : {}),
+  };
+}
+
+function readFinalizeReplanFence(planPath) {
+  const projectDir = path.dirname(path.resolve(planPath));
+  const statePath = path.join(projectDir, 'workflow-state.md');
+  const transactionPath = path.join(projectDir, '.cache', schema.REPLAN_TRANSACTION_NAME);
+  let stateContent = '';
+  let transaction = null;
+  try { stateContent = fs.readFileSync(statePath, 'utf8'); } catch (_) {}
+  try { transaction = JSON.parse(fs.readFileSync(transactionPath, 'utf8')); }
+  catch (_) {
+    try { fs.readFileSync(transactionPath); transaction = {}; } catch (_) { transaction = null; }
+  }
+  return Object.assign(schema.readReplanFence(stateContent, transaction), { planPath });
+}
+
+function validateCommittedEpochBinding(content, fence) {
+  if (!fence || !fence.committed || !fence.transaction) return { ok: true };
+  const nodes = parseNodes(content);
+  const sink = uniqueSink(nodes);
+  const epoch = validateEpochContract(content, nodes, sink);
+  if (!epoch.active || epoch.errors.length) {
+    return { ok: false, reason: 'epoch_contract_invalid', errors: epoch.errors.length
+      ? epoch.errors : ['committed child is missing schema-2 epoch Meta'] };
+  }
+  const fields = epoch.contract.fields;
+  const tx = fence.transaction;
+  const state = fence.state || {};
+  const mismatch = [];
+  const expect = (name, actual, wanted) => { if (String(actual) !== String(wanted)) mismatch.push(name); };
+  expect('epoch_lineage_id', fields.epoch_lineage_id, tx.epoch_lineage_id);
+  expect('plan_epoch', fields.plan_epoch, tx.parent.plan_epoch + 1);
+  expect('parent_plan_hash', fields.parent_plan_hash, tx.parent.plan_hash);
+  expect('claim_root_base_digest', fields.claim_root_base_digest, tx.parent.claim_root_base_digest);
+  expect('inherited_frontier_digest', fields.inherited_frontier_digest, tx.cas.prepare.inherited_frontier_digest);
+  expect('source_evidence_digest', fields.source_evidence_digest, tx.source.source_evidence_digest);
+  expect('planner_binding', fields.planner_binding, tx.planner.dispatch_nonce);
+  expect('transition_reason', fields.transition_reason, tx.transition_reason);
+  if (tx.schema_version === 2) {
+    expect('parent_snapshot_manifest_digest', fields.parent_snapshot_manifest_digest,
+      tx.snapshot.authority_digest);
+  } else {
+    // The only committed schema-1 child admitted here is the historical externally
+    // sealed form. The recursive verifier below proves every external seal before
+    // this legacy `pending` marker is accepted; authoring alone is never authority.
+    expect('parent_snapshot_manifest_digest', fields.parent_snapshot_manifest_digest, 'pending');
+  }
+  if (tx.transition_reason === 'diagnosis_to_build') {
+    const proof = tx.budget && tx.budget.case_b_proof;
+    expect('diagnosis_source_digest', fields.diagnosis_source_digest,
+      proof && proof.proof_digest);
+    expect('recommended_shape_digest', fields.recommended_shape_digest,
+      proof && proof.payload && proof.payload.recommended_shape_digest);
+  } else {
+    expect('diagnosis_source_digest', fields.diagnosis_source_digest, undefined);
+    expect('recommended_shape_digest', fields.recommended_shape_digest, undefined);
+  }
+  expect('inherited_frontier_classes',
+    epoch.contract.inherited.length ? epoch.contract.inherited.join(',') : 'none',
+    tx.source.inherited_frontier_classes.length ? tx.source.inherited_frontier_classes.slice().sort().join(',') : 'none');
+  expect('active_plan_hash', state.active_plan_hash, readStoredHash(content));
+  expect('stored_plan_hash', readStoredHash(content), tx.child.plan_hash);
+  expect('computed_plan_hash', computePlanHash(content), tx.child.plan_hash);
+  if (mismatch.length) return { ok: false, reason: 'epoch_state_mismatch', fields: mismatch };
+
+  // Consume the single snapshot/projection authority owned by replan. This is
+  // deliberately finalize-only: validatePlan remains the legitimate pre-commit
+  // authoring gate, while a committed child must recursively prove either the
+  // schema-2 projection binding or the externally sealed schema-1 compatibility.
+  const replan = require('./kaola-gitlab-workflow-replan');
+  const current = replan.verifyCurrentEpochAuthority(path.dirname(path.resolve(fence.planPath)));
+  if (!current.ok || current.authority_kind !== 'planned') {
+    return { ok: false, reason: current.reason || 'state_current_epoch_authority_invalid',
+      errors: [current.detail || current.reason || 'current epoch authority is not planned'] };
+  }
+  const snapshots = replan.verifyAllEpochSnapshots(path.dirname(path.resolve(fence.planPath)));
+  if (!snapshots.ok) {
+    return { ok: false, reason: snapshots.reason,
+      errors: [snapshots.detail || snapshots.path || snapshots.epoch || snapshots.reason] };
+  }
+  return { ok: true };
+}
+
 // --- the validator ----------------------------------------------------------
 // opts: { root, fanoutCap }
 function validatePlan(content, opts) {
@@ -1549,6 +2198,14 @@ function validatePlan(content, opts) {
   // stack — a crash, not a typed refusal). 200 is ~28x the largest realistic plan.
   if (nodes.length > schema.MAX_NODES) {
     return { result: 'refuse', reason: 'too_many_nodes', operator_hint: getOperatorHint('too_many_nodes'), errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
+  }
+  if (parseEpochContract(content).active) {
+    const compliance = validateRequiredAgentCompliance(content, nodes);
+    if (!compliance.ok) {
+      return { result: 'refuse', reason: compliance.reason,
+        operator_hint: getOperatorHint(compliance.reason), errors: [compliance.detail],
+        planHash: computePlanHash(content) };
+    }
   }
   const ids = new Set(nodes.map(n => n.id));
   // `## Node Briefs` freeze wall: a brief whose ### <node-id> header names a node absent from ## Nodes
@@ -2160,6 +2817,9 @@ function validatePlan(content, opts) {
       const opt5 = gateUncovered(nodes, n => n.role === 'metric-optimizer', 'adversarial-verifier', sink);
       if (opt5.length) errors.push(`OPT-5: adversarial-verifier does not post-dominate metric-optimizer node(s): ${opt5.join(', ')} — a change-gate adversarial-verifier must reproduce the metric claim before finalize`);
     }
+
+    const epoch = validateEpochContract(content, nodes, sink);
+    errors.push(...epoch.errors);
   }
 
   // #274 / #301: byte-identity write-set CO-OCCURRENCE gap. A frozen plan that edits one half of a
@@ -2312,6 +2972,10 @@ function revalidateForResume(content, opts) {
   // Same input-size backstop as validatePlan: the resume path also calls hasCycle, so an
   // oversized frozen plan must be refused before the DFS rather than overflow the stack.
   if (nodes.length > schema.MAX_NODES) return refuse('too_many_nodes', `plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`);
+  if (parseEpochContract(content).active) {
+    const compliance = validateRequiredAgentCompliance(content, nodes);
+    if (!compliance.ok) return refuse(compliance.reason, compliance.detail);
+  }
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
   for (const n of nodes) {
@@ -2745,6 +3409,16 @@ function main() {
   const planPath = args[0];
   const json = args.includes('--json');
   const root = findRepoRoot(path.dirname(path.resolve(planPath)));
+  let finalizeFence = null;
+  if (args.includes('--finalize-check')) {
+    finalizeFence = readFinalizeReplanFence(planPath);
+    if (!finalizeFence.ok || finalizeFence.fenced) {
+      const out = finalizeReplanEnvelope(finalizeFence);
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.reason) + '\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
   let content;
   try { content = fs.readFileSync(planPath, 'utf8'); }
   catch (_) {
@@ -2912,7 +3586,7 @@ function main() {
     return;
   }
   if (args.includes('--gate-verify')) {
-    const r = verifyGateExecution(content, { root });
+    const r = verifyGateExecution(content, { root, planPath });
     process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'gate execution verified' : 'typed refusal: ' + r.unsatisfied.map(u => `${u.requirement}: ${u.reason}`).join('; '))) + '\n');
     if (!r.ok) process.exitCode = 1;
     return;
@@ -3399,6 +4073,14 @@ function main() {
     return;
   }
   if (args.includes('--finalize-check')) {
+    const epochBinding = validateCommittedEpochBinding(content, finalizeFence);
+    if (!epochBinding.ok) {
+      const out = { result: 'refuse', reason: epochBinding.reason,
+        errors: epochBinding.errors || epochBinding.fields || [] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.reason) + '\n');
+      process.exitCode = 1;
+      return;
+    }
     // #424 (D-424-01) part 3 + #432 (D-432-01) part 3 + #475: the FINALIZE-TIME gate. Runs ONLY at
     // finalization (cmdFinalize), never per-node. Two coupled checks, precedence-ordered:
     //   (A) validation gate — DUAL-MODE by repo kind (#475 Pure option A):
@@ -3639,7 +4321,7 @@ function main() {
       }
     }
     // (2) gate-verify (informational at the per-node level — commit-node tags it so).
-    const gateVerifyOut = verifyGateExecution(content, { root });
+    const gateVerifyOut = verifyGateExecution(content, { root, planPath });
     // (3) verdict-check (informational per-node).
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
     const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
@@ -3762,21 +4444,6 @@ function main() {
   if (v.result === 'refuse') process.exitCode = 1;
 }
 
-if (require.main === module) {
-  try { main(); }
-  catch (err) {
-    // Fail closed: ANY uncaught internal error becomes a TYPED REFUSAL on STDOUT (not a
-    // bare stderr dump). main() is the only writer of the result, so on a throw stdout is
-    // empty — a --json consumer (executor / --freeze / --resume-check, and the walkthrough's
-    // validatePlanFixture which JSON.parses stdout) would otherwise crash on the empty parse.
-    // Detect --json from argv here since we are outside main().
-    const json = process.argv.includes('--json');
-    const out = { result: 'refuse', reason: 'internal_error', operator_hint: getOperatorHint('internal_error'), errors: ['validator internal error: ' + err.message] };
-    process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors[0]) + '\n');
-    process.exitCode = 1;
-  }
-}
-
 module.exports = {
   validatePlan,
   revalidateForResume,
@@ -3784,6 +4451,12 @@ module.exports = {
   reconcileLedger,
   computePlanHash,
   readStoredHash,
+  parseEpochContract,
+  validateEpochContract,
+  schema2ReviewGateContracts,
+  namedGateUncovered,
+  resolveNamedCertifier,
+  readFinalizeReplanFence,
   // `## Node Briefs` channel: the parser + presence probe (fence-aware; hash-covered when present).
   parseNodeBriefs,
   nodeBriefsPresent,
@@ -3793,6 +4466,7 @@ module.exports = {
   parseLabels,
   parseGoal,
   parseLedger,
+  validateRequiredAgentCompliance,
   parseSpeculativePolicy,
   parseWriteOverlapPolicy,
   parseOptimizeContracts,
@@ -3822,3 +4496,18 @@ module.exports = {
   // predicate the --parallel-safe coarse relaxation already applies (no new logic, no new entry point).
   hasUnresolvableEntry,
 };
+
+if (require.main === module) {
+  try { main(); }
+  catch (err) {
+    // Fail closed: ANY uncaught internal error becomes a TYPED REFUSAL on STDOUT (not a
+    // bare stderr dump). main() is the only writer of the result, so on a throw stdout is
+    // empty — a --json consumer (executor / --freeze / --resume-check, and the walkthrough's
+    // validatePlanFixture which JSON.parses stdout) would otherwise crash on the empty parse.
+    // Detect --json from argv here since we are outside main().
+    const json = process.argv.includes('--json');
+    const out = { result: 'refuse', reason: 'internal_error', operator_hint: getOperatorHint('internal_error'), errors: ['validator internal error: ' + err.message] };
+    process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors[0]) + '\n');
+    process.exitCode = 1;
+  }
+}

@@ -15,6 +15,7 @@
 
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
+const { SLOTS } = require('../templates/routing/slots.js');
 
 let passed = 0;
 let failed = 0;
@@ -41,6 +42,35 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   // multi-line slot value expands to multiple lines
   const irMulti = { slots: { block: { command: 'L1\nL2\nL3' } }, splices: {} };
   eq(renderSkeleton('<!-- SLOT:block -->', ctx('command', 'github'), irMulti), 'L1\nL2\nL3', 'SLOT-fill: multi-line');
+}
+
+// ---------------------------------------------------------------------------
+// Re-plan control-plane slots: the generated plan-run and next families must
+// render the edition-local aggregator basename while keeping one canonical
+// control-plane contract for command and skill surfaces.
+// ---------------------------------------------------------------------------
+{
+  const ir = { slots: SLOTS, splices: {} };
+  const expectedScripts = {
+    github: 'kaola-workflow-replan.js',
+    gitlab: 'kaola-gitlab-workflow-replan.js',
+    gitea: 'kaola-gitea-workflow-replan.js',
+  };
+  for (const slotName of ['pr-replan-control-plane', 'nx-replan-control-plane']) {
+    for (const surfaceType of ['command', 'skill']) {
+      for (const forge of ['github', 'gitlab', 'gitea']) {
+        const rendered = renderSkeleton(`<!-- SLOT:${slotName} -->`, ctx(surfaceType, forge), ir);
+        assert(rendered.includes(expectedScripts[forge]),
+          `${slotName}: ${surfaceType}/${forge} renders the edition-local re-plan aggregator`);
+        for (const token of ['replan_in_progress', 'replan_phase', 'parent_plan_hash',
+          'child_plan_hash', 'last_cas_result', 'resume --project',
+          'replan_planner_dispatch_required', 'workflow-plan.next.md']) {
+          assert(rendered.includes(token),
+            `${slotName}: ${surfaceType}/${forge} carries re-plan token ${token}`);
+        }
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

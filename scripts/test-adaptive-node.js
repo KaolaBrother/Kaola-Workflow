@@ -56,6 +56,7 @@ const {
   resolveOwningNodes,
   routeCanonicalFindings,
   reviewJournalBlocker,
+  reduceLogicalReviewAttempt,
   uniqueMaximalReviewProducer,
   nextReviewAttemptOrdinal,
   consumedReviewRepairs,
@@ -69,6 +70,8 @@ const {
   synthesizeLevel,
   // #688 (items 1+2): rebind-admissibility predicate, direct-call hardening regressions.
   proveRebindAdmissible,
+  // #699: crash-safe publication of a successor review-outcome source.
+  publishRepairReplanSource,
 } = require('./kaola-workflow-adaptive-node');
 const {
   RUNNING_SET_NAME,
@@ -76,6 +79,8 @@ const {
   dispatchEffortOpencode,
   evaluateEffectiveVerdict,
   canonicalLogicalGateIdentity,
+  sha256Canonical,
+  sha256Hex,
   validateReviewJournal,
   // #688 (item 4): canonical blob-map shape check, direct-call hardening regression.
   isCanonicalBlobMap,
@@ -472,6 +477,240 @@ function assert(condition, message) {
       && statuses.finalize === 'pending' && !fs.existsSync(path.join(cacheDir, 'running-set.json')),
       'R7-SIMULTANEOUS-RED: both gates return pending, running set drains, and successor stays hidden');
   } finally { fs.rmSync(simultaneousTmp, { recursive: true, force: true }); }
+}
+
+// #699 schema-2 code/security fanouts are one runtime review transaction, not
+// independent sequence attempts. A replicated majority may carry one
+// non-blocking dissent; blocker/fix veto and partitioned-all stay fail-closed.
+{
+  assert(typeof reduceLogicalReviewAttempt === 'function',
+    '#699 logical review reducer is exported for exact aggregation regression coverage');
+  if (typeof reduceLogicalReviewAttempt === 'function') {
+    const reducerNodes = [
+      { id: 'review-a', role: 'code-reviewer', dependsOn: ['writer'],
+        shape: { kind: 'fanout', group: 'replicas' }, gateAggregation: 'replicated_majority' },
+      { id: 'review-b', role: 'code-reviewer', dependsOn: ['writer'],
+        shape: { kind: 'fanout', group: 'replicas' }, gateAggregation: 'replicated_majority' },
+      { id: 'review-c', role: 'code-reviewer', dependsOn: ['writer'],
+        shape: { kind: 'fanout', group: 'replicas' }, gateAggregation: 'replicated_majority' },
+    ];
+    const gate = canonicalLogicalGateIdentity({ kind: 'fanout', id: 'replicas',
+      origin: ['writer'], members: reducerNodes.map(node => node.id) });
+    const receipt = (id, verdict, extra = '') => ({ node_id: id,
+      body: `evidence-binding: ${id} nonce-${id}\nverdict: ${verdict}\nfindings_blocking: 0\n${extra}` });
+    const majority = reduceLogicalReviewAttempt(reducerNodes, gate, [
+      receipt('review-a', 'pass'), receipt('review-b', 'pass'), receipt('review-c', 'fail'),
+    ]);
+    assert(majority.complete === true && majority.pass === true,
+      '#699 replicated-majority reducer accepts one non-blocking dissent');
+    const veto = reduceLogicalReviewAttempt(reducerNodes, gate, [
+      receipt('review-a', 'pass'), receipt('review-b', 'pass'),
+      receipt('review-c', 'pass', 'finding: id=R1 scope=in_scope action=fix status=open severity=high file=x.js fix_role=tdd-guide\n'),
+    ]);
+    assert(veto.complete === true && veto.pass === false && veto.blocker_veto === true,
+      '#699 replicated-majority reducer cannot outvote an unresolved in-scope fix');
+    const partitions = reducerNodes.map((node, index) => ({ ...node,
+      gateAggregation: 'partitioned_all', gateSurface: 'partition-' + index }));
+    const partitioned = reduceLogicalReviewAttempt(partitions, gate, [
+      receipt('review-a', 'pass'), receipt('review-b', 'pass'), receipt('review-c', 'fail'),
+    ]);
+    assert(partitioned.complete === true && partitioned.pass === false,
+      '#699 partitioned-all reducer requires every exact member approval');
+    const legacyAdversarial = reducerNodes.map(node => ({ ...node,
+      role: 'adversarial-verifier', gateAggregation: '' }));
+    const legacyMajority = reduceLogicalReviewAttempt(legacyAdversarial, gate, [
+      receipt('review-a', 'pass'), receipt('review-b', 'pass'),
+      { node_id: 'review-c', body: 'evidence-binding: review-c nonce-review-c\nverdict: fail\nfindings_blocking: 1\n' },
+    ]);
+    assert(legacyMajority.complete === true && legacyMajority.pass === true,
+      '#699 code/security blocker veto does not tighten verified legacy AV majority semantics');
+  }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-schema2-review-majority-'));
+  try {
+    const project = 'issue-699-majority';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const rows = [
+      '| writer | tdd-guide | — | product.js | 1 | sequence | standard | — | — | — | — |',
+      '| review-a | code-reviewer | writer | — | 1 | fanout(replicas) | reasoning | candidate approved | full candidate | replicated_majority | — |',
+      '| review-b | code-reviewer | writer | — | 1 | fanout(replicas) | reasoning | candidate approved | full candidate | replicated_majority | — |',
+      '| review-c | code-reviewer | writer | — | 1 | fanout(replicas) | reasoning | candidate approved | full candidate | replicated_majority | — |',
+      '| finalize | finalize | review-a,review-b,review-c | — | 1 | sequence | — | — | — | — | — |',
+    ];
+    const body = [
+      '# Workflow Plan', '', '## Meta', 'project: ' + project, 'plan_schema_version: 2',
+      'epoch_schema_version: 2', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |', ...rows,
+      '', '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| writer | complete |', '| review-a | in_progress |', '| review-b | in_progress |',
+      '| review-c | pending |', '| finalize | pending |', '',
+    ].join('\n');
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    const votes = { 'review-a': 'pass', 'review-b': 'pass', 'review-c': 'fail' };
+    for (const [index, id] of ['review-a', 'review-b'].entries()) {
+      const base = String(index + 1).repeat(40);
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + id), base + '\n');
+      fs.writeFileSync(path.join(cacheDir, id + '.md'),
+        `evidence-binding: ${id} ${base.slice(0, 12)}\nverdict: ${votes[id]}\nfindings_blocking: 0\n`);
+    }
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes:
+      ['review-a', 'review-b'].map(id => ({ id, role: 'code-reviewer', kind: 'read' })) }));
+    const writerIdentity = { baseline: 'a'.repeat(40), anchored_ref: 'a'.repeat(40),
+      open_token: 'writer-open', generation: 'a'.repeat(12),
+      ref: 'refs/kaola-workflow/barrier/' + project + '/writer' };
+    const reservedC = '3'.repeat(40);
+    const reservedRefs = new Map();
+    const droppedReservations = [];
+    const shell = (_script, args) => {
+      if (args.includes('--resume-check')) return { exitCode: 0, ok: true, result: 'ok' };
+      const nodeIdIndex = args.indexOf('--node-id');
+      const nodeId = nodeIdIndex >= 0 ? args[nodeIdIndex + 1] : null;
+      if (args.includes('--record-base')) {
+        const basePath = path.join(cacheDir, 'barrier-base-' + nodeId);
+        const openPath = path.join(cacheDir, 'barrier-open-' + nodeId);
+        if (!fs.existsSync(basePath)) {
+          fs.writeFileSync(basePath, reservedC + '\n');
+          fs.writeFileSync(openPath, 'head-at-reservation\n');
+          reservedRefs.set(nodeId, reservedC);
+        }
+        return { exitCode: 0, result: 'ok', nodeId, base: fs.readFileSync(basePath, 'utf8').trim() };
+      }
+      if (args.includes('--drop-base')) {
+        droppedReservations.push(nodeId);
+        for (const name of ['barrier-base-', 'barrier-open-']) {
+          try { fs.unlinkSync(path.join(cacheDir, name + nodeId)); } catch (_) {}
+        }
+        reservedRefs.delete(nodeId);
+        return { exitCode: 0, result: 'ok', nodeId };
+      }
+      if (args.includes('--start')) {
+        const base = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + nodeId), 'utf8').trim();
+        return { exitCode: 0, result: 'ok', ok: true, recordBase: { result: 'ok', nodeId, base, reused: true } };
+      }
+      return { exitCode: 0, result: 'ok', ok: true, overallOk: true, allDone: false,
+        readyPending: [{ id: 'review-c', role: 'code-reviewer', model: 'reasoning',
+          declared_write_set: '—', dependsOn: ['writer'] }],
+        selectorCheck: { isSelector: false, ok: true } };
+    };
+    const common = { planPath, project, shell,
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, value) => fs.writeFileSync(p, value),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: p => fs.readdirSync(p),
+      mkdirp: p => fs.mkdirSync(p, { recursive: true }),
+      resolveBarrierRef: (_ref, id) => reservedRefs.get(id) || '',
+      computeReviewCandidateDigest: () => 'd'.repeat(64),
+      captureWriterBarrierIdentity: id => id === 'writer' ? writerIdentity : null };
+    let crashedAfterReservation = false;
+    try {
+      runCloseNode({ ...common, nodeId: 'review-a', shell: (script, args) => {
+        const result = shell(script, args);
+        if (args.includes('--record-base') && args.includes('review-c')) {
+          throw new Error('simulated_crash_after_review_generation_reservation');
+        }
+        return result;
+      } });
+    } catch (err) {
+      crashedAfterReservation = String(err && err.message)
+        .includes('simulated_crash_after_review_generation_reservation');
+    }
+    assert(crashedAfterReservation
+      && !fs.existsSync(path.join(cacheDir, 'review-attempts.json'))
+      && fs.existsSync(path.join(cacheDir, 'barrier-base-review-c'))
+      && fs.existsSync(path.join(cacheDir, 'barrier-open-review-c'))
+      && reservedRefs.get('review-c') === reservedC,
+    '#699 crash after a pending-member reservation leaves no partial journal and retryable full identity');
+    let crashedAfterJournal = false;
+    try { runCloseNode({ ...common, nodeId: 'review-a', reviewFailpoint: 'attempt_written' }); }
+    catch (err) { crashedAfterJournal = String(err && err.message).includes('review_failpoint:attempt_written'); }
+    const journalCrashRead = readReviewJournal(common, fs.readFileSync(planPath, 'utf8'));
+    assert(crashedAfterJournal && journalCrashRead.ok === true
+      && readLedgerStatuses(fs.readFileSync(planPath, 'utf8'))['review-a'] === 'in_progress'
+      && journalCrashRead.journal.attempts[0].receipts.length === 1,
+    '#699 crash after journal write rereads validly and leaves the receipt-bearing close retryable');
+    const first = runCloseNode({ ...common, nodeId: 'review-a' });
+    const afterFirstPlan = fs.readFileSync(planPath, 'utf8');
+    const afterFirstRead = readReviewJournal(common, afterFirstPlan);
+    const afterFirstStatuses = readLedgerStatuses(afterFirstPlan);
+    assert(first.provisional === true && afterFirstRead.ok === true
+      && afterFirstRead.journal.attempts[0].generations.every(row => row.nonce)
+      && afterFirstStatuses['review-a'] === 'complete'
+      && afterFirstStatuses['review-b'] === 'in_progress'
+      && afterFirstStatuses['review-c'] === 'pending',
+    '#699 rolling fanout reserves every exact generation and rereads after a provisional close: '
+      + JSON.stringify({ first, afterFirstRead }));
+    assert(fs.existsSync(path.join(cacheDir, 'barrier-base-review-c'))
+      && fs.existsSync(path.join(cacheDir, 'barrier-open-review-c'))
+      && reservedRefs.get('review-c') === reservedC,
+    '#699 pending-member reservation owns the base, anchored ref, and freshness token as one identity');
+    const reconciled = runReconcileRunningSet(common);
+    assert(reconciled.result === 'ok' && !droppedReservations.includes('review-c')
+      && fs.existsSync(path.join(cacheDir, 'barrier-base-review-c'))
+      && fs.existsSync(path.join(cacheDir, 'barrier-open-review-c')),
+    '#699 reconcile preserves the journal-owned pending generation instead of orphan-sweeping it');
+    const oriented = runOrient({ ...common, statePath: path.join(projectDir, 'workflow-state.md') });
+    assert(oriented.result === 'ok' && oriented.reviewTopUp
+      && oriented.reviewTopUp.pending_members.join(',') === 'review-c',
+    '#699 orient exposes the bounded provisional-fanout top-up instead of dead-ending on the journal fence');
+    const planBeforeDrift = fs.readFileSync(planPath, 'utf8');
+    const runningBeforeDrift = fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8');
+    const drifted = runOpenReady({ ...common, fanoutCapReadonly: 2,
+      computeReviewCandidateDigest: () => 'e'.repeat(64) });
+    assert(drifted.reason === 'review_candidate_changed'
+      && fs.readFileSync(planPath, 'utf8') === planBeforeDrift
+      && fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8') === runningBeforeDrift
+      && !fs.existsSync(path.join(cacheDir, 'review-c.md')),
+    '#699 candidate drift refuses top-up before ledger, running-set, or evidence mutation');
+    let crashedAfterOpeningManifest = false;
+    try {
+      runOpenReady({ ...common, fanoutCapReadonly: 2, writeFile: (file, value) => {
+        fs.writeFileSync(file, value);
+        if (file === path.join(cacheDir, 'running-set.json')
+            && JSON.parse(value).state === 'opening') {
+          throw new Error('simulated_crash_after_review_topup_opening_manifest');
+        }
+      } });
+    } catch (err) {
+      crashedAfterOpeningManifest = String(err && err.message)
+        .includes('simulated_crash_after_review_topup_opening_manifest');
+    }
+    const recoveredTopUp = runReconcileRunningSet(common);
+    assert(crashedAfterOpeningManifest && recoveredTopUp.result === 'ok'
+      && (recoveredTopUp.rolledBack || []).includes('review-c')
+      && !droppedReservations.includes('review-c')
+      && fs.existsSync(path.join(cacheDir, 'barrier-base-review-c'))
+      && fs.existsSync(path.join(cacheDir, 'barrier-open-review-c'))
+      && reservedRefs.get('review-c') === reservedC,
+    '#699 opening-manifest crash rollback preserves the journal-owned generation identity for retry');
+    const topUp = runOpenReady({ ...common, fanoutCapReadonly: 2 });
+    const openedC = (topUp.opened || []).find(node => node.id === 'review-c');
+    assert(topUp.result === 'ok' && openedC && openedC.nonce === reservedC.slice(0, 12)
+      && readLedgerStatuses(fs.readFileSync(planPath, 'utf8'))['review-c'] === 'in_progress',
+    '#699 unresolved provisional fanout permits only its reserved missing member to top up');
+    fs.writeFileSync(path.join(cacheDir, 'review-c.md'),
+      `evidence-binding: review-c ${reservedC.slice(0, 12)}\nverdict: ${votes['review-c']}\nfindings_blocking: 0\n`);
+    const second = runCloseNode({ ...common, nodeId: 'review-b' });
+    const afterSecondRead = readReviewJournal(common, fs.readFileSync(planPath, 'utf8'));
+    assert(second.provisional === true && afterSecondRead.ok === true
+      && afterSecondRead.journal.attempts[0].receipts.length === 2,
+    '#699 rolling fanout rereads after the second provisional close');
+    const third = runCloseNode({ ...common, nodeId: 'review-c' });
+    const plan = fs.readFileSync(planPath, 'utf8');
+    const reread = readReviewJournal(common, plan);
+    const statuses = readLedgerStatuses(plan);
+    const attempts = reread.ok ? reread.journal.attempts : [];
+    assert(first.provisional === true && second.provisional === true && third.result === 'ok'
+      && attempts.length === 1 && attempts[0].receipts.length === 3
+      && attempts[0].outcome === 'pass' && attempts[0].lifecycle_settled === true,
+    '#699 real close-node lifecycle reduces 2 pass + 1 nonblocking dissent as one settled attempt: '
+      + JSON.stringify({ first, second, third, reread }));
+    assert(reread.ok === true && reviewJournalBlocker(reread.journal) === null
+      && ['review-a', 'review-b', 'review-c'].every(id => statuses[id] === 'complete'),
+    '#699 legal replicated-majority dissent rereads without repair blocker and leaves all members complete');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
 // REPAIR-DIGEST-DRIFT: exclude only this run's control tree and .kw bookkeeping.
@@ -6781,6 +7020,94 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// E3-699: schema-2 plans freeze the exact one-row-per-node compliance set up
+// front. Closing (and re-closing after a crash) must ADVANCE the existing
+// pending row to its verified evidence binding, never treat mere row presence
+// as completion and never append a duplicate. The finalize sink remains the
+// non-delegated main-session-direct row required by finalize compatibility.
+// ---------------------------------------------------------------------------
+{
+  const nodes = [
+    '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+  ];
+  let plan = makePlan([
+    '| impl | complete | |',
+    '| review | in_progress | |',
+    '| done | pending | |',
+  ], nodes) + [
+    '## Required Agent Compliance',
+    '',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '| --- | --- | --- | --- |',
+    '| tdd-guide (impl) | subagent-invoked | evidence-binding: impl priornonce123 | |',
+    '| code-reviewer (review) | pending | | |',
+    '| finalize (done) | pending | | |',
+    '',
+  ].join('\n');
+  const planPath = '/p/workflow-plan.md';
+  const files = {
+    [planPath]: plan,
+    '/p/.cache/review.md': 'evidence-binding: review reviewnonce123\nverdict: pass\nfindings_blocking: 0\n',
+    '/p/.cache/done.md': 'evidence-binding: done finalnonce123\nfinalization bookkeeping complete\n',
+  };
+  function closePreseeded(nodeId, advanceToFinalize) {
+    return runCloseAndOpenNext({
+      planPath, statePath: '/p/workflow-state.md', project: 'p', nodeId,
+      shell: (sp, args) => {
+        const base = path.basename(sp);
+        if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, result: 'pass' };
+        if (base === 'kaola-workflow-commit-node.js') {
+          return { exitCode: 0, result: 'ok', selectorCheck: {}, overallOk: true };
+        }
+        if (base === 'kaola-workflow-next-action.js') {
+          if (nodeId === 'done') return { exitCode: 0, result: 'ok', allDone: true, readyPending: [] };
+          if (advanceToFinalize) return {
+            exitCode: 0, result: 'ok', allDone: false,
+            readyPending: [{ id: 'done', role: 'finalize' }],
+            nextNode: { id: 'done', role: 'finalize', declared_write_set: '—' },
+          };
+          return { exitCode: 0, result: 'ok', allDone: false, readyPending: [], nextNode: null };
+        }
+        return { exitCode: 0, result: 'ok' };
+      },
+      readFile: fp => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+      writeFile: (fp, content) => { files[fp] = content; },
+      cacheExists: fp => fp in files,
+    });
+  }
+
+  const first = closePreseeded('review', true);
+  assert(first.result === 'ok' && first.closed === 'review' && first.opened && first.opened.id === 'done',
+    'E3-699 compliance: closing review advances the serial chain to finalize, got ' + JSON.stringify(first));
+  assert(files[planPath].includes('| code-reviewer (review) | subagent-invoked | evidence-binding: review reviewnonce123 | |'),
+    'E3-699 compliance: the pre-seeded review row advances to verified invoked/evidence binding');
+  assert(!files[planPath].includes('| code-reviewer (review) | pending | | |'),
+    'E3-699 compliance: the completed review row is no longer pending');
+
+  const reclose = closePreseeded('review', false);
+  assert(reclose.result === 'ok', 'E3-699 compliance: re-close is replay-safe, got ' + JSON.stringify(reclose));
+  assert((files[planPath].match(/\| code-reviewer \(review\) \|/g) || []).length === 1,
+    'E3-699 compliance: re-close retains exactly one review requirement row');
+
+  const finalized = closePreseeded('done', false);
+  assert(finalized.result === 'ok' && finalized.allDone === true,
+    'E3-699 compliance: finalize closes after the pre-seeded row advances, got ' + JSON.stringify(finalized));
+  const finalPlan = files[planPath];
+  const compliance = planValidator.validateRequiredAgentCompliance(finalPlan, planValidator.parseNodes(finalPlan));
+  assert(compliance.ok === true, 'E3-699 compliance: final exact row set is validator-compatible, got ' + JSON.stringify(compliance));
+  assert(compliance.ok && compliance.rows.length === 3
+    && JSON.stringify(compliance.rows.map(row => row.requirement))
+      === JSON.stringify(['tdd-guide (impl)', 'code-reviewer (review)', 'finalize (done)']),
+  'E3-699 compliance: final table contains the exact complete node requirement set');
+  assert(finalPlan.includes('| finalize (done) | main-session-direct | evidence-binding: done finalnonce123 | |'),
+    'E3-699 compliance: finalize pending row advances to main-session-direct with its evidence binding');
+  assert(!/\| (?:code-reviewer \(review\)|finalize \(done\)) \| pending \|/.test(finalPlan),
+    'E3-699 compliance: no closed node retains a pending compliance row');
+}
+
+// ---------------------------------------------------------------------------
 // S392 (#392): evidence-binding nonce.
 //   - 3-arg checkEvidenceShape (no opts) is byte-identical (BACKWARD-COMPAT: ~40 callers).
 //   - expectedNonce present + correct header → passes.
@@ -7515,6 +7842,90 @@ function rtHarness(initialFiles, opts) {
     && verified.missingTokenClass === 'findings',
   'D444-VERIFY-SEED-ONLY-GENERIC: untouched generic seed refuses verification, got ' + JSON.stringify(verified));
   try { fs.rmSync(tmpSeedOnly, { recursive: true, force: true }); } catch (_) {}
+}
+
+// #699 G4-CERTIFIER-SEED: opening a schema-2 certifier must materialize the exact logical-gate,
+// epoch-frontier, and current-candidate bindings the final barrier verifies. Read-only reviewer
+// returns are persisted through record-evidence, so that path must preserve the OPEN-TIME binding;
+// recomputing after a later writer mutation would certify bytes the reviewer never saw.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-g4-certifier-seed-'));
+  try {
+    const project = 'issue-699';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'product.js'), 'module.exports = 1;\n');
+    execFixtureFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore' });
+    execFixtureFileSync('git', ['config', 'user.email', 'kw@test'], { cwd: tmp });
+    execFixtureFileSync('git', ['config', 'user.name', 'kw'], { cwd: tmp });
+    execFixtureFileSync('git', ['add', '-A'], { cwd: tmp });
+    execFixtureFileSync('git', ['commit', '-m', 'base'], { cwd: tmp, stdio: 'ignore' });
+    const lineage = 'a'.repeat(64);
+    const frontier = 'b'.repeat(64);
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — issue-699', '', '## Meta',
+      'plan_schema_version: 2', 'contract_version: 2', 'epoch_schema_version: 2', 'project: ' + project,
+      'epoch_lineage_id: ' + lineage,
+      'inherited_frontier_classes: code',
+      'inherited_frontier_digest: ' + frontier,
+      'code_certifier: cert', 'security_certifier: none', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| writer | tdd-guide | — | product.js | 1 | sequence | — | — | — | — |',
+      '| cert | code-reviewer | writer | — | 1 | sequence | current code candidate is approved | full code candidate | sequence | — |',
+      '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status | notes |', '| --- | --- | --- |',
+      '| writer | completed | |', '| cert | in_progress | |', '| finalize | pending | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-cert'), 'abcdef123456extra\n');
+
+    const candidateAtOpen = planValidator.computeCodeTreeHash(tmp, project, []);
+    const gateDigest = sha256Canonical({
+      kind: 'sequence', members: ['cert'],
+      claim_digest: sha256Hex('current code candidate is approved'),
+      surface_digests: [sha256Hex('full code candidate')],
+      aggregation: 'sequence', certified_producers: [],
+    });
+    const seeded = seedEvidenceFile(planPath, 'cert', 'abcdef123456', 'code-reviewer', false);
+    const seededBody = fs.readFileSync(path.join(cacheDir, 'cert.md'), 'utf8');
+    const expectedBindings = [
+      ['certifier_kind', 'code'],
+      ['certifier_aggregation', 'sequence'],
+      ['certifier_gate_digest', gateDigest],
+      ['certifier_epoch_lineage_id', lineage],
+      ['certifier_inherited_frontier_digest', frontier],
+      ['certified_candidate_digest', candidateAtOpen],
+    ];
+    for (const [name, value] of expectedBindings) {
+      assert(seeded.required_tokens.includes(name), '#699 G4-CERTIFIER-SEED required_tokens includes ' + name);
+      assert(seededBody.includes(name + ': ' + value), '#699 G4-CERTIFIER-SEED materializes ' + name);
+    }
+
+    fs.writeFileSync(path.join(tmp, 'product.js'), 'module.exports = 2;\n');
+    const candidateAfterMutation = planValidator.computeCodeTreeHash(tmp, project, []);
+    assert(candidateAfterMutation !== candidateAtOpen,
+      '#699 G4-CERTIFIER-SEED control mutation changes the current candidate digest');
+    const recorded = runRecordEvidence({
+      planPath, project, nodeId: 'cert',
+      stdinContent: 'evidence-binding: cert abcdef123456\nverdict: pass\nfindings_blocking: 0\n',
+      readFile: (p) => fs.readFileSync(p, 'utf8'),
+      writeFile: (p, c) => fs.writeFileSync(p, c),
+      mkdirp: (p) => fs.mkdirSync(p, { recursive: true }),
+    });
+    assert(recorded.result === 'ok', '#699 G4-CERTIFIER-SEED record-evidence accepts current generation');
+    const recordedBody = fs.readFileSync(path.join(cacheDir, 'cert.md'), 'utf8');
+    for (const [name, value] of expectedBindings) {
+      assert(recordedBody.includes(name + ': ' + value),
+        '#699 G4-CERTIFIER-SEED record-evidence preserves open-time ' + name);
+    }
+    assert(!recordedBody.includes('certified_candidate_digest: ' + candidateAfterMutation),
+      '#699 G4-CERTIFIER-SEED later mutation cannot refresh the certified candidate through persistence');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -8558,6 +8969,49 @@ function rtHarness(initialFiles, opts) {
     assert(d && !('leg_branch' in d), '#591-SERIAL-READ-NO-LEG-FIELDS: serial dispatch has NO leg_branch key, got ' + JSON.stringify(Object.keys(d)));
     assert(JSON.stringify(r.opened).indexOf('"leg_path"') === -1 && JSON.stringify(r.opened).indexOf('"leg_branch"') === -1,
       '#591-SERIAL-READ-NO-LEG-FIELDS: no leg_path/leg_branch anywhere in the serial opened payload');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #692-LEG-UPSTREAM-EVIDENCE-ABSOLUTE: a co-opened WRITE member provisioned INTO an isolated leg
+  //   carries a PARENT-sourced upstream_evidence pointer (seed = a COMPLETE producer, code-explorer,
+  //   merged into the parent tree — NOT a live leg). Its dispatch.upstream_evidence[].path MUST be an
+  //   ABSOLUTE path under the PARENT worktree: a fresh leg worktree carries no sibling .cache evidence,
+  //   so the pre-#692 project-relative hint ('kaola-workflow/test-project/.cache/seed.md') resolved
+  //   (empty) from the briefed `cd <leg_path>` cwd, and a strict leg agent could not bind the upstream
+  //   nonce. (RED-provable: revert the openIntoLeg absolutization ⇒ up.path is the project-relative
+  //   string ⇒ isAbsolute / under-parent / not-under-leg assertions all fail.) Distinct from #622-MIXED,
+  //   which covers a LIVE-leg upstream (evidenceSource='leg'); this is the parent-merged upstream on the
+  //   leg-OPEN side — the exact default co-open-with-upstream shape the field bug hit.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    // seed is a COMPLETE producer — its evidence lives in the PARENT worktree .cache by construction.
+    // makeLaneRepo does not seed it; write it so the "file exists at that path" assertion is real.
+    fs.writeFileSync(path.join(cacheDir, 'seed.md'), 'evidence-binding: seed 0123456789ab\nfindings: seed producer output\n');
+    // getRoot() (git rev-parse --show-toplevel) realpath-resolves symlinks (macOS /var → /private/var),
+    // so the CLI-emitted parent path is under realpath(repoRoot). Compare against the same resolution.
+    const parentRoot = fs.realpathSync(repoRoot);
+    const expectedParentSeed = path.join(parentRoot, 'kaola-workflow', 'test-project', '.cache', 'seed.md');
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok' && r.laneGroup && Array.isArray(r.opened) && r.opened.length === 2,
+      '#692-LEG-UPSTREAM-EVIDENCE-ABSOLUTE: {A,B} co-open into legs, got ' + JSON.stringify(r));
+    const rs = readRS(cacheDir);
+    for (const n of r.opened) {
+      const leg = rs.lane_group.legs[n.id];
+      assert(leg && typeof leg.legPath === 'string' && leg.legPath.length > 0, '#692: leg provisioned for ' + n.id);
+      const ue = n.dispatch && Array.isArray(n.dispatch.upstream_evidence) ? n.dispatch.upstream_evidence : null;
+      const up = ue && ue.find(e => e.node_id === 'seed');
+      assert(up, '#692: ' + n.id + ' dispatch carries upstream_evidence for the completed producer seed, got ' + JSON.stringify(ue));
+      assert(up.role === 'code-explorer', '#692: seed upstream is a producer role (makes the upstream_read binding load-bearing), got ' + JSON.stringify(up.role));
+      // ★ THE #692 FIX: the parent-sourced upstream path is ABSOLUTE, under the PARENT worktree — never
+      //   the project-relative hint that a leg cwd cannot resolve.
+      assert(path.isAbsolute(up.path), '#692: ' + n.id + ' upstream_evidence.path is ABSOLUTE (was project-relative pre-fix), got ' + JSON.stringify(up.path));
+      assert(up.path === expectedParentSeed, '#692: ' + n.id + ' upstream_evidence.path points at the PARENT worktree evidence, got ' + JSON.stringify(up.path) + ' want ' + JSON.stringify(expectedParentSeed));
+      assert(up.path !== 'kaola-workflow/test-project/.cache/seed.md', '#692: ' + n.id + ' upstream_evidence.path is NOT the leg-unresolvable project-relative string');
+      assert(!up.path.startsWith(leg.legPath + path.sep), '#692: ' + n.id + ' upstream_evidence.path does NOT resolve under its own leg (the leg carries no sibling .cache), got ' + JSON.stringify(up.path));
+      assert(fs.existsSync(up.path), '#692: ' + n.id + ' upstream_evidence file EXISTS at the parent path, got ' + JSON.stringify(up.path));
+    }
     cleanup(repoRoot);
   }
 
@@ -16695,6 +17149,173 @@ function rtHarness(initialFiles, opts) {
   const vClean688c = planValidator.validatePlan(cleanBody688c, {});
   assert(vClean688c.result === 'in-grammar',
     '#688.3: (control) an ordinary node id set still freezes clean, got ' + JSON.stringify({ result: vClean688c.result, errors: vClean688c.errors }));
+}
+
+// #699: orient is the read-only projection of the active re-plan fence. It must
+// short-circuit before validator/next-action/task-mirror and surface only resume.
+{
+  let shells = 0;
+  let writes = 0;
+  const out = runOrient({
+    planPath: '/fake/kaola-workflow/issue-699/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-699/workflow-state.md',
+    project: 'issue-699',
+    replanFence: {
+      ok: true, fenced: true, reason: 'replan_in_progress', phase: 'child_frozen',
+      transaction_id: '1'.repeat(64), legal_mutation: 'replan resume',
+      transaction: {
+        parent: { plan_hash: '2'.repeat(64) }, child: { plan_hash: '3'.repeat(64) },
+        cas: { prepare: { result: 'match' }, pre_freeze: { result: 'match' } },
+      },
+    },
+    shell: () => { shells++; return { exitCode: 0 }; },
+    readFile: () => { throw new Error('orient fence must not read plan/state after projection'); },
+    writeFile: () => { writes++; }, cacheExists: () => false,
+  });
+  assert(out.result === 'refuse' && out.reason === 'replan_in_progress'
+    && out.replan_phase === 'child_frozen' && out.parent_plan_hash === '2'.repeat(64)
+    && out.child_plan_hash === '3'.repeat(64) && out.last_cas_seam === 'pre_freeze'
+    && out.resume_command === 'node scripts/kaola-workflow-replan.js resume --project issue-699 --json',
+  '#699 orient fence: exact sanitized transaction orientation, got ' + JSON.stringify(out));
+  assert(shells === 0 && writes === 0,
+    '#699 orient fence: no validator/next-action/task-mirror/cache mutation occurs');
+}
+
+// #699: after commit, scheduler orientation keeps the current next action for
+// execution while separately reporting the immutable epoch's actual first
+// child node. E2 current-authority refusal precedes every shell/cache mutation.
+{
+  const plan = makePlan([
+    '| child-first | complete | |',
+    '| current-node | in_progress | |',
+    '| finalize | pending | |',
+  ], [
+    '| child-first | code-explorer | — | — | 1 | sequence |',
+    '| current-node | tdd-guide | child-first | scripts/current.js | 1 | sequence |',
+    '| finalize | finalize | current-node | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const committedFence = { ok: true, fenced: false, committed: true, transaction: {
+    child: { plan_hash: 'a'.repeat(64), first_node_id: 'child-first', first_node_role: 'code-explorer' },
+  } };
+  let shellCalls = 0;
+  const shell = scriptPath => {
+    shellCalls++;
+    if (path.basename(scriptPath) === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (path.basename(scriptPath) === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok',
+      nextNode: { id: 'current-node', role: 'tdd-guide' }, readySet: [], allDone: false };
+    return { exitCode: 0, result: 'ok' };
+  };
+  const readFile = fpath => {
+    if (fpath.endsWith('workflow-plan.md')) return plan;
+    if (fpath.endsWith('workflow-state.md')) return makeState();
+    throw new Error('ENOENT ' + fpath);
+  };
+  const oriented = runOrient({
+    planPath: '/fake/kaola-workflow/issue-699/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-699/workflow-state.md', project: 'issue-699',
+    replanFence: committedFence, verifyEpochAuthority: () => ({ ok: true, authority_kind: 'planned' }),
+    shell, readFile, writeFile: () => { throw new Error('orient must stay read-only'); },
+    cacheExists: () => false,
+  });
+  assert(oriented.result === 'ok' && oriented.nextAction.nextNode.id === 'current-node'
+    && oriented.epochFirstNode && oriented.epochFirstNode.id === 'child-first'
+    && oriented.epochFirstNode.role === 'code-explorer',
+  '#699 committed orient separates scheduler-current next action from immutable epoch first node, got '
+    + JSON.stringify(oriented));
+
+  const beforeRefusal = shellCalls;
+  const refused = runOrient({
+    planPath: '/fake/kaola-workflow/issue-699/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-699/workflow-state.md', project: 'issue-699',
+    replanFence: committedFence,
+    verifyEpochAuthority: () => ({ ok: false, reason: 'state_planning_evidence_stale_first_node' }),
+    shell, readFile, writeFile: () => { throw new Error('refusal must not write'); }, cacheExists: () => false,
+  });
+  assert(refused.result === 'refuse' && refused.reason === 'state_planning_evidence_stale_first_node',
+    '#699 committed orient fails closed on E2 current-authority mismatch');
+  assert(shellCalls === beforeRefusal,
+    '#699 committed orient authority refusal occurs before validator/next-action/task-mirror shells');
+}
+
+// #699: a distinct review outcome may replace a live source only after the
+// committed predecessor source is proven by the epoch authority and archived
+// byte-for-byte. Every crash boundary converges without overwriting history.
+{
+  assert(typeof publishRepairReplanSource === 'function',
+    '#699 source publication helper is exported for focused transport proof');
+  if (typeof publishRepairReplanSource === 'function') {
+    const crypto = require('crypto');
+    const oldBytes = Buffer.from('{"attempt_id":"review:1","outcome_digest":"old"}\n');
+    const nextBytes = Buffer.from('{"attempt_id":"review:2","outcome_digest":"new"}\n');
+    const digest = crypto.createHash('sha256').update(oldBytes).digest('hex');
+    const transactionId = '7'.repeat(64);
+    const receipt = {
+      transaction_id: transactionId,
+      path: '.cache/replan-sources/' + digest + '.json',
+      digest,
+      size: oldBytes.length,
+    };
+
+    const makeFixture = label => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-699-source-' + label + '-'));
+      const cacheDir = path.join(root, '.cache');
+      const sourcePath = path.join(cacheDir, 'replan-source.json');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(sourcePath, oldBytes);
+      return { root, cacheDir, sourcePath };
+    };
+    const authority = () => ({ ok: true, source_bytes: oldBytes, receipt });
+    const publish = (fx, extra) => publishRepairReplanSource(Object.assign({
+      sourcePath: fx.sourcePath,
+      nextBytes,
+      isNextSource: bytes => Buffer.from(bytes).equals(nextBytes),
+      resolveCommittedSourceAuthority: authority,
+    }, extra || {}));
+
+    for (const boundary of ['after_replan_source_archived', 'after_replan_source_unlinked',
+      'after_replan_source_published']) {
+      const fx = makeFixture(boundary);
+      try {
+        let crashed = false;
+        try {
+          publish(fx, { failpoint: name => { if (name === boundary) throw new Error('crash:' + name); } });
+        } catch (error) { crashed = error.message === 'crash:' + boundary; }
+        assert(crashed, '#699 source publication reaches crash boundary ' + boundary);
+        const historyPath = path.join(fx.root, ...receipt.path.split('/'));
+        assert(fs.existsSync(historyPath) && fs.readFileSync(historyPath).equals(oldBytes),
+          '#699 ' + boundary + ': predecessor history is durable and byte-exact');
+        const retried = publish(fx);
+        assert(retried.ok === true && retried.rotated_from
+          && retried.rotated_from.digest === digest
+          && fs.readFileSync(fx.sourcePath).equals(nextBytes),
+        '#699 ' + boundary + ': retry publishes the exact successor and returns its history link');
+        assert(fs.readFileSync(historyPath).equals(oldBytes),
+          '#699 ' + boundary + ': retry never overwrites predecessor history');
+      } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+    }
+
+    const conflict = makeFixture('conflict');
+    try {
+      fs.writeFileSync(conflict.sourcePath, Buffer.from('{"attacker":true}\n'));
+      const before = fs.readFileSync(conflict.sourcePath);
+      const refused = publish(conflict);
+      assert(refused.ok === false && refused.reason === 'replan_source_conflict'
+        && fs.readFileSync(conflict.sourcePath).equals(before),
+      '#699 an unproven live source refuses without overwrite');
+    } finally { fs.rmSync(conflict.root, { recursive: true, force: true }); }
+
+    const collision = makeFixture('history-collision');
+    try {
+      const historyPath = path.join(collision.root, ...receipt.path.split('/'));
+      fs.mkdirSync(path.dirname(historyPath), { recursive: true });
+      fs.writeFileSync(historyPath, Buffer.from('tampered\n'));
+      const before = fs.readFileSync(collision.sourcePath);
+      const refused = publish(collision);
+      assert(refused.ok === false && refused.reason === 'replan_source_history_mismatch'
+        && fs.readFileSync(collision.sourcePath).equals(before),
+      '#699 a colliding source-history receipt refuses before unlink/publication');
+    } finally { fs.rmSync(collision.root, { recursive: true, force: true }); }
+  }
 }
 
 if (failed > 0) {

@@ -5,7 +5,7 @@
 // Hand-rolled assert + counter; repo style (no framework).
 // Most cases drive runHandoff with injected stub seams (no subprocess).
 
-const { runHandoff, shellHandoff, extractDecisionIdCandidates } = require('./kaola-workflow-adaptive-handoff');
+const { runHandoff, runReplanHandoff, shellHandoff, extractDecisionIdCandidates } = require('./kaola-workflow-adaptive-handoff');
 
 const fs = require('fs');
 const os = require('os');
@@ -1689,6 +1689,245 @@ function runMirrorHandoffCase(mirrorResponse) {
     assert((typeof parseNodeBriefs === 'function' ? parseNodeBriefs(briefless) : []).length === 0,
       'briefs-parse: a briefless plan parses to []');
   }
+}
+
+// ---------------------------------------------------------------------------
+// #699 — a normal adaptive handoff is never a second authority while a
+// claim-preserving re-plan transaction is fenced. The guard must run before
+// validator/freeze/task-mirror/roadmap/state writes and return the one legal
+// mutation with exact transaction orientation.
+// ---------------------------------------------------------------------------
+{
+  const planContent = makeUnfrozenPlan('auto-run');
+  const stateContent = makeStateContent({ issueNumber: 699 });
+  let shellCalls = 0;
+  let writes = 0;
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/issue-699/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-699/workflow-state.md',
+    project: 'issue-699',
+    json: true,
+    replanFence: {
+      ok: true,
+      fenced: true,
+      reason: 'replan_in_progress',
+      phase: 'planner_pending',
+      transaction_id: '1'.repeat(64),
+      legal_mutation: 'replan resume',
+      transaction: {
+        parent: { plan_hash: '2'.repeat(64) },
+        child: { plan_hash: null },
+        cas: { prepare: { seam: 'prepare', result: 'match' } },
+      },
+    },
+    shell: () => { shellCalls++; return { exitCode: 0, result: 'in-grammar', frozen: true, resumeOk: true }; },
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: fpath => fpath.endsWith('workflow-state.md') ? stateContent : planContent,
+    writeFile: () => { writes++; },
+  });
+  assert(result.handoff_status === 'replan_in_progress' && result.result === 'refuse'
+    && result.reason === 'replan_in_progress',
+  '#699 handoff fence: normal handoff refuses the active re-plan transaction');
+  assert(result.replan_phase === 'planner_pending'
+    && result.transaction_id === '1'.repeat(64)
+    && result.parent_plan_hash === '2'.repeat(64)
+    && result.child_plan_hash === 'none'
+    && result.last_cas_seam === 'prepare'
+    && result.last_cas_result === 'match',
+  '#699 handoff fence: refusal reports exact phase/hash/CAS orientation, got ' + JSON.stringify(result));
+  assert(result.resume_command === 'node scripts/kaola-workflow-replan.js resume --project issue-699 --json'
+    && result.legal_mutation === 'replan resume',
+  '#699 handoff fence: the sole legal mutation is the exact local resume command');
+  assert(shellCalls === 0 && writes === 0,
+  '#699 handoff fence: refusal occurs before validator/freeze/task-mirror/roadmap/state mutation');
+}
+
+// The child helper is deliberately narrower than the transaction engine: n2 remains
+// the sole CAS/attestation authority and passes a verified authority receipt. n4 owns
+// only schema-2 validation plus the one child-file freeze write.
+{
+  const child = makeUnfrozenPlan('auto-run').replace('labels: area:scripts', [
+    'labels: area:scripts',
+    'contract_version: 2',
+    'epoch_schema_version: 2',
+    'epoch_lineage_id: ' + '3'.repeat(64),
+    'plan_epoch: 2',
+    'parent_plan_hash: ' + '4'.repeat(64),
+    'parent_snapshot_manifest_digest: pending',
+    'claim_root_base_digest: ' + '5'.repeat(64),
+    'inherited_frontier_digest: ' + '6'.repeat(64),
+    'inherited_frontier_classes: none',
+    'transition_reason: repair_requires_replan',
+    'source_evidence_digest: ' + '7'.repeat(64),
+    'planner_binding: dispatch-699',
+    'code_certifier: none',
+    'security_certifier: none',
+  ].join('\n'));
+  let writes = 0;
+  const result = runReplanHandoff({
+    childPath: '/fake/kaola-workflow/issue-699/workflow-plan.next.md',
+    childContent: child,
+    transactionId: '8'.repeat(64),
+    authority: {
+      verified: true,
+      candidate_match: true,
+      claim_root_match: true,
+      inherited_frontier_match: true,
+      transaction_id: '8'.repeat(64),
+      child_path: '/fake/kaola-workflow/issue-699/workflow-plan.next.md',
+      child_digest: require('crypto').createHash('sha256').update(child).digest('hex'),
+      dispatch_nonce: 'dispatch-699',
+      planner_attestation_digest: '9'.repeat(64),
+    },
+    expected: {
+      epoch_lineage_id: '3'.repeat(64), plan_epoch: 2,
+      child_path: '/fake/kaola-workflow/issue-699/workflow-plan.next.md',
+      parent_plan_hash: '4'.repeat(64), claim_root_base_digest: '5'.repeat(64),
+      inherited_frontier_digest: '6'.repeat(64), planner_binding: 'dispatch-699',
+    },
+    freezePlan: content => ({ result: 'in-grammar', frozen: true,
+      planHash: 'a'.repeat(64), content: '<!-- plan_hash: ' + 'a'.repeat(64) + ' -->\n' + content }),
+    writeFile: (fpath, content) => { writes++; assert(fpath.endsWith('workflow-plan.next.md') && content.includes('plan_hash'),
+      '#699 child handoff: only the exact next-plan path is frozen'); },
+  });
+  assert(result.result === 'child_frozen' && result.phase === 'child_frozen'
+    && result.transaction_id === '8'.repeat(64) && result.child_plan_hash === 'a'.repeat(64)
+    && result.planner_attestation_digest === '9'.repeat(64),
+  '#699 child handoff: pure helper returns the frozen child/transaction/attestation binding, got ' + JSON.stringify(result));
+  assert(result.first_node_id === 'explore' && result.first_node_role === 'code-explorer',
+  '#699 child handoff: publication reports the actual first node parsed from the frozen child, never a stale parent tuple; got '
+    + JSON.stringify({ first_node_id: result.first_node_id, first_node_role: result.first_node_role }));
+  assert(writes === 1, '#699 child handoff: the helper performs exactly one child-file write');
+
+  let substitutedWrites = 0;
+  const substituted = runReplanHandoff({
+    childPath: '/tmp/attacker/workflow-plan.next.md', childContent: child,
+    transactionId: '8'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: '8'.repeat(64), child_path: '/fake/kaola-workflow/issue-699/workflow-plan.next.md',
+      child_digest: require('crypto').createHash('sha256').update(child).digest('hex'),
+      dispatch_nonce: 'dispatch-699', planner_attestation_digest: '9'.repeat(64),
+    },
+    expected: {
+      child_path: '/fake/kaola-workflow/issue-699/workflow-plan.next.md',
+      epoch_lineage_id: '3'.repeat(64), plan_epoch: 2, parent_plan_hash: '4'.repeat(64),
+      claim_root_base_digest: '5'.repeat(64), inherited_frontier_digest: '6'.repeat(64),
+      planner_binding: 'dispatch-699',
+    },
+    freezePlan: content => ({ result: 'in-grammar', frozen: true,
+      planHash: 'a'.repeat(64), content: '<!-- plan_hash: ' + 'a'.repeat(64) + ' -->\n' + content }),
+    writeFile: () => { substitutedWrites++; },
+  });
+  assert(substituted.result === 'refuse' && substituted.reason === 'replan_child_path_invalid'
+    && substitutedWrites === 0,
+  '#699 child handoff: basename-only path substitution refuses before freeze/write');
+}
+
+// #699 epoch-1 activation seam: the initial handoff must publish the frozen
+// plan hash in the Epoch Lineage block and replace the complete Planning
+// Evidence tuple in the same state write. A stale parent first-node tuple must
+// not survive a normally handed-off first plan.
+{
+  const HASH = 'd'.repeat(64);
+  const planContent = makeFrozenInProgressPlan(HASH);
+  const statePath = '/fake/kaola-workflow/test-project/workflow-state.md';
+  const stateContent = makeStateContent({ issueNumber: 699, hasPlanningEvidence: true })
+    .replace('plan_hash: oldHashValue', 'plan_hash: none')
+    .replace('decision: auto-run', 'decision: none\nfirst_node_id: stale-parent\nfirst_node_role: planner')
+    + [
+      '', '## Epoch Lineage', 'epoch_schema_version: 2',
+      'claim_identity_digest: ' + '1'.repeat(64),
+      'claim_root_base_digest: ' + '2'.repeat(64),
+      'epoch_lineage_id: ' + '3'.repeat(64),
+      'plan_epoch: 1', 'active_plan_hash: none',
+      'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+      'automatic_review_replans: 0', 'authorized_epoch_ceiling: 2',
+      'case_b_exemption_consumed: false', 'replan_status: none',
+      'replan_transaction_id: none', 'replan_phase: none',
+      'active_snapshot_manifest_digest: none', '',
+    ].join('\n');
+  let currentState = stateContent;
+  let stateWrites = 0;
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', statePath,
+    project: 'test-project',
+    shell: (scriptPath, args) => {
+      if (/plan-validator/.test(scriptPath) && args.includes('--freeze-checked')) {
+        return { exitCode: 0, result: 'in-grammar', planHash: HASH, decision: 'auto-run',
+          risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] } };
+      }
+      if (/plan-validator/.test(scriptPath) && args.includes('--freeze')) {
+        return { exitCode: 0, result: 'in-grammar', planHash: HASH, frozen: true,
+          resumeOk: true, decision: 'auto-run', risk: {} };
+      }
+      return { exitCode: 0, status: 'skipped' };
+    },
+    computeNextAction: () => ({ result: 'ok', nextNode: {
+      id: 'explore', role: 'code-explorer', model: 'standard', declared_write_set: '—',
+    } }),
+    resolveModel: () => 'standard',
+    readFile: fpath => fpath === statePath ? currentState : planContent,
+    writeFile: (fpath, content) => {
+      if (fpath === statePath) { stateWrites++; currentState = content; }
+    },
+  });
+  assert(result.handoff_status === 'ready_to_run', '#699 initial handoff reaches ready_to_run');
+  assert(stateWrites === 1, '#699 initial handoff publishes epoch-plan and Planning Evidence in one state replacement');
+  assert(new RegExp('^active_plan_hash: ' + HASH + '$', 'm').test(currentState),
+    '#699 initial handoff publishes the frozen plan as active_plan_hash');
+  assert(new RegExp('^plan_hash: ' + HASH + '$', 'm').test(currentState)
+    && /^first_node_id: explore$/m.test(currentState)
+    && /^first_node_role: code-explorer$/m.test(currentState)
+    && !/^first_node_id: stale-parent$/m.test(currentState),
+  '#699 initial handoff replaces the complete stale Planning Evidence tuple');
+}
+
+// #699 committed-child replay: handoff is no longer an activation writer once
+// a re-plan transaction has committed. It projects the immutable child's first
+// node, not the scheduler's current next node, and performs zero mutation.
+{
+  const stateContent = makeStateContent({ issueNumber: 699, hasPlanningEvidence: true });
+  const committedFence = {
+    ok: true, fenced: false, committed: true,
+    state: { plan_epoch: '2', active_plan_hash: 'a'.repeat(64) },
+    transaction: {
+      transaction_id: '8'.repeat(64), phase: 'committed',
+      child: { plan_hash: 'a'.repeat(64), decision: 'auto-run',
+        first_node_id: 'child-first', first_node_role: 'code-explorer' },
+    },
+  };
+  let shells = 0;
+  let writes = 0;
+  const replay = runHandoff({
+    planPath: '/fake/kaola-workflow/issue-699/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-699/workflow-state.md', project: 'issue-699',
+    replanFence: committedFence, verifyEpochAuthority: () => ({ ok: true, authority_kind: 'planned' }),
+    shell: () => { shells++; return { exitCode: 0 }; },
+    computeNextAction: () => ({ result: 'ok', nextNode: { id: 'current-node', role: 'tdd-guide' } }),
+    resolveModel: () => 'standard', readFile: () => stateContent,
+    writeFile: () => { writes++; },
+  });
+  assert(replay.handoff_status === 'ready_to_run' && replay.committed_replan === true
+    && replay.first_node && replay.first_node.id === 'child-first'
+    && replay.first_node.role === 'code-explorer',
+  '#699 committed handoff replay publishes the transaction child first node, got ' + JSON.stringify(replay));
+  assert(shells === 0 && writes === 0,
+    '#699 committed handoff replay performs zero validator/task/roadmap/mirror/state mutation');
+
+  const refused = runHandoff({
+    planPath: '/fake/kaola-workflow/issue-699/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/issue-699/workflow-state.md', project: 'issue-699',
+    replanFence: committedFence,
+    verifyEpochAuthority: () => ({ ok: false, result: 'refuse', reason: 'state_planning_evidence_stale_first_node' }),
+    shell: () => { shells++; return { exitCode: 0 }; }, computeNextAction: () => ({ result: 'ok' }),
+    resolveModel: () => 'standard', readFile: () => stateContent, writeFile: () => { writes++; },
+  });
+  assert(refused.result === 'refuse' && refused.reason === 'state_planning_evidence_stale_first_node',
+    '#699 committed handoff replay fails closed when the E2 current-authority verifier rejects it');
+  assert(shells === 0 && writes === 0,
+    '#699 rejected committed replay performs zero mutation');
 }
 
 // Summary

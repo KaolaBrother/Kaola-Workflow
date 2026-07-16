@@ -225,6 +225,7 @@ function testAC3AttestationSeeded() {
   // Use an isolated tmp to avoid touching the live kaola-workflow folder.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-attest-'));
   try {
+    initGitRepo(root);
     // Seed local roadmap evidence so the offline classifier can verify the target.
     const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapDir, { recursive: true });
@@ -282,6 +283,7 @@ function testAC3AttestationSeeded() {
 function testAttestationWarningPersistenceCodex() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-codex-'));
   try {
+    initGitRepo(root);
     const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapDir, { recursive: true });
     fs.writeFileSync(
@@ -336,6 +338,7 @@ function testAttestationWarningPersistenceCodex() {
 function testSelectionEvidenceDockingCodex() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-selection-evidence-codex-'));
   try {
+    initGitRepo(root);
     const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapDir, { recursive: true });
     fs.writeFileSync(
@@ -1967,6 +1970,7 @@ function testCodexCompactResume266() {
 function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-active-folders-'));
   try {
+    initGitRepo(tmp);
     // No-evidence offline case must return target_unverified (post-#169 contract).
     const unverified = runClaimRaw(['startup', '--target-issue', '163', '--runtime', 'codex', '--sink', 'pr'], tmp);
     assert(unverified.exitStatus === 1,
@@ -2068,6 +2072,7 @@ function main() {
     testCodexBundleStateIncoherent();                 // #430
     testCodexBundle424432433NodeSeeding();            // #424/#432/#433 n9-walkthrough
     testCodexInstalledPathsPartition543();            // #543 --with-fast/--with-full opt-in partition
+    testCodexReplanEditionContract699();
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
@@ -2657,6 +2662,180 @@ function testCodexInstalledPathsPartition543() {
   }
 
   console.log('testCodexInstalledPathsPartition543 (#543): PASSED');
+}
+
+function testCodexReplanEditionContract699() {
+  const scriptsDir = path.join(pluginRoot, 'scripts');
+  const replanScript = path.join(scriptsDir, 'kaola-workflow-replan.js');
+  const adaptiveNodeScript = path.join(scriptsDir, 'kaola-workflow-adaptive-node.js');
+  const handoffScript = path.join(scriptsDir, 'kaola-workflow-adaptive-handoff.js');
+  const validatorScript = path.join(scriptsDir, 'kaola-workflow-plan-validator.js');
+  const schema = require(path.join(scriptsDir, 'kaola-workflow-adaptive-schema.js'));
+  const replan = require(replanScript);
+  const adaptiveNode = require(adaptiveNodeScript);
+  const handoff = require(handoffScript);
+  const claim = require(claimScript);
+  const manifest = require(path.join(scriptsDir, 'kaola-workflow-install-manifest.js'));
+
+  assert(JSON.stringify(manifest.supportScripts('github').filter(name => /workflow-replan\.js$/.test(name)))
+      === JSON.stringify(['kaola-workflow-replan.js']),
+  'Codex re-plan smoke: manifest must install exactly the canonical aggregator');
+  assert(JSON.stringify(schema.REPLAN_PHASES) === JSON.stringify([
+    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
+  ]) && JSON.stringify(schema.REPLAN_STATUSES) === JSON.stringify([
+    'none', 'in_progress', 'candidate_changed', 'consent_halt',
+  ]) && JSON.stringify(schema.REPLAN_CAS_SEAMS) === JSON.stringify([
+    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
+  ]), 'Codex re-plan smoke: schema vocabulary must be canonical');
+
+  const missingCli = spawnSync(process.execPath,
+    [replanScript, 'status', '--project', 'n5-missing-codex-smoke', '--json'],
+    { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  const missingResult = JSON.parse(String(missingCli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+  assert(missingCli.status !== 0 && missingResult.reason === 'replan_authority_path_invalid',
+    'Codex re-plan smoke: packaged aggregator must execute its typed missing-authority refusal');
+
+  const packet = replan.buildPlannerPacket({ project: 'issue-n5-codex' }, {
+    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
+    parent: {
+      claim_identity: { repository_id: 'repo', worktree_path: repoRoot },
+      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+      plan_epoch: 1, plan_hash: '3'.repeat(64),
+    },
+    epoch_lineage_id: '4'.repeat(64),
+    source: {
+      source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
+      source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
+      inherited_frontier_classes: ['code'], validation_obligations: [],
+    },
+    cas: { prepare: { candidate_digest: '6'.repeat(64), inherited_frontier_digest: '7'.repeat(64) } },
+    budget: {
+      count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
+      case_b_proof: null, consent_ledger_digest: '9'.repeat(64),
+    },
+    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-n5' },
+  });
+  const packetKeys = new Set();
+  (function collect(value) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) return value.forEach(collect);
+    for (const [key, child] of Object.entries(value)) { packetKeys.add(key); collect(child); }
+  })(packet);
+  for (const forbiddenKey of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
+    'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
+    assert(!packetKeys.has(forbiddenKey),
+      'Codex re-plan smoke: planner packet must omit main-authored DAG key ' + forbiddenKey);
+  }
+  assert(packet.child_output_path === 'workflow-plan.next.md',
+    'Codex re-plan smoke: planner packet must bind the exact child path');
+
+  const childPath = path.join(os.tmpdir(), 'kw-n5-codex-attestation', 'workflow-plan.next.md');
+  let unattestedWrites = 0;
+  const unattested = handoff.runReplanHandoff({
+    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: 'a'.repeat(64), child_path: childPath,
+      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
+    },
+    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
+    writeFile: () => { unattestedWrites++; },
+  });
+  assert(unattested.reason === 'replan_child_authority_unverified' && unattestedWrites === 0,
+    'Codex re-plan smoke: missing planner attestation must refuse before writing');
+
+  const orientation = adaptiveNode.replanOrientation({
+    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
+    legal_mutation: 'replan resume', transaction: {
+      transaction_id: 'a'.repeat(64), phase: 'planner_pending',
+      parent: { plan_hash: 'b'.repeat(64) }, child: {}, cas: {},
+    },
+  }, 'issue-n5-codex');
+  assert(orientation.resume_command ===
+    'node scripts/kaola-workflow-replan.js resume --project issue-n5-codex --json',
+  'Codex re-plan smoke: orientation must expose only the canonical resume command');
+
+  const fenceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-codex-fence-')));
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: fenceRoot, encoding: 'utf8' });
+    const project = 'issue-n5-codex-fence';
+    const projectDir = path.join(fenceRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const stateBytes = Buffer.from([
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Epoch Lineage', 'replan_status: in_progress', 'replan_phase: planner_pending',
+      'replan_transaction_id: ' + 'c'.repeat(64), '',
+    ].join('\n'));
+    const planBytes = Buffer.from('# deliberately invalid frozen parent\n');
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), stateBytes);
+    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), planBytes);
+    fs.writeFileSync(path.join(cacheDir, 'replan-transaction.json'), '{}\n');
+    const beforeCache = new Map(fs.readdirSync(cacheDir).map(name =>
+      [name, fs.readFileSync(path.join(cacheDir, name))]));
+    const calls = [
+      [adaptiveNodeScript, ['open-next', '--project', project, '--json']],
+      [handoffScript, ['--project', project, '--json']],
+      [validatorScript, [path.join(projectDir, 'workflow-plan.md'), '--finalize-check', '--json']],
+      [claimScript, ['finalize', '--project', project, '--json']],
+    ];
+    for (const [script, args] of calls) {
+      const run = spawnSync(process.execPath, [script, ...args], {
+        cwd: fenceRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      });
+      const out = JSON.parse(String(run.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+      assert(run.status !== 0 && out.reason === 'replan_transaction_invalid',
+        'Codex re-plan smoke: half-transition must fence ' + path.basename(script) + ', got ' + JSON.stringify(out));
+    }
+    assert(fs.readFileSync(path.join(projectDir, 'workflow-state.md')).equals(stateBytes)
+        && fs.readFileSync(path.join(projectDir, 'workflow-plan.md')).equals(planBytes),
+    'Codex re-plan smoke: scheduler/finalize refusals must preserve parent state and plan bytes');
+    assert(JSON.stringify(fs.readdirSync(cacheDir).sort()) === JSON.stringify([...beforeCache.keys()].sort()),
+      'Codex re-plan smoke: half-transition refusals must not add cache side effects');
+    for (const [name, bytes] of beforeCache) {
+      assert(fs.readFileSync(path.join(cacheDir, name)).equals(bytes),
+        'Codex re-plan smoke: half-transition refusal mutated cache file ' + name);
+    }
+    assert(!fs.existsSync(path.join(cacheDir, 'scheduler.lock'))
+        && !fs.existsSync(path.join(cacheDir, 'orient-envelope.json'))
+        && !fs.existsSync(path.join(fenceRoot, 'kaola-workflow', 'archive')),
+    'Codex re-plan smoke: scheduler/finalize fence must create no lock, envelope, or archive');
+  } finally { fs.rmSync(fenceRoot, { recursive: true, force: true }); }
+
+  const archiveRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-n5-codex-archive-')));
+  try {
+    const project = 'issue-n5-codex-archive';
+    const projectDir = path.join(archiveRoot, 'kaola-workflow', project);
+    const epochDir = path.join(projectDir, '.cache', 'epochs', '1');
+    const filesDir = path.join(epochDir, 'files', '.cache');
+    fs.mkdirSync(filesDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Sink', 'issue_number: 699', 'sink: merge', '',
+    ].join('\n'));
+    const rebindBytes = Buffer.from('{"attempts":[{"attempt_id":"review:1","rebind":[]}]}\n');
+    const rebindPath = path.join(filesDir, 'review-attempts.json');
+    fs.writeFileSync(rebindPath, rebindBytes);
+    const stat = fs.statSync(rebindPath);
+    const snapshot = {
+      schema_version: 1, parent_plan_epoch: 1, epoch_lineage_id: 'd'.repeat(64),
+      transaction_id: 'e'.repeat(64), claim_root_base_digest: 'f'.repeat(64),
+      files: [{ path: '.cache/review-attempts.json', size: stat.size,
+        mode: (stat.mode & 0o777).toString(8).padStart(3, '0'), digest: schema.sha256Hex(rebindBytes) }],
+    };
+    snapshot.manifest_self_digest = schema.snapshotManifestDigest(snapshot);
+    fs.writeFileSync(path.join(epochDir, 'manifest.json'), schema.canonicalJson(snapshot) + '\n');
+    assert(replan.verifyAllEpochSnapshots(projectDir).ok,
+      'Codex re-plan smoke: live epoch snapshot must digest-verify before archive');
+    const archived = claim.archiveProjectDir(archiveRoot, project, 'closed');
+    assert(archived.archived === true && fs.readFileSync(path.join(archived.dest, '.cache', 'epochs', '1',
+      'files', '.cache', 'review-attempts.json')).equals(rebindBytes),
+    'Codex re-plan smoke: final archive must retain exact nested rebind-ledger bytes');
+    assert(replan.verifyAllEpochSnapshots(archived.dest).ok,
+      'Codex re-plan smoke: archived epoch snapshot must remain digest-verifiable');
+  } finally { fs.rmSync(archiveRoot, { recursive: true, force: true }); }
+
+  console.log('testCodexReplanEditionContract699: PASSED');
 }
 
 main();

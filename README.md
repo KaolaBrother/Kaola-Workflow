@@ -43,8 +43,8 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
 | Agent loop | Per-node role execution via the running-set scheduler |
 | Verification loop / grader | Adversarial verifier + fail-closed quality gates |
 | Exit condition | Post-dominance gates and the finalization sink — nodes close on recorded evidence, not on exit-0 |
-| Circuit breaker | Bounded planner repair → discard + restart → stop and ask; never a silent fallback |
-| Durable state tracking | `workflow-state.md`, the frozen plan ledger, and per-node evidence — resumable across sessions and context resets |
+| Circuit breaker | Bounded repair plus claim-scoped re-plan epochs; the third automatic review-driven transition consent-halts |
+| Durable state tracking | `workflow-state.md`, the frozen plan ledger, per-node evidence, and immutable epoch snapshots — resumable across sessions and context resets |
 | Human-in-the-loop escalation | Consent-halt valve: facts are resolved autonomously, judgment goes to you |
 | Outer loop | `/goal` cross-turn autonomy toward one objective |
 | Harness | The locked claim → worktree → free design → finalization frame |
@@ -58,6 +58,7 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
 - **Independent adversarial verification** plus fail-closed quality gates.
 - **Optimize-shaped work** ("make it faster / smaller / less flaky") via a bounded metric-ratchet role — direction, not destination, with a regression gate on every step.
 - **Durable per-step artifacts** with full resumability across sessions and context resets.
+- **Claim-preserving re-plan epochs** when a frozen DAG can no longer repair safely: the parent stays immutable and authoritative while `workflow-planner` authors a new child against the same claim, branch, worktree, and candidate.
 - A locked **claim → isolated worktree → free design → finalization** frame.
 - **Three agent runtimes** (Claude Code, Codex, opencode) across **three forges** (GitHub, GitLab, Gitea).
 - **Goal-driven autonomy** via `/goal` — keep a session working toward one objective across many turns.
@@ -796,7 +797,7 @@ This is Kaola-Workflow's primary design. For most issues — from a one-line fix
 KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — startup records `run_posture: worktree` in the `## Sink` block, derived from the actual worktree resolution; the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG, per-node `## Node Briefs`, plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes the legal schema-2 **planless** epoch-1 state, and when online/native provisions a worktree at `.kw/worktrees/<project>/`; offline mode provisions neither a worktree nor an in-place feature branch), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG, per-node `## Node Briefs`, plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and atomically publishes the legal **planned** state by replacing `active_plan_hash` plus the complete `## Planning Evidence` tuple (`plan_hash`, governance decision/risk, first-node id/role). As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
 
 Beyond the vendored set, the adaptive path adds locally-authored roles: `adversarial-verifier` (a read-only, refute-by-default skeptic used in verification fan-outs — never a review gate, touches zero repository files), `synthesizer` (parallel-write convergence on a real merge conflict), and `metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the `workflow-planner`/`contractor`/`issue-scout` orchestration roles described in [Workflow roles](#workflow-roles).
 
@@ -816,6 +817,41 @@ the greatest validated ordinal for each logical gate member rather than JSON arr
 logical gate permits five consumed repairs before the sixth returns `repair_limit_reached`.
 `findings-route.json` is only a regenerable view of the journal's canonical routing rows. See
 `docs/api.md` and `docs/decisions/D-682-01.md`.
+
+**Planner-owned re-plan epochs.** A real `repair-node` result of `repair_requires_replan` is first
+persisted mechanically as the schema-2 `.cache/replan-source.json` outcome bound to the settled,
+unconsumed review attempt; operators never seed that file by hand. `kaola-workflow-replan.js` then
+preserves the active claim, label, branch, worktree, claim-root base, and inherited candidate
+frontier while it advances `prepared → planner_pending → child_frozen → parent_archived → committed`.
+The frozen parent remains byte-immutable and authoritative until activation, and only a genuinely
+dispatched `workflow-planner` may write the seeded `workflow-plan.next.md` child.
+
+Before dispatch, the transaction derives a non-circular `snapshot_authority_projection` from stable
+parent/source/entry-CAS authority. Despite its historical field name, a schema-2 child's
+`parent_snapshot_manifest_digest` binds the projection digest; the later full manifest separately
+seals the projection, exact child and attestation, every archived file, its self-digest, and its exact
+file digest. Historical schema-1 children whose field remains `pending` pass only when every external
+seal proves `legacy_external_binding`. The runtime inventories 41 durable-write label families plus
+deterministic per-file/per-seam labels, and the focused proof covers all 12 combinations of four CAS
+seams × candidate/root/frontier axes. Any mismatch returns `replan_candidate_changed` without epoch
+or counter advance; activation rolls forward through its six journal steps rather than pretending the
+multi-file state change is filesystem-atomic.
+
+Every parent epoch remains under `.cache/epochs/<ordinal>/`, including the complete review/rebind
+ledger, and inherited code/security work retains G4 certifier obligations. Two automatic
+review-driven transitions are allowed at claim scope; the next consent-halts and one audited user
+extension adds exactly one slot. The one-shot zero-cost diagnosis-to-build route is available only
+without failed/unresolved review authority and with a completed parent, four exact schema-2
+`diagnosis_complete` artifacts, artifact-only writers, and exact child citations. Archive callers
+accept only `archived:true` or the idempotent `skipped:"source-missing"`; every other result stops
+before claim/worktree/roadmap/remote cleanup. See `docs/api.md`, `docs/workflow-state-contract.md`,
+and `docs/decisions/D-699-01.md`.
+
+This implementation is still awaiting terminal runtime certification: the versioned-authority engine
+is implemented and its focused suite is green, but the lifecycle/publication caller repair and the
+packaged-edition fixture parity work are separate, still-in-progress write surfaces, and the named
+certifiers plus three read-only falsification nodes have not yet run. See `[Unreleased]` in
+`CHANGELOG.md` and `docs/decisions/D-699-01.md` for current status.
 
 #### Supported adaptive patterns
 
@@ -904,6 +940,7 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`, and appends an optional project-local `kaola-workflow/.roadmap/_rules.md` to the generated `## Rules` section under a `### Project rules` sub-heading (no-op, byte-identical output, when the file is absent or empty). Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Phase 1, Finalization |
 | `kaola-workflow-repair-state.js` | Reconstructs `workflow-state.md` from existing phase artifacts or `fast-summary.md` when state is missing or stale, so a resumed session has a single safe next command. | Init / Resume |
+| `kaola-workflow-replan.js` (GitHub/Codex) / `kaola-gitlab-workflow-replan.js` (GitLab) / `kaola-gitea-workflow-replan.js` (Gitea) | Owns claim-preserving schema-2 re-plan epochs: prepare from a settled typed review outcome, fence ordinary mutation, request a planner-authored child, verify four candidate/claim-root/frontier CAS seams, snapshot the parent epoch, journal activation, resume crash prefixes, extend the consent ceiling one slot at a time, and verify retained snapshots. | Adaptive repair / Resume / Finalization verification |
 | `kaola-workflow-closure-audit.js` (GitHub) / `kaola-gitlab-workflow-closure-audit.js` (GitLab) / `kaola-gitea-workflow-closure-audit.js` (Gitea) | Reports closure drift (stale `.roadmap` sources, `ROADMAP.md` listing closed issues, stale `workflow:in-progress` labels, active folders/unarchived PR/MR folders for closed issues). Dry-run JSON by default; `--execute` repairs only safe local roadmap/label drift and never deletes active folders or worktrees. GitLab edition uses `unarchived_mr_folders` with lowercase MR state matching (`merged`/`closed`). Gitea edition keeps `unarchived_pr_folders` with lowercase PR state matching (`merged`/`closed`). Complements `stale-worktree-check`/`-cleanup` (which owns worktree/branch drift). | On demand / audit |
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Finalization merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Finalization |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |

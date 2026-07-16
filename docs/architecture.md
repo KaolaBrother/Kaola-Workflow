@@ -56,6 +56,136 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   consumed repair refuses without mutation. The journal is crash-safe evidence, not a scheduler or a
   second workflow state machine.
 
+  **Claim-preserving re-plan epochs (#699 / D-699-01).** A settled review transaction that cannot
+  prove one safe repair owner does not thaw `workflow-plan.md` and does not restart the claim.
+  Instead, the re-plan engine places one claim-scoped transaction around the existing adaptive
+  project:
+
+  ```text
+  frozen parent (authoritative, byte-immutable)
+        |
+        v
+    prepared --CAS-1--> planner_pending --CAS-2--> child_frozen
+                          |                          |
+                          | workflow-planner only   | CAS-3 + full parent snapshot
+                          v                          v
+                   workflow-plan.next.md      parent_archived
+                                                     |
+                                                     | CAS-4
+                                                     v
+                       committed <--- journaled multi-file activation
+  ```
+
+  **Initial authority and root.** A fresh schema-2 claim has exactly two legal epoch-1 forms.
+  `planless` has no plan or snapshots and carries `none` for the active/Planning Evidence hashes and
+  first-node tuple. `planned` has one frozen plan whose stored/computed hash equals both state hashes
+  and whose first node equals the state id/role. Initial handoff replaces the complete tuple in one
+  state write; epoch activation performs the same complete replacement for the child and verifies
+  the task mirror. Offline mode dominates native-worktree configuration and creates neither a
+  worktree nor an in-place branch. A no-history Git repository uses an object-width zero commit plus
+  the locally recomputed canonical empty-tree object as its immutable root; arbitrary synthetic
+  roots and non-Git roots fail closed.
+
+  **Current-epoch authority split.** Independent of any re-plan transaction, every prepare, resume,
+  archive, finalize, and watch caller verifies the *active* epoch through one shared
+  `verifyCurrentEpochAuthority` function rather than a private variant. It closes the self-host defect
+  where legal execution progress was mistaken for authoring tamper: the plan's `Meta`/`Nodes`/`Node
+  Briefs` bytes are the only hash-compared authored surface, while `Node Ledger`, `Required Agent
+  Compliance`, and the `workflow-tasks.json` mirror are runtime surfaces that legally progress after
+  commitment and are validated by parse/consistency rules instead of byte comparison. The claim-scoped
+  `epoch_schema_version`/`epoch_lineage_id` envelope (with its identity/root-digest basis) is a third,
+  separately verified tier: fully absent reads as pre-epoch legacy state, while a partial or
+  recomputed-mismatched envelope refuses. `kaola-workflow-claim.js` composes this current-epoch result
+  with `verifyAllEpochSnapshots` as `verifyArchiveEpochAuthority`, applied once before archive and
+  again to the archived destination and closure receipt.
+
+  **Source authority.** The direct-repair runtime, not an operator, persists a schema-2
+  `repair_outcome` envelope before returning `repair_requires_replan`. The envelope binds the
+  settled/unconsumed attempt, journal, parent plan/lineage/root, producer slice, and effective
+  candidate; `prepare` consumes and re-verifies that exact authority. A crash after persistence may
+  hide the first CLI response but cannot lose the consumable record, and a competing record for the
+  same attempt refuses rather than replacing it.
+
+  The claim identity and claim-root base establish `epoch_lineage_id`; they exclude the current
+  plan hash, gate name, and node ids, so authoring a new DAG cannot reset liveness or review
+  history. The candidate observation derives from the persisted claim root, and its inherited
+  code/security frontier carries the prior validation obligations and scope lineage into the child.
+  The active issue claim/label, feature branch, worktree, and product candidate never move into the
+  epoch snapshot and are not discarded.
+
+  `workflow-planner` owns the child topology exclusively. The main orchestrator may supply the
+  repository/project, typed source outcome, evidence packet, candidate/frontier bindings, and exact
+  child output path; it may not prescribe nodes, roles, dependencies, write sets, shape, or model.
+  A dispatch-log record plus planner attestation binds the packet, transaction, profile, nonce,
+  worktree, and child digest before the re-plan-specific handoff freezes the child. Before dispatch,
+  the transaction derives an immutable `snapshot_authority_projection` from stable parent/source/
+  entry-CAS authority and gives the planner its digest. The schema-2 child's historically named
+  `parent_snapshot_manifest_digest` field binds this projection digest. The parent remains current
+  through `parent_archived`; an invalid/unattested child cannot become authority.
+
+  Four compare-and-swap seams — prepare, pre-freeze, pre-snapshot, and pre-activation — recompute
+  the same `(candidate_digest, claim_root_base_digest, inherited_frontier_digest)` tuple. A
+  pre-promotion mismatch records `replan_candidate_changed`, advances neither epoch nor budget, and
+  requires planner re-authoring against the new candidate. The proof matrix mutates each of the
+  three tuple axes independently at all four seams (12 cells) and permits only the typed mismatch
+  receipt—no epoch/count/dispatch/snapshot/activation effect. Once promotion begins, rollback is not
+  attempted: ordinary mutation stays fenced while `resume` verifies and rolls forward the ordered
+  `child_plan_promoted → child_state_promoted_fenced → task_mirror_promoted →
+  active_cache_cleaned → transaction_committed → state_unfenced` journal. This is a
+  crash-resumable multi-file transaction, not a false claim of one filesystem-atomic swap.
+
+  Before activation, `.cache/epochs/<parent-epoch>/` snapshots the complete parent proof tree. The
+  later full manifest embeds/re-derives the projection and separately seals the exact child and
+  attestation, every sorted file row, its own semantic digest, and its exact file bytes. This is the
+  non-circular authority pair: child → stable parent projection, then full manifest → exact child.
+  The snapshot also contains the frozen plan/Ledger/state, claim/root/CAS/frontier views,
+  authoritative review journal, every attempt's complete `rebind` ledger, findings, node evidence,
+  contexts, receipts, certifiers, validation vectors, task mirror, and dispatch provenance.
+  Historical schema-1 snapshots whose child still says `pending` pass only when all immutable
+  manifest, copied-child, transaction, attestation, promoted-plan, and descendant-state seals prove
+  `legacy_external_binding`; a missing seal refuses `legacy_snapshot_binding_unsealed`. Only
+  manifest-listed, digest-unchanged epoch-local caches may be removed afterward; epoch and authority
+  records are retained.
+
+  The crash model is executable rather than prose-only. A central ordered inventory names 41
+  durable-write families across the main path, activation/cleanup, and reauthor/consent/failure side
+  paths. Snapshot-file and cleanup mutations receive deterministic sorted-ordinal/path-digest labels;
+  candidate-change receipts receive seam labels. Durable helpers fire immediately after their
+  operations; tests lock the full inventory and execute every discovered main-path crash prefix for
+  one-resume convergence and second-resume byte/cardinality idempotence. They do not yet constitute
+  direct failpoint execution of every registered consent/failure side-path label.
+
+  A nonempty inherited code/security frontier creates the existing G4 virtual producer obligation
+  in the child. Real role-specific certifier gates remain reachable and their receipts bind the full
+  relevant final digest, so a zero-new-writer child cannot convert inherited unapproved work into
+  baseline. Later relevant mutation stales certification as before.
+
+  Liveness is claim-scoped: two automatic review-driven replacement transitions may commit; the
+  next writes a durable consent halt before planner dispatch. A user action can extend the
+  hash-chained ceiling by exactly one slot at a time. The one-shot zero-cost Case-B transition is a
+  typed **no-review** path, not a diagnosis label applied to a failed review: no review journal or
+  source outcome may exist; the completed parent must bind four exact schema-2
+  `diagnosis_complete` artifacts, declare only artifact-path writers, and the child must cite the
+  proof/recommendation digests. Repeated, untyped, writer-bearing, citation-missing, or review-driven
+  transitions count or refuse. Verified v1 parents stay byte-immutable on v1 unless
+  the explicit compatibility path proves a legacy claim root, snapshots all v1 authority (including
+  an empty or populated rebind ledger), derives the frontier, and activates a schema-2 child.
+
+  Archive callers share the same last authority gate: only `archived:true` or idempotent
+  `skipped:"source-missing"` authorizes roadmap/remote/label/worktree/branch/receipt cleanup.
+  Recursive epoch verification determines the lineage-preserved receipt; any other archive result
+  leaves the live claim authority in place.
+
+  **Verification boundary.** The architecture above is the accepted target contract, not a
+  terminal-green assertion for the current candidate. The versioned-authority engine (transaction
+  rotation, the four CAS seams, snapshot/manifest sealing, and the current-epoch authority split) is
+  implemented and its focused suite plus sync/resume/forbidden-token checks are green. The
+  lifecycle/publication caller repair and the packaged-edition fixture repair are separate,
+  still-in-progress write surfaces; integrated certification remains withheld until the named code
+  and security certifiers and the three read-only falsification nodes (budget exhaustion,
+  history/archive integrity, and publication/edition parity) each record a pass. Consult the
+  project's Node Ledger and per-node gate evidence for current status.
+
   **A new shape of work composes with the existing library, rather than adding a new lane
   (issue #634).** Not every deliverable is task-shaped (a known acceptance criterion, one
   attempt). *Direction-not-destination* work — "make it faster / smaller / less flaky," with no

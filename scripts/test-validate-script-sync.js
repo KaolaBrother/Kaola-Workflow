@@ -20,6 +20,16 @@ const repoRoot = path.resolve(__dirname, '..');
 let failed = 0, passed = 0;
 function assert(cond, msg) { if (cond) { passed++; return; } failed++; process.stderr.write('FAIL: ' + msg + '\n'); }
 
+// Issue #699 registration guard: replan is canonical<->Codex byte-identical,
+// while adaptive-schema and closure-contract stay byte-identical across all four editions.
+assert((sync.COMMON_SCRIPTS || []).includes('kaola-workflow-replan.js'),
+  '#699: COMMON_SCRIPTS enrolls kaola-workflow-replan.js');
+for (const base of ['kaola-workflow-adaptive-schema.js', 'kaola-workflow-closure-contract.js']) {
+  const group = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => (g.files || []).some(f => f === 'scripts/' + base));
+  assert(group && group.files.length === 4,
+    '#699: ' + base + ' remains a four-edition byte-identical group');
+}
+
 // 1) The family generalizes beyond the classifier to the divergent cross-required hand-ports.
 const fam = sync.FORGE_EXPORT_SUPERSET_FAMILY;
 assert(Array.isArray(fam) && fam.length >= 7, '#553: FORGE_EXPORT_SUPERSET_FAMILY has >=7 entries, got ' + (fam && fam.length));

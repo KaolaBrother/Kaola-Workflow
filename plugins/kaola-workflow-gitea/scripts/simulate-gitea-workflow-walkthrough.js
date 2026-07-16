@@ -592,6 +592,9 @@ function testGiteaAdaptive() {
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-adaptive-'));
   try {
+    // #699: claim requires a resolvable claim-anchor git root (buildClaimAnchors); a bare
+    // temp dir refuses claim_root_unavailable with empty stdout before any JSON is emitted.
+    _initGitRepo(tmp);
     // #538: adaptive is unconditionally legal — claim always acquires (no switch).
     fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
     let r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-901', '--workflowPath', 'adaptive'], tmp).stdout);
@@ -1633,6 +1636,7 @@ function testGiteaBundleSingleIssueStateHasNoBundleFields() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-single-'));
   fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
   try {
+    _initGitRepo(tmp);
     gtPlantRoadmapIssue(tmp, 601);
     const r = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '601'],
       { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
@@ -1749,10 +1753,8 @@ function testGiteaFinalizeArchiveVerifiesBeforeDelete() {
     );
     assert.strictEqual(result.archive_incomplete, true,
       'gitea #426: archiveProjectDir must return archive_incomplete:true, got: ' + JSON.stringify(result));
-    assert.ok(
-      Array.isArray(result.missing) && result.missing.includes('workflow-state.md'),
-      'gitea #426: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing)
-    );
+    assert.strictEqual(result.snapshot_error, 'state_missing',
+      'gitea #426: malformed source (no workflow-state.md) must fail the epoch-authority preflight before copy/delete, got: ' + JSON.stringify(result));
     console.log('testGiteaFinalizeArchiveVerifiesBeforeDelete: PASSED');
   } finally {
     try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}

@@ -1003,6 +1003,133 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
+// Re-plan edition contract: exercise the packaged Codex aggregator and its pure authority/fence
+// seams. These assertions inspect returned behavior rather than counting labels in source text.
+{
+  const scriptsDir = path.join(root, pluginRoot, 'scripts');
+  const replanPath = path.join(scriptsDir, 'kaola-workflow-replan.js');
+  assert(fs.existsSync(replanPath), 'Codex re-plan aggregator must be packaged');
+
+  const manifest = require(path.join(scriptsDir, 'kaola-workflow-install-manifest.js'));
+  assert(JSON.stringify(manifest.supportScripts('github').filter(name => /workflow-replan\.js$/.test(name)))
+      === JSON.stringify(['kaola-workflow-replan.js']),
+  'Codex package manifest must resolve the canonical re-plan script name exactly once');
+
+  const cli = require('child_process').spawnSync(process.execPath,
+    [replanPath, 'status', '--project', 'n5-missing-codex-project', '--json'],
+    { cwd: root, encoding: 'utf8' });
+  const cliResult = JSON.parse(String(cli.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop());
+  assert(cli.status !== 0 && cliResult.reason === 'replan_authority_path_invalid',
+    'Codex re-plan CLI must execute and return the typed missing-authority refusal');
+
+  const schema = require(path.join(scriptsDir, 'kaola-workflow-adaptive-schema.js'));
+  const replan = require(replanPath);
+  const handoff = require(path.join(scriptsDir, 'kaola-workflow-adaptive-handoff.js'));
+  const adaptiveNode = require(path.join(scriptsDir, 'kaola-workflow-adaptive-node.js'));
+  assert(JSON.stringify(schema.REPLAN_PHASES) === JSON.stringify([
+    'prepared', 'planner_pending', 'child_frozen', 'parent_archived', 'committed',
+  ]) && JSON.stringify(schema.REPLAN_STATUSES) === JSON.stringify([
+    'none', 'in_progress', 'candidate_changed', 'consent_halt',
+  ]) && JSON.stringify(schema.REPLAN_CAS_SEAMS) === JSON.stringify([
+    'prepare', 'pre_freeze', 'pre_snapshot', 'pre_activation',
+  ]), 'Codex schema must expose the canonical re-plan phases/statuses/CAS seams');
+
+  // R6-699-03: buildPlannerPacket reads transaction.snapshot.{authority_projection,authority_digest},
+  // so the fixture transaction must carry a real projection built the way prepareReplan does (via the
+  // exported buildSnapshotAuthorityProjection) and its canonical digest, not a hand-typed placeholder.
+  const n5Transaction = {
+    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
+    parent: {
+      claim_identity: { repository_id: 'repo', worktree_path: root },
+      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+      plan_epoch: 1, plan_hash: '3'.repeat(64),
+      plan_digest: schema.sha256Hex(Buffer.from('n5-contract-plan')),
+      task_mirror_exact_digest: schema.sha256Hex(Buffer.from('n5-contract-task-mirror')),
+      ledger_digest: schema.sha256Hex(Buffer.from('n5-contract-ledger')),
+      state_authority_digest: schema.sha256Hex(Buffer.from('n5-contract-state-authority')),
+    },
+    epoch_lineage_id: '4'.repeat(64),
+    source: {
+      source_attempt_ids: ['review:1'], source_reason: 'review_repair_requires_replan',
+      source_evidence_digest: '5'.repeat(64), producer_slice: [], findings: [], rebind: [],
+      inherited_frontier_classes: ['code'], validation_obligations: [],
+      journal_digest: schema.sha256Hex(Buffer.from('n5-contract-journal')),
+    },
+    cas: { prepare: { candidate_digest: '6'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+      inherited_frontier_digest: '7'.repeat(64) } },
+    budget: {
+      count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
+      case_b_proof: null, consent_ledger_digest: '9'.repeat(64),
+    },
+    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-n5' },
+  };
+  n5Transaction.snapshot = {
+    authority_projection: replan.buildSnapshotAuthorityProjection(n5Transaction),
+  };
+  n5Transaction.snapshot.authority_digest = schema.sha256Canonical(n5Transaction.snapshot.authority_projection);
+  const packet = replan.buildPlannerPacket({ project: 'issue-n5-contract' }, n5Transaction);
+  const packetKeys = new Set();
+  (function collect(value) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) return value.forEach(collect);
+    for (const [key, child] of Object.entries(value)) { packetKeys.add(key); collect(child); }
+  })(packet);
+  for (const forbiddenKey of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
+    'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
+    assert(!packetKeys.has(forbiddenKey), 'planner packet must not carry orchestrator-authored DAG key: ' + forbiddenKey);
+  }
+  assert(packet.child_output_path === 'workflow-plan.next.md',
+    'planner packet must bind the sole child-authoring path');
+
+  const childPath = path.join(require('os').tmpdir(), 'kw-n5-codex-attestation', 'workflow-plan.next.md');
+  let childWrites = 0;
+  const unattested = handoff.runReplanHandoff({
+    childPath, childContent: 'planner draft\n', transactionId: 'a'.repeat(64),
+    authority: {
+      verified: true, candidate_match: true, claim_root_match: true, inherited_frontier_match: true,
+      transaction_id: 'a'.repeat(64), child_path: childPath,
+      child_digest: schema.sha256Hex(Buffer.from('planner draft\n')), dispatch_nonce: 'dispatch-n5',
+    },
+    expected: { child_path: childPath, planner_binding: 'dispatch-n5' },
+    writeFile: () => { childWrites++; },
+  });
+  assert(unattested.reason === 'replan_child_authority_unverified' && childWrites === 0,
+    'missing planner attestation must refuse before any child write');
+
+  const orientation = adaptiveNode.replanOrientation({
+    reason: 'replan_in_progress', phase: 'planner_pending', transaction_id: 'a'.repeat(64),
+    legal_mutation: 'replan resume', transaction: {
+      transaction_id: 'a'.repeat(64), phase: 'planner_pending',
+      parent: { plan_hash: 'b'.repeat(64) }, child: {}, cas: {},
+    },
+  }, 'issue-n5-contract');
+  assert(orientation.resume_command ===
+    'node scripts/kaola-workflow-replan.js resume --project issue-n5-contract --json',
+  'Codex orientation must expose only the canonical edition-local resume command');
+
+  const closure = require(path.join(scriptsDir, 'kaola-workflow-closure-contract.js'));
+  assert((closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('preserved')
+      && (closure.CLOSURE_RECEIPT_FIELDS.epoch_lineage_preserved || []).includes('failed')
+      && closure.CLOSURE_INVARIANTS.some(row => row.id === 'epoch-lineage-preserved'),
+  'Codex closure contract must preserve the recursive epoch-lineage receipt');
+
+  for (const skill of ['kaola-workflow-plan-run', 'kaola-workflow-adapt',
+    'kaola-workflow-finalize', 'kaola-workflow-next']) {
+    const file = `${pluginRoot}/skills/${skill}/SKILL.md`;
+    const text = read(file);
+    const match = /(?:^|\n)## In-progress re-plan control plane\s*\n([\s\S]*?)(?=\n## |$)/.exec(text);
+    assert(match && match[1].includes('kaola-workflow-replan.js')
+        && match[1].includes('resume --project {project} --json')
+        && match[1].includes('workflow-plan.next.md')
+        && match[1].includes('replan-planner-attestation.json'),
+    file + ' must route the canonical Codex re-plan transaction');
+    for (const forbiddenRoute of ['kaola-workflow-claim.js discard --project',
+      'discard+restart a fresh adaptive run', 'auto-takeover', 'approval gate']) {
+      assert(!match[1].includes(forbiddenRoute), file + ' must not expose ' + forbiddenRoute + ' during re-plan');
+    }
+  }
+}
+
 // PROVENANCE_BAN: Codex prompt surfaces (agents/*.toml, skills/*/SKILL.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
 // PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,

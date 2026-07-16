@@ -12,6 +12,49 @@ record a one-line derivation in the node's `.cache` evidence — OPTIONAL, never
 blocks a gate. An axiom may only make you stricter:
 never cite one to skip a typed gate, refusal, or barrier.
 
+## In-progress re-plan control plane
+
+<!-- PIN: replan-next -->
+
+This fence outranks every normal startup, mirror, scheduler, handoff, validation, and
+finalization route. Before any such action, read the project state and transaction status. When
+either reports `replan_in_progress`, do not mutate or replace the frozen parent
+`workflow-plan.md`. Read-only orientation must report the exact `replan_phase`,
+`transaction_id`, `parent_plan_hash`, `child_plan_hash` (or `none`), and
+`last_cas_result`; never reconstruct them from memory.
+
+The single legal mutation while the fence is active is the edition-local re-plan resume command:
+
+```bash
+REPLAN_SCRIPT="./plugins/kaola-workflow/scripts/kaola-workflow-replan.js"
+if [ ! -f "$REPLAN_SCRIPT" ]; then
+  REPLAN_SCRIPT="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-replan.js' -print -quit 2>/dev/null)"
+fi
+[ -n "$REPLAN_SCRIPT" ] && [ -f "$REPLAN_SCRIPT" ] || { echo "BLOCKED: kaola-workflow-replan.js unavailable" >&2; exit 1; }
+node "$REPLAN_SCRIPT" resume --project {project} --json
+```
+
+The installed aggregator is `kaola-workflow-replan.js`. Do not run mirror/open/record/close/run-chains,
+ordinary adaptive handoff, claim archive, task-mirror refresh, or finalize while an intermediate
+phase remains. `decision:ask` remains advisory and never adds a pause or gate.
+
+If resume returns `replan_planner_dispatch_required`, dispatch the genuine
+`workflow-planner` profile in its Re-plan dispatch mode with an isolated brief containing only
+the repository root, project, `transaction_id`, `dispatch_nonce`, profile identity, the exact
+`.cache/replan-planner-packet.json` path, and the packet's reason/source evidence. No role
+sequence, node ids, dependencies, write sets, cardinality, shape, model, or exact DAG fragment may
+be supplied by the orchestrator; an attempt earns `planner_control_boundary_violation`. The
+planner alone writes the seeded `workflow-plan.next.md` and
+`.cache/replan-planner-attestation.json`, then returns through this same resume command. Missing,
+stale, replayed, or mismatched dispatch proof/attestation is
+`replan_planner_attestation_invalid`; main must never synthesize either artifact.
+
+An invalid unfrozen child uses the bounded unfrozen child-repair loop: re-dispatch the same planner
+with the verbatim validator errors and its own child draft, then resume. The main session never
+repairs the child DAG. At the retry bound, stop with the typed evidence; do not create a competing
+plan, restart the claim, or route to another path. A verified legacy-v1 parent follows this same
+transaction into a schema-2 child; legacy normal startup behavior otherwise stays unchanged.
+
 This is the thin router. It owns startup checks, roadmap freshness, active project selection, state repair, and phase routing. It does not perform phase work directly unless it routes into the next skill.
 
 ## Goal Contract
@@ -264,9 +307,12 @@ nothing to resolve and nothing to deliberate.
 3. **Default → adaptive.** No matching path-name keyword and no explicit `KAOLA_PATH` →
    `export KAOLA_PATH=adaptive` and proceed to the Adaptive front-end entry section. The
    export is the action (it makes the Startup transaction skip and the adaptive front end
-   fire). Adaptive just runs. There is NO automatic fallback to fast/full — when adaptive
-   cannot proceed the only recourse is inside adaptive (bounded planner repair →
-   discard+restart a fresh adaptive run → stop+ask), per the `kaola-workflow-adapt` skill.
+   fire). Adaptive just runs. There is NO automatic fallback to fast/full. For a normal
+   fresh-start draft that never froze, the recourse stays inside adaptive (bounded planner
+   repair → discard+restart a fresh adaptive run → stop+ask), per the
+   `kaola-workflow-adapt` skill. This startup fallback is forbidden while
+   `replan_in_progress`; the re-plan fence permits only the edition-local
+   `resume --project {project} --json` mutation.
 
 State the chosen path and one-line reason aloud before the Startup transaction:
 

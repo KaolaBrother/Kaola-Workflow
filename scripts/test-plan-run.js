@@ -58,6 +58,23 @@ const canonical = read('commands/kaola-workflow-plan-run.md');
 const fnMatch = canonical.match(/^kaola_script\(\)\{.*\}$/m);
 assert(!!fnMatch, 'canonical: kaola_script() one-liner must be extractable for behavioral test');
 
+// #699: the runtime guard is universal and precedes the scheduler lock. A
+// missing entry here is a mutation bypass; a late guard creates scheduler.lock.
+{
+  const adaptive = read('scripts/kaola-workflow-adaptive-node.js');
+  const guarded = (adaptive.match(/const REPLAN_GUARDED_SUBCOMMANDS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
+  for (const op of ['open-next', 'open-ready', 'close-node', 'close-and-open-next',
+    'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
+    'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
+    'discard-speculative', 'mirror-project']) {
+    assert(guarded.includes("'" + op + "'"), '#699 replan fence: guarded mutator set includes ' + op);
+  }
+  const guardIdx = adaptive.indexOf('readProjectReplanFence(');
+  const lockIdx = adaptive.indexOf('acquireProjectLock(lockPath');
+  assert(guardIdx !== -1 && lockIdx !== -1 && guardIdx < lockIdx,
+    '#699 replan fence: filesystem fence check precedes scheduler lock acquisition');
+}
+
 function resolveWith(fnLine, scriptName, { cwd, env }) {
   const harness = `${fnLine}\nkaola_script "${scriptName}"\n`;
   const hp = path.join(cwd, '.kaola-script-harness.sh');
