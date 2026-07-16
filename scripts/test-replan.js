@@ -50,6 +50,9 @@ function frozenPlan(project, meta, nodes, ledger) {
   let text = [
     `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
     'labels: enhancement', 'speculative_open_policy: auto', 'validation_command: node scripts/test-replan.js',
+    // Schema-2 code-producing plans require a validation policy (bundle #693/#696/#697/#698): the command
+    // above plus a timeout. Emitted for schema-2 only so legacy v1 fixtures stay byte-stable.
+    ...(schema2 ? ['validation_timeout_minutes: 30'] : []),
     ...Object.entries(meta || {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(',') : v}`),
     '', '## Nodes', '',
     schema2
@@ -2371,6 +2374,20 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
   ok(!validator.verifyGateExecution(group.text, {
     currentCandidateDigest: candidate, readCache: name => name === 'review-a.md' ? groupReceipts[name] : null,
   }).ok, 'partitioned-all logical certifier refuses a missing member receipt');
+
+  // #695 (tighten-only guard): the unified inherited-frontier coverage is NOT a rubber stamp. A root that
+  // bypasses the named certifier fanout entirely (reaches the sink without routing through any member) is
+  // still a genuinely-uncovered inherited frontier and must refuse with the SAME g4_inherited_frontier_uncovered.
+  const bypassRoot = frozenPlan('issue-699', groupMeta, [
+    { id: 'review-a', role: 'code-reviewer', shape: 'fanout(cert)',
+      gate_claim: 'current code candidate is approved', gate_surface: 'api surface', gate_aggregation: 'partitioned_all' },
+    { id: 'review-b', role: 'code-reviewer', shape: 'fanout(cert)',
+      gate_claim: 'current code candidate is approved', gate_surface: 'runtime surface', gate_aggregation: 'partitioned_all' },
+    { id: 'bypass', role: 'doc-updater', write_set: 'docs/note.md' },
+    { id: 'child-finalize', role: 'finalize', depends_on: 'review-a,review-b,bypass', model: '—' },
+  ], { 'review-a': 'complete', 'review-b': 'complete', 'bypass': 'complete', 'child-finalize': 'pending' });
+  ok(validator.validatePlan(bypassRoot.text, {}).errors.some(error => error.includes('g4_inherited_frontier_uncovered')),
+    'an inherited-frontier root that bypasses the named certifier fanout still refuses g4_inherited_frontier_uncovered');
 
   const directMember = frozenPlan('issue-699', { ...groupMeta, code_certifier: 'review-a' }, [
     { id: 'review-a', role: 'code-reviewer', shape: 'fanout(cert)',

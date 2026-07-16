@@ -207,5 +207,61 @@ if (agentsTomlGroup && typeof sync.checkByteIdenticalGroup === 'function') {
     '#629 bullet 2: the real config/agents.toml triple is byte-identical at HEAD, got ' + JSON.stringify(res));
 }
 
+// ---------------------------------------------------------------------------
+// 8) The deterministic validation runner is one forge-neutral, byte-identical
+//    four-file family. Lock the exact paths, create-on-missing behavior for EACH
+//    member, drift detection, and live parity.
+// ---------------------------------------------------------------------------
+const validationRunnerFiles = [
+  'scripts/kaola-workflow-validation-runner.js',
+  'plugins/kaola-workflow/scripts/kaola-workflow-validation-runner.js',
+  'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-validation-runner.js',
+  'plugins/kaola-workflow-gitea/scripts/kaola-workflow-validation-runner.js',
+];
+const validationRunnerGroup = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => g.label === 'validation-runner module copies');
+assert(!!validationRunnerGroup, 'validation runner has a dedicated byte-identical group');
+if (validationRunnerGroup) {
+  assert(JSON.stringify(validationRunnerGroup.files) === JSON.stringify(validationRunnerFiles),
+    'validation runner byte group carries the exact canonical/codex/gitlab/gitea paths, got ' + JSON.stringify(validationRunnerGroup.files));
+  const referenceBytes = fs.readFileSync(path.join(repoRoot, validationRunnerFiles[0]));
+
+  // Exact create-on-missing proof: omit each member in turn. A missing reference
+  // stops comparison at that reference; a missing copy names exactly that copy.
+  for (let missingIndex = 0; missingIndex < validationRunnerFiles.length; missingIndex++) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-runner-missing-'));
+    try {
+      for (let index = 0; index < validationRunnerFiles.length; index++) {
+        if (index === missingIndex) continue;
+        const destination = path.join(tmp, validationRunnerFiles[index]);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, referenceBytes);
+      }
+      const result = sync.checkByteIdenticalGroup(validationRunnerGroup, tmp);
+      assert(JSON.stringify(result.missing) === JSON.stringify([validationRunnerFiles[missingIndex]]) && result.drift.length === 0,
+        'validation runner create-on-missing identifies exactly ' + validationRunnerFiles[missingIndex] + ', got ' + JSON.stringify(result));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-runner-drift-'));
+  try {
+    for (let index = 0; index < validationRunnerFiles.length; index++) {
+      const destination = path.join(tmp, validationRunnerFiles[index]);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, index === 2 ? Buffer.concat([referenceBytes, Buffer.from('\nDRIFT\n')]) : referenceBytes);
+    }
+    const result = sync.checkByteIdenticalGroup(validationRunnerGroup, tmp);
+    assert(result.missing.length === 0 && result.drift.length === 1 && result.drift[0].includes(validationRunnerFiles[2]),
+      'validation runner one-byte-family drift is caught at the exact copy, got ' + JSON.stringify(result));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  const live = sync.checkByteIdenticalGroup(validationRunnerGroup, repoRoot);
+  assert(live.missing.length === 0 && live.drift.length === 0,
+    'live validation runner four-file family is present and byte-identical, got ' + JSON.stringify(live));
+}
+
 if (failed) { process.stderr.write('\nvalidate-script-sync guard tests FAILED (' + failed + ' failures, ' + passed + ' passed)\n'); process.exit(1); }
 process.stdout.write('validate-script-sync guard tests passed (' + passed + ' assertions; ' + canonicalOnlyChecked + ' canonicalOnly exclusions machine-guarded)\n');

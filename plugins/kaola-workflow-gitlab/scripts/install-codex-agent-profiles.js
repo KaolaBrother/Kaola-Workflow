@@ -89,6 +89,13 @@ const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
 const CODEX_REASONING_EFFORT = 'xhigh';
 const MANIFEST_SCHEMA_VERSION = 1;
+const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier']);
+const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 2;
+const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
+const REVIEWER_TOP_LEVEL_FIELDS = Object.freeze([
+  'name', 'description', 'nickname_candidates', 'behavior_contract_version',
+  'behavior_contract_hash', 'resolved_profile_hash', 'developer_instructions',
+]);
 
 // issue #543: --with-fast / --with-full opt-in partition. Adaptive is the unconditional default
 // (#538); fast/full are install-time opt-ins recorded in the shared ~/.config/kaola-workflow/config.json
@@ -145,6 +152,110 @@ function parseStringArrayLine(top, key) {
 function sameStringArray(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
   return a.every((v, i) => v === b[i]);
+}
+
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+// Generated reviewer profiles carry two identities: the runtime-neutral behavior contract and
+// the complete resolved profile. The latter is a self-hash over all rendered bytes with its one
+// value slot normalized to 64 zeroes. This verifier is intentionally local to the installer so a
+// cached plugin remains self-contained; repository validators separately prove generator parity.
+function reviewerProfileContract(text, role) {
+  const reasons = [];
+  if (!REVIEWER_ROLES.includes(role)) return { reasons, identity: null };
+
+  const source = String(text);
+  const instructionMatch = /^developer_instructions\s*=\s*"""[\s\S]*?"""/m.exec(source);
+  const instructionIndex = instructionMatch ? instructionMatch.index : -1;
+  const header = instructionIndex < 0 ? source : source.slice(0, instructionIndex);
+  const suffix = instructionMatch
+    ? source.slice(instructionMatch.index + instructionMatch[0].length)
+    : '';
+  const fields = [
+    ...[...header.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
+    ...(instructionMatch ? ['developer_instructions'] : []),
+    ...[...suffix.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
+  ];
+  for (const field of fields) {
+    if (!REVIEWER_TOP_LEVEL_FIELDS.includes(field)) {
+      reasons.push(`reviewer_adapter_field_forbidden: ${field}`);
+    }
+  }
+  for (const field of REVIEWER_TOP_LEVEL_FIELDS) {
+    if (fields.filter(value => value === field).length > 1) {
+      reasons.push(`reviewer_top_level_field_duplicate: ${field}`);
+    }
+  }
+  for (const table of [...header.matchAll(/^\s*\[([^\]]+)\]\s*$/gm),
+    ...suffix.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)]) {
+    reasons.push(`reviewer_adapter_table_forbidden: ${table[1]}`);
+  }
+
+  const topVersions = [...header.matchAll(/^behavior_contract_version\s*=\s*(\d+)\s*$/gm)];
+  if (topVersions.length === 0) reasons.push('reviewer_contract_version_missing');
+  const topVersion = topVersions.length === 1 ? Number(topVersions[0][1]) : null;
+
+  const coreStarts = String(text).split('<!-- reviewer-behavior-core:start -->').length - 1;
+  const coreEnds = String(text).split('<!-- reviewer-behavior-core:end -->').length - 1;
+  let core = '';
+  if (coreStarts !== 1 || coreEnds !== 1) {
+    reasons.push(`reviewer_behavior_core_invalid: starts=${coreStarts} ends=${coreEnds}`);
+  } else {
+    const start = String(text).indexOf('<!-- reviewer-behavior-core:start -->');
+    const end = String(text).indexOf('<!-- reviewer-behavior-core:end -->', start);
+    core = String(text).slice(start, end + '<!-- reviewer-behavior-core:end -->'.length);
+  }
+  const coreRoleMatch = /^role:\s*([^\n]+)$/m.exec(core);
+  if (!coreRoleMatch || coreRoleMatch[1] !== role) reasons.push('reviewer_behavior_core_role_mismatch');
+  const coreVersionMatch = /^behavior_contract_version:\s*(\d+)$/m.exec(core);
+  const coreVersion = coreVersionMatch ? Number(coreVersionMatch[1]) : null;
+  if (coreVersion === null) reasons.push('reviewer_behavior_core_version_missing');
+  if (topVersion !== null && coreVersion !== null && topVersion !== coreVersion) {
+    reasons.push(`reviewer_contract_version_mismatch: top=${topVersion} core=${coreVersion}`);
+  } else if (topVersion !== null && topVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
+    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${topVersion}`);
+  }
+
+  const topBehaviorMatches = [...header.matchAll(/^behavior_contract_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
+  const topBehaviorHash = topBehaviorMatches.length === 1 ? topBehaviorMatches[0][1] : null;
+  if (!topBehaviorHash) reasons.push('reviewer_behavior_hash_missing');
+  const coreBehaviorMatch = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(core);
+  const coreBehaviorHash = coreBehaviorMatch ? coreBehaviorMatch[1] : null;
+  if (!coreBehaviorHash) reasons.push('reviewer_behavior_core_hash_missing');
+  if (topBehaviorHash && coreBehaviorHash && topBehaviorHash !== coreBehaviorHash) {
+    reasons.push(`reviewer_behavior_hash_mismatch: top=${topBehaviorHash} core=${coreBehaviorHash}`);
+  }
+
+  const resolvedMatches = [...String(text).matchAll(/^resolved_profile_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
+  let resolvedProfileHash = null;
+  if (resolvedMatches.length === 0) {
+    reasons.push('reviewer_resolved_profile_hash_missing');
+  } else if (resolvedMatches.length !== 1) {
+    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedMatches.length}`);
+  } else {
+    resolvedProfileHash = resolvedMatches[0][1];
+    const match = resolvedMatches[0];
+    const valueOffset = match.index + match[0].indexOf(resolvedProfileHash);
+    const normalized = String(text).slice(0, valueOffset) + '0'.repeat(64)
+      + String(text).slice(valueOffset + resolvedProfileHash.length);
+    const expected = sha256Hex(normalized);
+    if (resolvedProfileHash !== expected) {
+      reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
+    }
+  }
+
+  const identity = topVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
+      && coreVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
+      && topBehaviorHash && topBehaviorHash === coreBehaviorHash && resolvedProfileHash
+    ? {
+      behavior_contract_version: topVersion,
+      behavior_contract_hash: topBehaviorHash,
+      resolved_profile_hash: resolvedProfileHash,
+    }
+    : null;
+  return { reasons: [...new Set(reasons)], identity };
 }
 
 function managedBlockPattern(flags = 'm') {
@@ -277,7 +388,9 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
-  return reasons;
+  reasons.push(...reviewerProfileContract(text, role).reasons);
+
+  return [...new Set(reasons)];
 }
 
 function classifyProfilePinPosture(text) {
@@ -365,7 +478,11 @@ function validateSourceProfiles(rootDir) {
       errors.push(`agents/${entry.basename}: referenced by [agents.${entry.role}] but file is missing`);
       continue;
     }
-    const reasons = validateProfileText(read(file), entry.role, entry);
+    const text = read(file);
+    entry.sourceText = text;
+    entry.sourceSha256 = sha256(Buffer.from(text, 'utf8'));
+    entry.profileContract = reviewerProfileContract(text, entry.role).identity;
+    const reasons = validateProfileText(text, entry.role, entry);
     for (const r of reasons) errors.push(`agents/${entry.basename}: ${r}`);
   }
 
@@ -376,7 +493,13 @@ function validateSourceProfiles(rootDir) {
     }
   }
 
-  return { ok: errors.length === 0, errors, roles, entries };
+  return {
+    ok: errors.length === 0,
+    errors,
+    roles,
+    entries,
+    repair: errors.length > 0 ? REVIEWER_SOURCE_REPAIR : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -450,10 +573,19 @@ function writeManifest(agentsDir, { pluginRoot: srcRoot, copiedFiles, removed })
   }
 
   const files = {};
+  const profileContracts = {};
   const roles = [];
   for (const name of copiedFiles.slice().sort()) {
-    roles.push(name.replace(/\.toml$/, ''));
-    files[name] = sha256(fs.readFileSync(path.join(agentsDir, name)));
+    const role = name.replace(/\.toml$/, '');
+    const bytes = fs.readFileSync(path.join(agentsDir, name));
+    roles.push(role);
+    files[name] = sha256(bytes);
+    if (REVIEWER_ROLES.includes(role)) {
+      const contract = reviewerProfileContract(bytes.toString('utf8'), role);
+      assert(contract.reasons.length === 0 && contract.identity,
+        `cannot manifest invalid generated reviewer profile ${name}: ${contract.reasons.join('; ')}`);
+      profileContracts[name] = contract.identity;
+    }
   }
 
   const manifest = {
@@ -464,6 +596,7 @@ function writeManifest(agentsDir, { pluginRoot: srcRoot, copiedFiles, removed })
     source_plugin_root: srcRoot,
     roles,
     files,
+    profile_contracts: profileContracts,
     retired_files_removed: removed
       .filter(r => r.reason === 'retired')
       .map(r => r.file)
@@ -685,6 +818,10 @@ function postVerify(templateEntries) {
     }
     const reasons = validateProfileText(read(file), role, metaByRole.get(role));
     for (const r of reasons) problems.push(`installed ${role}.toml: ${r}`);
+    const source = path.join(sourceAgentsDir, `${role}.toml`);
+    if (!fs.readFileSync(file).equals(fs.readFileSync(source))) {
+      problems.push(`installed ${role}.toml bytes do not match selected source ${source}`);
+    }
   }
 
   const configText = fs.existsSync(targetConfig) ? read(targetConfig) : '';
@@ -1367,6 +1504,7 @@ function main() {
     for (const e of sourceCheck.errors) {
       process.stderr.write(`profile_schema_error: ${e}\n`);
     }
+    process.stderr.write(`profile_source_repair: ${sourceCheck.repair || REVIEWER_SOURCE_REPAIR}\n`);
     process.exit(1);
   }
   const templateRoles = sourceCheck.roles;
@@ -1512,6 +1650,7 @@ module.exports = {
   copyHookScripts,
   seedKaolaConfig,
   validateProfileText,
+  reviewerProfileContract,
   classifyProfilePinPosture,
   validateSourceProfiles,
   pruneStaleProfiles,
@@ -1527,6 +1666,9 @@ module.exports = {
   CODEX_STANDARD_EFFORT,
   CODEX_REASONING_MODEL,
   CODEX_REASONING_EFFORT,
+  REVIEWER_ROLES,
+  REVIEWER_BEHAVIOR_CONTRACT_VERSION,
+  REVIEWER_SOURCE_REPAIR,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
   CODEX_V2_TRANSPORT_UNSAFE_STATUS,

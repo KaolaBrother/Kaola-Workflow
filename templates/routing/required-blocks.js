@@ -32,6 +32,24 @@
 const REQUIRED_BLOCKS = [
   // ==== plan-run (basename kaola-workflow-plan-run on both surface types) ====
   {
+    block_id: 'pr-reviewer-contract-v2-execution',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: reviewer-contract-v2-execution -->',
+      'the opener\'s dispatch card is the sole runtime envelope',
+      '`behavior_contract_hash`',
+      '`resolved_profile_hash`',
+      '`review_context_hash`',
+      '`validation_obligations`',
+      '`.cache/validation-vectors/`',
+      '`replan_required`',
+      'The harness never selects a writer or replacement DAG.',
+      '`contract_version: 1`',
+    ],
+  },
+  {
     block_id: 'pr-planner-wait-budget',
     topic: 'plan-run',
     runtime_tag: 'both',
@@ -209,6 +227,25 @@ const REQUIRED_BLOCKS = [
   },
 
   // ==== finalize (basename kaola-workflow-finalize on both surface types) ====
+  {
+    block_id: 'fn-reviewer-contract-v2-finalization',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: reviewer-contract-v2-finalization -->',
+      '`plan_schema_version: 2`',
+      '`contract_version: 2`',
+      '`code_certifier`',
+      '`security_certifier`',
+      '`resolved_profile_hash`',
+      '`review_context_hash`',
+      '`candidate_digest`',
+      '`validation_obligations`',
+      '`.cache/validation-vectors/`',
+      '`contract_version: 1`',
+    ],
+  },
   {
     // 'closure-audit' (2nd token) is a bare SUBSTRING of the marker itself
     // ('<!-- PIN: closure-audit -->'), so it is vacuous against a marker-

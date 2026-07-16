@@ -55,6 +55,10 @@ const {
   resolveOwningNode,
   resolveOwningNodes,
   routeCanonicalFindings,
+  // #701: schema-2 anchor-path ownership routing + repair admissibility helpers.
+  schema2RouteCandidates,
+  findingOwnershipSummary,
+  completedNonGateWriterDescendants,
   reviewJournalBlocker,
   reduceLogicalReviewAttempt,
   uniqueMaximalReviewProducer,
@@ -117,6 +121,22 @@ function assert(condition, message) {
     failed++;
     console.error('FAIL: ' + message);
   }
+}
+
+// Existing lifecycle fixtures exercise the byte-preserved legacy-v1 engine.
+// Schema 2 deliberately refuses a newly authored field-absent draft, so these
+// fixtures first materialize the historical verified-frozen state they mean to
+// simulate, then run the same --freeze --repair transaction.
+function stampVerifiedLegacyPlan(planPath) {
+  const content = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)) return;
+  const hash = planValidator.computePlanHash(content);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
+}
+
+function freezeLegacyFixture(execFn, command, validator, planPath, options) {
+  stampVerifiedLegacyPlan(planPath);
+  return execFn(command, [validator, planPath, '--freeze', '--repair', '--json'], options);
 }
 
 // Repair attempt n5-core-review:1 RED matrix (R1/R2/R4/R5).
@@ -434,8 +454,9 @@ function assert(condition, message) {
     fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# State\n');
     const git = args => execFixtureFileSync('git', ['-C', simultaneousTmp, ...args], { stdio: 'ignore' });
     git(['init']); git(['config', 'user.email', 'kw@test']); git(['config', 'user.name', 'kw']);
-    execFixtureFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
-      planPath, '--freeze', '--repair', '--json'], { cwd: simultaneousTmp, stdio: 'pipe' });
+    freezeLegacyFixture(execFixtureFileSync, process.execPath,
+      path.join(__dirname, 'kaola-workflow-plan-validator.js'), planPath,
+      { cwd: simultaneousTmp, stdio: 'pipe' });
     git(['add', '-A']); git(['commit', '-m', 'seed']);
     for (const writer of ['writer-a', 'writer-b']) {
       execFixtureFileSync(process.execPath, [path.join(__dirname, 'kaola-workflow-plan-validator.js'),
@@ -1224,6 +1245,166 @@ for (const selected of ['arm-a', 'arm-b']) {
       'R20-HISTORICAL-BINDING-RED: earlier pass attempt remains valid after later gate reopens writer, got '
         + JSON.stringify(journalCheck));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ===========================================================================
+// #701 (D-701-01) — SEMANTIC-OWNER vs graph-maximal repair admissibility bridge.
+// Layer 1: schema2RouteCandidates resolves ownership from the finding's primary_anchor PATH (not the
+// compat object, which stringified to "[object Object]" → every schema-2 route carried []).
+// Layer 2: runRepairNode cross-checks the graph-maximal producer against which writer actually OWNS the
+// still-open blocking findings — repair_writer_ownership_mismatch for a maximal tail writer that owns
+// none, dependent_producer_replay_required when the operator names the non-maximal semantic owner.
+// The #683 simultaneous-failed-gates block is the structural precedent.
+// ===========================================================================
+{
+  // #701-L1: Layer-1 ownership derivation regression (schema-2, pure).
+  const routeNodes = [
+    { id: 'W', role: 'tdd-guide', declared_write_set: 'scripts/impl.js' },
+    { id: 'docs', role: 'doc-updater', declared_write_set: 'docs/x.md' },
+  ];
+  const anchored = schema2RouteCandidates([{ uid: 'u1', scope: 'in_scope', action: 'fix', status: 'open',
+    severity: 'high', fix_role: 'tdd-guide', primary_anchor: { kind: 'candidate_range', path: 'scripts/impl.js' } }],
+    routeNodes, 'review');
+  assert(anchored.length === 1 && JSON.stringify(anchored[0].ownership_candidates) === JSON.stringify(['W'])
+    && anchored[0].owning_node === 'W' && anchored[0].finding_id === 'u1',
+    '#701-L1: schema-2 route resolves ownership from primary_anchor.path to the owning writer, got ' + JSON.stringify(anchored[0]));
+  const anchorless = schema2RouteCandidates([{ uid: 'u2', primary_anchor: { kind: 'evidence_observation' } }],
+    routeNodes, 'review');
+  assert(JSON.stringify(anchorless[0].ownership_candidates) === JSON.stringify([]) && anchorless[0].owning_node === null,
+    '#701-L1: an anchor-less (evidence_observation, no path) schema-2 finding resolves to empty ownership, got ' + JSON.stringify(anchorless[0]));
+  const unroutable = schema2RouteCandidates([{ uid: 'u3', primary_anchor: { kind: 'candidate_range', path: 'scripts/nowhere.js' } }],
+    routeNodes, 'review');
+  assert(JSON.stringify(unroutable[0].ownership_candidates) === JSON.stringify([]),
+    '#701-L1: a finding whose path no node owns resolves to empty ownership (the #701 live symptom)');
+}
+
+{
+  // #701-L2H: Layer-2 ownership/descendant helpers (pure).
+  const attempt = { route_candidates: [
+    { finding_id: 'f1', status: 'open', ownership_candidates: ['W'] },
+    { finding_id: 'f2', status: 'resolved', ownership_candidates: ['W'] },
+  ] };
+  const owner = findingOwnershipSummary(attempt, 'W');
+  assert(owner.openFindings.length === 1 && owner.anyOwned === true && owner.nodeOwns === true && owner.uniqueOwner === 'W',
+    '#701-L2H: findingOwnershipSummary counts only still-open findings and resolves the unique owner, got ' + JSON.stringify(owner));
+  const tail = findingOwnershipSummary(attempt, 'tail');
+  assert(tail.anyOwned === true && tail.nodeOwns === false && tail.uniqueOwner === 'W',
+    '#701-L2H: a non-owner writer sees anyOwned+uniqueOwner but nodeOwns=false (the tail-writer signal), got ' + JSON.stringify(tail));
+  const absent = findingOwnershipSummary({ route_candidates: [{ finding_id: 'f', status: 'open', ownership_candidates: [] }] }, 'W');
+  assert(absent.openFindings.length === 1 && absent.anyOwned === false && absent.nodeOwns === false,
+    '#701-L2H: ownership absent (empty candidates) ⇒ anyOwned=false so the bridge stays inert, got ' + JSON.stringify(absent));
+  const desc = completedNonGateWriterDescendants([
+    { id: 'W', role: 'tdd-guide', declared_write_set: 'a.js', dependsOn: [] },
+    { id: 'W2', role: 'implementer', declared_write_set: 'b.js', dependsOn: ['W'] },
+    { id: 'rev', role: 'code-reviewer', declared_write_set: '—', dependsOn: ['W2'] },
+    { id: 'docs', role: 'doc-updater', declared_write_set: 'd.md', dependsOn: ['rev'] },
+  ], { W: 'complete', W2: 'complete', rev: 'in_progress', docs: 'pending' }, 'W');
+  assert(JSON.stringify(desc) === JSON.stringify(['W2']),
+    '#701-L2H: completed non-gate writer descendants excludes gates + incomplete + the start node, got ' + JSON.stringify(desc));
+}
+
+// #701-INT: Layer-2 integration through runRepairNode over a real close-produced journal. Chain
+// impl(owner) -> tail(graph-maximal writer) -> review(code-reviewer). A finding anchored to impl's file
+// makes tail the maximal producer that owns NOTHING.
+{
+  const makeRepairFixture = (findingLine) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-701-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-701');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| impl | complete | |', '| tail | complete | |', '| review | in_progress | |', '| done | pending | |',
+    ], [
+      '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+      '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+      '| review | code-reviewer | tail | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+      open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12), ref: 'refs/kaola-workflow/barrier/issue-701/' + id });
+    const identities = { impl: identityFor('i'), tail: identityFor('t') };
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-impl'), identities.impl.baseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-tail'), identities.tail.baseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'rrrrrrrrrrrr-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review rrrrrrrrrrrr\nverdict: fail\nfindings_blocking: 1\n' + (findingLine ? findingLine + '\n' : ''));
+    fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [{ id: 'review', role: 'code-reviewer', kind: 'read' }] }));
+    const common = { planPath, project: 'issue-701',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '9'.repeat(64), captureWriterBarrierIdentity: id => identities[id] || null };
+    const closed = runCloseNode({ ...common, nodeId: 'review' });
+    const journal = fs.existsSync(journalPath) ? JSON.parse(fs.readFileSync(journalPath, 'utf8')) : { attempts: [] };
+    const attempt = journal.attempts[0];
+    return { tmp, common, closed, attempt, journal,
+      runRepair: nodeId => runRepairNode({ ...common, nodeId, attemptId: attempt && attempt.attempt_id }),
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
+  };
+
+  // #701-C: the graph-maximal tail writer owns NONE of the still-open findings → repair_writer_ownership_mismatch.
+  {
+    const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js');
+    try {
+      assert(f.closed.result === 'review_failed' && f.attempt,
+        '#701-C: close produces a repairable failed attempt, got ' + JSON.stringify(f.closed));
+      assert(f.attempt && (f.attempt.route_candidates || []).some(r => (r.ownership_candidates || []).includes('impl')),
+        '#701-C: the close-derived route_candidates carry ownership to impl (file-based), got ' + JSON.stringify(f.attempt && f.attempt.route_candidates));
+      const r = f.runRepair('tail');
+      assert(r.result === 'repair_writer_ownership_mismatch' && r.semantic_owner === 'impl'
+        && JSON.stringify(r.ownership_candidates) === JSON.stringify(['impl']) && typeof r.operator_hint === 'string',
+        '#701-C: repair-node of the maximal tail writer (owns nothing) refuses repair_writer_ownership_mismatch naming impl, got ' + JSON.stringify(r));
+      const statuses = readLedgerStatuses(fs.readFileSync(path.join(f.tmp, 'kaola-workflow', 'issue-701', 'workflow-plan.md'), 'utf8'));
+      assert(statuses.tail === 'complete',
+        '#701-C: the ownership-mismatch refusal is ZERO-mutation (tail stays complete)');
+    } finally { f.cleanup(); }
+  }
+
+  // #701-D: the operator names the non-maximal SEMANTIC OWNER impl → dependent_producer_replay_required.
+  {
+    const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js');
+    try {
+      const r = f.runRepair('impl');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'dependent_producer_replay_required'
+        && r.semantic_owner === 'impl' && JSON.stringify(r.blocking_descendants) === JSON.stringify(['tail'])
+        && typeof r.operator_hint === 'string',
+        '#701-D: repair-node of the non-maximal owner impl returns dependent_producer_replay_required naming impl + [tail], got ' + JSON.stringify(r));
+    } finally { f.cleanup(); }
+  }
+
+  // #701-E: an ANCHOR-LESS finding (no routable owner) degrades to a GENERIC repair_requires_replan on the
+  // non-maximal path (NEVER the semantic-owner enrichment, NEVER an ownership mismatch), and leaves the
+  // maximal writer's repair path unblocked (the walkthrough-preserving inert behavior).
+  {
+    const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high');  // no file token
+    try {
+      assert(f.attempt && (f.attempt.route_candidates || []).every(r => (r.ownership_candidates || []).length === 0),
+        '#701-E: an anchor-less finding yields route_candidates with empty ownership, got ' + JSON.stringify(f.attempt && f.attempt.route_candidates));
+      const rImpl = f.runRepair('impl');
+      assert(rImpl.result === 'repair_requires_replan' && rImpl.reason !== 'dependent_producer_replay_required',
+        '#701-E: ownership-absent non-maximal repair degrades to a GENERIC replan (no semantic-owner enrichment), got ' + JSON.stringify(rImpl));
+      const rTail = f.runRepair('tail');
+      assert(rTail.result !== 'repair_writer_ownership_mismatch',
+        '#701-E: the maximal writer is NOT falsely accused of an ownership mismatch when ownership is absent, got ' + JSON.stringify(rTail));
+    } finally { f.cleanup(); }
+  }
+
+  // #701-F: a pre-fix / unroutable-file journal (findings routed to a file no node owns ⇒ ownership_candidates:[],
+  // the exact #701 live symptom) degrades to a GENERIC repair_requires_replan on the non-maximal path.
+  {
+    const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/nowhere.js');
+    try {
+      const rImpl = f.runRepair('impl');
+      assert(rImpl.result === 'repair_requires_replan' && rImpl.reason !== 'dependent_producer_replay_required'
+        && rImpl.result !== 'repair_writer_ownership_mismatch',
+        '#701-F: an unroutable-file (empty-ownership) journal degrades to a generic replan, got ' + JSON.stringify(rImpl));
+    } finally { f.cleanup(); }
+  }
 }
 
 // R21: sibling gates over one candidate form one repair invalidation set even though neither
@@ -6761,7 +6942,7 @@ function rtHarness(initialFiles, opts) {
   const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
   g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
   // Freeze in place so plan_hash exists.
-  execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+  freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' });
   fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
   g(['add', '-A']); g(['commit', '-m', 'init']);
   // Sanity: the FROZEN plan passes --resume-check (control — proves the tamper, not a freeze bug, fails it).
@@ -6863,6 +7044,39 @@ function rtHarness(initialFiles, opts) {
     const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => { if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'code-reviewer', declared_write_set: '—' }] }; return { exitCode: 0, result: 'ok' }; });
     const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
     assert(r.result === 'refuse' && r.reason === 'serial_node_live', 'S383-excl: open-ready refuses serial_node_live over a live serial node, got ' + JSON.stringify(r.reason));
+  }
+
+  // S383-excl SIBLING (#439): a live code-reviewer GATE (recorded in the running set as kind:'gate' by the
+  // widened recordGateInRunningSet) flips serialLive FALSE, so open-ready NO LONGER refuses serial_node_live
+  // over it. Under policy:auto it ADMITS the gate-blocked speculative descendant (the exact #439 regression:
+  // a serially-opened gate used to be invisible to the running set, so serialLive stayed true and open-ready
+  // wedged with serial_node_live). Same live-state shape as the case above; only the live member's kind
+  // differs (gate vs a plain serial write), and that is the whole fix.
+  {
+    const plan = makePlan(['| impl | complete | |', '| gate | in_progress | |', '| docs | pending | |', '| sink | pending | |'], [
+      '| impl | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | — | 1 | sequence |',
+      '| docs | doc-updater | gate | — | 1 | sequence |',
+      '| sink | finalize | docs | CHANGELOG.md | 1 | sequence |',
+    ]).replace('labels: area:scripts', 'labels: area:scripts\nspeculative_open_policy: auto');
+    const liveGateSet = JSON.stringify({ state: 'open', nodes: [
+      { id: 'gate', role: 'code-reviewer', kind: 'gate', declared_write_set: '—', baseline: 'recorded' },
+    ] });
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: liveGateSet }, (base) => {
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false,
+        readyPending: [], speculativePending: [{ id: 'docs', role: 'doc-updater', declared_write_set: '—', speculativeGate: 'gate' }] };
+      return { exitCode: 0, result: 'ok' };
+    });
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(!(r.result === 'refuse' && r.reason === 'serial_node_live'),
+      'S383-excl SIBLING: open-ready does NOT refuse serial_node_live over a live code-reviewer gate, got ' + JSON.stringify(r.reason));
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'docs'),
+      'S383-excl SIBLING: open-ready admits the speculative descendant docs behind the live gate (policy:auto), got ' + JSON.stringify({ result: r.result, opened: (r.opened || []).map(n => n.id) }));
+    const setAfter = JSON.parse(h.files[RS_SET_PATH]);
+    const gateStill = (setAfter.nodes || []).find(n => n.id === 'gate');
+    const docsEntry = (setAfter.nodes || []).find(n => n.id === 'docs');
+    assert(gateStill && gateStill.kind === 'gate', 'S383-excl SIBLING: the live gate survives untouched in the running set');
+    assert(docsEntry && docsEntry.speculative === true, 'S383-excl SIBLING: docs is recorded speculative:true alongside the live gate');
   }
 }
 
@@ -8180,7 +8394,7 @@ function rtHarness(initialFiles, opts) {
     // An overlapping fixture (T-OR-2) cannot freeze (the antichain pair-loop refuses two siblings
     // writing the same file) — those tests serial-degrade BEFORE the group barrier, so a freeze failure
     // there is non-fatal (handled in the test).
-    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     // #674a: optional consumer-repo convention — gitignore `.cache/` too (a common pattern for cache
     // dirs). Absent ⇒ byte-identical '.kw/\n' fixture every other caller relies on.
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), opts.gitignoreCache ? '.kw/\n.cache/\n' : '.kw/\n');
@@ -8262,7 +8476,7 @@ function rtHarness(initialFiles, opts) {
     const g = args => execFileSync('git', ['-C', repoRoot, ...args], { stdio: 'ignore' });
     try {
       g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-      execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, stdio: 'pipe' });
+      freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, stdio: 'pipe' });
       g(['add', '-A']); g(['commit', '-m', 'seed']);
       execFileSync('node', [VALIDATOR, planPath, '--record-base', '--node-id', 'impl', '--json'], { cwd: repoRoot, stdio: 'pipe' });
       const opened = runNode(repoRoot, ['open-ready', '--project', project, '--json'], DEFAULT);
@@ -8326,7 +8540,7 @@ function rtHarness(initialFiles, opts) {
     execFileSync('git', ['-C', repoRoot, 'init'], { stdio: ['ignore', 'ignore', 'ignore'] });
     execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'kw@test']);
     execFileSync('git', ['-C', repoRoot, 'config', 'user.name', 'kw']);
-    execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+    freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, stdio: ['ignore', 'ignore', 'ignore'] });
     fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({
       state: 'opening', max_concurrent: 2,
       nodes: [
@@ -9888,7 +10102,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
     const gs = (a) => execFileSync('git', ['-C', repoRoot, ...a], { stdio: ['ignore', 'ignore', 'ignore'] });
     gs(['init']); gs(['config', 'user.email', 'kw@test']); gs(['config', 'user.name', 'kw']); gs(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     gs(['add', '-A']); gs(['commit', '-m', 'init']);
     const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
@@ -10054,7 +10268,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
     const gs = (a) => execFileSync('git', ['-C', repoRoot, ...a], { stdio: ['ignore', 'ignore', 'ignore'] });
     gs(['init']); gs(['config', 'user.email', 'kw@test']); gs(['config', 'user.name', 'kw']); gs(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     gs(['add', '-A']); gs(['commit', '-m', 'init']);
     // LEVEL 1: open {A,B}, close both → M1.
@@ -10614,7 +10828,7 @@ function rtHarness(initialFiles, opts) {
       g(['config', 'user.email', 'kw@test']);
       g(['config', 'user.name', 'kw']);
       g(['config', 'commit.gpgsign', 'false']);
-      const froze = execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+      const froze = freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' });
       // The disjoint mixed plan MUST freeze cleanly (open-ready's integrity --resume-check needs it).
       assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse', '#615-MIXED: fixture must freeze, got ' + froze);
       fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
@@ -10723,7 +10937,7 @@ function rtHarness(initialFiles, opts) {
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
       const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
       g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-      const froze = execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+      const froze = freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' });
       assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse', '#622-MIXED: fixture must freeze, got ' + froze);
       fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
       g(['add', '-A']); g(['commit', '-m', 'init']);
@@ -10928,7 +11142,7 @@ function rtHarness(initialFiles, opts) {
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
       const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
       g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-      const froze = execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+      const froze = freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' });
       assert(JSON.parse(froze.trim().split('\n').pop()).result !== 'refuse', 'R4-REGRESSION: fixture must freeze, got ' + froze);
       fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
       g(['add', '-A']); g(['commit', '-m', 'init']);
@@ -12373,7 +12587,7 @@ function rtHarness(initialFiles, opts) {
     g(['config', 'commit.gpgsign', 'false']);
     // Freeze in place so plan_hash exists (mutating subcommands run an integrity --resume-check; we
     // want the ONLY refusal under test to be the #466 split guard, which precedes the dispatch).
-    try { execFileSync('node', [VALIDATOR_466, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_466, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']);
     g(['commit', '-m', 'init']);
@@ -12552,7 +12766,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(repoRoot, 'a.js'), '// impl\n');
     const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR_439, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_439, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
     execFileSync('node', [VALIDATOR_439, planPath, '--record-base', '--node-id', 'impl', '--json'],
@@ -12616,17 +12830,46 @@ function rtHarness(initialFiles, opts) {
     rm439(repoRoot);
   }
 
-  // T439-4: with the gate open SERIALLY (no running-set), open-next of the gate-blocked read node
-  // refuses gate_not_complete (evaluated after the scheduler/batch guard passes — no running-set is
-  // live on the serial path). When the gate is instead live in the running-set, open-next refuses
-  // scheduler_active first; the speculative open then goes through open-ready --speculative-consent.
+  // T439-4: open-next of a gate-blocked read node refuses gate_not_complete. Since the widened
+  // recordGateInRunningSet now records a serially-opened review gate in the running set (kind:'gate'), the
+  // scheduler-exclusion layer would otherwise refuse the generic scheduler_active first; the settlement-5
+  // precedence intercept reinterprets THAT scheduler_active into the more-specific gate_not_complete
+  // (which points the operator at the speculative open-ready path) because docs is speculative-eligible
+  // behind the open gate. The specific refusal + named gate must survive the gate now being visible.
   {
-    const { repoRoot } = make439Repo('consent');
-    run439(repoRoot, ['open-next', '--project', 'issue-439', '--json']);  // serially opens the gate (no running-set)
+    const { repoRoot, cacheDir } = make439Repo('consent');
+    run439(repoRoot, ['open-next', '--project', 'issue-439', '--json']);  // serially opens the gate (now recorded kind:'gate')
+    const gateRS = readRS439(cacheDir);
+    assert(gateRS && (gateRS.nodes || []).some(n => n.id === 'gate' && n.kind === 'gate'),
+      'T439-4: a serially-opened review gate IS recorded in the running set as kind:gate');
     const r = run439(repoRoot, ['open-next', '--project', 'issue-439', '--node-id', 'docs', '--json']);
     assert(r.result === 'refuse' && r.reason === 'gate_not_complete',
-      'T439-4: open-next of a gate-blocked read node refuses gate_not_complete, got ' + JSON.stringify(r));
+      'T439-4: open-next of a gate-blocked read node refuses gate_not_complete (settlement-5 precedence over scheduler_active), got ' + JSON.stringify(r));
     assert(r.speculativeGate === 'gate', 'T439-4: gate_not_complete names the open gate');
+    rm439(repoRoot);
+  }
+
+  // T439-8 (#439 regression, END-TO-END): the exact reopened-bug shape. A review gate opened SERIALLY via
+  // open-next (not open-ready) lands in the running set as kind:'gate' (the widened recordGateInRunningSet);
+  // open-ready under policy:auto then ADMITS the gate-blocked speculative descendant instead of wedging with
+  // serial_node_live. Pre-fix the serially-opened gate was invisible to the running set, so open-ready saw
+  // serialLive=true and refused. Driven as REAL subprocesses through the whole lifecycle.
+  {
+    const { repoRoot, cacheDir } = make439Repo('auto');
+    const opened = run439(repoRoot, ['open-next', '--project', 'issue-439', '--json']);  // serially opens the gate
+    assert(opened.result === 'ok', 'T439-8: open-next opens the gate serially, got ' + JSON.stringify(opened.reason || opened.result));
+    const rsGate = readRS439(cacheDir);
+    assert(rsGate && (rsGate.nodes || []).some(n => n.id === 'gate' && n.kind === 'gate'),
+      'T439-8: the serially-opened gate is now recorded in the running set as kind:gate');
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--json']);  // policy:auto ⇒ no consent flag
+    assert(!(r.result === 'refuse' && r.reason === 'serial_node_live'),
+      'T439-8: open-ready no longer wedges with serial_node_live over the serially-opened gate, got ' + JSON.stringify(r.reason));
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'docs'),
+      'T439-8: open-ready admits the speculative descendant docs behind the open gate under policy:auto, got ' + JSON.stringify({ result: r.result, opened: (r.opened || []).map(n => n.id) }));
+    const rsAfter = readRS439(cacheDir);
+    const docsEntry = rsAfter && (rsAfter.nodes || []).find(n => n.id === 'docs');
+    assert(docsEntry && docsEntry.speculative === true, 'T439-8: docs is stamped speculative:true alongside the still-live gate');
+    assert(rsAfter && (rsAfter.nodes || []).some(n => n.id === 'gate' && n.kind === 'gate'), 'T439-8: the gate stays live in the running set through the speculative open');
     rm439(repoRoot);
   }
 
@@ -12843,7 +13086,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(repoRoot, 'a.js'), '// writerA\n');
     const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_596, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
     execFileSync('node', [VALIDATOR_596, planPath, '--record-base', '--node-id', 'writerA', '--json'],
@@ -12880,7 +13123,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(repoRoot, 'a.js'), '// writerA\n');
     const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_596, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
     execFileSync('node', [VALIDATOR_596, planPath, '--record-base', '--node-id', 'writerA', '--json'],
@@ -13344,7 +13587,7 @@ function rtHarness(initialFiles, opts) {
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
       const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
       g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-      try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+      try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_596, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
       fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
       g(['add', '-A']); g(['commit', '-m', 'init']);
       // writerA ran and produced a.js, but serial nodes never commit (finalize-owned-commit contract) —
@@ -13950,7 +14193,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
     const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
     return { repoRoot, project, planPath, cacheDir };
@@ -14659,7 +14902,7 @@ function rtHarness(initialFiles, opts) {
     const planPath = path.join(projDir, 'workflow-plan.md');
     fs.writeFileSync(planPath, plan612(proj));
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');   // NO main_root: → fallback path
-    try { execFileSync('node', [VALIDATOR_612, planPath, '--freeze', '--repair', '--json'], { cwd: root, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR_612, planPath, { cwd: root, encoding: 'utf8' }); } catch (_) {}
   };
 
   // ---- Fixture E (ESCAPE): mainRoot resolves (via the git-common-dir fallback, no main_root: field)
@@ -14898,7 +15141,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
     const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
-    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    try { freezeLegacyFixture(execFileSync, 'node', VALIDATOR, planPath, { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
     fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
     g(['add', '-A']); g(['commit', '-m', 'init']);
     return { repoRoot, project, planPath, projDir, cacheDir };
@@ -15855,7 +16098,7 @@ function rtHarness(initialFiles, opts) {
     g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
     let freeze;
     try {
-      freeze = JSON.parse(execFileSync('node', [VALIDATOR_683, planPath, '--freeze', '--repair', '--json'],
+      freeze = JSON.parse(freezeLegacyFixture(execFileSync, 'node', VALIDATOR_683, planPath,
         { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop());
     } catch (err) {
       freeze = JSON.parse(String(err.stdout || '{}').trim().split('\n').pop());
@@ -17315,6 +17558,397 @@ function rtHarness(initialFiles, opts) {
         && fs.readFileSync(collision.sourcePath).equals(before),
       '#699 a colliding source-history receipt refuses before unlink/publication');
     } finally { fs.rmSync(collision.root, { recursive: true, force: true }); }
+}
+}
+// ===========================================================================
+// Reviewer contract v2 conformance corpus. This is intentionally data-driven:
+// the JSON is the cross-runtime issue matrix, while these assertions prove that
+// every lifecycle consumer uses the same pure schema functions.
+// ===========================================================================
+{
+  const reviewSchema = require('./kaola-workflow-adaptive-schema');
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'reviewer-conformance-fixtures.json'), 'utf8'));
+  const requiredCoverage = [
+    'issue_matrices', 'v1_v2_split', 'malformed_identity', 'mismatched_identity',
+    'investigation_completion', 'change_gate_failure', 'finding_anchors',
+    'finding_uid_collision', 'strict_progress', 'sequence_reducer',
+    'replicated_majority_reducer', 'partitioned_all_reducer',
+    'g4_common_certifier', 'validation_pass', 'validation_fail',
+    'validation_inconclusive', 'validation_drift',
+  ];
+  for (const token of requiredCoverage) {
+    assert(fixture.coverage.includes(token), 'review-v2 corpus covers ' + token);
+  }
+
+  const requiredFunctions = [
+    'canonicalJson', 'deriveGateMode', 'requiredReviewTokens', 'deriveGateEffect',
+    'buildReviewContext', 'validateReviewEvidenceBinding', 'normalizeFindingAnchor',
+    'computeFindingUid', 'normalizeFindingSet', 'reduceReviewReceipts',
+    'normalizeResolutionSet', 'deriveRepairDelta', 'validateRepairDelta',
+    'assessFindingClosure', 'compareValidationObligations', 'assessReviewProgress',
+  ];
+  const apiReady = requiredFunctions.every(name => typeof reviewSchema[name] === 'function');
+  for (const name of requiredFunctions) {
+    assert(typeof reviewSchema[name] === 'function', 'review-v2 exports pure ' + name);
+  }
+
+  if (apiReady) {
+    for (const row of fixture.gate_modes) {
+      const node = row.plan.nodes.find(n => n.id === row.node_id);
+      assert(reviewSchema.deriveGateMode(row.plan, node) === row.expected,
+        'review-v2 deriveGateMode: ' + row.name);
+    }
+
+    const changePlan = fixture.gate_modes[0].plan;
+    const changeNode = changePlan.nodes.find(n => n.id === 'av');
+    const investigationPlan = fixture.gate_modes[1].plan;
+    const investigationNode = investigationPlan.nodes.find(n => n.id === 'av');
+    const baseTokens = ['evidence-binding', 'contract_version', 'review_context_hash',
+      'behavior_contract_hash', 'resolved_profile_hash', 'candidate_digest', 'domain_outcome'];
+    const investigationTokens = reviewSchema.requiredReviewTokens(investigationPlan, investigationNode);
+    const changeTokens = reviewSchema.requiredReviewTokens(changePlan, changeNode);
+    assert(baseTokens.every(t => investigationTokens.includes(t)) && investigationTokens.includes('claim_outcome'),
+      'review-v2 investigation tokens derive from the shared gate classifier');
+    assert(changeTokens.includes('gate_mode') && changeTokens.includes('gate_claim')
+      && changeTokens.includes('gate_surface') && changeTokens.includes('gate_aggregation'),
+      'review-v2 change-gate tokens derive from the shared gate classifier');
+
+    for (const row of fixture.outcomes) {
+      const got = reviewSchema.deriveGateEffect(row.role, row.gate_mode, row.domain_outcome,
+        row.blocking_findings || 0);
+      assert(got === row.expected_gate_effect,
+        'review-v2 three-axis gate effect for ' + row.role + '/' + row.gate_mode + '/' + row.domain_outcome);
+    }
+
+    const contextInput = {
+      contract_version: 2,
+      behavior_contract_version: 2,
+      behavior_contract_hash: '1'.repeat(64),
+      plan_schema_version: 2,
+      plan_hash: '2'.repeat(64),
+      claim_identity_digest: '3'.repeat(64),
+      epoch_lineage_id: '4'.repeat(64),
+      epoch: 1,
+      logical_gate: {
+        key: 'gate', kind: 'sequence', members: ['av'], claim_digest: '5'.repeat(64),
+        surface_digests: ['6'.repeat(64)], aggregation: 'sequence', certified_producers: ['writer'],
+      },
+      gate_mode: 'change_gate',
+      claim_root_base: { commit: 'a'.repeat(40), digest: '7'.repeat(64) },
+      candidate_digest: '8'.repeat(64),
+      inherited_frontier: { digest: 'none', classes: [] },
+      scope_lineage_id: '9'.repeat(64),
+      review_phase: 'discovery', attempt_ordinal: 1,
+      acceptance_evidence: [{ kind: 'test', digest: 'a'.repeat(64) }],
+      prior_findings: [], repair_delta: null, validation_obligations: [],
+    };
+    const contextA = reviewSchema.buildReviewContext(contextInput);
+    const contextB = reviewSchema.buildReviewContext(JSON.parse(JSON.stringify(contextInput)));
+    assert(contextA.ok === true && contextA.context_hash === contextB.context_hash
+      && contextA.bytes === contextB.bytes,
+      'review-v2 runtime-neutral context is canonical and deterministic');
+    assert(!Object.prototype.hasOwnProperty.call(contextA.context, 'resolved_profile_hash')
+      && !Object.prototype.hasOwnProperty.call(contextA.context, 'runtime'),
+      'review-v2 context excludes runtime/profile identity');
+
+    const dispatchIdentity = {
+      contract_version: 2, review_context_hash: contextA.context_hash,
+      behavior_contract_hash: contextInput.behavior_contract_hash,
+      resolved_profile_hash: 'b'.repeat(64), candidate_digest: contextInput.candidate_digest,
+    };
+    const boundEvidence = { ...dispatchIdentity };
+    assert(reviewSchema.validateReviewEvidenceBinding(boundEvidence, dispatchIdentity, contextA.context).ok === true,
+      'review-v2 exact dispatch/context/candidate/profile binding passes');
+    assert(reviewSchema.validateReviewEvidenceBinding({ ...boundEvidence, candidate_digest: 'c'.repeat(64) },
+      dispatchIdentity, contextA.context).reason === 'review_candidate_mismatch',
+      'review-v2 stale candidate refuses before finding normalization');
+    assert(reviewSchema.validateReviewEvidenceBinding({ ...boundEvidence, resolved_profile_hash: 'd'.repeat(64) },
+      dispatchIdentity, contextA.context).reason === 'review_profile_mismatch',
+      'review-v2 stale profile refuses before finding normalization');
+
+    const scope = 'e'.repeat(64);
+    const normalizedAnchors = fixture.anchors.map(anchor => reviewSchema.normalizeFindingAnchor(anchor));
+    assert(normalizedAnchors.every(r => r.ok === true), 'review-v2 all five immutable anchor variants normalize');
+    const anchorIndex = {
+      object_format: 'sha1', candidate_tree_digest: '1'.repeat(64),
+      parent_candidate_digest: 'b'.repeat(64),
+      candidate_entries: {
+        'src/a.js': { object_format: 'sha1', tree_mode: '100644',
+          object_id: 'a'.repeat(40), blob_length: 12 },
+        'bin/tool': { object_format: 'sha1', tree_mode: '100755', object_id: 'e'.repeat(40) },
+      },
+      base_entries: {
+        'src/deleted.js': { object_format: 'sha1', tree_mode: '100644',
+          object_id: 'c'.repeat(40), blob_length: 8 },
+        'bin/tool': { object_format: 'sha1', tree_mode: '100644', object_id: 'e'.repeat(40) },
+      },
+      evidence_digests: ['2'.repeat(64)],
+    };
+    assert(reviewSchema.normalizeFindingAnchor(fixture.anchors[0], { anchor_index: anchorIndex }).ok === true,
+      'review-v2 candidate range must byte-match the authoritative Git candidate index');
+    assert(reviewSchema.normalizeFindingAnchor({ ...fixture.anchors[0], path: '../src/a.js' }).reason
+      === 'finding_anchor_path_invalid', 'review-v2 traversal anchor refuses');
+    assert(reviewSchema.normalizeFindingAnchor({ ...fixture.anchors[0], object_format: 'sha256' }).reason
+      === 'finding_anchor_candidate_range_invalid', 'review-v2 object-format/object-id mismatch refuses');
+    assert(reviewSchema.normalizeFindingAnchor({ ...fixture.anchors[0], end: 13 }, { anchor_index: anchorIndex }).reason
+      === 'finding_anchor_candidate_mismatch', 'review-v2 byte range beyond authoritative blob length refuses');
+    assert(reviewSchema.normalizeFindingAnchor({ ...fixture.anchors[1], parent_candidate_digest: 'a'.repeat(64) },
+      { anchor_index: anchorIndex }).reason === 'finding_parent_candidate_mismatch',
+      'review-v2 deleted range must bind the exact parent candidate');
+    assert(reviewSchema.normalizeFindingAnchor(fixture.anchors[2], { anchor_index: anchorIndex }).ok === true,
+      'review-v2 mode-only tree-entry change matches exact base/candidate entries');
+    assert(reviewSchema.normalizeFindingAnchor({ ...fixture.anchors[3], path: 'src/a.js' },
+      { anchor_index: anchorIndex }).reason === 'finding_required_absence_present',
+      'review-v2 required-absence anchor refuses a present candidate path');
+    assert(reviewSchema.normalizeFindingAnchor({ ...fixture.anchors[4], producer_evidence_digest: '3'.repeat(64) },
+      { anchor_index: anchorIndex }).reason === 'finding_evidence_observation_unbound',
+      'review-v2 evidence observation must bind an authoritative producer receipt digest');
+    const uidA = reviewSchema.computeFindingUid(scope, normalizedAnchors[0].anchor);
+    const uidB = reviewSchema.computeFindingUid(scope, normalizedAnchors[0].anchor);
+    assert(uidA === uidB && /^[0-9a-f]{64}$/.test(uidA), 'review-v2 finding UID is canonical and proof-independent');
+    const findingBase = {
+      failure_class: 'correctness',
+      trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64), expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+      primary_anchor: fixture.anchors[0], secondary_anchors: [], severity: 'high',
+      scope: 'in_scope', action: 'fix', status: 'open', fix_role: 'tdd-guide', proof_digest: '5'.repeat(64),
+    };
+    const setOk = reviewSchema.normalizeFindingSet([findingBase, { ...findingBase, proof_digest: '6'.repeat(64) }], { scope_lineage_id: scope });
+    assert(setOk.ok === true && setOk.findings.length === 1,
+      'review-v2 identical immutable UID consolidates while proof churn cannot create identity');
+    const collision = reviewSchema.normalizeFindingSet([findingBase,
+      { ...findingBase, failure_class: 'security' }], { scope_lineage_id: scope });
+    assert(collision.ok === false && collision.reason === 'finding_uid_collision',
+      'review-v2 conflicting immutable fields at one UID refuse collision');
+    // R6 — a MOVE keeps identity (primary anchor alone determines the UID; the new location rides as a
+    // secondary anchor), and secondary-anchor INPUT ORDER is canonicalized to one byte-sorted set. The
+    // identity baseline is findingBase's own normalizeFindingSet UID (the authoritative producer), which
+    // adding secondary anchors must not change.
+    const baseUid = setOk.findings[0].uid;
+    const secA = { ...fixture.anchors[0], path: 'src/moved.js' };
+    const secB = { ...fixture.anchors[0], start: 0, end: 2 };
+    const movedForward = reviewSchema.normalizeFindingSet(
+      [{ ...findingBase, secondary_anchors: [secA, secB] }], { scope_lineage_id: scope });
+    const movedReversed = reviewSchema.normalizeFindingSet(
+      [{ ...findingBase, secondary_anchors: [secB, secA] }], { scope_lineage_id: scope });
+    assert(movedForward.ok === true && movedReversed.ok === true
+      && movedForward.findings[0].uid === baseUid && movedReversed.findings[0].uid === baseUid,
+      'review-v2 R6: a move keeps the primary-anchor UID; a new location is only secondary evidence');
+    assert(movedForward.findings[0].secondary_anchors.length === 2
+      && JSON.stringify(movedForward.findings[0].secondary_anchors)
+        === JSON.stringify(movedReversed.findings[0].secondary_anchors),
+      'review-v2 R6: multiple secondary anchors canonicalize to one byte-sorted order regardless of input order');
+
+    const previousAttempt = {
+      attempt_id: 'review2-gate:1', outcome: 'fail', lifecycle_settled: true,
+      candidate_digest: 'a'.repeat(64),
+      candidate_declared: { 'src/a.js': '100644 ' + '1'.repeat(40) },
+      repair: { selected_writer: 'writer', settled: true }, consumed_by: 'writer', rebind: [],
+    };
+    const repairDelta = reviewSchema.deriveRepairDelta({
+      previous_attempt: previousAttempt,
+      current_candidate: { digest: 'b'.repeat(64),
+        declared: { 'src/a.js': '100644 ' + '2'.repeat(40) },
+        residue_digest: 'c'.repeat(64) },
+    });
+    assert(repairDelta.ok === true && repairDelta.repair_delta.paths.length === 1
+      && repairDelta.repair_delta.paths[0].path === 'src/a.js',
+      'review-v2 repair delta is the exact before/after declared-path partition');
+    const regressionBase = { ...findingBase,
+      trigger: { ...findingBase.trigger, observed_digest: '7'.repeat(64) }, status: 'open' };
+    const regression = reviewSchema.normalizeFindingSet([regressionBase], { scope_lineage_id: scope });
+    const priorOpenFinding = { ...setOk.findings[0], status: 'open' };
+    const admitted = reviewSchema.assessFindingClosure({
+      prior_findings: [priorOpenFinding],
+      current_findings: [{ ...priorOpenFinding, status: 'resolved' }, regression.findings[0]],
+      repair_delta: repairDelta.repair_delta, candidate_digest: 'b'.repeat(64),
+    });
+    assert(admitted.ok === true && admitted.scope_expanded === false
+      && admitted.repair_delta_uids.length === 1,
+      'review-v2 closure admits a new blocker only when an immutable anchor intersects repair delta');
+    const outside = reviewSchema.normalizeFindingSet([{ ...regressionBase, primary_anchor: fixture.anchors[2] }],
+      { scope_lineage_id: scope });
+    const expanded = reviewSchema.assessFindingClosure({
+      prior_findings: [priorOpenFinding],
+      current_findings: [{ ...priorOpenFinding, status: 'open' }, outside.findings[0]],
+      repair_delta: repairDelta.repair_delta, candidate_digest: 'b'.repeat(64),
+    });
+    assert(expanded.ok === true && expanded.scope_expanded === true && expanded.expanded_uids.length === 1,
+      'review-v2 blocker outside the repair delta is classified as durable scope expansion');
+    const missingPrior = reviewSchema.assessFindingClosure({
+      prior_findings: [priorOpenFinding], current_findings: [],
+      repair_delta: repairDelta.repair_delta, candidate_digest: 'b'.repeat(64),
+    });
+    assert(missingPrior.ok === false && missingPrior.reason === 'review_prior_uid_missing',
+      'review-v2 closure cannot omit a prior UID');
+    const boundVectorDigest = '8'.repeat(64);
+    const boundEvidenceDigest = '9'.repeat(64);
+    const resolutionBinding = { repair_attempt_id: previousAttempt.attempt_id, candidate_digest: 'b'.repeat(64),
+      known_validation_vector_digests: [boundVectorDigest], known_evidence_digests: [boundEvidenceDigest] };
+    const resolution = reviewSchema.normalizeResolutionSet([{
+      uid: uidA, repair_attempt_id: previousAttempt.attempt_id,
+      validation_vector_digest: boundVectorDigest, evidence_digest: boundEvidenceDigest,
+      candidate_digest: 'b'.repeat(64),
+    }], resolutionBinding);
+    assert(resolution.ok === true && resolution.resolutions[0].uid === uidA,
+      'review-v2 resolution proof is closed-shape and bound to repair plus current candidate');
+    const fabricatedVector = reviewSchema.normalizeResolutionSet([{
+      uid: uidA, repair_attempt_id: previousAttempt.attempt_id,
+      validation_vector_digest: 'e'.repeat(64), evidence_digest: boundEvidenceDigest,
+      candidate_digest: 'b'.repeat(64),
+    }], resolutionBinding);
+    assert(fabricatedVector.ok === false && fabricatedVector.reason === 'review_resolution_vector_unbound',
+      'review-v2 a well-formed but unbound validation-vector digest fails closed (anti-laundering)');
+    const fabricatedEvidence = reviewSchema.normalizeResolutionSet([{
+      uid: uidA, repair_attempt_id: previousAttempt.attempt_id,
+      validation_vector_digest: boundVectorDigest, evidence_digest: 'e'.repeat(64),
+      candidate_digest: 'b'.repeat(64),
+    }], resolutionBinding);
+    assert(fabricatedEvidence.ok === false && fabricatedEvidence.reason === 'review_resolution_evidence_unbound',
+      'review-v2 a well-formed but unbound evidence digest fails closed (anti-laundering)');
+    const artifacts = reviewSchema.authoritativeResolutionArtifacts([
+      { candidate_digest: 'b'.repeat(64), outcome: 'pass', vector_id: boundVectorDigest, receipt_sha256: boundEvidenceDigest },
+      { candidate_digest: 'a'.repeat(64), outcome: 'pass', vector_id: 'c'.repeat(64), receipt_sha256: 'd'.repeat(64) },
+    ], 'b'.repeat(64));
+    assert(JSON.stringify(artifacts.validation_vector_digests) === JSON.stringify([boundVectorDigest])
+      && JSON.stringify(artifacts.evidence_digests) === JSON.stringify([boundEvidenceDigest]),
+      'review-v2 authoritative resolution artifacts admit only current-candidate pass vectors');
+    assert(reviewSchema.isCanonicalBlobMap({ sha256: '100644 ' + 'a'.repeat(64) }) === true,
+      'review-v2 candidate partitions accept repository-native sha256 object ids');
+
+    for (const row of fixture.reducers) {
+      const got = reviewSchema.reduceReviewReceipts(row.input);
+      assert(got.complete === row.expected.complete && got.gate_effect === row.expected.gate_effect
+        && got.domain_outcome === row.expected.domain_outcome,
+        'review-v2 reducer: ' + row.name + ' got=' + JSON.stringify(got));
+    }
+    for (const row of fixture.validation) {
+      const got = reviewSchema.compareValidationObligations(row.obligations, row.vectors, row.current_candidate_digest);
+      assert(got.status === row.expected, 'review-v2 validation vector comparison: ' + row.name
+        + ' got=' + JSON.stringify(got));
+    }
+    // R2 regression through the real runner: two passing vectors for the SAME command over DIFFERENT
+    // candidates have different vector ids, yet an inherited obligation is satisfied by the current-candidate
+    // pass. Exact vector-id equality would force every repair into non-progress.
+    {
+      const runner = require('./kaola-workflow-validation-runner');
+      const execIdentity = { comparable: true, digest: 'a1'.repeat(32), incomparability_classes: [] };
+      const buildPass = candidateDigest => runner.buildValidationVector({
+        command_id: 'c0'.repeat(32), candidate_digest: candidateDigest, execution_identity: execIdentity,
+        runs: [{ index: 0, exit_code: 0, signal: null, timed_out: false,
+          pre_candidate_digest: candidateDigest, post_candidate_digest: candidateDigest,
+          execution_identity_digest: execIdentity.digest, failure_signature_sha256: '0'.repeat(64) }],
+      }, []);
+      const vectorA = buildPass('a'.repeat(64));
+      const vectorB = buildPass('b'.repeat(64));
+      assert(vectorA.vector_id !== vectorB.vector_id && vectorA.command_id === vectorB.command_id
+        && vectorA.outcome === 'pass' && vectorB.outcome === 'pass',
+        'review-v2 R2: candidate-bound vectors share command_id but differ in vector_id across candidates');
+      const inherited = [{ command_id: vectorA.command_id, required_pass_vector_id: vectorA.vector_id }];
+      const repaired = reviewSchema.compareValidationObligations(inherited, [vectorB], 'b'.repeat(64));
+      assert(repaired.status === 'pass' && repaired.matched[0].current_pass_vector_id === vectorB.vector_id
+        && repaired.matched[0].required_pass_vector_id === vectorA.vector_id,
+        'review-v2 R2: an inherited obligation is satisfied by a comparable current-candidate pass after repair');
+      const staleOnly = reviewSchema.compareValidationObligations(inherited, [vectorA], 'b'.repeat(64));
+      assert(staleOnly.status === 'drift' && staleOnly.reason === 'validation_candidate_drift',
+        'review-v2 R2: a pass bound only to the prior candidate does not satisfy the current obligation');
+      const missingBuild = runner.buildValidationVector({
+        command_id: 'c0'.repeat(32), candidate_digest: 'b'.repeat(64), execution_identity: execIdentity,
+        runs: [{ index: 0, exit_code: 1, signal: null, timed_out: false,
+          pre_candidate_digest: 'b'.repeat(64), post_candidate_digest: 'b'.repeat(64),
+          execution_identity_digest: execIdentity.digest, failure_signature_sha256: '1'.repeat(64) }],
+      }, []);
+      const failCurrent = reviewSchema.compareValidationObligations(inherited, [missingBuild], 'b'.repeat(64));
+      assert(failCurrent.status === 'fail' && failCurrent.reason === 'validation_failed',
+        'review-v2 R2: a failing current-candidate vector is non-progress, not accepted');
+    }
+    // R6 — durable, data-driven negative fixtures for the schema-2 validation policy parser. Each row is a
+    // real ## Meta snippet through the REAL parseValidationPolicy; a regression in any typed refusal reds here.
+    if (Array.isArray(fixture.validation_policy) && typeof planValidator.parseValidationPolicy === 'function') {
+      const policyPlan = metaLines => [
+        '# Workflow Plan — policy fixture', '', '## Meta',
+        'plan_schema_version: 2', 'labels: area:scripts', 'validation_command: node --check lib/impl.js',
+        ...metaLines, '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| a | code-explorer | — | — | 1 | sequence |',
+        '| finalize | finalize | a | — | 1 | sequence |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| a | pending |', '| finalize | pending |', '',
+      ].join('\n');
+      for (const row of fixture.validation_policy) {
+        const got = planValidator.parseValidationPolicy(policyPlan(row.meta));
+        if (row.expected_ok) {
+          assert(got.ok === true && got.source === 'schema-2',
+            'review-v2 R6 validation policy accepts: ' + row.name + ' got=' + JSON.stringify(got));
+        } else {
+          assert(got.ok === false && got.reason === row.expected_reason,
+            'review-v2 R6 validation policy refuses: ' + row.name + ' expected=' + row.expected_reason
+              + ' got=' + JSON.stringify(got));
+        }
+      }
+    }
+
+    const priorUid = uidA;
+    const progressResolution = { uid: priorUid, repair_attempt_id: 'repair:1',
+      validation_vector_digest: '1'.repeat(64), evidence_digest: '2'.repeat(64), candidate_digest: '3'.repeat(64) };
+    const progress = reviewSchema.assessReviewProgress({
+      previous_open_uids: [priorUid], current_open_uids: [],
+      resolutions: [progressResolution],
+      known_validation_vector_digests: ['1'.repeat(64)], known_evidence_digests: ['2'.repeat(64)],
+      repair_attempt_id: 'repair:1', candidate_digest: '3'.repeat(64),
+      validation: { status: 'pass' }, previous_consecutive_nonprogress: 0,
+    });
+    assert(progress.progress === true && progress.stop_reason === null,
+      'review-v2 strict progress requires resolution proof, smaller frontier, and inherited validation pass');
+    const unboundProgress = reviewSchema.assessReviewProgress({
+      previous_open_uids: [priorUid], current_open_uids: [],
+      resolutions: [progressResolution],
+      known_validation_vector_digests: ['a'.repeat(64)], known_evidence_digests: ['2'.repeat(64)],
+      repair_attempt_id: 'repair:1', candidate_digest: '3'.repeat(64),
+      validation: { status: 'pass' }, previous_consecutive_nonprogress: 0,
+    });
+    assert(unboundProgress.progress === false && unboundProgress.reason === 'review_resolution_proof_missing',
+      'review-v2 a fabricated resolution digest cannot count a UID off the frontier as progress');
+    const nonprogress = reviewSchema.assessReviewProgress({
+      previous_open_uids: [priorUid], current_open_uids: [priorUid], resolutions: [],
+      repair_attempt_id: 'repair:2', candidate_digest: '4'.repeat(64),
+      before_candidate_digest: '3'.repeat(64), logical_gate_key: 'gate', scope_lineage_id: scope,
+      validation: { status: 'inconclusive' }, previous_consecutive_nonprogress: 1,
+    });
+    assert(nonprogress.progress === false && nonprogress.stop_reason === 'review_nonconvergent'
+      && nonprogress.consecutive_nonprogress === 2,
+      'review-v2 two unique consecutive nonprogress repairs stop while preserving the five-repair cap');
+    const replay = reviewSchema.assessReviewProgress({
+      previous_open_uids: [priorUid], current_open_uids: [priorUid], resolutions: [],
+      repair_attempt_id: 'repair:2', before_candidate_digest: '3'.repeat(64),
+      candidate_digest: '4'.repeat(64), logical_gate_key: 'gate', scope_lineage_id: scope,
+      validation: { status: 'inconclusive' }, previous_consecutive_nonprogress: 1,
+      seen_idempotency_keys: [nonprogress.idempotency_key],
+    });
+    assert(replay.reason === 'review_progress_replay' && replay.consecutive_nonprogress === 1,
+      'review-v2 crash replay cannot increment the nonprogress counter twice');
+  }
+
+  assert(typeof planValidator.resolvePlanContract === 'function', 'review-v2 validator exports resolvePlanContract');
+  assert(typeof planValidator.buildPlanView === 'function', 'review-v2 validator exports buildPlanView');
+  assert(typeof planValidator.parseValidationPolicy === 'function', 'review-v2 validator exports parseValidationPolicy');
+  if (typeof planValidator.resolvePlanContract === 'function') {
+    const legacyBody = makePlan(['| explore | pending | |', '| finalize | pending | |'], [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| finalize | finalize | explore | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const legacyFrozen = '<!-- plan_hash: ' + planValidator.computePlanHash(legacyBody) + ' -->\n' + legacyBody;
+    const legacyContract = planValidator.resolvePlanContract(legacyFrozen, { requireFrozen: true });
+    assert(legacyContract.ok === true && legacyContract.plan_schema_version === 1
+      && legacyContract.contract_version === 1,
+      'review-v2 verified field-absent frozen plan maps explicitly to v1');
+    const missingDraft = planValidator.freezePlan(legacyBody, {});
+    assert(missingDraft.result === 'refuse' && missingDraft.reason === 'plan_schema_version_missing',
+      'review-v2 newly frozen field-absent draft refuses before spawn');
+    const v1Draft = planValidator.freezePlan(legacyBody.replace('labels:', 'plan_schema_version: 1\nlabels:'), {});
+    assert(v1Draft.result === 'refuse' && v1Draft.reason === 'plan_schema_version_legacy_new',
+      'review-v2 newly authored explicit v1 draft refuses before spawn');
   }
 }
 

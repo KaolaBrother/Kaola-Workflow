@@ -1091,6 +1091,74 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
+// Reviewer-contract-v2 edition wall: prove generated source identity, exact installed-profile
+// enforcement, read-only-but-gating cache inspection, validation-runner distribution, shared
+// lifecycle exports, and the complete authoring/execution/finalization guidance family.
+{
+  const generator = require(path.join(root, 'scripts', 'generate-reviewer-profiles.js'));
+  const generatedErrors = generator.checkGeneratedProfiles(root);
+  assert(generatedErrors.length === 0,
+    'generated reviewer profiles must be current: ' + generatedErrors.join('; '));
+
+  const installerFile = pluginRoot + '/scripts/install-codex-agent-profiles.js';
+  const installer = require(path.join(root, installerFile));
+  const sourceCheck = installer.validateSourceProfiles(path.join(root, pluginRoot));
+  assert(sourceCheck.ok,
+    pluginRoot + ' profile source contract failed: ' + sourceCheck.errors.join('; '));
+  for (const role of ['code-reviewer', 'adversarial-verifier']) {
+    const entry = sourceCheck.entries.find(candidate => candidate.role === role);
+    assert(entry && entry.profileContract && entry.profileContract.behavior_contract_version === 2,
+      pluginRoot + ' must expose reviewer contract version 2 for ' + role);
+    assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
+      && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
+    pluginRoot + ' must bind behavior and resolved profile hashes for ' + role);
+    assert(!/^model(?:_reasoning_effort)?\s*=/m.test(entry.sourceText),
+      pluginRoot + ' reviewer profiles must inherit the parent model by omission');
+  }
+  assertIncludes(installerFile, 'profile_contracts');
+  assertIncludes(installerFile, 'profile_source_repair');
+
+  const preflightFile = pluginRoot + '/scripts/kaola-workflow-codex-preflight.js';
+  assertIncludes(preflightFile, "scope: 'repository'");
+  assertIncludes(preflightFile, "scope: 'plugin_cache'");
+  assertIncludes(preflightFile, 'profile_bytes_mismatch');
+  assertIncludes(preflightFile, 'pluginCacheStale');
+
+  const runnerFile = pluginRoot + '/scripts/kaola-workflow-validation-runner.js';
+  assert(exists(runnerFile), runnerFile + ' is missing');
+  assert(read(runnerFile) === read('scripts/kaola-workflow-validation-runner.js'),
+    runnerFile + ' must be byte-identical to the canonical validation runner');
+  const installManifest = require(path.join(root, 'scripts', 'kaola-workflow-install-manifest.js'));
+  assert(installManifest.supportScripts('gitlab').includes('kaola-workflow-validation-runner.js'),
+    'manual edition install must ship the deterministic validation runner');
+
+  const schema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  for (const name of ['deriveGateMode', 'buildReviewContext', 'validateReviewEvidenceBinding',
+    'reduceReviewReceipts', 'compareValidationObligations', 'validateReviewJournalV2']) {
+    assert(typeof schema[name] === 'function', pluginRoot + ' adaptive schema must export ' + name);
+  }
+  const planValidator = require(path.join(root, pluginRoot, 'scripts',
+    'kaola-gitlab-workflow-plan-validator.js'));
+  for (const name of ['resolvePlanContract', 'buildPlanView', 'validateSchema2ReviewPlan',
+    'verifyVerdictBlock']) {
+    assert(typeof planValidator[name] === 'function', pluginRoot + ' plan validator must export ' + name);
+  }
+
+  for (const file of [
+    pluginRoot + '/commands/kaola-workflow-adapt.md',
+    pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md',
+    pluginRoot + '/agents/workflow-planner.toml',
+  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-authoring -->');
+  for (const file of [
+    pluginRoot + '/commands/kaola-workflow-plan-run.md',
+    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md',
+  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-execution -->');
+  for (const file of [
+    pluginRoot + '/commands/kaola-workflow-finalize.md',
+    pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md',
+  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-finalization -->');
+}
+
 // #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the GitLab finalize command so a silent
 // drop (the #294 fail-open class) turns this chain RED. Pins own edition's file only.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');

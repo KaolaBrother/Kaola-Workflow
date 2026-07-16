@@ -37,7 +37,7 @@ config_file = "./agents/kaola-workflow/build-error-resolver.toml"
 nickname_candidates = ["Resolver", "Repair", "Buildfix"]
 
 [agents.code-reviewer]
-description = "Kaola-Workflow for Codex Phase 5 reviewer: performs detached correctness, scope, maintainability, and test coverage review."
+description = "Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage."
 config_file = "./agents/kaola-workflow/code-reviewer.toml"
 nickname_candidates = ["Reviewer", "Critic", "Inspector"]
 
@@ -52,7 +52,7 @@ config_file = "./agents/kaola-workflow/doc-updater.toml"
 nickname_candidates = ["Docs", "Docking", "Writer"]
 
 [agents.adversarial-verifier]
-description = "Kaola-Workflow for Codex adaptive-path falsifier: tries to disprove a recorded claim (refute-if-uncertain); read-only, never a gate."
+description = "Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim."
 config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
 

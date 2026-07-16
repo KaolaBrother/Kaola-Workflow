@@ -120,6 +120,18 @@ if (fnMatch) {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// Reviewer contract v2 execution card dependencies. The runtime guidance consumes
+// these pure fields; it must never carry an independently reimplemented gate mode.
+{
+  const schema = require('./kaola-workflow-adaptive-schema');
+  assert(typeof schema.deriveGateMode === 'function',
+    'review-v2 plan-run dependency: deriveGateMode is exported from adaptive-schema');
+  assert(typeof schema.requiredReviewTokens === 'function',
+    'review-v2 plan-run dependency: requiredReviewTokens is exported from adaptive-schema');
+  assert(typeof schema.buildReviewContext === 'function',
+    'review-v2 plan-run dependency: buildReviewContext is exported from adaptive-schema');
+}
+
 if (failed > 0) {
   console.error(`test-plan-run: ${failed} failed, ${passed} passed`);
   process.exit(1);

@@ -36,6 +36,7 @@ function makeUnfrozenPlan(decision) {
     '# Workflow Plan — test-project',
     '',
     '## Meta',
+    'plan_schema_version: 2',
     'labels: area:scripts',
     '',
     '## Nodes',
@@ -60,6 +61,7 @@ function makeInProgressPlan() {
     '# Workflow Plan — test-project',
     '',
     '## Meta',
+    'plan_schema_version: 2',
     'labels: area:scripts',
     '',
     '## Nodes',
@@ -87,6 +89,7 @@ function makeFrozenInProgressPlan(planHash) {
     '<!-- plan_hash: ' + hash + ' -->',
     '',
     '## Meta',
+    'plan_schema_version: 2',
     'labels: area:scripts',
     '',
     '## Nodes',
@@ -294,7 +297,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
 {
   const tieredPlan = [
     '# Workflow Plan — test-project', '',
-    '## Meta', 'labels: area:scripts', '',
+    '## Meta', 'plan_schema_version: 2', 'labels: area:scripts', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
     '| --- | --- | --- | --- | --- | --- | --- |',
@@ -1417,14 +1420,21 @@ function runMirrorHandoffCase(mirrorResponse) {
   function observesPlan(gateRole, observesValue) {
     return [
       '# Workflow Plan — test-project', '',
-      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: area:scripts',
+      'sink: CHANGELOG.md',
+      'code_certifier: none',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none', '',
       '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape | observes |',
-      '| --- | --- | --- | --- | --- | --- | --- |',
-      '| seed     | code-explorer | —      | —              | 1 | sequence | — |',
-      '| gate     | ' + gateRole + ' | seed | —            | 1 | sequence | ' + observesValue + ' |',
-      '| w        | doc-updater   | seed   | docs/decisions/D-641-01.md | 1 | sequence | — |',
-      '| finalize | finalize      | gate,w | —              | 1 | sequence | — |', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —      | —              | 1 | sequence | — | — | — | — | — |',
+      '| gate     | ' + gateRole + ' | seed | —            | 1 | sequence | ' + observesValue + ' | inspect-observation | scratch | sequence | — |',
+      '| w        | doc-updater   | seed   | docs/decisions/D-641-01.md | 1 | sequence | — | — | — | — | — |',
+      '| finalize | finalize      | gate,w | —              | 1 | sequence | — | — | — | — | — |', '',
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
@@ -1524,7 +1534,13 @@ function runMirrorHandoffCase(mirrorResponse) {
   function briefsPlan(briefsBlock) {
     const base = [
       '# Workflow Plan — test-project', '',
-      '## Meta', 'labels: area:scripts', '',
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: area:scripts',
+      'code_certifier: none',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '| --- | --- | --- | --- | --- | --- |',
@@ -1928,6 +1944,72 @@ function runMirrorHandoffCase(mirrorResponse) {
     '#699 committed handoff replay fails closed when the E2 current-authority verifier rejects it');
   assert(shells === 0 && writes === 0,
     '#699 rejected committed replay performs zero mutation');
+}
+// Reviewer contract v2 freeze boundary: the handoff's two-phase transaction must
+// consume the validator's explicit version resolver rather than infer a contract.
+{
+  const validator = require('./kaola-workflow-plan-validator');
+  assert(typeof validator.resolvePlanContract === 'function',
+    'review-v2 handoff dependency: validator exports resolvePlanContract');
+  const draft = makeUnfrozenPlan('auto-run');
+  const contract = typeof validator.resolvePlanContract === 'function'
+    ? validator.resolvePlanContract(draft, { forFreeze: true }) : null;
+  assert(contract && contract.ok === true && contract.plan_schema_version === 2
+    && contract.contract_version === 2,
+    'review-v2 handoff resolves a newly authored schema-2 plan to dispatch contract 2');
+}
+
+// ---------------------------------------------------------------------------
+// R3 — G4 common-certifier wall shares the runner's test-consumed-prose classification.
+// A downstream doc-updater that mutates test-consumed prose (README.md, or a plan-declared
+// validation_test_consumes path) AFTER the designated code certifier is a code-relevant producer:
+// G4 must refuse the topology because the certifier does not cover it. An inert doc (docs/decisions/**)
+// remains non-code and freezes green. Driven in-process through the real validatePlan.
+// ---------------------------------------------------------------------------
+{
+  const validator = require('./kaola-workflow-plan-validator');
+  const g4Plan = (docPath, extraMeta) => [
+    '# Workflow Plan — test-project', '',
+    '## Meta',
+    'plan_schema_version: 2',
+    'labels: area:scripts',
+    'code_certifier: reviewer',
+    'security_certifier: none',
+    'inherited_frontier_digest: none',
+    'inherited_frontier_classes: none',
+    'validation_command: node --check lib/impl.js',
+    'validation_timeout_minutes: 5',
+    ...(extraMeta || []), '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| writer   | tdd-guide   | —        | lib/impl.js | 1 | sequence | — | — | — | — |',
+    '| reviewer | code-reviewer | writer | —           | 1 | sequence | review-change | code-tree | sequence | — |',
+    '| docs     | doc-updater | reviewer | ' + docPath + ' | 1 | sequence | — | — | — | — |',
+    '| finalize | finalize    | docs     | —           | 1 | sequence | — | — | — | — |', '',
+    '## Node Ledger', '',
+    '| id | status |', '| --- | --- |',
+    '| writer | pending |', '| reviewer | pending |', '| docs | pending |', '| finalize | pending |', '',
+  ].join('\n') + '\n';
+
+  const builtinConsumed = validator.validatePlan(g4Plan('README.md'), { forFreeze: true });
+  assert(builtinConsumed.result === 'refuse'
+    && Array.isArray(builtinConsumed.errors)
+    && builtinConsumed.errors.some(e => /g4_common_certifier_uncovered/.test(e) && /docs/.test(e)),
+    'R3 G4: a downstream doc-updater writing built-in test-consumed prose (README.md) refuses uncovered, got '
+      + JSON.stringify({ result: builtinConsumed.result, errors: builtinConsumed.errors }));
+
+  const customConsumed = validator.validatePlan(
+    g4Plan('notes/custom.md', ['validation_test_consumes: notes/custom.md']), { forFreeze: true });
+  assert(customConsumed.result === 'refuse'
+    && customConsumed.errors.some(e => /g4_common_certifier_uncovered/.test(e) && /docs/.test(e)),
+    'R3 G4: a plan-declared validation_test_consumes prose path is code-relevant and refuses uncovered, got '
+      + JSON.stringify({ result: customConsumed.result, errors: customConsumed.errors }));
+
+  const inertDoc = validator.validatePlan(g4Plan('docs/decisions/D-000-01.md'), { forFreeze: true });
+  assert(!(inertDoc.errors || []).some(e => /g4_common_certifier_uncovered/.test(e)),
+    'R3 G4 green control: an inert doc (docs/decisions/**) is not a code producer and G4 stays covered, got '
+      + JSON.stringify({ result: inertDoc.result, errors: inertDoc.errors }));
 }
 
 // Summary

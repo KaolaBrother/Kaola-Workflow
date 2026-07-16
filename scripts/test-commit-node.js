@@ -396,22 +396,33 @@ function assert(condition, message) {
     fs.mkdirSync(cacheDir, { recursive: true });
     const planPath = path.join(projDir, 'workflow-plan.md');
     // #463: opts.policy injects a write_overlap_policy line; opts.noGate drops the code-reviewer.
-    const metaRows = ['## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md'];
+    const metaRows = [
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: area:scripts',
+      'sink: CHANGELOG.md',
+      'code_certifier: ' + (opts.noGate ? 'none' : 'review'),
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+      'validation_timeout_minutes: 5',
+    ];
     if (opts.policy) metaRows.push('write_overlap_policy: ' + opts.policy);
     metaRows.push('');
-    const reviewDep = opts.noGate ? null : '| review   | code-reviewer | A,B   | —     | 1 | sequence        |';
+    const reviewDep = opts.noGate ? null : '| review   | code-reviewer | A,B   | —     | 1 | sequence | review-change | code-tree | sequence | — |';
     const finalizeDep = opts.noGate ? 'A,B' : 'review';
     const plan = [
       '# Workflow Plan — test-project', '',
       ...metaRows,
       '## Nodes', '',
-      '| id | role | depends_on | declared_write_set | cardinality | shape |',
-      '| --- | --- | --- | --- | --- | --- |',
-      '| seed     | code-explorer | —     | —     | 1 | sequence        |',
-      '| A        | ' + legRole + ' | seed  | ' + aSet + ' | 1 | sequence |',
-      '| B        | ' + legRole + ' | seed  | ' + bSet + ' | 1 | sequence |',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —     | —     | 1 | sequence | — | — | — | — |',
+      '| A        | ' + legRole + ' | seed  | ' + aSet + ' | 1 | sequence | — | — | — | — |',
+      '| B        | ' + legRole + ' | seed  | ' + bSet + ' | 1 | sequence | — | — | — | — |',
       ...(reviewDep ? [reviewDep] : []),
-      '| finalize | finalize      | ' + finalizeDep + '| —     | 1 | sequence        |', '',
+      '| finalize | finalize      | ' + finalizeDep + '| —     | 1 | sequence | — | — | — | — |', '',
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | complete |',
@@ -714,29 +725,38 @@ function assert(condition, message) {
       const covered = shape === 'covered';
       const nodeRows = covered
         ? [
-          '| A        | tdd-guide     | seed   | src/a.js          | 1 | sequence |',
-          '| B        | tdd-guide     | seed   | lib/b.js          | 1 | sequence |',
-          '| synth    | synthesizer   | A,B    | src/a.js lib/b.js | 1 | sequence |',
-          '| review   | code-reviewer | synth  | —                 | 1 | sequence |',
-          '| finalize | finalize      | review | —                 | 1 | sequence |',
+          '| A        | tdd-guide     | seed   | src/a.js          | 1 | sequence | — | — | — | — |',
+          '| B        | tdd-guide     | seed   | lib/b.js          | 1 | sequence | — | — | — | — |',
+          '| synth    | synthesizer   | A,B    | src/a.js lib/b.js | 1 | sequence | — | — | — | — |',
+          '| review   | code-reviewer | synth  | —                 | 1 | sequence | review-change | code-tree | sequence | — |',
+          '| finalize | finalize      | review | —                 | 1 | sequence | — | — | — | — |',
         ]
         : [
-          '| A        | tdd-guide     | seed    | src/a.js          | 1 | sequence |',
-          '| B        | tdd-guide     | seed    | lib/b.js          | 1 | sequence |',
-          '| reviewL  | code-reviewer | A,B     | —                 | 1 | sequence |',
-          '| synth    | synthesizer   | reviewL | src/a.js lib/b.js | 1 | sequence |',
-          '| finalize | finalize      | synth   | —                 | 1 | sequence |',
+          '| A        | tdd-guide     | seed    | src/a.js          | 1 | sequence | — | — | — | — |',
+          '| B        | tdd-guide     | seed    | lib/b.js          | 1 | sequence | — | — | — | — |',
+          '| reviewL  | code-reviewer | A,B     | —                 | 1 | sequence | review-legs | code-tree | sequence | — |',
+          '| synth    | synthesizer   | reviewL | src/a.js lib/b.js | 1 | sequence | — | — | — | — |',
+          '| finalize | finalize      | synth   | —                 | 1 | sequence | — | — | — | — |',
         ];
       const ledgerRows = covered
         ? ['| seed | pending |', '| A | pending |', '| B | pending |', '| synth | pending |', '| review | pending |', '| finalize | pending |']
         : ['| seed | pending |', '| A | pending |', '| B | pending |', '| reviewL | pending |', '| synth | pending |', '| finalize | pending |'];
       const plan = [
         '# Workflow Plan — test-project', '',
-        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+        '## Meta',
+        'plan_schema_version: 2',
+        'labels: area:scripts',
+        'sink: CHANGELOG.md',
+        'code_certifier: ' + (covered ? 'review' : 'reviewL'),
+        'security_certifier: none',
+        'inherited_frontier_digest: none',
+        'inherited_frontier_classes: none',
+        'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+        'validation_timeout_minutes: 5', '',
         '## Nodes', '',
-        '| id | role | depends_on | declared_write_set | cardinality | shape |',
-        '| --- | --- | --- | --- | --- | --- |',
-        '| seed     | code-explorer | —      | —                 | 1 | sequence |',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| seed     | code-explorer | —      | —                 | 1 | sequence | — | — | — | — |',
         ...nodeRows, '',
         '## Node Ledger', '',
         '| id | status |', '| --- | --- |',
@@ -881,6 +901,20 @@ function assert(condition, message) {
       'T-GB-6 (mutation): a lone undeclared stray z.js MUST refuse — a vacuous/short-circuit pass is impossible');
     cleanup(repoRoot);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer contract v2 whole-plan gate dependencies. Finalization and
+// --verdict-check consume the same graph classifier and receipt reducer.
+// ---------------------------------------------------------------------------
+{
+  const schema = require('./kaola-workflow-adaptive-schema');
+  assert(typeof planValidator.buildPlanView === 'function',
+    'review-v2 commit dependency: plan-validator exports buildPlanView');
+  assert(typeof schema.deriveGateMode === 'function',
+    'review-v2 commit dependency: adaptive-schema exports deriveGateMode');
+  assert(typeof schema.reduceReviewReceipts === 'function',
+    'review-v2 commit dependency: adaptive-schema exports reduceReviewReceipts');
 }
 
 // ---------------------------------------------------------------------------

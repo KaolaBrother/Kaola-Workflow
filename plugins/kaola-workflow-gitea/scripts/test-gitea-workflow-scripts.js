@@ -3920,6 +3920,19 @@ function testInstallSchemaPruneManifest332Gitea() {
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
     assert.strictEqual(manifest.roles.length, 16, '#463 gt AC: manifest must list 16 roles (14 base + synthesizer + metric-optimizer)');
+    for (const role of ['code-reviewer', 'adversarial-verifier']) {
+      const file = role + '.toml';
+      const sourceBytes = fs.readFileSync(path.join(giteaPluginRoot, 'agents', file));
+      const installedBytes = fs.readFileSync(path.join(agentsDir, file));
+      assert.ok(sourceBytes.equals(installedBytes),
+        'reviewer contract: installed ' + file + ' must byte-match the selected source');
+      const text = installedBytes.toString('utf8');
+      assert.deepStrictEqual(manifest.profile_contracts[file], {
+        behavior_contract_version: Number(text.match(/^behavior_contract_version = (\d+)$/m)[1]),
+        behavior_contract_hash: text.match(/^behavior_contract_hash = "([0-9a-f]{64})"$/m)[1],
+        resolved_profile_hash: text.match(/^resolved_profile_hash = "([0-9a-f]{64})"$/m)[1],
+      }, 'reviewer contract: manifest must bind behavior/profile identity for ' + file);
+    }
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
@@ -3987,11 +4000,26 @@ function testGiteaPreflight332() {
     const ce = path.join(agentsDir, 'code-explorer.toml');
     const savedCe = fs.readFileSync(ce, 'utf8');
 
+    const reviewer = path.join(agentsDir, 'code-reviewer.toml');
+    fs.writeFileSync(reviewer, fs.readFileSync(reviewer, 'utf8').replace(
+      'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+    let r = pf(['--project-root', root, '--no-autofix', '--json']);
+    let j = JSON.parse(r.stdout);
+    assert.ok(r.status !== 0 && j.status === 'profiles_stale',
+      'reviewer contract: modified project profile must refuse as profiles_stale');
+    assert.strictEqual(j.repair, `node ${installProfilesScript} ${root}`,
+      'reviewer contract: project repair must name the exact scoped installer command');
+    r = pf(['--project-root', root, '--json']);
+    assert.strictEqual(r.status, 0, 'reviewer contract: project profile drift must autofix');
+    assert.ok(fs.readFileSync(reviewer).equals(
+      fs.readFileSync(path.join(giteaPluginRoot, 'agents', 'code-reviewer.toml'))),
+    'reviewer contract: project autofix must restore exact source bytes');
+
     // AC7a: malformed -> profiles_malformed under --no-autofix
     fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
-    let r = pf(['--project-root', root, '--no-autofix', '--json']);
+    r = pf(['--project-root', root, '--no-autofix', '--json']);
     assert.notStrictEqual(r.status, 0, '#332 gt AC7a: malformed must refuse');
-    let j = JSON.parse(r.stdout);
+    j = JSON.parse(r.stdout);
     assert.strictEqual(j.status, 'profiles_malformed', '#332 gt AC7a: status profiles_malformed');
     assert.strictEqual(j.malformed[0].role, 'code-explorer', '#332 gt AC7a: malformed role correct');
 
@@ -4044,19 +4072,28 @@ function testGiteaPreflight332() {
       j = JSON.parse(r.stdout);
       const userScope = j.scopes.find(s => s.scope === 'user');
       assert.ok(userScope.stale_files.includes('docs-lookup.toml'), '#332 gt AC10: user scope reports docs-lookup');
-      assert.ok(userScope.repair.includes('install-codex-agent-profiles.js'), '#332 gt AC10: repair command present');
+      assert.strictEqual(userScope.repair, `node ${installProfilesScript} ${home}`,
+        '#332 gt AC10: user scope repair must be the exact scoped installer command');
       fs.unlinkSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
       runInstallProfiles(home);
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
       assert.strictEqual(r.status, 0, '#332 gt AC10: doctor exit 0 when both clean');
       const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
       fs.mkdirSync(cacheAgents, { recursive: true });
-      fs.writeFileSync(path.join(cacheAgents, 'x.toml'), 'model_reasoning_effort = "medium"\ndeveloper_instructions = """x"""\n');
+      fs.copyFileSync(path.join(giteaPluginRoot, 'agents', 'code-reviewer.toml'),
+        path.join(cacheAgents, 'code-reviewer.toml'));
+      const cachedReviewer = path.join(cacheAgents, 'code-reviewer.toml');
+      fs.writeFileSync(cachedReviewer, fs.readFileSync(cachedReviewer, 'utf8').replace(
+        'Precision-first code review specialist', 'Precision-first cached code review specialist'));
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
-      assert.strictEqual(r.status, 0, '#332 gt AC11: malformed plugin_cache must not change exit code');
+      assert.strictEqual(r.status, 1, '#332 gt AC11: stale plugin_cache must fail doctor');
       j = JSON.parse(r.stdout);
       const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
-      assert.ok(cacheScope && cacheScope.read_only === true && cacheScope.malformed.length > 0, '#332 gt AC11: cache scope read_only + malformed evidence');
+      assert.ok(cacheScope && cacheScope.read_only === true && cacheScope.stale_profiles.length > 0,
+        '#332 gt AC11: cache scope read_only + stale profile evidence');
+      assert.strictEqual(cacheScope.repair,
+        'codex plugin remove p@m && codex plugin add p@m  # refresh plugin cache',
+        '#332 gt AC11: cache scope must name the exact refresh command');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(proj, { recursive: true, force: true });

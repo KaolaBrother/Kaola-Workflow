@@ -253,16 +253,62 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) span
   transiently stale mid-run):
   `node plugins/kaola-workflow-{gitlab,gitea}/scripts/validate-kaola-workflow-{gitlab,gitea}-contracts.js --forbidden-only <file>...`
 
-**Agent-profile md↔toml token-pin parity contract (#422, see `docs/decisions/D-422-01.md`).**
+## Generated Reviewer Profiles and Proof Boundaries (#696 / D-696-01)
+
+`code-reviewer` and `adversarial-verifier` are generated-profile exceptions to the ordinary
+hand-mirrored agent workflow:
+
+1. Edit `templates/reviewers/behavior-contracts.json` for runtime-neutral behavior or
+   `templates/reviewers/runtime-adapters.json` for closed tools/model-policy/evidence-transport data.
+   Adapter data must never grow arbitrary prompt, prefix, suffix, or instruction fields.
+2. Edit `scripts/generate-reviewer-profiles.js` only when rendering or validation rules change.
+3. Run `node scripts/generate-reviewer-profiles.js --write`, then `--check`. Never hand-edit any of
+   its three Claude or six Codex outputs.
+4. Run `node scripts/test-agent-profile-parity.js` and `node scripts/test-opencode-edition.js`.
+   OpenCode must preserve normalized behavior-core bytes and identity after its runtime transform.
+
+`behavior_contract_hash` establishes deterministic runtime-neutral contract equivalence.
+`resolved_profile_hash` establishes deterministic complete-render byte identity. Neither hash means
+that stochastic models must emit identical findings, explanations, or outcomes. Installer/preflight
+checks may claim exact selected-source, installed-file, manifest, and plugin-cache bytes only; they
+must not claim proprietary prompt-load attestation without a public runtime introspection contract.
+Codex reviewer profiles preserve inherit-by-omission and may not emit top-level `model` or
+`model_reasoning_effort`.
+
+## Reviewer Contract V2 Authoring and Local Validation (#693 / #697 / #698)
+
+- Every newly authored adaptive plan declares `plan_schema_version: 2`; do not rewrite a verified
+  frozen field-absent/schema-1 plan. Contract, context, receipt, and journal versions must match
+  exactly before spawn or state mutation.
+- Author the complete schema-2 validation policy and gate metadata. Keep one command authority:
+  refine the existing `validation_command` with `validation_cwd`, repetitions, `all` pass rule,
+  timeout, and a canonical environment allowlist. Do not introduce a second command field.
+- Never infer adversarial mode from a role name, prompt, or desired outcome. The shared
+  forward-reachability `deriveGateMode` result is authoritative at every lifecycle seam.
+- Keep harness-owned `execution_status` and `gate_effect` out of role evidence. Reviewers emit the
+  domain outcome and supplied identities; the harness verifies bindings before findings and derives
+  the other axes.
+- Execute inherited validation obligations with `kaola-workflow-validation-runner.js` using the
+  exact frozen policy, and place canonical receipts in `.cache/validation-vectors/`. Timeout, signal,
+  mixed results, candidate mutation, unresolved executable identity, or other incomparability is
+  `inconclusive`, never pass.
+- Treat `review_scope_expanded` and `review_nonconvergent` as settled typed `replan_required`
+  handoffs. Stop the frozen run and surface the packet. This layer must not select a replacement
+  writer/topology, thaw the plan, or activate a child epoch.
+- Correctness gates are owned and local. Do not add a hosted pipeline as a required plan node,
+  completion authority, or Finalization precondition.
+
+**Non-generated agent-profile md↔toml token-pin parity contract (#422, see
+`docs/decisions/D-422-01.md`).**
 Three-part machine-enforced contract:
 
 1. **`.toml` triple byte-identity** — `validate-script-sync.js` `BYTE_IDENTICAL_GROUPS`
    includes a programmatic entry for every `plugins/kaola-workflow/agents/*.toml` file
-   (built via `readdirSync`), covering 15 base-role profiles and 6 `-max` model variants.
+   (built via `readdirSync`), covering all 16 base-role profiles.
    Any byte divergence between the three plugin-tree copies of a `.toml` reds the validation
    run. A new profile added to the codex tree is auto-covered.
 
-2. **Feature-token mirroring** — `scripts/test-agent-profile-parity.js` enforces that any
+2. **Feature-token mirroring** — for non-generated roles, `scripts/test-agent-profile-parity.js` enforces that any
    token in the curated `FEATURE_TOKENS` list that is present in an `agents/<name>.md` MUST
    also appear in all three `.toml` twins. Add a token to `FEATURE_TOKENS` only after it is
    GREEN at HEAD (present in both the `.md` and all three `.toml` twins). A drift between the
@@ -272,8 +318,9 @@ Three-part machine-enforced contract:
    pinned by all four `validate-*-contracts.js`, so a missing or renamed guard file reds
    every chain.
 
-**Workflow:** When adding a feature paragraph to an `agents/<name>.md`, mirror the feature
-token(s) into all three `.toml` twins first, then pin the token in `FEATURE_TOKENS`.
+**Workflow:** For a non-generated role, mirror a new feature paragraph/token into all three `.toml`
+twins first, then pin it in `FEATURE_TOKENS`. For the two generated reviewers, use the canonical
+JSON + generator workflow above instead.
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
 (`plugins/kaola-workflow/`, `plugins/kaola-workflow-gitlab/`, `plugins/kaola-workflow-gitea/`)

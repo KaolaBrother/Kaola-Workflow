@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
+const reviewerGenerator = require('./generate-reviewer-profiles');
 const pinnedCommit = '922d2d8f8b64f4e50936e24465cb3bcac81ac0e1';
 // Vendored agents carry full upstream provenance (URL + blob-sha + sha256 + license).
 const vendoredAgents = [
@@ -173,6 +174,30 @@ for (const agentName of localAgents) {
   assert(content.includes('kaola-workflow-managed-agent: true'), `${relativePath} must carry the managed marker`);
 }
 
+// Generated reviewer profiles are versioned artifacts, not provenance-exempt free-form files.
+// The generator owns all nine outputs; this wall binds the Claude source files to the same
+// behavior identity and complete-byte self-hash later consumed by both installers.
+const generatedReviewerErrors = reviewerGenerator.checkGeneratedProfiles(root);
+assert(generatedReviewerErrors.length === 0,
+  'generated reviewer profiles must be current: ' + generatedReviewerErrors.join('; '));
+for (const relativePath of [
+  'agents/code-reviewer.md',
+  'agents/profiles/higher/code-reviewer.md',
+  'agents/adversarial-verifier.md',
+]) {
+  const content = read(relativePath);
+  reviewerGenerator.verifyResolvedProfileHash(content);
+  const identity = reviewerGenerator.behaviorIdentityFromCore(content);
+  const topVersion = /^behavior_contract_version:\s*(\d+)$/m.exec(content);
+  const topHash = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(content);
+  assert(topVersion && Number(topVersion[1]) === 2,
+    relativePath + ' must carry behavior_contract_version 2');
+  assert(topHash && topHash[1] === identity.behavior_contract_hash,
+    relativePath + ' top-level behavior hash must bind its normalized behavior core');
+  assert(identity.behavior_contract_version === 2,
+    relativePath + ' behavior core must carry contract version 2');
+}
+
 // Future-agent wall: every node-role agent carries both halves of its evidence contract.
 checkFutureAgentWall(
   path.join(root, 'agents'),
@@ -196,6 +221,14 @@ assert(!installScript.includes('Continue installation anyway'), 'install.sh must
 assert(!installScript.includes('Install ECC:'), 'install.sh must not print ECC install instructions');
 assert(installScript.includes('install_agent_files'), 'install.sh must install vendored agents');
 assert(installScript.includes('.kaola-workflow-agent-manifest'), 'install.sh must track managed agent hashes');
+assert(installScript.includes('generate-reviewer-profiles.js" --check'),
+  'install.sh must reject stale generated reviewer sources before writing agents');
+assert(installScript.includes('refresh_reviewer_resolved_profile_hash'),
+  'install.sh must recompute the complete-byte reviewer self-hash after model inheritance rewrite');
+assert(installScript.includes('reviewer_manifest_metadata'),
+  'install.sh must persist reviewer behavior and resolved-profile identities in its managed manifest');
+assert(installScript.includes('filesystem bytes only; runtime prompt loading is not attested'),
+  'install.sh must state the filesystem-only proof boundary');
 
 const uninstallScript = read('uninstall.sh');
 assert(uninstallScript.includes('kaola-workflow-managed-agent: true'), 'uninstall.sh must use the managed marker');

@@ -131,6 +131,10 @@ const SLOTS = {
     },
   },
   'pr-replan-control-plane': replanSlot('replan-plan-run'),
+  'pr-review-validation-runner': {
+    command: "Use the already-resolved `$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js`; pass the exact hash-covered policy values and write one canonical JSON receipt per obligation without shell re-derivation.",
+    skill: "Resolve `kaola-workflow-validation-runner.js` from the same installed runtime as the adaptive node; pass the exact hash-covered policy values and write one canonical JSON receipt per obligation without shell re-derivation.",
+  },
 
   // ---- next (frontmatter 2-shape + H1; both forge-invariant) -----------
   "nx-frontmatter": {"command":"---\ndescription: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.\nargument-hint: (optional project name or task description)\n---","skill":"---\nname: kaola-workflow-next\ndescription: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and phase artifacts.\n---"},

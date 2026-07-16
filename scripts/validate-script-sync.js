@@ -120,6 +120,17 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
+    // The validation runner carries no runtime- or forge-specific names, paths, or imports.
+    // All install surfaces execute the same identity/reduction contract byte-for-byte.
+    label: 'validation-runner module copies',
+    files: [
+      'scripts/kaola-workflow-validation-runner.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-validation-runner.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-validation-runner.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-validation-runner.js',
+    ],
+  },
+  {
     // #399: the contractor Step-8a ledger-regression guard is forge-neutral (no rename) but the
     // gitlab/gitea finalize SKILLs shell-resolve it from their OWN tree (their contract validators
     // forbid a base-tree `plugins/kaola-workflow/scripts/` reference), so it byte-ships to all four.

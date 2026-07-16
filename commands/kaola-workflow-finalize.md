@@ -44,6 +44,28 @@ Finalization proves the workflow is complete and records final metadata. Do not
 repair inline when final validation fails except under the Trivial Inline Edit
 Exception below.
 
+<!-- PIN: reviewer-contract-v2-finalization -->
+### Reviewer Contract Version and Freshness Gate
+
+For an adaptive plan, resolve the frozen contract version before accepting any gate evidence.
+Under `plan_schema_version: 2` and `contract_version: 2`, `--verdict-check` verifies normalized
+receipts from the planner-designated `code_certifier` and, when present, `security_certifier`;
+a plain verdict line is not sufficient. Each receipt must match the frozen `resolved_profile_hash`,
+`review_context_hash`, and recomputed current `candidate_digest`. Treat a mismatch as the typed
+failure `schema-2 certifier receipt is stale for the current candidate` and block finalization.
+
+For every certifier, read its canonical review context and enforce every nonempty
+`validation_obligations` entry against the canonical pass receipts in
+`.cache/validation-vectors/`. The obligated command/vector identities and current candidate must
+match exactly; a missing, failed, inconclusive, timed-out, signaled, drifted, or stale receipt keeps
+the final gate open. Only after all certifier and validation-vector freshness checks pass may the
+existing adaptive finalization gates authorize closure.
+
+A verified frozen legacy plan with `contract_version: 1` keeps its existing schema-1
+verdict/evidence semantics and does not acquire schema-2 receipt requirements. Never upgrade or
+rewrite that plan in place.
+<!-- /PIN -->
+
 ## Prerequisite
 
 Read `workflow_path` from `kaola-workflow/{project}/workflow-state.md` (defaults to `full` when absent).

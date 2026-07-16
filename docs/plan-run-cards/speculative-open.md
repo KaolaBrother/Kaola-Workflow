@@ -33,8 +33,9 @@ A node is **speculative-eligible** when:
 
 When these conditions hold, `open-next` refuses with `reason: gate_not_complete` (naming the
 speculative gate). The node is NOT opened serially via `open-next` at either tier — it is
-admitted only through `open-ready`, the running-set scheduler's open path (see §8.1 for what
-happens if the gate itself was opened outside that path).
+admitted only through `open-ready`, the running-set scheduler's open path. This holds regardless of
+how the gate itself was opened: a serially-opened gate (via `open-next` or the fused advance) is
+recorded into the running set, so `open-ready` admits its speculative descendants (see §8.1).
 
 **The two tiers differ ONLY in ceremony, never in eligibility or safety:**
 
@@ -225,21 +226,26 @@ gate (or the same gate rerun) completes.
 
 ## 8. Operational gotchas (learned from live use)
 
-### 8.1 A gate opened via the fused serial advance cannot admit speculation
+### 8.1 A gate opened via the fused serial advance now admits speculation
 
-An authored speculative topology needs its gate node to be opened through the running-set
-**scheduler**'s open path (`open-ready`), not the plain serial path (`open-next`, including the
-fused serial advance `close-and-open-next` auto-continues into). If the gate is currently
-`in_progress` as a bare serial node (exactly one `in_progress` row, no live running set),
-calling `open-ready` to fan out its speculative descendants refuses with
-`reason: serial_node_live` — the guard prologue's live-coordination layer treats a
-serial-opened node and the scheduler as mutually exclusive, precisely so the two openers never
-race the same ledger row.
+A gate (review gate or `main-session-gate`) is opened serially — through `open-next` or the fused
+serial advance `close-and-open-next` auto-continues into — and is recorded into the running set as
+a `kind: gate` member at open time. Because a live gate is now a running-set member, `open-ready`
+sees `runningSetLive` (not `serialLive`) and admits the gate's eligible speculative descendants
+under `speculative_open_policy: auto` (or `consent`) without any extra step. The gate node carries
+no write set and is not a fan-out slot occupant, so it never consumes a speculative read slot and
+never trips the write-exclusivity fences.
 
-**Recovery:** route the gate's own open through `open-ready` instead of the serial path (rather
-than `open-next`), then re-run `open-ready` to admit the speculative frontier — a gate that is
-itself scheduler-tracked does not trip this exclusion. Plan topology that intends to exercise a
-speculative frontier should route its gate's own open through `open-ready` from the start.
+Historically this refused with `reason: serial_node_live`: a serially-opened gate was invisible to
+the running set, so the live-coordination layer read exactly one `in_progress` row with no live
+running set and treated the gate and the scheduler as mutually exclusive. The manual recovery
+(re-open the gate through `open-ready` first) is no longer needed — the gate's own serial open now
+records it.
+
+For the operator-directed path, `open-next --node-id {descendant}` on a gate-blocked read node
+still refuses `gate_not_complete` (naming the open gate) so the speculative open is routed through
+`open-ready`; this stays the more-specific refusal even though the gate is now a live running-set
+member.
 
 ### 8.2 Do not land parent-branch commits while a speculative leg is open
 
@@ -287,6 +293,6 @@ open-next -> gate_not_complete
               +-- write-bearing member (always) --------------> discard-speculative --node-id {id}
                                                                   -> orient -> re-enter loop
 
-Gotchas: gate opened via the fused serial advance -> open-ready refuses serial_node_live (§8.1).
+Gotchas: gate opened via the fused serial advance -> open-ready ADMITS its speculation (§8.1).
          parent commit lands while a leg is open   -> close refuses leg_base_unreachable (§8.2).
 ```

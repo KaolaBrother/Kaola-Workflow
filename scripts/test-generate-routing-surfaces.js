@@ -14,8 +14,11 @@
 // `generate-routing-surfaces.js --check`.
 
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
+const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
-const { SLOTS } = require('../templates/routing/slots.js');
+const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
+const fs = require('fs');
+const path = require('path');
 
 let passed = 0;
 let failed = 0;
@@ -176,6 +179,57 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   try { renderSkeleton('<!-- REGION:command -->\nx', ctx('command', 'github'), { slots: {}, splices: {} }); }
   catch (e) { threw = true; }
   assert(threw, 'unterminated REGION throws');
+}
+
+// ---------------------------------------------------------------------------
+// Real plan-run generation contract: all six outputs must be exact renders of
+// the canonical skeleton and carry the complete reviewer-contract-v2 execution
+// block. This is deliberately in the render-engine test (not only the CLI
+// --check) so a field can neither disappear from every generated surface nor be
+// hand-added to an output without its canonical source.
+// ---------------------------------------------------------------------------
+{
+  const repo = path.resolve(__dirname, '..');
+  const rows = GENERATED_SURFACES.filter(row => row.topic === 'plan-run');
+  eq(rows.length, 6, 'real plan-run registry derives exactly six surfaces');
+  const ir = { slots: SLOTS, splices: SPLICES };
+  const required = [
+    '<!-- PIN: reviewer-contract-v2-execution -->',
+    '`plan_schema_version`',
+    '`contract_version`',
+    '`behavior_contract_version`',
+    '`behavior_contract_hash`',
+    '`resolved_profile_hash`',
+    '`review_context_hash`',
+    '`review_context_path`',
+    '`candidate_digest`',
+    '`gate_mode`',
+    '`logical_gate`',
+    '`gate_claim`',
+    '`gate_surface`',
+    '`gate_aggregation`',
+    '`validation_obligations`',
+    '`.cache/validation-vectors/`',
+    '`replan_required`',
+    '`review_scope_expanded`',
+    '`review_nonconvergent`',
+    '`contract_version: 1`',
+  ];
+  for (const row of rows) {
+    const skeleton = fs.readFileSync(path.join(repo, 'templates', 'routing', row.skeleton), 'utf8');
+    const rendered = renderSkeleton(skeleton, { surface_type: row.surface_type, forge: row.forge }, ir);
+    const committed = fs.readFileSync(path.join(repo, row.path), 'utf8');
+    eq(committed, rendered, `real plan-run byte identity: ${row.path}`);
+    for (const token of required) {
+      assert(rendered.includes(token), `real plan-run v2 field ${token} propagates to ${row.path}`);
+    }
+    const marker = rendered.indexOf('<!-- PIN: reviewer-contract-v2-execution -->');
+    const end = rendered.indexOf('<!-- /PIN -->', marker);
+    const block = marker >= 0 && end > marker ? rendered.slice(marker, end) : '';
+    assert(block.length > 0, `real plan-run v2 block is bounded on ${row.path}`);
+    assert(!/(?:#\d+|\bD-\d+-\d+\b|\bADR[- ]?\d+\b)/i.test(block),
+      `real plan-run v2 block carries rules without issue/decision provenance on ${row.path}`);
+  }
 }
 
 if (failed > 0) {

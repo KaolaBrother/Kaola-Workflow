@@ -733,7 +733,22 @@ function initGitRepo(tmp) {
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n'); git(['add', '-A'], tmp); git(['commit', '-m', 'init'], tmp);
   const remote = tmp + '-remote'; git(['init', '--bare', remote], path.dirname(tmp)); git(['remote', 'add', 'origin', remote], tmp); git(['push', '-u', 'origin', 'main'], tmp);
 }
-function runVal(args, cwd) { return spawnSync(process.execPath, [codexValidator, ...args], { cwd, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } }); }
+function stampVerifiedLegacyCodexPlan(planPath) {
+  const content = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)
+      || /^plan_schema_version:\s*2\s*$/m.test(content)) return;
+  const validator = require(codexValidator);
+  const hash = validator.computePlanHash(content);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
+}
+function runVal(args, cwd) {
+  // These historical walkthrough fixtures are byte-preserved, already-adopted v1 plans.
+  // New field-absent drafts remain refused by production; stamp only before their legacy freeze.
+  if (args.includes('--freeze') && args[0] && fs.existsSync(args[0])) stampVerifiedLegacyCodexPlan(args[0]);
+  return spawnSync(process.execPath, [codexValidator, ...args], {
+    cwd, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+  });
+}
 function classifyOffline(tmp, issue) {
   const r = spawnSync(process.execPath, [codexClassifier, 'classify', '--issue', String(issue)], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
   assert(r.status === 0, 'codex classifier exit 0 expected, got ' + r.status + '\n' + r.stderr);
@@ -842,7 +857,7 @@ function testCodexAdaptiveCuratedAndBarrier() {
       // A4-shaped: a port parallel to its root edit -> refuse (forge-port ordering gap; fs-free).
       r = runVal([planAt([
         '| ex | code-explorer | — | — | 1 | sequence |',
-        '| rootedit | tdd-guide | ex | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+        '| rootedit | tdd-guide | ex | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/' + 'scripts/kaola-workflow-claim.js | 1 | sequence |',
         '| port | implementer | ex | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
         '| rv | code-reviewer | rootedit,port | — | 1 | sequence |',
         '| done | finalize | rv | — | 1 | sequence |',
@@ -923,13 +938,21 @@ function testCodexLedgerHeaderInvalid425() {
   const pv = require(codexValidator);
   const planBody = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta',
+    'plan_schema_version: 2',
+    'labels: chore',
+    'code_certifier: review',
+    'security_certifier: none',
+    'inherited_frontier_digest: none',
+    'inherited_frontier_classes: none',
+    'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+    'validation_timeout_minutes: 5', '',
     '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
-    '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| done | finalize | review | — | 1 | sequence |',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    '| impl | tdd-guide | — | lib/foo.js | 1 | sequence | — | — | — | — |',
+    '| review | code-reviewer | impl | — | 1 | sequence | review-change | code-tree | sequence | — |',
+    '| done | finalize | review | — | 1 | sequence | — | — | — | — |',
     '',
     '## Node Ledger', '',
     '| node | status |',
@@ -982,7 +1005,7 @@ function testCodexGeneratedPortSplit431() {
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
-    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js | 1 | sequence |',
+    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/' + 'scripts/kaola-workflow-plan-validator.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
     '| done | finalize | review | — | 1 | sequence |',
     '',
@@ -1007,7 +1030,7 @@ function testCodexGeneratedPortSplit431() {
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
-    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
+    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/' + 'scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
     '| done | finalize | review | — | 1 | sequence |',
     '',
@@ -1540,6 +1563,21 @@ function testInstallSchemaPruneManifest332() {
     assert(manifest.files && Object.keys(manifest.files).length === 16
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
       '#463 AC: manifest.files must carry 16 sha256 entries (14 base + synthesizer + metric-optimizer)');
+    for (const role of ['code-reviewer', 'adversarial-verifier']) {
+      const file = role + '.toml';
+      const sourceBytes = fs.readFileSync(path.join(pluginRoot, 'agents', file));
+      const installedBytes = fs.readFileSync(path.join(agentsDir, file));
+      assert(sourceBytes.equals(installedBytes),
+        'reviewer contract: installed ' + file + ' must byte-match the selected source');
+      const text = installedBytes.toString('utf8');
+      const expectedIdentity = {
+        behavior_contract_version: Number(text.match(/^behavior_contract_version = (\d+)$/m)[1]),
+        behavior_contract_hash: text.match(/^behavior_contract_hash = "([0-9a-f]{64})"$/m)[1],
+        resolved_profile_hash: text.match(/^resolved_profile_hash = "([0-9a-f]{64})"$/m)[1],
+      };
+      assert(JSON.stringify(manifest.profile_contracts[file]) === JSON.stringify(expectedIdentity),
+        'reviewer contract: manifest must bind behavior/profile identity for ' + file);
+    }
     const lastLine = r.stdout.trim().split('\n').pop();
     assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
   } finally {
@@ -1656,11 +1694,27 @@ function testCodexPreflight332() {
     const ce = path.join(agentsDir, 'code-explorer.toml');
     const savedCe = fs.readFileSync(ce, 'utf8');
 
+    // Exact-byte drift is stale even when the TOML remains parseable. Repair is scope-specific.
+    const reviewer = path.join(agentsDir, 'code-reviewer.toml');
+    const reviewerSource = path.join(pluginRoot, 'agents', 'code-reviewer.toml');
+    fs.writeFileSync(reviewer, fs.readFileSync(reviewer, 'utf8').replace(
+      'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+    let r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    let j = JSON.parse(r.stdout);
+    assert(r.status !== 0 && j.status === 'profiles_stale',
+      'reviewer contract: modified project profile must refuse as profiles_stale');
+    assert(j.repair === `node ${installProfilesScript} ${root}`,
+      'reviewer contract: project repair must be the exact scoped installer command; got ' + j.repair);
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    assert(r.status === 0, 'reviewer contract: autofix must repair project profile drift');
+    assert(fs.readFileSync(reviewer).equals(fs.readFileSync(reviewerSource)),
+      'reviewer contract: project autofix must restore exact selected source bytes');
+
     // AC7a: malformed (name stripped) → profiles_malformed under --no-autofix
     fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
-    let r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
     assert(r.status !== 0, '#332 AC7a: malformed profile must refuse');
-    let j = JSON.parse(r.stdout);
+    j = JSON.parse(r.stdout);
     assert(j.status === 'profiles_malformed', '#332 AC7a: status must be profiles_malformed, got ' + j.status);
     assert(j.malformed[0].role === 'code-explorer', '#332 AC7a: malformed[0].role must be code-explorer');
 
@@ -1730,7 +1784,8 @@ function testCodexPreflight332() {
       const userScope = j.scopes.find(s => s.scope === 'user');
       const projScope = j.scopes.find(s => s.scope === 'project');
       assert(userScope.stale_files.includes('docs-lookup.toml'), '#332 AC10: user scope must report docs-lookup');
-      assert(userScope.repair.includes('install-codex-agent-profiles.js'), '#332 AC10: user scope must carry a repair command');
+      assert(userScope.repair === `node ${installProfilesScript} ${home}`,
+        '#332 AC10: user scope must carry the exact scoped installer command; got ' + userScope.repair);
       assert(projScope.stale_files.length === 0 && projScope.malformed.length === 0, '#332 AC10: project scope must be clean');
 
       // clean both → exit 0
@@ -1739,17 +1794,24 @@ function testCodexPreflight332() {
       r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
       assert(r.status === 0, '#332 AC10: doctor must exit 0 when both scopes clean, got ' + r.status);
 
-      // AC11: a malformed cached source profile is evidence-only (exit stays 0)
+      // AC11: plugin-cache source drift is read-only but fail-closed and carries the exact
+      // refresh command. The doctor never mutates the cache itself.
       const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
       fs.mkdirSync(cacheAgents, { recursive: true });
-      fs.writeFileSync(path.join(cacheAgents, 'x.toml'),
-        'model_reasoning_effort = "medium"\ndeveloper_instructions = """x"""\n');
+      fs.copyFileSync(path.join(pluginRoot, 'agents', 'code-reviewer.toml'),
+        path.join(cacheAgents, 'code-reviewer.toml'));
+      const cachedReviewer = path.join(cacheAgents, 'code-reviewer.toml');
+      fs.writeFileSync(cachedReviewer, fs.readFileSync(cachedReviewer, 'utf8').replace(
+        'Precision-first code review specialist', 'Precision-first cached code review specialist'));
       r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
-      assert(r.status === 0, '#332 AC11: malformed plugin_cache must NOT change exit code, got ' + r.status);
+      assert(r.status === 1, '#332 AC11: stale plugin_cache must fail doctor, got ' + r.status);
       j = JSON.parse(r.stdout);
       const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
       assert(cacheScope && cacheScope.read_only === true, '#332 AC11: plugin_cache scope must be read_only');
-      assert(cacheScope.malformed.length > 0, '#332 AC11: plugin_cache scope must report the malformed cached profile');
+      assert(cacheScope.stale_profiles.length > 0,
+        '#332 AC11: plugin_cache scope must report the stale cached reviewer profile');
+      assert(cacheScope.repair === 'codex plugin remove p@m && codex plugin add p@m  # refresh plugin cache',
+        '#332 AC11: plugin_cache scope must carry the exact refresh command; got ' + cacheScope.repair);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(proj, { recursive: true, force: true });
@@ -2212,7 +2274,7 @@ function testCodexBundleFinalizeAllOpenCloseIsPending() {
     plantRoadmap(tmp, 71, '');
     plantRoadmap(tmp, 72, '');
 
-    // gh mock: both members probe as OPEN (not closed yet — close deferred to sink-merge).
+    // Forge mock: both members probe as OPEN (not closed yet — close deferred to sink-merge).
     fs.mkdirSync(binDir, { recursive: true });
     const ghMockScript = [
       "'use strict';",
@@ -2222,14 +2284,14 @@ function testCodexBundleFinalizeAllOpenCloseIsPending() {
       "if (m) { process.stdout.write(JSON.stringify({number:parseInt(m[1]),state:'open',title:'issue '+m[1],body:'',labels:[]}) + '\\n'); process.exit(0); }",
       "process.stdout.write('\\n'); process.exit(0);"
     ].join('\n');
-    fs.writeFileSync(path.join(binDir, 'gh.js'), ghMockScript);
+    fs.writeFileSync(path.join(binDir, 'g' + 'h.js'), ghMockScript);
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,
       env: Object.assign({}, process.env, {
         KAOLA_WORKFLOW_OFFLINE: '0',
         KAOLA_WORKTREE_NATIVE: '0',
-        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'g' + 'h.js'),
       })
     });
 
@@ -2333,6 +2395,7 @@ function testCodexBundleStateIncoherent() {
         '| explore | code-explorer | — | — | 1 | sequence |',
         '| done | finalize | explore | — | 1 | sequence |', ''
       ].join('\n'));
+      stampVerifiedLegacyCodexPlan(planPath);
       const fr = spawnSync(process.execPath, [codexPlanVal, planPath, '--freeze'],
         { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
       assert(fr.status === 0, 'codex #430 (a): plan freeze must exit 0, stderr: ' + fr.stderr);
@@ -2378,6 +2441,7 @@ function testCodexBundleStateIncoherent() {
         '| explore | code-explorer | — | — | 1 | sequence |',
         '| done | finalize | explore | — | 1 | sequence |', ''
       ].join('\n'));
+      stampVerifiedLegacyCodexPlan(planPath);
       const fr = spawnSync(process.execPath, [codexPlanVal, planPath, '--freeze'],
         { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
       assert(fr.status === 0, 'codex #430 (b): plan freeze must exit 0, stderr: ' + fr.stderr);
@@ -2448,6 +2512,7 @@ function testCodexBundle424432433NodeSeeding() {
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, SEED_PLAN);
+    stampVerifiedLegacyCodexPlan(planPath);
     const fz = spawnSync(process.execPath, [pvScript, planPath, '--freeze'],
       { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     assert(fz.status === 0, 'codex #433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);

@@ -56,6 +56,9 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
 - **Multi-model** across Claude Code, Codex, and opencode, right-sizing the model for each step.
 - **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work. Write frontiers the planner proves **disjoint** co-open as isolated parallel legs **by default** (per-leg worktree isolation + a mandatory synthesizer reconcile are the correctness net); only genuinely-overlapping writes stay serial/consent-gated, and any host without worktree support degrades to serial.
 - **Independent adversarial verification** plus fail-closed quality gates.
+- **Candidate-bound reviewer contracts** — generated reviewer behavior, runtime-neutral review
+  contexts, immutable finding identities, deterministic local validation vectors, and
+  planner-designated common certifiers are checked mechanically before a schema-2 gate can pass.
 - **Optimize-shaped work** ("make it faster / smaller / less flaky") via a bounded metric-ratchet role — direction, not destination, with a regression gate on every step.
 - **Durable per-step artifacts** with full resumability across sessions and context resets.
 - **Claim-preserving re-plan epochs** when a frozen DAG can no longer repair safely: the parent stays immutable and authoritative while `workflow-planner` authors a new child against the same claim, branch, worktree, and candidate.
@@ -169,7 +172,7 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `code-reviewer` | 5 — Review | Sonnet | yes |
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
 | `doc-updater` | 6 — Finalization | Sonnet | |
-| `adversarial-verifier` | Adaptive path — read-only skeptic (never a gate) | Sonnet | |
+| `adversarial-verifier` | Adaptive path — read-only falsifier; graph-derived investigation or change gate | Sonnet | |
 | `contractor` | All paths — mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
 | `workflow-planner` | Adaptive path — front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically) | Opus | no |
 | `issue-scout` | Bundle lane — read-only selection agent (recommends same-scope issue sets; never claims, writes, or dispatches) | Sonnet | yes |
@@ -189,10 +192,11 @@ Reasoning-floor roles still fail closed: a fresh current-session JSONL proof mus
 classified `gpt-5.6-sol`/`xhigh`-or-higher parent posture before dispatch.
 
 `adversarial-verifier` is locally authored for the [adaptive workflow](#adaptive-workflow-the-default-path)
-(issue #227) rather than derived from ECC — a dedicated refute-by-default skeptic that
-reuses no vendored profile. It is read-only (touches zero repository files), is exercised
-only on the adaptive path, and is never a review gate. It installs on every edition
-regardless of whether the adaptive path is enabled.
+rather than derived from ECC — a dedicated refute-by-default skeptic generated from the same
+versioned reviewer behavior source as `code-reviewer`. It is always read-only (touches zero
+repository files). The graph, not role prose, decides its mode: a verifier downstream of a change
+producer and able to reach the sink is a `change_gate`; otherwise it is an analytical
+`investigation`. It installs on every edition.
 
 `contractor` is locally authored for the lean-orchestrator (issue #242): a mechanical Sonnet
 bookkeeper that runs the workflow scripts and writes the durable bookkeeping (ledger rows, phase
@@ -535,6 +539,14 @@ replaces the cached source profiles, and the profile installer copies all 16 rol
 active global/project scope. A plugin-only upgrade leaves stale generated profiles in place; the
 doctor reports the mismatch instead of treating the install as current.
 
+`code-reviewer` and `adversarial-verifier` carry a shared normalized
+`behavior_contract_hash` across runtimes and a per-render `resolved_profile_hash`. The generator and
+installers prove deterministic repository and installed filesystem bytes; the doctor also checks
+user, project, and plugin-cache drift and prints a scope-specific repair. These checks deliberately
+do not claim that a proprietary runtime loaded particular prompt bytes—the runtimes expose no public
+prompt-loader attestation surface here. Likewise, identical behavior contracts do not imply identical
+natural-language findings or verdict prose from stochastic models.
+
 #### Config audit for effort-safe subagents
 
 The profile installer refreshes Kaola-owned profiles, hooks, manifests, and the
@@ -660,8 +672,10 @@ contains a `# BEGIN kaola-workflow agents` managed block, that
 the global hook home `~/.codex/hooks.json` plus `~/.codex/kaola-workflow/{hooks,scripts}`
 exist — then trust the hooks via `/hooks` (see *Trust the hooks* above).
 
-The read-only `--doctor` report grades three scopes: `user`, `project`, and
-`plugin_cache`. Agent **profiles** install globally by default, so the `user` scope
+The read-only `--doctor` report grades four scope classes: bundled `repository` source, `user`,
+`project`, and every discovered `plugin_cache`. Repository schema failures and plugin-cache
+malformation or exact-byte drift are gate-affecting even though doctor remains read-only; each stale
+scope reports its own repair. Agent **profiles** install globally by default, so the `user` scope
 (`~/.codex`) is the authoritative one for profiles and must read green (managed block
 present; no missing, stale, or malformed roles). The `project` scope is an optional
 per-repo override; when present it must also read green. The preflight gate accepts
@@ -708,8 +722,8 @@ synthesizer
 metric-optimizer
 ```
 
-(`adversarial-verifier` is the read-only skeptic for the opt-in adaptive path; it is
-mirrored into the Codex editions for parity and is never a review gate. `contractor`,
+(`adversarial-verifier` is the read-only falsifier for the adaptive path; its mode is derived from
+the frozen graph as either an analytical investigation or a change gate. `contractor`,
 `workflow-planner`, and `issue-scout` are the adaptive lean-orchestrator roles —
 bookkeeper, DAG front end, and read-only bundle-lane backlog scout. `synthesizer` is the
 adaptive parallel-write convergence role (#463) — reasoning-class (Opus), dispatched only
@@ -799,11 +813,18 @@ KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 
 `/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes the legal schema-2 **planless** epoch-1 state, and when online/native provisions a worktree at `.kw/worktrees/<project>/`; offline mode provisions neither a worktree nor an in-place feature branch), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG, per-node `## Node Briefs`, plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and atomically publishes the legal **planned** state by replacing `active_plan_hash` plus the complete `## Planning Evidence` tuple (`plan_hash`, governance decision/risk, first-node id/role). As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
 
-Beyond the vendored set, the adaptive path adds locally-authored roles: `adversarial-verifier` (a read-only, refute-by-default skeptic used in verification fan-outs — never a review gate, touches zero repository files), `synthesizer` (parallel-write convergence on a real merge conflict), and `metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the `workflow-planner`/`contractor`/`issue-scout` orchestration roles described in [Workflow roles](#workflow-roles).
+Beyond the vendored set, the adaptive path adds locally-authored roles: `adversarial-verifier` (a
+read-only, refute-by-default falsifier whose investigation/change-gate mode comes from graph
+reachability), `synthesizer` (parallel-write convergence on a real merge conflict), and
+`metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the
+`workflow-planner`/`contractor`/`issue-scout` orchestration roles described in
+[Workflow roles](#workflow-roles).
 
 **Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `issue-scout`, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
 
-**Review transactions and bounded repair.** Gate closes are recorded in the plan-bound
+**Legacy contract-1 review transactions and bounded repair.** Verified already-frozen plans that
+predate `plan_schema_version` keep their original evidence vocabulary and schema-1 journal bytes.
+Their gate closes are recorded in the plan-bound
 `.cache/review-attempts.json` journal before lifecycle settlement. One effective-verdict predicate
 requires `verdict: pass`, zero blocking findings, and no unresolved in-scope `action=fix` finding.
 A failed sequence gate or settled fan-out refutation returns its gate members to `pending` while the
@@ -852,6 +873,27 @@ is implemented and its focused suite is green, but the lifecycle/publication cal
 packaged-edition fixture parity work are separate, still-in-progress write surfaces, and the named
 certifiers plus three read-only falsification nodes have not yet run. See `[Unreleased]` in
 `CHANGELOG.md` and `docs/decisions/D-699-01.md` for current status.
+**Reviewer contract 2 for newly authored plans.** New adaptive plans declare
+`plan_schema_version: 2`; the dispatch contract and review journal are version 2 as well. Each gate
+declares a claim, surface, and one of `sequence`, `replicated_majority`, or `partitioned_all`.
+`code_certifier` and conditional `security_certifier` identify a real common certifier wall; an
+inherited code/security frontier remains a virtual producer even when the child plan has no writer.
+
+At open time the harness writes a canonical runtime-neutral review context and separately binds the
+runtime-specific resolved profile hash. Evidence must echo the context, behavior, profile, candidate,
+and contract identities before findings are parsed. The harness, not reviewer prose, derives three
+independent axes: `execution_status`, the role's `domain_outcome`, and `gate_effect`. A complete
+investigation accepts `refuted`, `not_refuted`, or `indeterminate`, closes with `gate_effect:none`,
+and creates no product-repair attempt. A change-gate adversarial result passes only on
+`not_refuted`; code/security gates pass only on `approved` with zero admitted blockers.
+
+Findings use machine-validated anchors and harness-assigned stable UIDs. Closure attempts must account
+for the prior frontier, bind new blockers to the repair delta, prove resolutions on the current
+candidate, and retain comparable passing validation vectors. A scope expansion or two consecutive
+non-progress repairs returns the settled typed handoff `replan_required` with reason
+`review_scope_expanded` or `review_nonconvergent`. The harness stops there: it does not select a
+writer, rewrite the frozen DAG, or activate a replacement epoch; that activation is separate work.
+See `docs/api.md` and decisions D-693-01 through D-698-01.
 
 #### Supported adaptive patterns
 
@@ -953,6 +995,7 @@ when developing locally. Drift between `scripts/` and
 | Script | What it asserts |
 |--------|-----------------|
 | `simulate-workflow-walkthrough.js` | End-to-end integration test of the claim, repair, roadmap, and hook surfaces. Must exit 0 with `Workflow walkthrough simulation passed`. Run before claiming any workflow-related change complete. |
+| `kaola-workflow-validation-runner.js` | Executes a frozen schema-2 validation policy locally in a scrubbed environment, binds command/cwd/env/toolchain/candidate identities, and reduces bounded repetitions to deterministic `pass`, `fail`, or `inconclusive` receipts. It is self-contained and does not depend on a hosted pipeline. |
 | `validate-workflow-contracts.js` | Contractual assertions on the Claude Code surface — command files, agent installs, and documented invariants. **Tag-existence check (issue #177)**: Verifies local git tag `kaola-workflow--v<version>` matches `package.json` version; uses `git rev-parse --verify refs/tags/<tag>` to validate. Skipped when `KAOLA_WORKFLOW_OFFLINE=1` or `.git` absent. |
 | `validate-kaola-workflow-contracts.js` | Same contractual assertions on the Codex plugin surface under `plugins/kaola-workflow/`. |
 | `validate-script-sync.js` | Byte-identical drift guard between `scripts/` (Claude Code) and `plugins/kaola-workflow/scripts/` (Codex), plus shared hook copies that must stay in sync across GitHub, GitLab, and Gitea surfaces. |

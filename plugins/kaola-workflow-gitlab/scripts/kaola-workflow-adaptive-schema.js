@@ -427,7 +427,7 @@ const EPOCH_STATE_FIELD_ORDER = Object.freeze([
   'replan_phase',
   'active_snapshot_manifest_digest',
 ]);
-const HEX64_RE = /^[0-9a-f]{64}$/;
+const HEX64_RE = /^[0-9a-f]{64}$/i;
 const OBJECT_ID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function isPlainObject(value) {
@@ -1454,6 +1454,797 @@ function evaluateEffectiveVerdict(cacheText) {
   };
 }
 
+// Reviewer contract v2 ------------------------------------------------------
+//
+// These helpers are deliberately runtime/forge neutral. The validator owns the
+// Markdown -> planView adapter; every lifecycle seam consumes this one pure
+// representation and never reimplements graph classification or reduction.
+const REVIEW_PLAN_SCHEMA_VERSION = 2;
+const REVIEW_CONTRACT_VERSION = 2;
+const REVIEW_CONTEXT_SCHEMA_VERSION = 2;
+const REVIEW_JOURNAL_SCHEMA_VERSION = 2;
+const REVIEW_GATE_ROLES = Object.freeze(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
+const REVIEW_AGGREGATIONS = Object.freeze(['sequence', 'replicated_majority', 'partitioned_all']);
+const ADVERSARIAL_OUTCOMES = Object.freeze(['refuted', 'not_refuted', 'indeterminate']);
+const APPROVAL_OUTCOMES = Object.freeze(['approved', 'changes_requested']);
+const FINDING_ANCHOR_KINDS = Object.freeze([
+  'candidate_range', 'deleted_base_range', 'tree_entry_change', 'required_absence', 'evidence_observation',
+]);
+const FINDING_FAILURE_CLASSES = Object.freeze([
+  'correctness', 'security', 'data_loss', 'concurrency', 'persistence', 'compatibility',
+  'contract', 'validation', 'test_coverage', 'scope_regression', 'performance_regression',
+]);
+// HEX64_RE, isPlainObject, canonicalJson and sha256Hex are defined once near the top of this module
+// (the #692/#699 epoch-authority block) and reused here by the schema-2 review engine; the byte-identical
+// duplicates that landed with the #693/#696/#697/#698 merge were removed to keep a single module-scope
+// definition (a second `const HEX64_RE` is a redeclaration error, and TDZ forbids relying on the later copy).
+const SHA1_RE = /^[0-9a-f]{40}$/i;
+const TREE_MODE_RE = /^[0-7]{6}$/;
+
+function planNodeId(node) { return node && node.id != null ? String(node.id) : ''; }
+function planNodeRole(node) { return node && node.role != null ? String(node.role) : ''; }
+function planNodeDepends(node) {
+  const value = node && (Array.isArray(node.dependsOn) ? node.dependsOn : node.depends_on);
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+// The single gate-mode classifier. This intentionally uses forward
+// reachability, not strict post-dominance: a verifier downstream of a producer
+// remains a change gate even when another producer -> sink route bypasses it.
+function deriveGateMode(planView, node) {
+  if (!node || planNodeRole(node) !== 'adversarial-verifier') return null;
+  const plan = planView && typeof planView === 'object' ? planView : {};
+  const nodes = Array.isArray(plan.nodes) ? plan.nodes : [];
+  const byId = new Map(nodes.map(n => [planNodeId(n), n]));
+  const nodeId = planNodeId(node);
+  if (!nodeId || !byId.has(nodeId)) return 'investigation';
+  const sinkId = String(plan.sinkId || plan.sink_id || plan.sink || '');
+  if (!sinkId || !byId.has(sinkId)) return 'investigation';
+  const adjacency = new Map(nodes.map(n => [planNodeId(n), []]));
+  for (const child of nodes) {
+    for (const parent of planNodeDepends(child)) {
+      if (adjacency.has(parent)) adjacency.get(parent).push(planNodeId(child));
+    }
+  }
+  const reaches = (from, to) => {
+    if (from === to) return true;
+    const seen = new Set([from]);
+    const stack = [...(adjacency.get(from) || [])];
+    while (stack.length) {
+      const current = stack.pop();
+      if (current === to) return true;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      stack.push(...(adjacency.get(current) || []));
+    }
+    return false;
+  };
+  if (!reaches(nodeId, sinkId)) return 'investigation';
+  const producers = plan.changeProducerIds instanceof Set
+    ? [...plan.changeProducerIds].map(String)
+    : (Array.isArray(plan.changeProducerIds) ? plan.changeProducerIds.map(String) : []);
+  return producers.some(id => id !== nodeId && byId.has(id) && reaches(id, nodeId))
+    ? 'change_gate' : 'investigation';
+}
+
+function requiredReviewTokens(planView, node) {
+  if (!node || !REVIEW_GATE_ROLES.includes(planNodeRole(node))) return ['evidence-binding'];
+  const base = ['evidence-binding', 'contract_version', 'review_context_hash', 'behavior_contract_hash',
+    'resolved_profile_hash', 'candidate_digest', 'domain_outcome'];
+  const role = planNodeRole(node);
+  if (role === 'adversarial-verifier') {
+    base.push('claim_outcome');
+    if (deriveGateMode(planView, node) === 'change_gate') {
+      base.push('gate_mode', 'gate_claim', 'gate_surface', 'gate_aggregation');
+    }
+  } else {
+    base.push('gate_claim', 'gate_surface', 'gate_aggregation', 'finding_json|findings_none');
+  }
+  return base;
+}
+
+function deriveGateEffect(role, gateMode, domainOutcome, blockingFindings) {
+  const r = String(role || '');
+  const outcome = String(domainOutcome || '');
+  const blockers = Number.isInteger(blockingFindings) && blockingFindings >= 0 ? blockingFindings : 0;
+  if (r === 'adversarial-verifier') {
+    if (!ADVERSARIAL_OUTCOMES.includes(outcome)) return null;
+    if (gateMode === 'investigation') return 'none';
+    if (gateMode !== 'change_gate') return null;
+    return outcome === 'not_refuted' ? 'pass' : 'fail';
+  }
+  if (!REVIEW_GATE_ROLES.includes(r) || !APPROVAL_OUTCOMES.includes(outcome)) return null;
+  return outcome === 'approved' && blockers === 0 ? 'pass' : 'fail';
+}
+
+function buildReviewContext(input) {
+  const value = isPlainObject(input) ? input : {};
+  for (const forbidden of ['resolved_profile_hash', 'runtime', 'model', 'tools', 'evidence_transport', 'timestamp', 'absolute_path']) {
+    if (Object.prototype.hasOwnProperty.call(value, forbidden)) {
+      return { ok: false, reason: 'review_context_runtime_specific', field: forbidden };
+    }
+  }
+  const context = { schema_version: REVIEW_CONTEXT_SCHEMA_VERSION };
+  const fields = [
+    'contract_version', 'behavior_contract_version', 'behavior_contract_hash', 'plan_schema_version',
+    'plan_hash', 'claim_identity_digest', 'epoch_lineage_id', 'epoch', 'logical_gate', 'gate_mode',
+    'claim_root_base', 'candidate_digest', 'inherited_frontier', 'scope_lineage_id', 'review_phase',
+    'attempt_ordinal', 'acceptance_evidence', 'prior_findings', 'repair_delta', 'validation_obligations',
+  ];
+  for (const field of fields) context[field] = value[field];
+  const hashFields = ['behavior_contract_hash', 'plan_hash', 'claim_identity_digest', 'epoch_lineage_id',
+    'candidate_digest', 'scope_lineage_id'];
+  // A contract-2 gate context requires behavior contract version 2 exactly. A schema-2 gate role whose
+  // profile still carries a v1 (or missing) behavior identity is a silent downgrade and must refuse here
+  // rather than admit a weaker contract under a v2 plan/dispatch.
+  if (context.contract_version !== 2 || context.plan_schema_version !== 2
+    || context.behavior_contract_version !== 2
+    || !Number.isInteger(context.epoch) || context.epoch < 1
+    || !Number.isInteger(context.attempt_ordinal) || context.attempt_ordinal < 1
+    || !hashFields.every(field => typeof context[field] === 'string' && HEX64_RE.test(context[field]))) {
+    return { ok: false, reason: 'review_context_identity_malformed' };
+  }
+  if (!['investigation', 'change_gate'].includes(context.gate_mode)
+    || !['discovery', 'closure'].includes(context.review_phase)
+    || !isPlainObject(context.logical_gate)
+    || !REVIEW_AGGREGATIONS.includes(context.logical_gate.aggregation)
+    || !Array.isArray(context.logical_gate.members)
+    || !Array.isArray(context.logical_gate.surface_digests)
+    || !Array.isArray(context.logical_gate.certified_producers)
+    || !isPlainObject(context.claim_root_base)
+    || typeof context.claim_root_base.commit !== 'string'
+    || !/^[0-9a-f]{40,64}$/i.test(context.claim_root_base.commit)
+    || !HEX64_RE.test(String(context.claim_root_base.digest || ''))
+    || !isPlainObject(context.inherited_frontier)
+    || !Array.isArray(context.inherited_frontier.classes)
+    || !Array.isArray(context.acceptance_evidence)
+    || !Array.isArray(context.prior_findings)
+    || !Array.isArray(context.validation_obligations)) {
+    return { ok: false, reason: 'review_context_shape_malformed' };
+  }
+  if ((context.review_phase === 'discovery' && context.repair_delta !== null)
+    || (context.review_phase === 'closure'
+      && !validateRepairDelta(context.repair_delta, context.candidate_digest).ok)) {
+    return { ok: false, reason: 'review_context_repair_delta_malformed' };
+  }
+  try {
+    const bytes = canonicalJson(context);
+    return { ok: true, context, bytes, context_hash: sha256Hex(bytes) };
+  } catch (error) {
+    return { ok: false, reason: 'review_context_not_canonical', detail: error.message };
+  }
+}
+
+function parseReviewEvidence(input) {
+  if (isPlainObject(input)) return { ...input };
+  const text = String(input || '');
+  const out = {};
+  const keys = ['contract_version', 'review_context_hash', 'behavior_contract_hash', 'resolved_profile_hash',
+    'candidate_digest', 'domain_outcome', 'claim_outcome', 'gate_mode', 'gate_claim', 'gate_surface',
+    'gate_aggregation', 'execution_status', 'gate_effect'];
+  for (const key of keys) {
+    const re = new RegExp('^' + key + ':[ \\t]*(.*?)\\s*$', 'gm');
+    let match, last = null;
+    while ((match = re.exec(text)) !== null) last = match[1];
+    if (last !== null) out[key] = key === 'contract_version' && /^\d+$/.test(last) ? Number(last) : last;
+  }
+  out.finding_json = [];
+  out.resolution_json = [];
+  for (const [key, target] of [['finding_json', out.finding_json], ['resolution_json', out.resolution_json]]) {
+    const re = new RegExp('^' + key + ':[ \\t]*(\\{.*\\})[ \\t]*$', 'gm');
+    let match;
+    while ((match = re.exec(text)) !== null) {
+      try { target.push(JSON.parse(match[1])); } catch (_) { target.push({ __malformed: true }); }
+    }
+  }
+  return out;
+}
+
+function parseReviewEvidenceIdentity(input) {
+  if (isPlainObject(input)) {
+    const out = {};
+    for (const key of ['contract_version', 'review_context_hash', 'behavior_contract_hash',
+      'resolved_profile_hash', 'candidate_digest', 'domain_outcome', 'claim_outcome',
+      'gate_mode', 'gate_claim', 'gate_surface', 'gate_aggregation', 'execution_status', 'gate_effect']) {
+      if (Object.prototype.hasOwnProperty.call(input, key)) out[key] = input[key];
+    }
+    return out;
+  }
+  const text = String(input || '');
+  const out = {};
+  for (const key of ['contract_version', 'review_context_hash', 'behavior_contract_hash',
+    'resolved_profile_hash', 'candidate_digest', 'domain_outcome', 'claim_outcome',
+    'gate_mode', 'gate_claim', 'gate_surface', 'gate_aggregation', 'execution_status', 'gate_effect']) {
+    const re = new RegExp('^' + key + ':[ \\t]*(.*?)\\s*$', 'gm');
+    let match, last = null;
+    while ((match = re.exec(text)) !== null) last = match[1];
+    if (last !== null) out[key] = key === 'contract_version' && /^\d+$/.test(last) ? Number(last) : last;
+  }
+  return out;
+}
+
+// Binding verification is deliberately complete before any finding rows are
+// inspected. Callers may pass raw evidence text or a parsed object.
+function validateReviewEvidenceBinding(evidenceInput, dispatch, context) {
+  const evidence = parseReviewEvidenceIdentity(evidenceInput);
+  const d = isPlainObject(dispatch) ? dispatch : {};
+  const c = isPlainObject(context) ? context : {};
+  if (Object.prototype.hasOwnProperty.call(evidence, 'execution_status')
+    || Object.prototype.hasOwnProperty.call(evidence, 'gate_effect')) {
+    return { ok: false, reason: 'review_reserved_harness_field' };
+  }
+  if (d.contract_version !== 2 || c.contract_version !== 2 || evidence.contract_version !== 2) {
+    return { ok: false, reason: 'review_contract_version_mismatch' };
+  }
+  let recomputed;
+  try { recomputed = sha256Hex(canonicalJson(c)); } catch (_) {
+    return { ok: false, reason: 'review_context_malformed' };
+  }
+  if (!HEX64_RE.test(String(d.review_context_hash || ''))
+    || evidence.review_context_hash !== d.review_context_hash
+    || d.review_context_hash !== recomputed) {
+    return { ok: false, reason: 'review_context_mismatch' };
+  }
+  if (!HEX64_RE.test(String(d.behavior_contract_hash || ''))
+    || evidence.behavior_contract_hash !== d.behavior_contract_hash
+    || d.behavior_contract_hash !== c.behavior_contract_hash) {
+    return { ok: false, reason: 'review_behavior_mismatch' };
+  }
+  if (!HEX64_RE.test(String(d.resolved_profile_hash || ''))
+    || evidence.resolved_profile_hash !== d.resolved_profile_hash) {
+    return { ok: false, reason: 'review_profile_mismatch' };
+  }
+  if (!HEX64_RE.test(String(d.candidate_digest || ''))
+    || evidence.candidate_digest !== d.candidate_digest
+    || d.candidate_digest !== c.candidate_digest) {
+    return { ok: false, reason: 'review_candidate_mismatch' };
+  }
+  return { ok: true, evidence };
+}
+
+function normalizeFindingPath(raw) {
+  if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f\x7f]/.test(raw)
+    || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) return null;
+  let path = raw;
+  while (path.startsWith('./')) path = path.slice(2);
+  const parts = path.split('/').filter(part => part !== '.');
+  if (!parts.length || parts.some(part => !part || part === '..')) return null;
+  path = parts.join('/');
+  if (path.normalize('NFC') !== path) return null;
+  return path;
+}
+
+function normalizeObjectId(format, value) {
+  const f = String(format || '').toLowerCase();
+  const id = String(value || '').toLowerCase();
+  if (f === 'sha1' && SHA1_RE.test(id)) return { object_format: f, object_id: id };
+  if (f === 'sha256' && HEX64_RE.test(id)) return { object_format: f, object_id: id };
+  return null;
+}
+
+function normalizeTreeEntry(value, format) {
+  if (value === null) return null;
+  if (!isPlainObject(value) || !TREE_MODE_RE.test(String(value.tree_mode || ''))) return undefined;
+  const id = normalizeObjectId(format, value.object_id);
+  return id ? { tree_mode: String(value.tree_mode), object_id: id.object_id } : undefined;
+}
+
+function normalizeFindingAnchor(input, options) {
+  const value = isPlainObject(input) ? input : {};
+  const kind = String(value.kind || '');
+  const opts = isPlainObject(options) ? options : {};
+  if (!FINDING_ANCHOR_KINDS.includes(kind)) return { ok: false, reason: 'finding_anchor_kind_invalid' };
+  const path = kind === 'evidence_observation' ? null : normalizeFindingPath(value.path);
+  if (kind !== 'evidence_observation' && !path) return { ok: false, reason: 'finding_anchor_path_invalid' };
+  let anchor;
+  if (kind === 'candidate_range') {
+    const oid = normalizeObjectId(value.object_format, value.object_id);
+    if (!oid || !/^(?:100644|100755|120000)$/.test(String(value.tree_mode || ''))
+      || !Number.isInteger(value.start) || !Number.isInteger(value.end)
+      || value.start < 0 || value.end <= value.start
+      || (Number.isInteger(value.blob_length) && value.end > value.blob_length)) {
+      return { ok: false, reason: 'finding_anchor_candidate_range_invalid' };
+    }
+    anchor = { kind, path, object_format: oid.object_format, tree_mode: String(value.tree_mode),
+      object_id: oid.object_id, start: value.start, end: value.end };
+  } else if (kind === 'deleted_base_range') {
+    const oid = normalizeObjectId(value.object_format, value.object_id);
+    const hunk = String(value.deletion_hunk_digest || value.deletion_patch_digest || '').toLowerCase();
+    if (!oid || !TREE_MODE_RE.test(String(value.tree_mode || ''))
+      || !HEX64_RE.test(String(value.parent_candidate_digest || '')) || !HEX64_RE.test(hunk)
+      || !Number.isInteger(value.start) || !Number.isInteger(value.end)
+      || value.start < 0 || value.end <= value.start
+      || (Number.isInteger(value.blob_length) && value.end > value.blob_length)) {
+      return { ok: false, reason: 'finding_anchor_deleted_range_invalid' };
+    }
+    anchor = { kind, parent_candidate_digest: String(value.parent_candidate_digest).toLowerCase(), path,
+      object_format: oid.object_format, tree_mode: String(value.tree_mode), object_id: oid.object_id,
+      start: value.start, end: value.end, deletion_hunk_digest: hunk };
+  } else if (kind === 'tree_entry_change') {
+    const format = String(value.object_format || '').toLowerCase();
+    if (!['sha1', 'sha256'].includes(format)) return { ok: false, reason: 'finding_anchor_object_format_invalid' };
+    const base = normalizeTreeEntry(value.base, format);
+    const candidate = normalizeTreeEntry(value.candidate, format);
+    if (base === undefined || candidate === undefined || (base === null && candidate === null)
+      || canonicalJson(base) === canonicalJson(candidate)) {
+      return { ok: false, reason: 'finding_anchor_tree_change_invalid' };
+    }
+    anchor = { kind, path, object_format: format, base, candidate };
+  } else if (kind === 'required_absence') {
+    if (!HEX64_RE.test(String(value.acceptance_clause_digest || ''))
+      || !HEX64_RE.test(String(value.candidate_tree_digest || ''))) {
+      return { ok: false, reason: 'finding_anchor_absence_invalid' };
+    }
+    anchor = { kind, path, acceptance_clause_digest: String(value.acceptance_clause_digest).toLowerCase(),
+      candidate_tree_digest: String(value.candidate_tree_digest).toLowerCase() };
+  } else {
+    const observation = String(value.observation_key || '');
+    if (!HEX64_RE.test(String(value.producer_evidence_digest || ''))
+      || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(observation)) {
+      return { ok: false, reason: 'finding_anchor_evidence_invalid' };
+    }
+    anchor = { kind, producer_evidence_digest: String(value.producer_evidence_digest).toLowerCase(),
+      observation_key: observation };
+  }
+  if (value.trigger_digest !== undefined) {
+    if (!HEX64_RE.test(String(value.trigger_digest))) return { ok: false, reason: 'finding_trigger_digest_invalid' };
+    anchor.trigger_digest = String(value.trigger_digest).toLowerCase();
+  }
+  // Optional harness-supplied candidate index. When present it is authoritative;
+  // absence of the index keeps this helper a structural pure normalizer.
+  const index = opts.anchor_index;
+  if (index && path) {
+    const entries = kind === 'deleted_base_range' ? index.base_entries : index.candidate_entries;
+    const expected = entries && entries[path];
+    if (kind === 'required_absence') {
+      if (index.candidate_entries && Object.prototype.hasOwnProperty.call(index.candidate_entries, path)) {
+        return { ok: false, reason: 'finding_required_absence_present' };
+      }
+      if (index.candidate_tree_digest && anchor.candidate_tree_digest !== index.candidate_tree_digest) {
+        return { ok: false, reason: 'finding_candidate_tree_mismatch' };
+      }
+    } else if (kind === 'tree_entry_change') {
+      const baseExpected = index.base_entries
+        && Object.prototype.hasOwnProperty.call(index.base_entries, path) ? index.base_entries[path] : null;
+      const candidateExpected = index.candidate_entries
+        && Object.prototype.hasOwnProperty.call(index.candidate_entries, path) ? index.candidate_entries[path] : null;
+      const project = entry => entry === null ? null : {
+        tree_mode: entry.tree_mode, object_id: entry.object_id,
+      };
+      if (anchor.object_format !== index.object_format
+        || canonicalJson(anchor.base) !== canonicalJson(project(baseExpected))
+        || canonicalJson(anchor.candidate) !== canonicalJson(project(candidateExpected))) {
+        return { ok: false, reason: 'finding_anchor_tree_change_mismatch' };
+      }
+    } else if (kind !== 'evidence_observation' && (!expected
+      || expected.object_format !== anchor.object_format || expected.tree_mode !== anchor.tree_mode
+      || expected.object_id !== anchor.object_id
+      || (Number.isInteger(expected.blob_length) && anchor.end > expected.blob_length))) {
+      return { ok: false, reason: 'finding_anchor_candidate_mismatch' };
+    }
+    if (kind === 'deleted_base_range' && index.parent_candidate_digest
+      && anchor.parent_candidate_digest !== index.parent_candidate_digest) {
+      return { ok: false, reason: 'finding_parent_candidate_mismatch' };
+    }
+  }
+  if (index && kind === 'evidence_observation' && Array.isArray(index.evidence_digests)
+    && !index.evidence_digests.includes(anchor.producer_evidence_digest)) {
+    return { ok: false, reason: 'finding_evidence_observation_unbound' };
+  }
+  return { ok: true, anchor };
+}
+
+function computeFindingUid(scopeLineageId, primaryAnchor) {
+  if (!HEX64_RE.test(String(scopeLineageId || ''))) return null;
+  try { return sha256Hex(canonicalJson({ scope_lineage_id: String(scopeLineageId).toLowerCase(), primary_anchor: primaryAnchor })); }
+  catch (_) { return null; }
+}
+
+function normalizeFindingSet(findings, options) {
+  const opts = isPlainObject(options) ? options : {};
+  const scopeLineageId = String(opts.scope_lineage_id || '').toLowerCase();
+  if (!HEX64_RE.test(scopeLineageId) || !Array.isArray(findings)) {
+    return { ok: false, reason: 'finding_set_malformed' };
+  }
+  const byUid = new Map();
+  for (const input of findings) {
+    if (!isPlainObject(input) || !FINDING_FAILURE_CLASSES.includes(input.failure_class)
+      || !isPlainObject(input.trigger)) return { ok: false, reason: 'finding_malformed' };
+    const triggerKeys = ['precondition_digest', 'input_digest', 'expected_digest', 'observed_digest'];
+    if (!triggerKeys.every(key => HEX64_RE.test(String(input.trigger[key] || '')))) {
+      return { ok: false, reason: 'finding_trigger_malformed' };
+    }
+    const trigger = {};
+    for (const key of triggerKeys) trigger[key] = String(input.trigger[key]).toLowerCase();
+    const triggerDigest = sha256Hex(canonicalJson(trigger));
+    const primaryInput = { ...(input.primary_anchor || {}), trigger_digest: triggerDigest };
+    const primary = normalizeFindingAnchor(primaryInput, opts);
+    if (!primary.ok) return primary;
+    const secondary = [];
+    for (const raw of (Array.isArray(input.secondary_anchors) ? input.secondary_anchors : [])) {
+      const normalized = normalizeFindingAnchor(raw, opts);
+      if (!normalized.ok) return normalized;
+      secondary.push(normalized.anchor);
+    }
+    const secondaryMap = new Map(secondary.map(anchor => [canonicalJson(anchor), anchor]));
+    const secondaryAnchors = [...secondaryMap.values()].sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b)));
+    const uid = computeFindingUid(scopeLineageId, primary.anchor);
+    if (!uid) return { ok: false, reason: 'finding_uid_unavailable' };
+    if (input.uid !== undefined && String(input.uid).toLowerCase() !== uid) {
+      return { ok: false, reason: 'finding_uid_mismatch' };
+    }
+    const immutable = { failure_class: input.failure_class, trigger, primary_anchor: primary.anchor };
+    const normalized = {
+      uid, failure_class: input.failure_class, trigger, trigger_digest: triggerDigest,
+      primary_anchor: primary.anchor, secondary_anchors: secondaryAnchors,
+      severity: input.severity == null ? null : String(input.severity),
+      scope: input.scope == null ? null : String(input.scope),
+      action: input.action == null ? null : String(input.action),
+      status: input.status == null ? null : String(input.status),
+      fix_role: input.fix_role == null ? null : String(input.fix_role),
+      proof_digest: input.proof_digest == null ? null : String(input.proof_digest).toLowerCase(),
+    };
+    if (byUid.has(uid)) {
+      const prior = byUid.get(uid);
+      if (canonicalJson(prior.immutable) !== canonicalJson(immutable)) {
+        return { ok: false, reason: 'finding_uid_collision', uid };
+      }
+      const merged = new Map([...prior.finding.secondary_anchors, ...secondaryAnchors]
+        .map(anchor => [canonicalJson(anchor), anchor]));
+      prior.finding.secondary_anchors = [...merged.values()].sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b)));
+      continue;
+    }
+    byUid.set(uid, { immutable, finding: normalized });
+  }
+  return { ok: true, findings: [...byUid.values()].map(value => value.finding).sort((a, b) => a.uid.localeCompare(b.uid)) };
+}
+
+// The authoritative current-candidate artifacts a closure resolution is allowed
+// to cite. A resolution's validation_vector_digest must name the vector_id of an
+// actual current-candidate PASS vector, and its evidence_digest must name that
+// vector's durable receipt_sha256. Both are harness-recomputed from the bound
+// validation vectors, so a reviewer cannot invent a well-formed 64-hex digest and
+// have it count as proof. Returns lowercase sorted digest arrays.
+function authoritativeResolutionArtifacts(vectors, candidateDigest) {
+  const cand = String(candidateDigest || '').toLowerCase();
+  const vectorDigests = new Set();
+  const evidenceDigests = new Set();
+  for (const vector of Array.isArray(vectors) ? vectors : []) {
+    if (!isPlainObject(vector)) continue;
+    if (String(vector.candidate_digest || '').toLowerCase() !== cand) continue;
+    if (vector.outcome !== 'pass') continue;
+    if (HEX64_RE.test(String(vector.vector_id || ''))) vectorDigests.add(String(vector.vector_id).toLowerCase());
+    if (HEX64_RE.test(String(vector.receipt_sha256 || ''))) evidenceDigests.add(String(vector.receipt_sha256).toLowerCase());
+  }
+  return {
+    validation_vector_digests: [...vectorDigests].sort(),
+    evidence_digests: [...evidenceDigests].sort(),
+  };
+}
+
+// A closure resolution is deliberately a closed record.  In particular, a
+// reviewer cannot attach an unbound prose "proof" and have it count as removal
+// from the frontier: every identity below is supplied by the harness context.
+// When the binding carries the authoritative current-candidate artifact sets, the
+// referenced validation-vector and evidence digests must resolve to one of them —
+// a fabricated well-formed digest fails closed here rather than laundering a UID
+// off the frontier.
+function normalizeResolutionSet(resolutions, binding) {
+  const rows = Array.isArray(resolutions) ? resolutions : null;
+  const expected = isPlainObject(binding) ? binding : {};
+  if (!rows) return { ok: false, reason: 'review_resolution_set_malformed' };
+  const allowed = ['uid', 'repair_attempt_id', 'validation_vector_digest', 'evidence_digest', 'candidate_digest'];
+  const knownVectorDigests = Array.isArray(expected.known_validation_vector_digests)
+    ? new Set(expected.known_validation_vector_digests.map(value => String(value).toLowerCase())) : null;
+  const knownEvidenceDigests = Array.isArray(expected.known_evidence_digests)
+    ? new Set(expected.known_evidence_digests.map(value => String(value).toLowerCase())) : null;
+  const byUid = new Map();
+  for (const raw of rows) {
+    if (!isPlainObject(raw) || Object.keys(raw).some(key => !allowed.includes(key))
+      || Object.keys(raw).length !== allowed.length) {
+      return { ok: false, reason: 'review_resolution_malformed' };
+    }
+    const row = {};
+    for (const key of allowed) row[key] = String(raw[key] == null ? '' : raw[key]).toLowerCase();
+    if (!HEX64_RE.test(row.uid) || !row.repair_attempt_id
+      || !HEX64_RE.test(row.validation_vector_digest) || !HEX64_RE.test(row.evidence_digest)
+      || !HEX64_RE.test(row.candidate_digest)) {
+      return { ok: false, reason: 'review_resolution_malformed' };
+    }
+    if (expected.repair_attempt_id != null && row.repair_attempt_id !== String(expected.repair_attempt_id).toLowerCase()) {
+      return { ok: false, reason: 'review_resolution_repair_mismatch', uid: row.uid };
+    }
+    if (expected.candidate_digest != null && row.candidate_digest !== String(expected.candidate_digest).toLowerCase()) {
+      return { ok: false, reason: 'review_resolution_candidate_mismatch', uid: row.uid };
+    }
+    if (knownVectorDigests && !knownVectorDigests.has(row.validation_vector_digest)) {
+      return { ok: false, reason: 'review_resolution_vector_unbound', uid: row.uid };
+    }
+    if (knownEvidenceDigests && !knownEvidenceDigests.has(row.evidence_digest)) {
+      return { ok: false, reason: 'review_resolution_evidence_unbound', uid: row.uid };
+    }
+    if (byUid.has(row.uid) && canonicalJson(byUid.get(row.uid)) !== canonicalJson(row)) {
+      return { ok: false, reason: 'review_resolution_collision', uid: row.uid };
+    }
+    byUid.set(row.uid, row);
+  }
+  return { ok: true, resolutions: [...byUid.values()].sort((a, b) => a.uid.localeCompare(b.uid)) };
+}
+
+function deriveRepairDelta(input) {
+  const value = isPlainObject(input) ? input : {};
+  const previous = value.previous_attempt;
+  const current = value.current_candidate;
+  if (!isPlainObject(previous) || !isPlainObject(current)) {
+    return { ok: false, reason: 'review_repair_delta_unavailable' };
+  }
+  const before = effectiveCandidate(previous);
+  const selectedWriter = previous.repair && previous.repair.selected_writer;
+  if (previous.outcome !== 'fail' || previous.lifecycle_settled !== true
+    || !selectedWriter || previous.repair.settled !== true
+    || previous.consumed_by !== selectedWriter
+    || !HEX64_RE.test(String(before.digest || ''))
+    || !HEX64_RE.test(String(current.digest || ''))
+    || !isCanonicalBlobMap(before.declared) || !isCanonicalBlobMap(current.declared)) {
+    return { ok: false, reason: 'review_repair_delta_unavailable' };
+  }
+  const paths = [];
+  const keys = Array.from(new Set([...Object.keys(before.declared), ...Object.keys(current.declared)])).sort();
+  for (const path of keys) {
+    const prior = Object.prototype.hasOwnProperty.call(before.declared, path) ? before.declared[path] : null;
+    const after = Object.prototype.hasOwnProperty.call(current.declared, path) ? current.declared[path] : null;
+    if (prior !== after) paths.push({ path, before: prior, after });
+  }
+  return { ok: true, repair_delta: {
+    repair_attempt_id: String(previous.attempt_id),
+    selected_writer: String(selectedWriter),
+    before_candidate_digest: String(before.digest).toLowerCase(),
+    after_candidate_digest: String(current.digest).toLowerCase(),
+    paths,
+  } };
+}
+
+function validateRepairDelta(delta, expectedCandidateDigest) {
+  if (!isPlainObject(delta)) return { ok: false, reason: 'review_repair_delta_malformed' };
+  const allowed = ['repair_attempt_id', 'selected_writer', 'before_candidate_digest', 'after_candidate_digest', 'paths'];
+  if (Object.keys(delta).some(key => !allowed.includes(key)) || Object.keys(delta).length !== allowed.length
+    || typeof delta.repair_attempt_id !== 'string' || !delta.repair_attempt_id
+    || typeof delta.selected_writer !== 'string' || !delta.selected_writer
+    || !HEX64_RE.test(String(delta.before_candidate_digest || ''))
+    || !HEX64_RE.test(String(delta.after_candidate_digest || ''))
+    || (expectedCandidateDigest && delta.after_candidate_digest !== expectedCandidateDigest)
+    || !Array.isArray(delta.paths)) {
+    return { ok: false, reason: 'review_repair_delta_malformed' };
+  }
+  const seen = new Set();
+  let priorPath = null;
+  for (const row of delta.paths) {
+    if (!isPlainObject(row) || Object.keys(row).some(key => !['path', 'before', 'after'].includes(key))
+      || Object.keys(row).length !== 3 || !normalizeFindingPath(row.path)
+      || row.path !== normalizeFindingPath(row.path) || seen.has(row.path)
+      || (priorPath !== null && priorPath.localeCompare(row.path) >= 0)
+      || !(row.before === null || (typeof row.before === 'string' && CANONICAL_TREE_ENTRY_RE.test(row.before)))
+      || !(row.after === null || (typeof row.after === 'string' && CANONICAL_TREE_ENTRY_RE.test(row.after)))
+      || row.before === row.after) {
+      return { ok: false, reason: 'review_repair_delta_malformed' };
+    }
+    seen.add(row.path);
+    priorPath = row.path;
+  }
+  return { ok: true, repair_delta: delta };
+}
+
+function findingAnchorPaths(finding) {
+  const anchors = [finding && finding.primary_anchor,
+    ...((finding && Array.isArray(finding.secondary_anchors)) ? finding.secondary_anchors : [])];
+  return Array.from(new Set(anchors.filter(anchor => anchor && typeof anchor.path === 'string')
+    .map(anchor => anchor.path))).sort();
+}
+
+// Closure-frontier admission is separate from progress.  It proves complete
+// coverage of the previous frontier and classifies genuinely new blockers as
+// either repair regressions (anchored in the exact repair delta) or scope
+// expansion (durable re-plan), before the numeric progress reducer runs.
+function assessFindingClosure(input) {
+  const value = isPlainObject(input) ? input : {};
+  const prior = Array.isArray(value.prior_findings) ? value.prior_findings : [];
+  const current = Array.isArray(value.current_findings) ? value.current_findings : [];
+  const priorByUid = new Map(prior.map(finding => [String(finding && finding.uid || ''), finding]));
+  const currentByUid = new Map(current.map(finding => [String(finding && finding.uid || ''), finding]));
+  if (priorByUid.has('') || currentByUid.has('') || priorByUid.size !== prior.length || currentByUid.size !== current.length) {
+    return { ok: false, reason: 'review_finding_frontier_malformed' };
+  }
+  for (const finding of current) {
+    if (!['open', 'resolved'].includes(String(finding.status || ''))) {
+      return { ok: false, reason: 'review_finding_status_invalid', uid: finding.uid };
+    }
+  }
+  const missing = [...priorByUid.keys()].filter(uid => !currentByUid.has(uid)).sort();
+  if (missing.length) return { ok: false, reason: 'review_prior_uid_missing', missing_uids: missing };
+  for (const [uid, before] of priorByUid) {
+    const after = currentByUid.get(uid);
+    const immutable = finding => ({ failure_class: finding.failure_class, trigger: finding.trigger,
+      primary_anchor: finding.primary_anchor });
+    if (canonicalJson(immutable(before)) !== canonicalJson(immutable(after))) {
+      return { ok: false, reason: 'finding_uid_collision', uid };
+    }
+  }
+  const delta = value.repair_delta;
+  const deltaCheck = validateRepairDelta(delta, value.candidate_digest);
+  if (!deltaCheck.ok) return deltaCheck;
+  const deltaPaths = new Set(delta.paths.map(row => row.path));
+  const repairDeltaUids = [];
+  const expandedUids = [];
+  for (const finding of current) {
+    if (priorByUid.has(finding.uid) || finding.status === 'resolved') continue;
+    const bound = findingAnchorPaths(finding).some(path => deltaPaths.has(path));
+    (bound ? repairDeltaUids : expandedUids).push(finding.uid);
+  }
+  repairDeltaUids.sort();
+  expandedUids.sort();
+  return { ok: true, scope_expanded: expandedUids.length > 0,
+    repair_delta_uids: repairDeltaUids, expanded_uids: expandedUids };
+}
+
+function reduceReviewReceipts(input) {
+  const value = isPlainObject(input) ? input : {};
+  const aggregation = String(value.aggregation || '');
+  const role = String(value.role || '');
+  const mode = value.gate_mode == null ? null : String(value.gate_mode);
+  const members = Array.isArray(value.expected_members) ? value.expected_members.map(String) : [];
+  const surfaces = Array.isArray(value.expected_surfaces) ? value.expected_surfaces.map(String) : [];
+  const receipts = Array.isArray(value.receipts) ? value.receipts : [];
+  const incomplete = reason => ({ complete: false, execution_status: 'failed', domain_outcome: null, gate_effect: null, reason });
+  if (!REVIEW_AGGREGATIONS.includes(aggregation) || !REVIEW_GATE_ROLES.includes(role)
+    || !members.length || members.length !== surfaces.length) return incomplete('review_reducer_shape_invalid');
+  if (aggregation === 'sequence' && members.length !== 1) return incomplete('review_sequence_cardinality_invalid');
+  if (aggregation === 'replicated_majority' && new Set(surfaces).size !== 1) return incomplete('review_replica_surface_mismatch');
+  if (aggregation === 'partitioned_all' && new Set(surfaces).size !== surfaces.length) return incomplete('review_partition_surface_duplicate');
+  if (receipts.length !== members.length) return incomplete('review_receipt_missing');
+  const byMember = new Map();
+  for (const receipt of receipts) {
+    if (!isPlainObject(receipt) || receipt.execution_status !== 'complete'
+      || !members.includes(String(receipt.node_id)) || byMember.has(String(receipt.node_id))) {
+      return incomplete('review_receipt_identity_invalid');
+    }
+    byMember.set(String(receipt.node_id), receipt);
+  }
+  for (let i = 0; i < members.length; i++) {
+    if (!byMember.has(members[i]) || String(byMember.get(members[i]).surface || '') !== surfaces[i]) {
+      return incomplete('review_receipt_surface_mismatch');
+    }
+  }
+  const ordered = members.map(id => byMember.get(id));
+  let domainOutcome;
+  if (role === 'adversarial-verifier') {
+    if (ordered.some(receipt => !ADVERSARIAL_OUTCOMES.includes(receipt.domain_outcome))) {
+      return incomplete('review_domain_outcome_invalid');
+    }
+    if (aggregation === 'sequence') domainOutcome = ordered[0].domain_outcome;
+    else if (aggregation === 'partitioned_all') {
+      domainOutcome = ordered.some(r => r.domain_outcome === 'refuted') ? 'refuted'
+        : (ordered.some(r => r.domain_outcome === 'indeterminate') ? 'indeterminate' : 'not_refuted');
+    } else {
+      const count = outcome => ordered.filter(r => r.domain_outcome === outcome).length;
+      domainOutcome = count('not_refuted') > ordered.length / 2 ? 'not_refuted'
+        : (count('refuted') * 2 >= ordered.length ? 'refuted' : 'indeterminate');
+    }
+  } else {
+    if (ordered.some(receipt => !APPROVAL_OUTCOMES.includes(receipt.domain_outcome))) {
+      return incomplete('review_domain_outcome_invalid');
+    }
+    const blockers = ordered.some(receipt => Number(receipt.blocking_findings || 0) > 0
+      || receipt.domain_outcome === 'changes_requested');
+    if (aggregation === 'replicated_majority') {
+      const approvals = ordered.filter(receipt => receipt.domain_outcome === 'approved'
+        && Number(receipt.blocking_findings || 0) === 0).length;
+      domainOutcome = !blockers && approvals > ordered.length / 2 ? 'approved' : 'changes_requested';
+    } else {
+      domainOutcome = blockers ? 'changes_requested' : 'approved';
+    }
+  }
+  const blocking = ordered.reduce((sum, receipt) => sum + Math.max(0, Number(receipt.blocking_findings || 0)), 0);
+  return { complete: true, execution_status: 'complete', domain_outcome: domainOutcome,
+    gate_effect: deriveGateEffect(role, mode, domainOutcome, blocking), blocking_findings: blocking,
+    reducer_inputs: ordered };
+}
+
+// An inherited obligation is the immutable pair {command_id, required_pass_vector_id}. command_id encodes
+// the command / environment / tool identity (it excludes the candidate), so it is stable across a repair;
+// required_pass_vector_id is the candidate-A proof and stays as durable audit metadata. The candidate-bound
+// vector id necessarily changes when a repair produces candidate B, so satisfaction is a COMPARABLE current-
+// candidate pass — same command_id, bound to the current candidate — NOT a re-appearance of the A vector id.
+// Requiring exact vector-id equality would make every substantive repair non-progress (the R2 defect).
+function compareValidationObligations(obligations, vectors, currentCandidateDigest) {
+  if (!Array.isArray(obligations) || !Array.isArray(vectors)) return { status: 'drift', reason: 'validation_shape_invalid' };
+  if (!obligations.length) return { status: 'pass', matched: [] };
+  const current = String(currentCandidateDigest || '').toLowerCase();
+  const matched = [];
+  for (const obligation of obligations) {
+    if (!isPlainObject(obligation) || !HEX64_RE.test(String(obligation.command_id || ''))
+      || !HEX64_RE.test(String(obligation.required_pass_vector_id || ''))) {
+      return { status: 'drift', reason: 'validation_obligation_invalid' };
+    }
+    const candidates = vectors.filter(vector => vector && vector.command_id === obligation.command_id);
+    if (!candidates.length) return { status: 'drift', reason: 'validation_command_drift', command_id: obligation.command_id };
+    // When the current candidate digest is known, require the satisfying vector to bind it. A same-command
+    // vector left over from another candidate cannot certify the current one (validation_candidate_drift).
+    const boundToCurrent = current
+      ? candidates.filter(vector => String(vector.candidate_digest || '').toLowerCase() === current)
+      : candidates;
+    if (current && !boundToCurrent.length) {
+      return { status: 'drift', reason: 'validation_candidate_drift', command_id: obligation.command_id };
+    }
+    const vector = boundToCurrent[boundToCurrent.length - 1];
+    if (vector.outcome === 'fail') return { status: 'fail', reason: 'validation_failed', command_id: obligation.command_id };
+    if (vector.outcome !== 'pass') return { status: 'inconclusive', reason: 'validation_inconclusive', command_id: obligation.command_id };
+    matched.push({ command_id: obligation.command_id, required_pass_vector_id: obligation.required_pass_vector_id,
+      current_pass_vector_id: vector.vector_id });
+  }
+  return { status: 'pass', matched };
+}
+
+function assessReviewProgress(input) {
+  const value = isPlainObject(input) ? input : {};
+  const previous = Array.from(new Set(Array.isArray(value.previous_open_uids) ? value.previous_open_uids.map(String) : [])).sort();
+  const current = Array.from(new Set(Array.isArray(value.current_open_uids) ? value.current_open_uids.map(String) : [])).sort();
+  const previousSet = new Set(previous);
+  const currentSet = new Set(current);
+  const removed = previous.filter(uid => !currentSet.has(uid));
+  const added = current.filter(uid => !previousSet.has(uid));
+  const deltaUids = new Set(Array.isArray(value.repair_delta_uids) ? value.repair_delta_uids.map(String) : []);
+  const scopeExpanded = added.some(uid => !deltaUids.has(uid));
+  const resolutions = Array.isArray(value.resolutions) ? value.resolutions : [];
+  const knownVectorDigests = Array.isArray(value.known_validation_vector_digests)
+    ? new Set(value.known_validation_vector_digests.map(v => String(v).toLowerCase())) : null;
+  const knownEvidenceDigests = Array.isArray(value.known_evidence_digests)
+    ? new Set(value.known_evidence_digests.map(v => String(v).toLowerCase())) : null;
+  // A UID only leaves the frontier with a resolution whose digests resolve to
+  // authoritative current-candidate artifacts. When the caller supplies the known
+  // sets, an unbound (fabricated) digest fails the membership test and the UID
+  // cannot count toward progress.
+  const resolutionFor = uid => resolutions.find(r => r && r.uid === uid
+    && r.repair_attempt_id === value.repair_attempt_id
+    && r.candidate_digest === value.candidate_digest
+    && HEX64_RE.test(String(r.validation_vector_digest || ''))
+    && HEX64_RE.test(String(r.evidence_digest || ''))
+    && (!knownVectorDigests || knownVectorDigests.has(String(r.validation_vector_digest).toLowerCase()))
+    && (!knownEvidenceDigests || knownEvidenceDigests.has(String(r.evidence_digest).toLowerCase())));
+  const allResolved = removed.every(uid => !!resolutionFor(uid));
+  const validationPass = value.validation && value.validation.status === 'pass';
+  const progress = !scopeExpanded && current.length < previous.length && allResolved && validationPass;
+  const idempotencyMaterial = {
+    logical_gate_key: value.logical_gate_key || null,
+    scope_lineage_id: value.scope_lineage_id || null,
+    repair_attempt_id: value.repair_attempt_id || null,
+    before_candidate_digest: value.before_candidate_digest || null,
+    candidate_digest: value.candidate_digest || null,
+  };
+  const idempotencyKey = sha256Hex(canonicalJson(idempotencyMaterial));
+  const replay = new Set(Array.isArray(value.seen_idempotency_keys) ? value.seen_idempotency_keys : []).has(idempotencyKey);
+  let consecutive = Number.isInteger(value.previous_consecutive_nonprogress)
+    ? Math.max(0, value.previous_consecutive_nonprogress) : 0;
+  if (!replay) consecutive = progress ? 0 : consecutive + 1;
+  let stopReason = null;
+  if (scopeExpanded) stopReason = 'review_scope_expanded';
+  else if (!progress && Number.isInteger(value.consumed_repairs)
+    && value.consumed_repairs >= REVIEW_REPAIR_LIMIT) stopReason = 'review_repair_limit';
+  else if (!progress && consecutive >= 2) stopReason = 'review_nonconvergent';
+  return {
+    progress: progress && !replay,
+    reason: replay ? 'review_progress_replay' : (progress ? null
+      : (scopeExpanded ? 'review_scope_expanded'
+        : (!allResolved ? 'review_resolution_proof_missing'
+          : (!validationPass ? 'review_validation_nonprogress' : 'review_frontier_nonprogress')))),
+    stop_reason: stopReason,
+    replan_required: stopReason === 'review_scope_expanded' || stopReason === 'review_nonconvergent',
+    consecutive_nonprogress: consecutive,
+    idempotency_key: idempotencyKey,
+    previous_open_uids: previous,
+    current_open_uids: current,
+  };
+}
+
 // Canonical logical-gate identity. Display labels remain useful operator metadata but never
 // participate in the key, so a reusable fan-out label cannot alias another resolved group.
 function canonicalLogicalGateIdentity(input) {
@@ -1476,7 +2267,7 @@ function canonicalLogicalGateIdentity(input) {
 // text share one blob sha). A sha-only identity is therefore a WEAKER measuring stick than the whole-tree
 // digest, the residue digest, the re-anchor safety assertion and the barrier — all of which see the mode —
 // and anything the stick cannot see falls in no partition of the rebind proof and is silently waived.
-const CANONICAL_TREE_ENTRY_RE = /^[0-7]{6} [0-9a-f]{40}$/i;
+const CANONICAL_TREE_ENTRY_RE = /^[0-7]{6} (?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 
 // A canonical blob map: a plain object whose keys are sorted repo-relative paths and whose values are
 // tree-entry identities. Canonical form is what makes a byte-comparison against a freshly computed map sound.
@@ -1491,7 +2282,8 @@ const CANONICAL_TREE_ENTRY_RE = /^[0-7]{6} [0-9a-f]{40}$/i;
 function isCanonicalBlobMap(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value).sort();
-  return keys.every(k => k && typeof value[k] === 'string' && CANONICAL_TREE_ENTRY_RE.test(value[k]));
+  return keys.every(k => k && normalizeFindingPath(k) === k
+    && typeof value[k] === 'string' && CANONICAL_TREE_ENTRY_RE.test(value[k]));
 }
 
 // A writer-identity tuple as recorded in producer_bindings (and in a rebind record's overlay). The
@@ -1531,13 +2323,366 @@ function effectiveProducerBinding(attempt, writer) {
   return (attempt && attempt.producer_bindings) ? attempt.producer_bindings[writer] : undefined;
 }
 
-// Pure, fail-closed structural validation for the authoritative review journal. Schema-2
-// code/security fanout reduction is plan-owned: callers pass the canonical adapter rows from
-// plan-validator, while metadata-absent legacy fanouts retain their historical majority rule.
-function validateReviewJournal(journal, expectedPlanHash, options) {
+// Pure, fail-closed structural validation for the authoritative review journal. Runtime code may
+// perform additional plan-relative proofs, but no caller is allowed to accept malformed durable state.
+function validateReviewJournalV2(journal, expectedPlanHash) {
+  const refuseJournal = (reason, detail) => ({ ok: false, reason, detail: detail || null });
+  if (!journal || !isPlainObject(journal) || journal.schema_version !== REVIEW_JOURNAL_SCHEMA_VERSION
+    || journal.contract_version !== REVIEW_CONTRACT_VERSION) {
+    return refuseJournal('review_journal_version_unsupported', 'schema_version and contract_version must equal 2');
+  }
+  if (!HEX64_RE.test(String(journal.plan_hash || ''))
+    || (expectedPlanHash && String(journal.plan_hash).toLowerCase() !== String(expectedPlanHash).toLowerCase())) {
+    return refuseJournal('review_journal_plan_hash_mismatch');
+  }
+  if (!Array.isArray(journal.attempts)) return refuseJournal('review_journal_malformed', 'attempts must be an array');
+  const ids = new Set();
+  const txs = new Set();
+  const ordinals = new Map();
+  // Durable review history is indexed by scope lineage (epoch_lineage_id + scope_lineage_id), NOT by the
+  // logical gate key. The gate key hashes member node ids, so renaming/re-planning a gate would otherwise
+  // reset an otherwise-identical scope back to discovery; scope_lineage_id deliberately excludes the node
+  // id. Gate identity is attempt metadata. Issue 699 owns the cross-epoch activation/CAS that carries a
+  // scope lineage across plan hashes; this reader/validator exposes the scope-keyed contract it consumes.
+  const lineageByScope = new Map();
+  const scopeKey = attempt => String(attempt.epoch_lineage_id).toLowerCase() + ''
+    + String(attempt.scope_lineage_id).toLowerCase();
+  for (const attempt of journal.attempts) {
+    if (!isPlainObject(attempt)) return refuseJournal('review_journal_malformed', 'attempt must be an object');
+    const required = ['attempt_id', 'ordinal', 'plan_hash', 'contract_version', 'logical_gate',
+      'transaction_key', 'candidate_digest', 'candidate_declared', 'candidate_residue_digest',
+      'epoch_lineage_id', 'gate_mode', 'scope_lineage_id',
+      'context_hashes', 'profile_hashes', 'review_phase', 'prior_open_uids', 'current_open_uids',
+      'current_findings', 'findings', 'resolutions', 'route_candidates', 'repair_delta',
+      'validation_obligations', 'validation_vectors',
+      'progress', 'reducer', 'receipts', 'outcome', 'reason', 'settlement_command',
+      'lifecycle_settled', 'producer_bindings', 'repair', 'rebind', 'consumed_by'];
+    const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(attempt, key));
+    if (missing.length) return refuseJournal('review_journal_malformed', 'missing attempt fields: ' + missing.join(', '));
+    if (typeof attempt.attempt_id !== 'string' || !attempt.attempt_id || ids.has(attempt.attempt_id)) {
+      return refuseJournal(ids.has(attempt.attempt_id) ? 'review_journal_duplicate_attempt_id' : 'review_journal_malformed');
+    }
+    ids.add(attempt.attempt_id);
+    if (attempt.contract_version !== 2 || attempt.plan_hash !== journal.plan_hash
+      || !HEX64_RE.test(String(attempt.transaction_key || '')) || txs.has(attempt.transaction_key)
+      || !HEX64_RE.test(String(attempt.candidate_digest || ''))
+      || !HEX64_RE.test(String(attempt.candidate_residue_digest || ''))
+      || !isCanonicalBlobMap(attempt.candidate_declared)
+      || !HEX64_RE.test(String(attempt.epoch_lineage_id || ''))
+      || !HEX64_RE.test(String(attempt.scope_lineage_id || ''))) {
+      return refuseJournal('review_journal_identity_mismatch');
+    }
+    txs.add(attempt.transaction_key);
+    if (!Number.isInteger(attempt.ordinal) || attempt.ordinal < 1
+      || !['investigation', 'change_gate'].includes(attempt.gate_mode)
+      || !['discovery', 'closure'].includes(attempt.review_phase)
+      || !['close-node', 'close-and-open-next'].includes(attempt.settlement_command)
+      || typeof attempt.lifecycle_settled !== 'boolean') {
+      return refuseJournal('review_journal_malformed', 'attempt scalar fields invalid');
+    }
+    const gate = attempt.logical_gate;
+    if (!isPlainObject(gate) || !HEX64_RE.test(String(gate.key || ''))
+      || !['sequence', 'group'].includes(gate.kind) || !Array.isArray(gate.members)
+      || !REVIEW_AGGREGATIONS.includes(gate.aggregation)
+      || !HEX64_RE.test(String(gate.claim_digest || '')) || !Array.isArray(gate.surface_digests)
+      || gate.surface_digests.some(value => !HEX64_RE.test(String(value || '')))
+      || !Array.isArray(gate.certified_producers)
+      || JSON.stringify(gate.members) !== JSON.stringify(Array.from(new Set(gate.members.map(String))).sort())) {
+      return refuseJournal('review_journal_identity_mismatch');
+    }
+    const gateIdentity = { kind: gate.kind, members: gate.members, claim_digest: gate.claim_digest,
+      surface_digests: gate.surface_digests, aggregation: gate.aggregation,
+      certified_producers: gate.certified_producers };
+    if (sha256Hex(canonicalJson(gateIdentity)) !== gate.key) {
+      return refuseJournal('review_journal_identity_mismatch');
+    }
+    if (!Array.isArray(attempt.context_hashes)) {
+      return refuseJournal('review_journal_malformed', 'context_hashes must be an array');
+    }
+    const expectedTransaction = sha256Hex(canonicalJson({
+      plan_hash: journal.plan_hash, logical_gate_key: gate.key,
+      candidate_digest: attempt.candidate_digest,
+      context_hash: attempt.context_hashes.length === 1 ? attempt.context_hashes[0] : null,
+    }));
+    if (expectedTransaction !== attempt.transaction_key) {
+      return refuseJournal('review_journal_transaction_key_mismatch');
+    }
+    if (!ordinals.has(scopeKey(attempt))) ordinals.set(scopeKey(attempt), []);
+    ordinals.get(scopeKey(attempt)).push(attempt.ordinal);
+    if (!Array.isArray(attempt.context_hashes) || !Array.isArray(attempt.profile_hashes)
+      || attempt.context_hashes.some(value => !HEX64_RE.test(String(value)))
+      || attempt.profile_hashes.some(value => !HEX64_RE.test(String(value)))
+      || !Array.isArray(attempt.prior_open_uids) || !Array.isArray(attempt.current_open_uids)
+      || !Array.isArray(attempt.current_findings) || !Array.isArray(attempt.findings)
+      || !Array.isArray(attempt.resolutions) || !Array.isArray(attempt.route_candidates)
+      || !Array.isArray(attempt.validation_obligations) || !Array.isArray(attempt.validation_vectors)
+      || !Array.isArray(attempt.receipts) || !Array.isArray(attempt.rebind)
+      || !isPlainObject(attempt.reducer) || !isPlainObject(attempt.producer_bindings)
+      || !isPlainObject(attempt.repair)) {
+      return refuseJournal('review_journal_malformed', 'attempt collection fields invalid');
+    }
+    if (attempt.context_hashes.length !== 1
+      || JSON.stringify(attempt.context_hashes) !== JSON.stringify([...new Set(attempt.context_hashes)].sort())
+      || JSON.stringify(attempt.profile_hashes) !== JSON.stringify([...new Set(attempt.profile_hashes)].sort())
+      || JSON.stringify(attempt.prior_open_uids) !== JSON.stringify([...new Set(attempt.prior_open_uids)].sort())
+      || JSON.stringify(attempt.current_open_uids) !== JSON.stringify([...new Set(attempt.current_open_uids)].sort())
+      || [...attempt.prior_open_uids, ...attempt.current_open_uids].some(value => !HEX64_RE.test(String(value || '')))
+      || canonicalJson(attempt.current_findings) !== canonicalJson(attempt.findings)) {
+      return refuseJournal('review_journal_malformed', 'attempt canonical collections invalid');
+    }
+    const receiptIds = new Set();
+    for (const receipt of attempt.receipts) {
+      if (!isPlainObject(receipt) || receipt.schema_version !== 2 || receipt.contract_version !== 2
+        || receipt.execution_status !== 'complete' || !gate.members.includes(receipt.node_id)
+        || receiptIds.has(receipt.node_id) || !HEX64_RE.test(String(receipt.review_context_hash || ''))
+        || !HEX64_RE.test(String(receipt.behavior_contract_hash || ''))
+        || !HEX64_RE.test(String(receipt.resolved_profile_hash || ''))
+        || receipt.candidate_digest !== attempt.candidate_digest
+        || !HEX64_RE.test(String(receipt.raw_evidence_sha256 || ''))
+        || !Array.isArray(receipt.findings) || !Array.isArray(receipt.resolutions)
+        || !Array.isArray(receipt.validation_vectors)
+        || receipt.gate_effect !== deriveGateEffect(attempt.reducer.role, attempt.gate_mode,
+          receipt.domain_outcome, receipt.blocking_findings)) {
+        return refuseJournal('review_journal_receipt_binding_mismatch');
+      }
+      receiptIds.add(receipt.node_id);
+    }
+    if (receiptIds.size !== gate.members.length || gate.members.some(member => !receiptIds.has(member))) {
+      return refuseJournal('review_journal_receipt_binding_mismatch');
+    }
+    const expectedContextHashes = [...new Set(attempt.receipts.map(receipt => receipt.review_context_hash))].sort();
+    const expectedProfileHashes = [...new Set(attempt.receipts.map(receipt => receipt.resolved_profile_hash))].sort();
+    const expectedSurfaceDigests = gate.members.map(member => {
+      const receipt = attempt.receipts.find(row => row.node_id === member);
+      return sha256Hex(String(receipt.surface || ''));
+    });
+    if (canonicalJson(expectedContextHashes) !== canonicalJson(attempt.context_hashes)
+      || canonicalJson(expectedProfileHashes) !== canonicalJson(attempt.profile_hashes)
+      || canonicalJson(expectedSurfaceDigests) !== canonicalJson(gate.surface_digests)) {
+      return refuseJournal('review_journal_receipt_binding_mismatch');
+    }
+    const normalizedFindings = normalizeFindingSet(attempt.receipts.flatMap(receipt => receipt.findings), {
+      scope_lineage_id: attempt.scope_lineage_id,
+    });
+    if (!normalizedFindings.ok || canonicalJson(normalizedFindings.findings) !== canonicalJson(attempt.findings)) {
+      return refuseJournal(normalizedFindings.reason || 'review_journal_findings_mismatch');
+    }
+    const expectedRoutes = attempt.receipts.flatMap(receipt => receipt.findings.map(finding => ({
+      source_node: receipt.node_id, finding_id: finding.uid,
+    })));
+    if (attempt.route_candidates.length !== expectedRoutes.length) {
+      return refuseJournal('review_journal_route_mismatch');
+    }
+    const remainingRoutes = expectedRoutes.slice();
+    for (const route of attempt.route_candidates) {
+      const allowedRouteKeys = ['source_node', 'finding_id', 'id', 'scope', 'action', 'status',
+        'severity', 'fix_role', 'ownership_candidates', 'owning_node', 'raw'];
+      if (!isPlainObject(route) || Object.keys(route).some(key => !allowedRouteKeys.includes(key))
+        || !gate.members.includes(route.source_node) || route.id !== route.finding_id
+        || !HEX64_RE.test(String(route.finding_id || '')) || typeof route.raw !== 'string'
+        || !Array.isArray(route.ownership_candidates)
+        || canonicalJson(route.ownership_candidates) !== canonicalJson([...new Set(route.ownership_candidates)].sort())
+        || (route.ownership_candidates.length === 1
+          ? route.owning_node !== route.ownership_candidates[0] : route.owning_node !== null)) {
+        return refuseJournal('review_journal_route_mismatch');
+      }
+      const index = remainingRoutes.findIndex(expected => expected.source_node === route.source_node
+        && expected.finding_id === route.finding_id);
+      if (index < 0) return refuseJournal('review_journal_route_mismatch');
+      remainingRoutes.splice(index, 1);
+    }
+    const vectors = [];
+    const vectorKeys = new Set();
+    for (const vector of attempt.receipts.flatMap(receipt => receipt.validation_vectors)) {
+      if (!isPlainObject(vector) || !HEX64_RE.test(String(vector.command_id || ''))
+        || !HEX64_RE.test(String(vector.candidate_digest || ''))
+        || vector.candidate_digest !== attempt.candidate_digest
+        || !HEX64_RE.test(String(vector.vector_id || ''))
+        || !['pass', 'fail', 'inconclusive'].includes(vector.outcome)
+        || !HEX64_RE.test(String(vector.receipt_sha256 || ''))) {
+        return refuseJournal('review_journal_validation_vector_malformed');
+      }
+      const key = canonicalJson(vector);
+      if (!vectorKeys.has(key)) { vectorKeys.add(key); vectors.push(vector); }
+    }
+    vectors.sort((a, b) => (a.command_id + ':' + a.vector_id).localeCompare(b.command_id + ':' + b.vector_id));
+    if (canonicalJson(vectors) !== canonicalJson(attempt.validation_vectors)) {
+      return refuseJournal('review_journal_validation_vector_mismatch');
+    }
+    for (const obligation of attempt.validation_obligations) {
+      if (!isPlainObject(obligation) || Object.keys(obligation).sort().join(',') !== 'command_id,required_pass_vector_id'
+        || !HEX64_RE.test(String(obligation.command_id || ''))
+        || !HEX64_RE.test(String(obligation.required_pass_vector_id || ''))) {
+        return refuseJournal('review_journal_validation_obligation_malformed');
+      }
+    }
+    const expectedSurfaces = gate.members.map(member => {
+      const receipt = attempt.receipts.find(row => row.node_id === member);
+      return receipt ? receipt.surface : '';
+    });
+    const reduced = reduceReviewReceipts({ aggregation: gate.aggregation, role: attempt.reducer.role,
+      gate_mode: attempt.gate_mode, expected_members: gate.members,
+      expected_surfaces: expectedSurfaces, receipts: attempt.receipts });
+    if (!reduced.complete || attempt.reducer.complete !== true
+      || attempt.reducer.domain_outcome !== reduced.domain_outcome
+      || attempt.reducer.gate_effect !== reduced.gate_effect
+      || attempt.reducer.blocking_findings !== reduced.blocking_findings) {
+      return refuseJournal('review_journal_outcome_mismatch');
+    }
+    const lineage = lineageByScope.get(scopeKey(attempt)) || [];
+    if (attempt.ordinal !== lineage.length + 1
+      || attempt.review_phase !== (lineage.length ? 'closure' : 'discovery')) {
+      return refuseJournal('review_journal_phase_mismatch');
+    }
+    const previous = lineage.length ? lineage[lineage.length - 1] : null;
+    let expectedProgress;
+    if (!previous) {
+      if (attempt.repair_delta !== null || attempt.prior_open_uids.length !== 0
+        || attempt.resolutions.length !== 0) {
+        return refuseJournal('review_journal_phase_mismatch');
+      }
+      expectedProgress = { progress: null, reason: null, stop_reason: null, replan_required: false,
+        consecutive_nonprogress: 0, idempotency_key: null,
+        previous_open_uids: [], current_open_uids: attempt.findings
+          .filter(finding => finding.status !== 'resolved').map(finding => finding.uid).sort() };
+    } else {
+      if (attempt.scope_lineage_id !== previous.scope_lineage_id
+        || attempt.epoch_lineage_id !== previous.epoch_lineage_id
+        || canonicalJson(attempt.validation_obligations) !== canonicalJson(previous.validation_obligations)) {
+        return refuseJournal('review_journal_lineage_mismatch');
+      }
+      const delta = deriveRepairDelta({ previous_attempt: previous,
+        current_candidate: { digest: attempt.candidate_digest, declared: attempt.candidate_declared,
+          residue_digest: attempt.candidate_residue_digest } });
+      if (!delta.ok || canonicalJson(delta.repair_delta) !== canonicalJson(attempt.repair_delta)) {
+        return refuseJournal('review_journal_repair_delta_mismatch');
+      }
+      const expectedPriorFindings = previous.current_findings
+        .filter(finding => finding.status !== 'resolved');
+      const closure = assessFindingClosure({ prior_findings: expectedPriorFindings,
+        current_findings: attempt.findings, repair_delta: attempt.repair_delta,
+        candidate_digest: attempt.candidate_digest });
+      if (!closure.ok) return refuseJournal(closure.reason, (closure.missing_uids || []).join(','));
+      const authoritativeArtifacts = authoritativeResolutionArtifacts(attempt.validation_vectors, attempt.candidate_digest);
+      const normalizedResolutions = normalizeResolutionSet(attempt.receipts.flatMap(receipt => receipt.resolutions), {
+        repair_attempt_id: attempt.repair_delta.repair_attempt_id,
+        candidate_digest: attempt.candidate_digest,
+        known_validation_vector_digests: authoritativeArtifacts.validation_vector_digests,
+        known_evidence_digests: authoritativeArtifacts.evidence_digests,
+      });
+      if (!normalizedResolutions.ok
+        || canonicalJson(normalizedResolutions.resolutions) !== canonicalJson(attempt.resolutions)) {
+        return refuseJournal(normalizedResolutions.reason || 'review_journal_resolution_mismatch');
+      }
+      const previousOpen = expectedPriorFindings.map(finding => finding.uid).sort();
+      const currentOpen = attempt.findings.filter(finding => finding.status !== 'resolved')
+        .map(finding => finding.uid).sort();
+      if (canonicalJson(previousOpen) !== canonicalJson(attempt.prior_open_uids)
+        || canonicalJson(currentOpen) !== canonicalJson(attempt.current_open_uids)) {
+        return refuseJournal('review_journal_frontier_mismatch');
+      }
+      const validation = compareValidationObligations(attempt.validation_obligations, attempt.validation_vectors,
+        attempt.candidate_digest);
+      expectedProgress = assessReviewProgress({ previous_open_uids: previousOpen,
+        current_open_uids: currentOpen, repair_delta_uids: closure.repair_delta_uids,
+        resolutions: attempt.resolutions, repair_attempt_id: attempt.repair_delta.repair_attempt_id,
+        candidate_digest: attempt.candidate_digest, validation,
+        known_validation_vector_digests: authoritativeArtifacts.validation_vector_digests,
+        known_evidence_digests: authoritativeArtifacts.evidence_digests,
+        logical_gate_key: gate.key, scope_lineage_id: attempt.scope_lineage_id,
+        before_candidate_digest: attempt.repair_delta.before_candidate_digest,
+        seen_idempotency_keys: lineage.map(row => row.progress && row.progress.idempotency_key).filter(Boolean),
+        previous_consecutive_nonprogress: previous.progress
+          && Number.isInteger(previous.progress.consecutive_nonprogress)
+          ? previous.progress.consecutive_nonprogress : 0,
+        consumed_repairs: lineage.filter(row => row.outcome === 'fail' && row.repair
+          && row.repair.settled === true && row.consumed_by != null).length });
+    }
+    if (!isPlainObject(attempt.progress) || canonicalJson(attempt.progress) !== canonicalJson(expectedProgress)) {
+      return refuseJournal('review_journal_progress_mismatch');
+    }
+    const reducerPass = reduced.gate_effect === 'pass' || reduced.gate_effect === 'none';
+    const progressPass = attempt.review_phase === 'discovery' || attempt.progress.progress === true;
+    const expectedOutcome = reducerPass && progressPass ? 'pass' : 'fail';
+    const expectedReason = expectedOutcome === 'pass' ? null
+      : (attempt.review_phase === 'closure' && !attempt.progress.progress
+        ? attempt.progress.reason : 'review_gate_failed');
+    if (attempt.outcome !== expectedOutcome || attempt.reason !== expectedReason) {
+      return refuseJournal('review_journal_outcome_mismatch');
+    }
+    lineage.push(attempt);
+    lineageByScope.set(scopeKey(attempt), lineage);
+    for (const identity of Object.values(attempt.producer_bindings)) {
+      if (!isWriterIdentityTuple(identity)) return refuseJournal('review_journal_writer_identity_malformed');
+    }
+    const selectedWriter = attempt.repair.selected_writer;
+    if (Object.keys(attempt.repair).sort().join(',') !== 'selected_writer,settled'
+      || !(selectedWriter === null || (typeof selectedWriter === 'string' && selectedWriter))
+      || !(attempt.repair.settled === null || typeof attempt.repair.settled === 'boolean')
+      || !(attempt.consumed_by === null || (typeof attempt.consumed_by === 'string' && attempt.consumed_by))
+      || (selectedWriter !== null && !attempt.producer_bindings[selectedWriter])
+      || (attempt.consumed_by !== null && attempt.consumed_by !== selectedWriter)
+      || (attempt.consumed_by !== null && attempt.repair.settled !== true)
+      || (attempt.outcome === 'pass' && (selectedWriter !== null || attempt.consumed_by !== null || attempt.rebind.length))) {
+      return refuseJournal('review_journal_repair_state_malformed');
+    }
+    let expectedBase = selectedWriter && attempt.producer_bindings[selectedWriter]
+      ? attempt.producer_bindings[selectedWriter].baseline : null;
+    let expectedGeneration = 1;
+    for (const record of attempt.rebind) {
+      if (!isPlainObject(record) || !Number.isInteger(record.generation) || record.generation < 1
+        || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(String(record.base_before || ''))
+        || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(String(record.base_after || ''))
+        || !HEX64_RE.test(String(record.candidate_digest || ''))
+        || !isCanonicalBlobMap(record.candidate_declared)
+        || !isPlainObject(record.producer_bindings)
+        || !Object.values(record.producer_bindings).every(isWriterIdentityTuple)
+        || !Array.isArray(record.absorbed) || !Array.isArray(record.attributed_to)
+        || typeof record.settled !== 'boolean' || typeof record.aborted !== 'boolean'
+        || (record.aborted && record.settled)) {
+        return refuseJournal('review_journal_rebind_malformed');
+      }
+      if (!record.aborted) {
+        const overlay = selectedWriter && record.producer_bindings[selectedWriter];
+        if (!selectedWriter || record.generation !== expectedGeneration
+          || record.base_before !== expectedBase || !overlay
+          || overlay.baseline !== record.base_after) {
+          return refuseJournal('review_journal_rebind_chain_invalid');
+        }
+        expectedBase = record.base_after;
+        expectedGeneration += 1;
+      }
+    }
+  }
+  for (const values of ordinals.values()) {
+    values.sort((a, b) => a - b);
+    if (values.some((value, index) => value !== index + 1)) return refuseJournal('review_journal_duplicate_ordinal');
+  }
+  return { ok: true };
+}
+
+// Pure, fail-closed structural validation for the authoritative review journal. Schema-2 journals are
+// dispatched to validateReviewJournalV2; schema-1 journals are validated in place. The third argument
+// carries two independently-shipped, type-disjoint contracts, sniffed fail-closed: a NUMBER is the
+// expected-schema-version enforcement (#693/#696/#697/#698 — reject a journal whose schema_version differs
+// from the plan's verified contract); a plain OBJECT is the schema-1 fanout-reduction options (issue-699 —
+// { schema2_review_gates } whose plan-owned canonical adapter rows make code/security group outcomes
+// authoritative, while a metadata-absent legacy fanout keeps its historical majority rule). Any other value
+// (string/array/null) selects neither behavior. No caller needs both at once: a schema-2 journal routes to
+// V2 before options are read, and the options path only runs for a schema-1 journal.
+function validateReviewJournal(journal, expectedPlanHash, schemaVersionOrOptions) {
+  const expectedSchemaVersion = typeof schemaVersionOrOptions === 'number' ? schemaVersionOrOptions : undefined;
+  const options = (schemaVersionOrOptions && typeof schemaVersionOrOptions === 'object'
+    && !Array.isArray(schemaVersionOrOptions)) ? schemaVersionOrOptions : undefined;
   const refuseJournal = (reason, detail) => ({ ok: false, reason, detail: detail || null });
   if (!journal || typeof journal !== 'object' || Array.isArray(journal)) {
     return refuseJournal('review_journal_malformed', 'journal must be an object');
+  }
+  if (expectedSchemaVersion && journal.schema_version !== expectedSchemaVersion) {
+    return refuseJournal('review_journal_version_mismatch', 'journal schema does not match verified plan contract');
+  }
+  if (journal.schema_version === REVIEW_JOURNAL_SCHEMA_VERSION) {
+    return validateReviewJournalV2(journal, expectedPlanHash);
   }
   if (journal.schema_version !== 1) {
     return refuseJournal('review_journal_version_unsupported', 'schema_version must equal 1');
@@ -2626,8 +3771,39 @@ module.exports = {
   parseNodeFindings,
   unresolvedInScopeFixes,
   evaluateEffectiveVerdict,
+  REVIEW_PLAN_SCHEMA_VERSION,
+  REVIEW_CONTRACT_VERSION,
+  REVIEW_CONTEXT_SCHEMA_VERSION,
+  REVIEW_JOURNAL_SCHEMA_VERSION,
+  REVIEW_GATE_ROLES,
+  REVIEW_AGGREGATIONS,
+  ADVERSARIAL_OUTCOMES,
+  APPROVAL_OUTCOMES,
+  FINDING_ANCHOR_KINDS,
+  FINDING_FAILURE_CLASSES,
+  canonicalJson,
+  sha256Hex,
+  deriveGateMode,
+  requiredReviewTokens,
+  deriveGateEffect,
+  buildReviewContext,
+  parseReviewEvidence,
+  parseReviewEvidenceIdentity,
+  validateReviewEvidenceBinding,
+  normalizeFindingAnchor,
+  computeFindingUid,
+  normalizeFindingSet,
+  normalizeResolutionSet,
+  authoritativeResolutionArtifacts,
+  deriveRepairDelta,
+  validateRepairDelta,
+  assessFindingClosure,
+  reduceReviewReceipts,
+  compareValidationObligations,
+  assessReviewProgress,
   canonicalLogicalGateIdentity,
   validateReviewJournal,
+  validateReviewJournalV2,
   isCanonicalBlobMap,
   isWriterIdentityTuple,
   nonAbortedRebinds,

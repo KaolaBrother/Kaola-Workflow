@@ -15,7 +15,7 @@ Everything under `.opencode/` is **generated from canonical** by
 
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
-| `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. |
+| `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. Generated reviewers preserve their canonical normalized behavior core and identity. |
 | `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's central effort resolution (`task` tool, no per-call `model=`). The canonical Path Intent / auto-fallback prose is also stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
 | `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 3 runtime-neutral hook scripts, byte-copied. |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
@@ -27,6 +27,20 @@ One file is **authored** (not generated) and verified present by the test:
 Generated agents are deliberately model-agnostic, so regenerating the tree never
 overwrites a user's model choices — those live only in the user-owned
 `opencode.json`.
+
+## Reviewer behavior derivation
+
+`code-reviewer` and `adversarial-verifier` are first rendered into their canonical Claude roots by
+`scripts/generate-reviewer-profiles.js` from `templates/reviewers/behavior-contracts.json` and the
+closed runtime adapters. `sync-opencode-edition.js` then transforms those generated roots into
+OpenCode frontmatter/permissions; it does not maintain a second reviewer prompt.
+
+`scripts/test-opencode-edition.js` extracts the delimited reviewer core and proves that role,
+`behavior_contract_version`, `behavior_contract_hash`, and every normalized core byte match the
+canonical generated source. This is deterministic contract equivalence only. OpenCode and another
+runtime may produce different natural-language findings, explanations, or domain outcomes because
+the underlying model execution is stochastic. The transform also makes no claim about private
+runtime prompt-loader bytes; it proves the tracked/generated filesystem surface.
 
 ## Model effort — two tiers as reasoning-effort variants
 
@@ -462,9 +476,10 @@ The validator is self-contained (run directly with `node`; it is intentionally
 
 ## Verification
 
-The edition is covered by `scripts/test-opencode-edition.js` (363 assertions):
+The edition is covered by `scripts/test-opencode-edition.js` (525 assertions):
 agent/command presence and frontmatter, model-agnostic invariant (no `model:` in
-generated agents), byte-for-byte canonical parity, `opencode.json` JSONC validity
+generated agents), byte-for-byte canonical parity including generated reviewer behavior identity,
+`opencode.json` JSONC validity
 + exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the
 higher-profile correspondence), the **workflow-planner `mapTier` guidance**,
 **model-prose consistency** (no contradictory "pass `model=`" instructions),
