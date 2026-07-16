@@ -611,6 +611,7 @@ function testGiteaAdaptive() {
     fs.mkdirSync(pdir, { recursive: true });
     const planPath = path.join(pdir, 'workflow-plan.md');
     fs.writeFileSync(planPath, PLAN);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     assert.strictEqual(spawnNode(valScript, [planPath, '--freeze'], tmp).status, 0, 'gitea: plan freeze must exit 0');
     assert.strictEqual(spawnNode(repairScript, ['issue-903'], tmp).status, 0, 'gitea: adaptive repair must exit 0');
     const repairedState = fs.readFileSync(path.join(pdir, 'workflow-state.md'), 'utf8');
@@ -620,6 +621,7 @@ function testGiteaAdaptive() {
     fs.mkdirSync(tdir, { recursive: true });
     const tplan = path.join(tdir, 'workflow-plan.md');
     fs.writeFileSync(tplan, PLAN);
+    fs.writeFileSync(tplan, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(tplan, 'utf8')) + ' -->\n\n' + fs.readFileSync(tplan, 'utf8'));
     spawnNode(valScript, [tplan, '--freeze'], tmp);
     fs.writeFileSync(tplan, fs.readFileSync(tplan, 'utf8').replace('lib/x.js', 'lib/y.js'));
     assert.ok(/typed refusal/.test(spawnNode(repairScript, ['issue-904'], tmp).stdout), 'gitea: tampered plan must be a typed refusal');
@@ -760,6 +762,7 @@ function testGiteaAdaptive() {
     fs.mkdirSync(e2dir, { recursive: true });
     const e2plan = path.join(e2dir, 'workflow-plan.md');
     fs.writeFileSync(e2plan, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| done | finalize | — | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| done | pending |', 'consent_halt: pending', ''].join('\n'));
+    fs.writeFileSync(e2plan, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(e2plan, 'utf8')) + ' -->\n\n' + fs.readFileSync(e2plan, 'utf8'));
     spawnNode(valScript, [e2plan, '--freeze'], tmp);
     spawnNode(repairScript, ['issue-941'], tmp);
     assert.ok(/consent-halt-surface/.test(fs.readFileSync(path.join(e2dir, 'workflow-state.md'), 'utf8')),
@@ -1078,6 +1081,7 @@ function testGiteaAdaptive() {
       // --repair via CLI normalizes the header and surfaces header_normalized:true.
       const lhPlanPath = path.join(tmp, 'lh-plan.md');
       fs.writeFileSync(lhPlanPath, planBodyLh);
+      fs.writeFileSync(lhPlanPath, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(lhPlanPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(lhPlanPath, 'utf8'));
       const lhR = spawnNode(valScript, [lhPlanPath, '--freeze', '--repair', '--json'], tmp);
       assert.strictEqual(lhR.status, 0,
         'gitea #425: --freeze --repair must exit 0 on a `| node |` header plan, got ' + lhR.status + ' stderr: ' + lhR.stderr);

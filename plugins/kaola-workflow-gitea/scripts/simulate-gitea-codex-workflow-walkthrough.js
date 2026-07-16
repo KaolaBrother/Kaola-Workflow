@@ -268,6 +268,7 @@ const gtOs = require('os');
     ].join('\n'));
     const planPath = path.join(dir, 'workflow-plan.md');
     fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + gtMinimalPlan);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(gtPlanVal).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fr = gtSpawn(process.execPath, [gtPlanVal, planPath, '--freeze'],
       { cwd: tA, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     if (fr.status !== 0) throw new Error('gitea-codex #430 (a): freeze must exit 0, stderr: ' + fr.stderr);
@@ -298,6 +299,7 @@ const gtOs = require('os');
     ].join('\n'));
     const planPath = path.join(dir, 'workflow-plan.md');
     fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + gtMinimalPlan);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(gtPlanVal).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fr = gtSpawn(process.execPath, [gtPlanVal, planPath, '--freeze'],
       { cwd: tB, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     if (fr.status !== 0) throw new Error('gitea-codex #430 (b): freeze must exit 0, stderr: ' + fr.stderr);

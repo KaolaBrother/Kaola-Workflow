@@ -275,6 +275,7 @@ const glOs = require('os');
     ].join('\n'));
     const planPath = path.join(dir, 'workflow-plan.md');
     fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + glMinimalPlan);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(glPlanVal).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fr = glSpawn(process.execPath, [glPlanVal, planPath, '--freeze'],
       { cwd: tA, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     if (fr.status !== 0) throw new Error('gitlab-codex #430 (a): freeze must exit 0, stderr: ' + fr.stderr);
@@ -306,6 +307,7 @@ const glOs = require('os');
     ].join('\n'));
     const planPath = path.join(dir, 'workflow-plan.md');
     fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + glMinimalPlan);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(glPlanVal).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fr = glSpawn(process.execPath, [glPlanVal, planPath, '--freeze'],
       { cwd: tB, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     if (fr.status !== 0) throw new Error('gitlab-codex #430 (b): freeze must exit 0, stderr: ' + fr.stderr);
