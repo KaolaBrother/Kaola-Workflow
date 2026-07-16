@@ -2824,4 +2824,140 @@ for (const variant of ['untyped', 'writer-bearing', 'review-present']) {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// #706 baseline retention (ledger-complete writers, gate not yet attempted): reconcile-running-set must
+// NOT drop the barrier baseline of a ledger-COMPLETE writer even when NO review attempt references it
+// yet. A post-dominating gate records its FIRST attempt at ITS OWN close, and that close captures every
+// complete producer's writer identity (base file + open token + anchored ref) from
+// `.cache/barrier-base-<writer>` — so the #703 journal-referenced retention alone cannot protect a
+// pending gate's producers. Sweeping them (as both the `no_running_set` reconcile of a crashed serial
+// run and a running-set-present hygiene reconcile did) makes the later gate close refuse
+// `writer_identity_unavailable`; the manual `--record-base` remedy re-anchors on the CURRENT tree and
+// loses the writer's historical diff attribution. A genuinely-orphaned baseline (no ledger row — a
+// discarded / never-completed node) must still sweep on BOTH paths.
+function initPendingGateFixture() {
+  // Journal-silent mid-run state: the `review` gate is live (in_progress) but has NOT yet recorded an
+  // attempt, so retention of `impl` (complete) can only come from the ledger-complete rule.
+  const fx = initFixture({ sourceAttemptId: 'review:1', seedSource: false });
+  fs.rmSync(path.join(fx.cacheDir, 'review-attempts.json'), { force: true });
+  fs.rmSync(path.join(fx.cacheDir, 'review.md'), { force: true });
+  const planPath = path.join(fx.projectDir, 'workflow-plan.md');
+  fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8')
+    .replace('| review | complete |', '| review | in_progress |')
+    // The gate never closed: its verdict-role compliance row must not exist yet, or the journal-absent
+    // read refuses review_journal_missing instead of creating the first attempt at the gate close.
+    .replace('| code-reviewer (review) | invoked | .cache/review.md | |\n', ''));
+  // The live gate's own open identity (its evidence-binding nonce source).
+  const gateBase = 'b'.repeat(40);
+  fs.writeFileSync(path.join(fx.cacheDir, 'barrier-base-review'), gateBase + '\n');
+  fs.writeFileSync(path.join(fx.cacheDir, 'barrier-open-review'), gateBase + '\n');
+  // A genuine orphan: no ledger row, no running-set owner, no journal reference.
+  fs.writeFileSync(path.join(fx.cacheDir, 'barrier-base-ghost'), 'f'.repeat(40) + '\n');
+  // Anchored-ref store: the git-ref half of the writer identity; --drop-base removes file + ref together.
+  const refs = new Map([['impl', fx.commit], ['review', gateBase], ['ghost', 'f'.repeat(40)]]);
+  const dropped = [];
+  const shell = (_script, args) => {
+    if (args.includes('--drop-base')) {
+      const idx = args.indexOf('--node-id');
+      const id = idx >= 0 ? args[idx + 1] : null;
+      dropped.push(id);
+      refs.delete(id);
+      for (const prefix of ['barrier-base-', 'barrier-open-']) {
+        try { fs.unlinkSync(path.join(fx.cacheDir, prefix + id)); } catch (_) {}
+      }
+      return { exitCode: 0, result: 'ok', nodeId: id };
+    }
+    if (args.includes('--resume-check')) return { exitCode: 0, ok: true };
+    return { exitCode: 0, result: 'ok', ok: true, overallOk: true,
+      selectorCheck: { isSelector: false, ok: true } };
+  };
+  const common = {
+    planPath, project: fx.project, shell,
+    readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, v) => fs.writeFileSync(p, v),
+    cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) {} },
+    readdir: p => fs.readdirSync(p),
+    resolveBarrierRef: (_ref, id) => refs.get(id) || '',
+    computeReviewCandidateDigest: () => 'c'.repeat(64),
+    // NO captureWriterBarrierIdentity injection: the REAL capture must read the on-disk identity —
+    // exactly the seam that refused writer_identity_unavailable after the buggy sweep.
+  };
+  // The gate close: record pass evidence bound to the live generation, then a real runCloseNode.
+  const closeGate = () => {
+    fs.writeFileSync(path.join(fx.cacheDir, 'review.md'), [
+      'evidence-binding: review ' + gateBase.slice(0, 12),
+      'verdict: pass', 'findings_blocking: 0', '',
+    ].join('\n'));
+    return adaptiveNode.runCloseNode({ ...common, nodeId: 'review' });
+  };
+  return { fx, refs, dropped, common, closeGate };
+}
+
+// #706 shape (i) — the close-crash / hygiene reconcile with a running set PRESENT: a ledger-complete
+// writer still in the 'open' set (its close's running-set removal crashed) is dropped FROM THE SET, but
+// its baseline is RETAINED, and the pending post-dominating gate then closes successfully.
+{
+  const h = initPendingGateFixture();
+  try {
+    fs.writeFileSync(path.join(h.fx.cacheDir, 'running-set.json'), JSON.stringify({
+      state: 'open', nodes: [
+        { id: 'impl', role: 'tdd-guide', kind: 'write', baseline: 'recorded' },
+        { id: 'review', role: 'code-reviewer', kind: 'read', baseline: 'recorded' },
+      ] }, null, 2));
+    const reconciled = adaptiveNode.runReconcileRunningSet(h.common);
+    equal(reconciled.result, 'ok', '#706(i) reconcile completes on the close-crash running set');
+    ok(reconciled.reconciled === true && (reconciled.closedDropped || []).includes('impl'),
+      '#706(i) the terminal member leaves the running set (close-crash repair): '
+      + JSON.stringify({ reconciled: reconciled.reconciled, closedDropped: reconciled.closedDropped }));
+    ok(fs.existsSync(path.join(h.fx.cacheDir, 'barrier-base-impl'))
+      && fs.existsSync(path.join(h.fx.cacheDir, 'barrier-open-impl'))
+      && !h.dropped.includes('impl'),
+    '#706(i) the ledger-complete writer KEEPS its baseline identity (a successful close would have kept it), '
+      + 'dropped=' + JSON.stringify(h.dropped));
+    ok(!fs.existsSync(path.join(h.fx.cacheDir, 'barrier-base-ghost'))
+      && (reconciled.orphanBaselinesDropped || []).includes('ghost'),
+    '#706(i) a genuinely-orphaned baseline still sweeps: ' + JSON.stringify(reconciled.orphanBaselinesDropped));
+    const closed = h.closeGate();
+    ok(closed.reason !== 'writer_identity_unavailable',
+      '#706(i) the gate close no longer refuses writer_identity_unavailable: ' + JSON.stringify(closed));
+    equal(closed.result, 'ok', '#706(i) the post-dominating gate close SUCCEEDS after reconcile '
+      + '(no manual --record-base remedy): ' + JSON.stringify(closed));
+    const journal = JSON.parse(fs.readFileSync(path.join(h.fx.cacheDir, 'review-attempts.json'), 'utf8'));
+    equal(journal.attempts[0].producer_bindings.impl.baseline, h.fx.commit,
+      '#706(i) the attempt binds the writer ORIGINAL baseline (historical diff attribution intact, '
+      + 'not a semantically-weaker current-tree re-record)');
+  } finally { fs.rmSync(h.fx.root, { recursive: true, force: true }); }
+}
+
+// #706 shape (ii) — the `no_running_set` path (a crashed serial run: open-next writes no manifest): the
+// reconcile still reports reconciled:false, but its hoisted orphan sweep must not drop ledger-complete
+// writers' baselines. The sweep itself stays (its crash-repair purpose: reclaiming baselines of
+// discarded / never-completed nodes, which would otherwise be silently reused by a later open) — proven
+// by the ghost still sweeping on this same run.
+{
+  const h = initPendingGateFixture();
+  try {
+    ok(!fs.existsSync(path.join(h.fx.cacheDir, 'running-set.json')),
+      '#706(ii) precondition: no running-set.json (serial run)');
+    const reconciled = adaptiveNode.runReconcileRunningSet(h.common);
+    equal(reconciled.result, 'ok', '#706(ii) reconcile returns ok on the manifest-less project');
+    ok(reconciled.reconciled === false && reconciled.reason === 'no_running_set',
+      '#706(ii) the manifest-less reconcile stays a no-transaction report: '
+      + JSON.stringify({ reconciled: reconciled.reconciled, reason: reconciled.reason }));
+    ok(fs.existsSync(path.join(h.fx.cacheDir, 'barrier-base-impl'))
+      && fs.existsSync(path.join(h.fx.cacheDir, 'barrier-open-impl'))
+      && !h.dropped.includes('impl')
+      && !(reconciled.orphanBaselinesDropped || []).includes('impl'),
+    '#706(ii) the no_running_set sweep RETAINS the ledger-complete writer baseline (pre-fix it reported '
+      + 'it in orphanBaselinesDropped), got ' + JSON.stringify(reconciled.orphanBaselinesDropped));
+    ok(!fs.existsSync(path.join(h.fx.cacheDir, 'barrier-base-ghost'))
+      && (reconciled.orphanBaselinesDropped || []).includes('ghost'),
+    '#706(ii) a genuinely-orphaned baseline still sweeps on the no_running_set path: '
+      + JSON.stringify(reconciled.orphanBaselinesDropped));
+    const closed = h.closeGate();
+    ok(closed.reason !== 'writer_identity_unavailable',
+      '#706(ii) the gate close no longer refuses writer_identity_unavailable: ' + JSON.stringify(closed));
+    equal(closed.result, 'ok', '#706(ii) the post-dominating gate close SUCCEEDS after the manifest-less '
+      + 'reconcile: ' + JSON.stringify(closed));
+  } finally { fs.rmSync(h.fx.root, { recursive: true, force: true }); }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);
