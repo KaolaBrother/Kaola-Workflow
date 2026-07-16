@@ -1,0 +1,15 @@
+evidence-binding: e2-versioned-epoch-repair 5558d54a8213
+RED: `node scripts/test-replan.js` exited 1 because planned current authority accepted a state with `epoch_schema_version` removed (`actual: undefined`, expected `state_epoch_schema_missing`); the focused compliance probe showed missing-finalize, duplicate-requirement, and malformed-header variants all froze `in-grammar` and resumed with `ok:true`.
+GREEN: `node scripts/test-replan.js` exited 0 with `test-replan: PASSED (955 assertions)`; the four schema/lineage mutations now refuse from both shared entry points with the same typed reason, and every malformed compliance variant refuses at both freeze and resume with `required_agent_compliance_invalid`.
+upstream_read: e1-epoch3-authority-blueprint a224da30381a
+attempt_1_provenance: e2-versioned-epoch-repair 57da78d0e83e
+e3_handback_read: e3-lifecycle-publication-repair 0e932924a6e7
+issue_comment_read: 4988777256
+
+authority_green: Hermetic copy of the live planned authority returned `state_epoch_schema_missing`, `state_epoch_schema_unsupported`, `state_epoch_lineage_missing`, and `state_epoch_lineage_mismatch` respectively from both `verifyCurrentEpochAuthority` and `verifyAllEpochSnapshots`; every pair reported `shared_reason:true`.
+compliance_green: Focused live-plan mutations for a missing finalize requirement, duplicate requirement, and malformed header each returned `required_agent_compliance_invalid` from `validatePlan` and `revalidateForResume`; the unmodified live plan resumed with hash `f696f5a02b2d9a2b1f8822b75b26fa479d650e18346a779f75a571425420d9d0`.
+history_green: `node scripts/kaola-workflow-replan.js verify-snapshots --project issue-699 --json` reverified epoch 1 manifest `8b95f06d869f4006cdac93eaca0eebb066b9d98a0a3ce9106d7ea2b60781c6ad` and epoch 2 manifest `68a0b4f5bbba8dc5ba16634c1042f7d8ff1d78c5178f935081800fd5509acce1` together.
+parity_green: `node scripts/edition-sync.js --check` passed 12 forge ports, 25 COMMON_SCRIPTS mirrors, and 27 byte-identical groups; `node scripts/validate-script-sync.js` passed; `node scripts/test-edition-sync.js` passed 46 assertions; `node scripts/test-validate-script-sync.js` passed 43 assertions.
+downstream_green: `test-adaptive-handoff.js` passed 170 assertions, `test-adaptive-node.js` passed 2227 assertions, the four E3 core walkthrough scenarios passed, and both archive walkthrough scenarios passed. Envelope-absent legacy archive compatibility remains green without reclassifying a partially stripped schema-2 authority as legacy.
+e3_replay_fixture_handoff: Runtime pending-row advancement remains E3-owned. The scheduled E3 replay must replace its `test-claim-hardening.js` schema-2 placeholder digest tuple (`1*64`, `2*64`, `3*64`; 264 assertions pass and 2 fixture assertions now correctly refuse) and its `test-bundle-finalize.js` planless schema-2 fixture that omits `epoch_lineage_id` (148 pass, 1 fixture assertion correctly refuses). Accepting either fixture in E2 would reopen the exact handback hole.
+scope_preserved: No E3-owned source or test file was edited. Canonical E2 changes were regenerated only into the nine declared Codex/GitLab/Gitea mirrors.

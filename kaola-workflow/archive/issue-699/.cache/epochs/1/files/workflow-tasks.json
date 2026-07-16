@@ -1,0 +1,78 @@
+{
+  "source_plan_hash": "b9072d7c90fc11b0abb94eb50780818e5606ce8d0ef66429ff6c73b2ed22f37b",
+  "tasks": [
+    {
+      "id": "n1-epoch-architecture",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-lineage-transaction",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-planner-control-plane",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-runtime-integration",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-edition-contract-proof",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-documentation",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-code-review",
+      "role": "code-reviewer",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    },
+    {
+      "id": "n8-security-review",
+      "role": "security-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n9-falsify-crash-cas",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n10-falsify-inheritance-budget",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n11-falsify-planner-legacy",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n12-finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-16T00:14:04.238Z"
+}

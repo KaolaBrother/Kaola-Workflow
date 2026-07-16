@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "plan_hash": "356e9948105a500db2dc3061b9fe3dc7c8dcdcf9e117df5c2c7eb23906d1f938",
+  "attempts": [
+    {
+      "attempt_id": "r6-code-review:1",
+      "ordinal": 1,
+      "plan_hash": "356e9948105a500db2dc3061b9fe3dc7c8dcdcf9e117df5c2c7eb23906d1f938",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"r5-documentation-correction\"],\"members\":[\"r6-code-review\"]}",
+        "kind": "sequence",
+        "id": "r6-code-review",
+        "origin": [
+          "r5-documentation-correction"
+        ],
+        "members": [
+          "r6-code-review"
+        ]
+      },
+      "transaction_key": "117ad76a504336263f1c823d17046e80d2b679011515e41ab835d8ece49b12a0",
+      "candidate_digest": "2f45d397575b61cc773b525c8da21c4650e5ec78ad8be0e57cd64896f529a881",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 2f597ab062b278a5c380cba4b89f4c1ffdc51d35",
+        "README.md": "100644 a7c11dbbd1e8f0bf5620acd00a26ab5fcae04648",
+        "docs/api.md": "100644 2eb6478d9d5f520b5981ad8c5a2e912d5fc0a1d6",
+        "docs/architecture.md": "100644 1e4c04c3b3e9c4e529c532f4a59683df04aa367c",
+        "docs/conventions.md": "100644 a7cbf4465aa24fd7c33af34fce94244c31818a43",
+        "docs/decisions/D-699-01.md": "100644 7c29abe7cbfaa4f9bc60eb20fab241993a901a62",
+        "docs/plan-run-cards/repair-routing.md": "100644 57fe3670547681e306f24b027457e7a0bc8d0369",
+        "docs/workflow-state-contract.md": "100644 b681dc411209e7541bef3c6b95d89115bbd49dce",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-handoff.js": "100644 3e9076a7470c92ccb7ff44c64a895dd1182cf0c3",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 535b471d7b9a2e27b1e80620d1e41d698456a97f",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 106a7c9d87087ae024ee14b53016dbd612359bbb",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js": "100644 95bdf41f18d352af000643b9db4ee8a31c4bbbb2",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-replan.js": "100644 86e8eeeb9bc3dc431b4078e990260f0541135fdf",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js": "100644 176dea06cc7555a0d0cc580711714d102ba6f502",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js": "100644 ff1aa8e52aa799dd80b41ef6174b6042bb631505",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-handoff.js": "100644 fe3b68c73154bcf6fe217687d527d2c2468cde7f",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 6cc63c2e058c49629379a02c4d57e86935cccab8",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 3fd3d9a04943366dfe4c9dc83089754fbc8f8d0d",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js": "100644 2c548968b5f43b757b5b3fa700de9c1d6f759e26",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js": "100644 d2979dbcdb518cbc37e4dc8fb69935f55fe9fa70",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js": "100644 176dea06cc7555a0d0cc580711714d102ba6f502",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js": "100644 ff1aa8e52aa799dd80b41ef6174b6042bb631505",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-handoff.js": "100644 2f33140e497572a9da260d04ae543e55dd3a6515",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 4896569d60cd63abeecbe410f4461829eea73f0e",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": "100644 176dea06cc7555a0d0cc580711714d102ba6f502",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 4b90e73f6c3b00984520adb684019e8bcc86cc77",
+        "plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js": "100644 ff1aa8e52aa799dd80b41ef6174b6042bb631505",
+        "plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js": "100644 8aaa4ee30e4587e6be8cf2a4b2cbe9f8a917dd08",
+        "plugins/kaola-workflow/scripts/kaola-workflow-replan.js": "100644 1ce0c49b8a8b85b92dbf5a5495845d118f9855c9",
+        "scripts/kaola-workflow-adaptive-handoff.js": "100644 2f33140e497572a9da260d04ae543e55dd3a6515",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 4896569d60cd63abeecbe410f4461829eea73f0e",
+        "scripts/kaola-workflow-adaptive-schema.js": "100644 176dea06cc7555a0d0cc580711714d102ba6f502",
+        "scripts/kaola-workflow-claim.js": "100644 4b90e73f6c3b00984520adb684019e8bcc86cc77",
+        "scripts/kaola-workflow-closure-contract.js": "100644 ff1aa8e52aa799dd80b41ef6174b6042bb631505",
+        "scripts/kaola-workflow-plan-validator.js": "100644 8aaa4ee30e4587e6be8cf2a4b2cbe9f8a917dd08",
+        "scripts/kaola-workflow-replan.js": "100644 1ce0c49b8a8b85b92dbf5a5495845d118f9855c9",
+        "scripts/simulate-workflow-walkthrough.js": "100755 aad9ef297a32a1996ef0d6dd2a5927000238a02c",
+        "scripts/test-adaptive-handoff.js": "100644 1479c03a04c60b596011883d91cb6386c7981cb3",
+        "scripts/test-adaptive-node.js": "100644 28b58279758e494f2c21355cf9a0b1c5d57f6886",
+        "scripts/test-bundle-finalize.js": "100644 83c6a8b72fb6bc0754a28b8f6c010234d1726b16",
+        "scripts/test-claim-hardening.js": "100644 88ec7a67472d37a50b00b23d0c8502230ec9861f",
+        "scripts/test-plan-run.js": "100644 d7534f9cdd38d79ec5a084484a360b5c8960958e",
+        "scripts/test-replan.js": "100644 173dcb82838b1da77a6b013447cb115c35aaf1e4"
+      },
+      "candidate_residue_digest": "9c61e4de3adecebe9a1f81692f69f1929dde7f370cb8c40b65c76b740b6aec01",
+      "generations": [
+        {
+          "member": "r6-code-review",
+          "nonce": "450fb7b6bb95"
+        }
+      ],
+      "settlement_command": "close-node",
+      "outcome": "fail",
+      "reason": "verdict_not_pass",
+      "receipts": [
+        {
+          "node_id": "r6-code-review",
+          "generation": "450fb7b6bb95",
+          "receipt_sha256": "a191868253cee704211783184d39b43d9ac09e2ffaca8b7c13c383bef7a09879",
+          "effective_pass": false,
+          "verdict": "fail",
+          "findings_blocking": 0,
+          "body": "evidence-binding: r6-code-review 450fb7b6bb95\nverdict: fail\nfindings_blocking: 0\ncertifier_kind: code\ncertifier_aggregation: sequence\ncertifier_gate_digest: d36bf2fabd6cc557197d01cba8e1900125d042a8888b0c3fd63d3ad093bbddd9\ncertifier_epoch_lineage_id: 013e796d486ea0426548c2b1448a20d92cd95e62e4a0ee3b601048f8ebf1e4f7\ncertifier_inherited_frontier_digest: 42b1b3321089d2e423e359b2b5afb51496e7e26548a52986f8a01f875275583c\ncertified_candidate_digest: 07984b68e9c52fff512de5fec6f4e613251a3c5620aa93417d6cd063a5ab159d\nfinding: id=R6-699-01 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=projection-bound-child-is-rejected-by-finalize\nfinding: id=R6-699-02 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=valid-planless-epoch-one-cannot-archive\nfinding: id=R6-699-03 scope=in_scope action=fix status=open severity=medium fix_role=build-error-resolver rationale=packaged-planner-packet-fixtures-omit-snapshot-authority\nfinding: id=R6-699-04 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=walkthrough-timeout-is-shorter-than-focused-suite-runtime\n\n# Findings\n\n## HIGH — R6-699-01: every new projection-bound child is rejected by finalization\n\nRequirement: N7-699-04 child/snapshot cross-binding and the schema-2 finalization authority chain.\n\nOwner: `r3-lineage-proof-repair` for the transaction/snapshot representation and\n`r4-forge-contract-repair` for the finalization consumer; repair role `tdd-guide`.\n\nLocations:\n\n- `scripts/kaola-workflow-adaptive-schema.js:360-362` declares epoch schema 2 but leaves\n  `REPLAN_TRANSACTION_SCHEMA_VERSION` at 1.\n- `scripts/kaola-workflow-replan.js:1074-1091` stamps every newly prepared transaction with that\n  version 1 constant.\n- `scripts/kaola-workflow-plan-validator.js:2050-2057` accepts the projection digest only when\n  `tx.schema_version === 2`; every version 1 transaction is treated as a historical externally sealed\n  transaction whose child must contain literal `pending`.\n- `scripts/test-replan.js:1069-1090` proves that a new child correctly contains the real\n  `tx.snapshot.authority_digest`, but never sends that committed child through `--finalize-check`.\n  The finalization integration beginning at `scripts/test-replan.js:2192` covers an uncommitted fence,\n  so it cannot expose the post-commit discriminator mismatch.\n- The generated Codex, GitLab, and Gitea schema/replan/validator mirrors contain the same mismatch.\n\nImpact: a canonical schema-2 re-plan can prepare, freeze, snapshot, and report `committed`, yet the\nfirst finalization check rejects the legitimate child as `epoch_state_mismatch`. The new workflow\ntherefore cannot reach its release gate after a real epoch transition.\n\nFocused reproduction: I loaded the existing `initFixture` and `advanceToAttestedChild` helper prelude\nfrom `scripts/test-replan.js` in memory (no repository file was created), called the canonical\n`resumeReplan` path through `committed`, then invoked:\n\n`node scripts/kaola-workflow-plan-validator.js <fixture>/kaola-workflow/issue-699/workflow-plan.md --finalize-check --json`\n\nObserved values:\n\n- `resume_result: committed`\n- `transaction_schema_version: 1`\n- transaction snapshot authority digest and child `parent_snapshot_manifest_digest` were identical\n  (`196ffda74eb9c45993a7e4337430d55055af01965a27064c846370ce347c3f1c` in this run)\n- finalization exited 1 with\n  `{\"result\":\"refuse\",\"reason\":\"epoch_state_mismatch\",\"errors\":[\"parent_snapshot_manifest_digest\"]}`\n\nAcceptance for resolution:\n\n1. Use one authoritative discriminator that distinguishes newly projection-bound transactions from\n   verified historical external seals; do not accept `pending` for a new schema-2 child.\n2. Add a regression that performs a canonical prepare -> planner handoff -> commit, then exercises\n   `--finalize-check`; the epoch binding must pass and the fixture may proceed to the next independent\n   gate (for example `chains_unverified` when no chain receipt is installed).\n3. Preserve the historical epoch-1 snapshot compatibility receipt and regenerate all three plugin\n   mirrors byte-for-byte modulo forge names.\n\n## HIGH — R6-699-02: the legal planless epoch-1 state cannot be archived\n\nRequirement: A5-699-01, including both legal initial authority forms and fail-closed archive behavior.\n\nOwner: `r2-lifecycle-transport-repair` for lifecycle behavior and `r3-lineage-proof-repair` for the\nrecursive verifier; repair role `tdd-guide`.\n\nLocations:\n\n- `scripts/kaola-workflow-replan.js:2354-2374` correctly accepts zero snapshots for plan epoch 1 and\n  `active_snapshot_manifest_digest: none`.\n- `scripts/kaola-workflow-replan.js:2375-2380` then unconditionally reads `workflow-plan.md` and\n  compares it with `active_plan_hash`, although the legal planless state intentionally has no plan and\n  records `active_plan_hash: none`.\n- `scripts/kaola-workflow-claim.js:2078-2093` makes that verifier a mandatory precondition of every\n  archive.\n- `scripts/simulate-workflow-walkthrough.js:15245-15280` tests planless claim only until the first\n  handoff, while `scripts/simulate-workflow-walkthrough.js:15288-15306` tests archive refusal only via\n  the forced-refusal seam. There is no positive archive test for a valid planless authority.\n\nImpact: release/finalize/watch callers now fail closed, but a fresh valid claim cannot take any archive\npath before a plan is handed off. This violates one of the two initial authority forms and turns a\nvalid planless project into durable workflow residue.\n\nFocused reproduction: in a disposable Git repository I planted a local roadmap issue, ran offline\n`kaola-workflow-claim.js startup --target-issue 6999`, and called the exported `archiveProjectDir` on\nthe untouched claim. The state was `epoch_schema_version: 2`, `plan_epoch: 1`,\n`active_plan_hash: none`, `active_snapshot_manifest_digest: none`, and no plan existed. The result was:\n\n`{\"archived\":false,\"archive_incomplete\":true,\"missing\":[],\"snapshot_error\":\"snapshot_active_plan_mismatch\"}`\n\nAcceptance for resolution:\n\n1. For the legal planless form, require `active_plan_hash: none` and absence of `workflow-plan.md`; do\n   not attempt to hash an absent plan. Continue to reject a plan/hash mismatch in the planned form.\n2. Add a positive direct archive regression for a fresh planless epoch-1 claim and at least one caller\n   regression proving that explicit archive success, not a forced refusal, drives cleanup.\n3. Keep archive failure fail-closed and preserve the live project on every verifier error.\n\n## MEDIUM — R6-699-03: all packaged planner-packet fixtures omit snapshot authority\n\nRequirement: N7-699-04 projection transport plus A5-699-03 four-edition packaged validation.\n\nOwner: `r3-lineage-proof-repair` for the direct contract fixture shape and\n`r4-forge-contract-repair` for packaged/forge parity; repair role `build-error-resolver`.\n\nLocations:\n\n- `scripts/validate-kaola-workflow-contracts.js:1037-1055` constructs a transaction without\n  `transaction.snapshot` and immediately calls `buildPlannerPacket`.\n- `plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js:4965-4984` and\n  `plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js:4783-4802` repeat the obsolete\n  shape.\n- `plugins/kaola-workflow/scripts/kaola-workflow-replan.js:1384-1385`,\n  `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js:1385-1386`, and\n  `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-replan.js:1385-1386` require the projection\n  and digest, as the production contract intends.\n\nImpact: the Codex packaged contract validator and both forge edition suites abort with an unhandled\n`TypeError` before they can certify the implementation. This is fixture drift, not evidence that the\nprojection should be made optional.\n\nFocused reproductions:\n\n- `node scripts/validate-kaola-workflow-contracts.js` -> exit 1 at the Codex replan port, reading\n  `transaction.snapshot.authority_projection` from `undefined`.\n- `node plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js` -> exit 1 at the\n  equivalent GitLab packet fixture.\n- `node plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js` -> exit 1 at the\n  equivalent Gitea packet fixture.\n\nAcceptance for resolution: construct a valid non-circular `snapshot.authority_projection` plus its\ncanonical digest in all three direct fixtures (prefer the canonical transaction builder where\npractical), retain negative missing/tampered projection coverage, and make all three packaged commands\npass without weakening `buildPlannerPacket`.\n\n## MEDIUM — R6-699-04: the integrated transport wrapper times out a passing focused suite\n\nRequirement: the live review -> mechanical source -> planner transition and N7-699-06 durable\ninterruption/CAS proof must be executable through the focused walkthrough gate.\n\nOwner: `r2-lifecycle-transport-repair` for the walkthrough integration; repair role `tdd-guide`.\n\nLocations:\n\n- `scripts/simulate-workflow-walkthrough.js:15388-15392` launches all of `scripts/test-replan.js`\n  with a fixed `timeout: 120000` and asserts only `result.status === 0`.\n- The wrapper does not report `result.error`/`ETIMEDOUT`, so the failure message obscures the actual\n  timeout.\n\nImpact: the required five-scenario focused walkthrough is deterministically red even though its nested\nsuite is green. On this review host the standalone suite needed more than twice the wrapper budget.\n\nFocused reproductions:\n\n- `node scripts/simulate-workflow-walkthrough.js --only testReviewOutcomeTransport699` -> exit 1 at\n  `simulate-workflow-walkthrough.js:15392` after the child is terminated by the nested timeout.\n- `/usr/bin/time -p node scripts/test-replan.js` -> `test-replan: PASSED (888 assertions)`,\n  `real 251.75` seconds.\n\nAcceptance for resolution: remove the redundant short nested deadline or set a supported, non-flaky\nbudget above the actual suite envelope; surface `result.error` explicitly; and prove that the focused\nwalkthrough scenario and standalone 888-assertion suite both pass.\n\n# Verdict\n\nBLOCK. No CRITICAL finding was found, so `findings_blocking` is 0 under the schema contract. The four\nopen `scope=in_scope action=fix` findings are nevertheless mechanical finalization blockers. The\ncandidate must return through a bounded repair cycle before this certifier can issue `verdict: pass`.\n\n# Review authority and candidate binding\n\n- Reviewed base: `d59b191c925c634a36a74592ac9a9d21dfc93982`.\n- Frozen epoch-2 plan hash: `356e9948105a500db2dc3061b9fe3dc7c8dcdcf9e117df5c2c7eb23906d1f938`.\n- Direct upstream: `r5-documentation-correction 7dbb4753c89a`.\n- The certifier tuple above was recomputed from the frozen plan and current candidate and matched the\n  seeded values exactly: gate digest `d36bf2fabd6cc557197d01cba8e1900125d042a8888b0c3fd63d3ad093bbddd9`,\n  lineage `013e796d486ea0426548c2b1448a20d92cd95e62e4a0ee3b601048f8ebf1e4f7`, inherited frontier\n  `42b1b3321089d2e423e359b2b5afb51496e7e26548a52986f8a01f875275583c`, candidate\n  `07984b68e9c52fff512de5fec6f4e613251a3c5620aa93417d6cd063a5ab159d`.\n- Immutable epoch-1 manifest, physical `files/` snapshot, archived review receipt/journal, and child\n  linkage were inspected. The historical external-seal receipt remains present and its manifest/child\n  digests match the active epoch-2 lineage; this review did not modify or re-author it.\n- Read the issue body/comments, r1-r5 evidence, active transaction/state, complete tracked diff and\n  candidate-only files, generated mirrors, tests, docs, and the core claim/handoff/replan/validator\n  consumers. `git diff --check` passed.\n\n# Seven-source-requirement disposition\n\n1. A5-699-01 initial authority: planless claim and planless -> planned publication probes pass, but\n   positive planless archival is broken by R6-699-02.\n2. A5-699-02 offline/no-history: focused offline dominance and zero-commit/canonical-empty-tree probes\n   pass for native-off and native-on configurations.\n3. Live review-to-planner transport: the canonical repair source/prepare/commit cases pass in the\n   standalone re-plan suite, but the required integrated wrapper is red under R6-699-04.\n4. N7-699-04 child/snapshot cross-binding: projection/full-seal/tamper cases pass in the focused suite,\n   but a real committed child cannot finalize under R6-699-01 and packaged fixtures are red under\n   R6-699-03.\n5. N7-699-05 Case B: typed terminal diagnosis artifacts, no-review route, citations, and one-shot\n   budget behavior pass in the focused 888-assertion suite.\n6. N7-699-06 durable prefixes/CAS: the 41 base families, five deterministic dynamic forms, crash\n   prefixes, and four-seam x three-axis CAS matrix pass in the focused suite. No claim of full package\n   certification is made while R6-699-03/R6-699-04 remain open.\n7. A5-699-03 forge neutrality: edition/script sync and both standalone forbidden-token probes pass;\n   GitLab/Gitea package execution remains blocked by R6-699-03 rather than by a forbidden token.\n\n# Focused validation record\n\n- `node scripts/test-replan.js` -> PASS, 888 assertions; measured `real 251.75` seconds.\n- Initial authority/archive-refusal/offline focused walkthrough subset -> PASS, four scenarios.\n- Positive disposable planless archive probe -> reproduced `snapshot_active_plan_mismatch`.\n- Disposable canonical committed-child finalization probe -> reproduced `epoch_state_mismatch` on\n  `parent_snapshot_manifest_digest`.\n- `node scripts/validate-kaola-workflow-contracts.js` -> expected current FAIL, R6-699-03.\n- GitLab and Gitea direct edition suites -> expected current FAIL, R6-699-03.\n- `node scripts/simulate-workflow-walkthrough.js --only testReviewOutcomeTransport699` -> expected\n  current FAIL, R6-699-04.\n- `node scripts/edition-sync.js --check` -> PASS: 12 forge ports, 25 common mirrors, 27 byte-identical\n  groups.\n- `node scripts/validate-script-sync.js` -> PASS: common/normalized/hook/export-superset families.\n- Correct GitLab and Gitea standalone `--forbidden-only` checks over their plan-validator/replan ports\n  -> PASS.\n- Current frozen plan `--resume-check` -> PASS. Current `--finalize-check` advances through epoch\n  binding and refuses only `chains_unverified`, as expected before final chain execution.\n- Full `npm test` and the four complete package chains were not run, per the node brief and dispatch;\n  the focused failures above already prevent a valid full-chain certification claim.\n"
+        }
+      ],
+      "findings": [
+        {
+          "source_node": "r6-code-review",
+          "raw": "id=R6-699-01 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=projection-bound-child-is-rejected-by-finalize",
+          "id": "R6-699-01",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "tdd-guide",
+          "rationale": "projection-bound-child-is-rejected-by-finalize"
+        },
+        {
+          "source_node": "r6-code-review",
+          "raw": "id=R6-699-02 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=valid-planless-epoch-one-cannot-archive",
+          "id": "R6-699-02",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "tdd-guide",
+          "rationale": "valid-planless-epoch-one-cannot-archive"
+        },
+        {
+          "source_node": "r6-code-review",
+          "raw": "id=R6-699-03 scope=in_scope action=fix status=open severity=medium fix_role=build-error-resolver rationale=packaged-planner-packet-fixtures-omit-snapshot-authority",
+          "id": "R6-699-03",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "fix_role": "build-error-resolver",
+          "rationale": "packaged-planner-packet-fixtures-omit-snapshot-authority"
+        },
+        {
+          "source_node": "r6-code-review",
+          "raw": "id=R6-699-04 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=walkthrough-timeout-is-shorter-than-focused-suite-runtime",
+          "id": "R6-699-04",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "fix_role": "tdd-guide",
+          "rationale": "walkthrough-timeout-is-shorter-than-focused-suite-runtime"
+        }
+      ],
+      "route_candidates": [
+        {
+          "source_node": "r6-code-review",
+          "finding_id": "R6-699-01",
+          "id": "R6-699-01",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R6-699-01 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=projection-bound-child-is-rejected-by-finalize"
+        },
+        {
+          "source_node": "r6-code-review",
+          "finding_id": "R6-699-02",
+          "id": "R6-699-02",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R6-699-02 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide rationale=valid-planless-epoch-one-cannot-archive"
+        },
+        {
+          "source_node": "r6-code-review",
+          "finding_id": "R6-699-03",
+          "id": "R6-699-03",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "build-error-resolver",
+          "raw": "id=R6-699-03 scope=in_scope action=fix status=open severity=medium fix_role=build-error-resolver rationale=packaged-planner-packet-fixtures-omit-snapshot-authority"
+        },
+        {
+          "source_node": "r6-code-review",
+          "finding_id": "R6-699-04",
+          "id": "R6-699-04",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "fix_role": "tdd-guide",
+          "raw": "id=R6-699-04 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=walkthrough-timeout-is-shorter-than-focused-suite-runtime"
+        }
+      ],
+      "producer_bindings": {
+        "r2-lifecycle-transport-repair": {
+          "baseline": "b6675aaedc02f0bed20d08db77ed9d16bbc3cd13",
+          "anchored_ref": "b6675aaedc02f0bed20d08db77ed9d16bbc3cd13",
+          "open_token": "d59b191c925c634a36a74592ac9a9d21dfc93982",
+          "generation": "b6675aaedc02",
+          "ref": "refs/kaola-workflow/barrier/issue-699/r2-lifecycle-transport-repair"
+        },
+        "r3-lineage-proof-repair": {
+          "baseline": "ef637b74db4be2f9679630a6df6431c90594dd20",
+          "anchored_ref": "ef637b74db4be2f9679630a6df6431c90594dd20",
+          "open_token": "d59b191c925c634a36a74592ac9a9d21dfc93982",
+          "generation": "ef637b74db4b",
+          "ref": "refs/kaola-workflow/barrier/issue-699/r3-lineage-proof-repair"
+        },
+        "r4-forge-contract-repair": {
+          "baseline": "9667df96675ca92ad8b934be17ac629e36175e66",
+          "anchored_ref": "9667df96675ca92ad8b934be17ac629e36175e66",
+          "open_token": "d59b191c925c634a36a74592ac9a9d21dfc93982",
+          "generation": "9667df96675c",
+          "ref": "refs/kaola-workflow/barrier/issue-699/r4-forge-contract-repair"
+        },
+        "r5-documentation-correction": {
+          "baseline": "7dbb4753c89abe47ce32c0086c57f42e844006fd",
+          "anchored_ref": "7dbb4753c89abe47ce32c0086c57f42e844006fd",
+          "open_token": "d59b191c925c634a36a74592ac9a9d21dfc93982",
+          "generation": "7dbb4753c89a",
+          "ref": "refs/kaola-workflow/barrier/issue-699/r5-documentation-correction"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ],
+  "epoch_lineage_id": "013e796d486ea0426548c2b1448a20d92cd95e62e4a0ee3b601048f8ebf1e4f7",
+  "claim_identity_digest": "a0d3696a5275ac3abd3ae5bac6188c0d38b2a0d3e12324f51c6c373eb2bdd97b",
+  "plan_epoch": 2,
+  "legacy_import": {
+    "schema_version": 1,
+    "epoch_lineage_id": "013e796d486ea0426548c2b1448a20d92cd95e62e4a0ee3b601048f8ebf1e4f7",
+    "claim_identity_digest": "a0d3696a5275ac3abd3ae5bac6188c0d38b2a0d3e12324f51c6c373eb2bdd97b",
+    "parent_plan_hash": "b9072d7c90fc11b0abb94eb50780818e5606ce8d0ef66429ff6c73b2ed22f37b",
+    "parent_plan_epoch": 1,
+    "transaction_id": "31ae45e492001bf6c8d3a44f0f95f0299f4570998af6996dcd47ed9ec6fac3df",
+    "snapshot_manifest_digest": "8b95f06d869f4006cdac93eaca0eebb066b9d98a0a3ce9106d7ea2b60781c6ad",
+    "snapshot_path": ".cache/epochs/1/files/.cache/review-attempts.json",
+    "journal_digest": "ed53fecb2b38cb41f30cdd1edc9927d758fb5e8cd6c60dc48def53ebafe7e574",
+    "attempt_ids": [
+      "n7-code-review:1"
+    ],
+    "attempts_digest": "d9ce66d00fdd24d5f17a4b57c771738bbdbcc8399192cd9a3a473d77e955c104",
+    "consumed_attempt_ids": [
+      "n7-code-review:1"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "state": "open",
+  "max_concurrent": 4,
+  "nodes": [
+    {
+      "id": "e3-lifecycle-publication-repair",
+      "role": "tdd-guide",
+      "kind": "write",
+      "declared_write_set": "scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js, scripts/kaola-workflow-closure-contract.js, plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js, plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js, plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js, scripts/kaola-workflow-adaptive-handoff.js, plugins/kaola-workflow/scripts/kaola-workflow-adaptive-handoff.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-handoff.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-handoff.js, scripts/kaola-workflow-adaptive-node.js, plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js, scripts/test-adaptive-handoff.js, scripts/test-adaptive-node.js, scripts/test-claim-hardening.js, scripts/test-bundle-finalize.js, scripts/simulate-workflow-walkthrough.js",
+      "model": "reasoning",
+      "wait_budget_minutes": 240,
+      "wait_budget_source": "planner_override",
+      "baseline": "recorded",
+      "openedAt": "2026-07-16T06:45:55.141Z"
+    }
+  ],
+  "updatedAt": "2026-07-16T06:45:55.141Z"
+}

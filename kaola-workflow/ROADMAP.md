@@ -7,15 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #692 | adaptive: write-leg dispatch briefs upstream_evidence at a leg-relative path, but a leg worktree carries no sibling .cache evidence | open | — | Absolutize dispatch.upstream_evidence[].path to the parent worktree when a node opens into an isolated leg, so leg agents can bind the upstream nonce without leaving the briefed cd-leg discipline. |
-| #693 | adaptive: an investigation adversarial-verifier deadlocks the run — close-node applies change-gate semantics, but repair-node has no writer to route to (producer_slice: []) | open | — | Add one shared graph-derived gate-mode classifier (reachability-based, mirroring advVerifierIsChangeGate) so an investigation adversarial-verifier settles as analytical output at close-node and no producer_slice:[] deadlock remains. |
-| #694 | sink-merge --sink resumes a STALE sink-receipt.json from a previous run and replays its closure step — silently overriding --keep-issue-open and closing a keep-open epic | open | — | Persist and end-state-verify keep-open intent at the closure step, key cross-run receipt staleness off a run marker (not naive branch_head), and extend journal disposal to collision-suffixed archives. |
-| #695 | [P1][adaptive] Behavioral review parity with planner-owned DAGs and convergent re-plan epochs | open | — | Umbrella design: land work packages #693 then #696/#697-runner then #697-conformance then #698 then #699 for cross-runtime behavioral review parity, convergence, and planner-owned re-plan epochs. |
-| #696 | enhancement(agents): generate Claude/Codex reviewers from one versioned behavior contract | open | — | Generate Claude/Codex reviewer profiles from one versioned behavior contract under D-687-01 inherit-by-omission (generator must emit no model/effort keys). |
-| #697 | enhancement(validation): deterministic local runner and cross-runtime reviewer conformance | open | — | Add the deterministic local validation runner and cross-runtime conformance matrix; reconcile the schema-2 validation policy block with the existing #547 validation_command Meta key. |
-| #698 | enhancement(adaptive): candidate-bound review context, immutable findings, aggregation, and G4 | open | — | Candidate-bound review context, machine-assigned finding UIDs, declared gate aggregation, progress accounting, and the G4 common-certifier wall on schema-2 plans. |
-| #699 | enhancement(adaptive): planner-owned re-plan epochs preserve claim, candidate, and evidence | open | — | Claim-preserving planner-owned re-plan epochs with a CAS-protected crash-safe transaction and a claim-level liveness budget. |
-| #700 | fix(sink): collision-suffixed archive must commit and persist closure metadata | open | — | Use the actual archiveProjectDir destination in --sink, persist cmdFinalize-equivalent closure/attestation metadata, and fail resumably unless the collision-suffixed archive plus roadmap cleanup are committed and pushed. |
+| none | No active work | — | — | — |
 
 ## Rules
 

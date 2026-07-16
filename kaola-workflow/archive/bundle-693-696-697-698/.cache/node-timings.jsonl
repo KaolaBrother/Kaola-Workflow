@@ -1,0 +1,15 @@
+{"node":"n1-architecture","event":"opened","ts":"2026-07-15T09:46:00.669Z"}
+{"node":"n1-architecture","event":"closed","ts":"2026-07-15T10:06:05.309Z"}
+{"node":"n2-profile-contracts","event":"opened","ts":"2026-07-15T10:06:14.863Z"}
+{"node":"n2-profile-contracts","event":"closed","ts":"2026-07-15T10:26:56.982Z"}
+{"node":"n3-validation-runner","event":"opened","ts":"2026-07-15T10:28:16.420Z"}
+{"node":"n3-validation-runner","event":"closed","ts":"2026-07-15T10:57:08.795Z"}
+{"node":"n4-review-engine","event":"opened","ts":"2026-07-15T10:57:09.290Z"}
+{"node":"n4-review-engine","event":"closed","ts":"2026-07-15T13:24:01.977Z"}
+{"node":"n5-runtime-guidance","event":"opened","ts":"2026-07-15T13:24:02.516Z"}
+{"node":"n5-runtime-guidance","event":"closed","ts":"2026-07-15T13:47:01.255Z"}
+{"node":"n6-installed-contract-proof","event":"opened","ts":"2026-07-15T13:47:01.745Z"}
+{"node":"n6-installed-contract-proof","event":"closed","ts":"2026-07-15T14:44:56.463Z"}
+{"node":"n7-documentation","event":"opened","ts":"2026-07-15T14:44:56.914Z"}
+{"node":"n7-documentation","event":"closed","ts":"2026-07-15T15:08:35.512Z"}
+{"node":"n8-code-review","event":"opened","ts":"2026-07-15T15:10:06.509Z"}

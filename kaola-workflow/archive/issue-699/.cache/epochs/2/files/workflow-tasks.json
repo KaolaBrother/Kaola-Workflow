@@ -1,0 +1,72 @@
+{
+  "source_plan_hash": "356e9948105a500db2dc3061b9fe3dc7c8dcdcf9e117df5c2c7eb23906d1f938",
+  "tasks": [
+    {
+      "id": "r1-repair-blueprint",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r2-lifecycle-transport-repair",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r3-lineage-proof-repair",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r4-forge-contract-repair",
+      "role": "build-error-resolver",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r5-documentation-correction",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r6-code-review",
+      "role": "code-reviewer",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    },
+    {
+      "id": "r7-security-review",
+      "role": "security-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "r8-falsify-lifecycle-transport",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "r9-falsify-binding-caseb",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "r10-falsify-crash-editions",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "r11-finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-16T03:49:10.183Z"
+}

@@ -1,0 +1,13 @@
+{"node":"n1-epoch-architecture","event":"opened","ts":"2026-07-15T16:06:08.631Z"}
+{"node":"n1-epoch-architecture","event":"closed","ts":"2026-07-15T16:24:07.776Z"}
+{"node":"n2-lineage-transaction","event":"opened","ts":"2026-07-15T16:24:17.344Z"}
+{"node":"n2-lineage-transaction","event":"closed","ts":"2026-07-15T18:18:27.504Z"}
+{"node":"n3-planner-control-plane","event":"opened","ts":"2026-07-15T18:18:32.551Z"}
+{"node":"n3-planner-control-plane","event":"closed","ts":"2026-07-15T18:45:17.410Z"}
+{"node":"n4-runtime-integration","event":"opened","ts":"2026-07-15T18:45:22.185Z"}
+{"node":"n4-runtime-integration","event":"closed","ts":"2026-07-15T22:20:07.373Z"}
+{"node":"n5-edition-contract-proof","event":"opened","ts":"2026-07-15T23:00:12.307Z"}
+{"node":"n5-edition-contract-proof","event":"closed","ts":"2026-07-15T23:27:54.419Z"}
+{"node":"n6-documentation","event":"opened","ts":"2026-07-15T23:59:39.292Z"}
+{"node":"n6-documentation","event":"closed","ts":"2026-07-16T00:13:51.179Z"}
+{"node":"n7-code-review","event":"opened","ts":"2026-07-16T00:14:04.186Z"}

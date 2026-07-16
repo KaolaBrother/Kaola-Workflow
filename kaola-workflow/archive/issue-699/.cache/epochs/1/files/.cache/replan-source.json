@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "result": "repair_requires_replan",
+  "attempt_id": "n7-code-review:1",
+  "reason": "repair_requires_replan",
+  "producer_slice": [
+    "n2-lineage-transaction",
+    "n3-planner-control-plane",
+    "n4-runtime-integration",
+    "n5-edition-contract-proof",
+    "n6-documentation"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "source_plan_hash": "f696f5a02b2d9a2b1f8822b75b26fa479d650e18346a779f75a571425420d9d0",
+  "tasks": [
+    {
+      "id": "e1-epoch3-authority-blueprint",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "e2-versioned-epoch-repair",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "e3-lifecycle-publication-repair",
+      "role": "tdd-guide",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    },
+    {
+      "id": "e4-packaged-fixture-repair",
+      "role": "build-error-resolver",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e5-documentation-correction",
+      "role": "doc-updater",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e6-code-review",
+      "role": "code-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e7-security-review",
+      "role": "security-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e8-falsify-two-transition-budget",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e9-falsify-history-and-archive",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e10-falsify-publication-and-editions",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "e11-finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-16T07:50:42.464Z"
+}
