@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Integration tests for the --sink transaction (kaola-workflow-sink-merge.js) — issues #694 and #700.
+// Integration tests for the --sink transaction (kaola-workflow-sink-merge.js) — issues #694/#700/#705.
 // Hand-rolled assert + counter; repo style (no framework) — mirrors test-bundle-finalize.js.
 //
 // Covered scenarios:
@@ -15,6 +15,14 @@
 //       removal + regenerated ROADMAP.md), the ## Closure + ## Attestation blocks are persisted, and
 //       no dirty main checkout remains after status:sinked.
 //   (d) #700/#694 — journal disposal covers the collision-suffixed archive path.
+//   (e) #705 — a keep-open SOLE-archiver sink RETAINS the kept-open issue's roadmap source: the
+//       source survives at HEAD, the regenerated ROADMAP.md still lists the (still-open) issue, the
+//       issue is never closed, and the sink still reports status:sinked with a clean main checkout.
+//   (f) #705 — a normal CLOSING sole-archiver sink still REMOVES the roadmap source (the keep-open
+//       retention must not regress the close path).
+//   (g) #705 — a MIXED bundle (one close + one keep-open) removes ONLY the closing issue's roadmap
+//       source and keeps the kept-open member's — the per-member excludeIssues scoping of
+//       archiveProjectDir/reconcileRoadmapForClosure.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -373,12 +381,137 @@ function suffixedArchiveRel(tmpRoot, project) {
   }
 })();
 
+// --------------------------------------------------------------------------- (e) #705
+
+(function testKeepOpenSoleArchiverRetainsRoadmapSource() {
+  console.log('Test (#705 e): a keep-open sole-archiver sink RETAINS the kept-open issue roadmap source — source survives at HEAD, ROADMAP.md still lists it, issue never closed, status sinked, main clean');
+  const project = 'issue-70501';
+  const issue = 70501;
+  const fx = buildSoleArchiverFixture(project, issue, { issueAction: 'comment_keep_open' });
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue), '--keep-issue-open']);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#705 e: sink exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#705 e: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // THE FIX: the kept-open issue's roadmap source must SURVIVE at HEAD (an open issue stays tracked).
+    assert(catFileType(fx.tmpRoot, 'HEAD:kaola-workflow/.roadmap/issue-' + issue + '.md') === 'blob',
+      '#705 e: the kept-open roadmap source must SURVIVE at HEAD (a blob); got ' + JSON.stringify(catFileType(fx.tmpRoot, 'HEAD:kaola-workflow/.roadmap/issue-' + issue + '.md')));
+    // ... and the regenerated mirror must still list the (still-open) issue as active.
+    const mirrorAtHead = showAtHead(fx.tmpRoot, 'kaola-workflow/ROADMAP.md');
+    assert(mirrorAtHead != null && new RegExp('^\\| #' + issue + ' \\|', 'm').test(mirrorAtHead),
+      '#705 e: ROADMAP.md at HEAD must still list the kept-open issue as active; got:\n' + mirrorAtHead);
+
+    // The issue must NEVER be closed (keep-open).
+    const calls = readLog(fx.logFile);
+    assert(!calls.includes('close:' + issue), '#705 e: a kept-open issue must NEVER be closed; calls=' + JSON.stringify(calls));
+
+    // main checkout must be CLEAN after status:sinked (the retained source is committed at HEAD, not
+    // left as a staged/unstaged deletion).
+    const status = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
+    assert(status === '', '#705 e: main checkout must be clean after status:sinked; got:\n' + status);
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (f) #705
+
+(function testClosingSoleArchiverStillRemovesRoadmapSource() {
+  console.log('Test (#705 f): a normal CLOSING sole-archiver sink still REMOVES the roadmap source (keep-open retention must not regress the close path)');
+  const project = 'issue-70502';
+  const issue = 70502;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#705 f: sink exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#705 f: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // The close path is unchanged: the roadmap source is removed from HEAD and the mirror drops it.
+    assert(catFileType(fx.tmpRoot, 'HEAD:kaola-workflow/.roadmap/issue-' + issue + '.md') === null,
+      '#705 f: the roadmap source must be removed from HEAD on a close run');
+    const mirrorAtHead = showAtHead(fx.tmpRoot, 'kaola-workflow/ROADMAP.md');
+    assert(mirrorAtHead != null && !new RegExp('^\\| #' + issue + ' \\|', 'm').test(mirrorAtHead),
+      '#705 f: ROADMAP.md at HEAD must no longer list the closed issue as active');
+
+    const calls = readLog(fx.logFile);
+    assert(calls.includes('close:' + issue), '#705 f: the issue must be closed on a non-keep-open run; calls=' + JSON.stringify(calls));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (g) #705
+
+// A mix of close + keep-open is a PER-MEMBER property, expressed at the archiveProjectDir /
+// reconcileRoadmapForClosure seam via excludeIssues (the sink CLI carries a whole-run keep-open
+// posture, so a genuine intra-run mix is only reachable at this mechanism level). Drive it directly:
+// a bundle of two members, one excluded (kept open), one removed (closing).
+(function testMixedBundleExcludeIssuesScopesRetention() {
+  console.log('Test (#705 g): archiveProjectDir excludeIssues keeps ONLY the kept-open member roadmap source in a mixed bundle; the closing member is removed and the regenerated mirror reflects both');
+  const claim = require(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'));
+  const project = 'issue-70503';
+  const keepN = 70503; // kept-open member (excluded from removal)
+  const closeN = 70504; // closing member (source removed)
+  const tmpRoot = fs.realpathSync(makeTmpRoot());
+  try {
+    // Minimal in-place repo: .roadmap sources for both members + a mirror + a live bundle project.
+    spawnSync('git', ['init', '-b', 'main'], { cwd: tmpRoot, encoding: 'utf8' });
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpRoot, encoding: 'utf8' });
+    spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmpRoot, encoding: 'utf8' });
+    const roadmapDir = path.join(tmpRoot, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(path.join(roadmapDir, 'issue-' + keepN + '.md'), roadmapSource(keepN));
+    fs.writeFileSync(path.join(roadmapDir, 'issue-' + closeN + '.md'), roadmapSource(closeN));
+    fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([keepN, closeN]));
+    const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+    // Bundle state: issue_numbers carries BOTH members so archiveProjectDir reconciles both.
+    const state = [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'runtime: claude', 'step: start', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink',
+      'branch: workflow/' + project,
+      'issue_number: ' + keepN,
+      'issue_numbers: ' + keepN + ',' + closeN,
+      'sink: merge',
+      '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), state);
+
+    // Archive with the kept-open member excluded from roadmap-source removal.
+    const res = claim.archiveProjectDir(tmpRoot, project, 'closed', undefined, { excludeIssues: [keepN] });
+    assert(res && res.archived === true, '#705 g: archiveProjectDir must succeed; got ' + JSON.stringify(res));
+
+    const keepSrc = path.join(roadmapDir, 'issue-' + keepN + '.md');
+    const closeSrc = path.join(roadmapDir, 'issue-' + closeN + '.md');
+    assert(fs.existsSync(keepSrc), '#705 g: the kept-open member roadmap source must SURVIVE');
+    assert(!fs.existsSync(closeSrc), '#705 g: the closing member roadmap source must be REMOVED');
+    assert(!res.roadmap_sources_removed.includes('issue-' + keepN + '.md'), '#705 g: kept member must NOT be in roadmap_sources_removed');
+    assert(res.roadmap_sources_removed.includes('issue-' + closeN + '.md'), '#705 g: closing member MUST be in roadmap_sources_removed; got ' + JSON.stringify(res.roadmap_sources_removed));
+
+    // The regenerated mirror lists ONLY the still-open member.
+    const mirror = fs.readFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), 'utf8');
+    assert(new RegExp('^\\| #' + keepN + ' \\|', 'm').test(mirror), '#705 g: mirror must still list the kept-open member; got:\n' + mirror);
+    assert(!new RegExp('^\\| #' + closeN + ' \\|', 'm').test(mirror), '#705 g: mirror must NOT list the closed member; got:\n' + mirror);
+  } finally {
+    try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }
