@@ -2445,6 +2445,18 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
           receipt.domain_outcome, receipt.blocking_findings)) {
         return refuseJournal('review_journal_receipt_binding_mismatch');
       }
+      // Fail-closed re-validation: never trust the STORED blocking_findings/domain_outcome pair —
+      // recompute the open-blocker count from receipt.findings (the same predicate ingestion uses)
+      // and re-assert approved ⇒ zero open findings, so a hand-crafted receipt cannot carry an open
+      // blocker behind a gate_effect:pass.
+      const openCount = receipt.findings.filter(finding =>
+        isPlainObject(finding) && finding.status !== 'resolved').length;
+      if (receipt.blocking_findings !== openCount
+        || (attempt.reducer.role !== 'adversarial-verifier'
+          && ((receipt.domain_outcome === 'approved' && openCount > 0)
+            || (receipt.domain_outcome === 'changes_requested' && openCount === 0)))) {
+        return refuseJournal('review_journal_receipt_binding_mismatch');
+      }
       receiptIds.add(receipt.node_id);
     }
     if (receiptIds.size !== gate.members.length || gate.members.some(member => !receiptIds.has(member))) {

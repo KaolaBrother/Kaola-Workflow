@@ -1025,6 +1025,14 @@ function prepareReviewOpen(opts, planContent, nodeLike) {
   if (!node || !reviewSchema.REVIEW_GATE_ROLES.includes(node.role)) {
     return { ok: true, legacy: false, contract, review_gate: false };
   }
+  // #699/#698 seam: a code/security FANOUT review member is owned by the schema-1 provisional-fanout
+  // machinery (validateSchema2ReviewEvidence routes its close there). Its open is the ordinary read-node
+  // open against the journal-reserved generation — no V2 review context is materialized for it, so mirror
+  // the non-review-gate return. Sequence/single review opens stay on the V2 path below.
+  if (['code-reviewer', 'security-reviewer'].includes(node.role)
+      && logicalGateForNode(nodes, node).kind === 'fanout') {
+    return { ok: true, legacy: false, contract, review_gate: false };
+  }
   const planView = validator.buildPlanView(planContent);
   const planNode = planView.nodes.find(candidate => candidate.id === node.id);
   const gateMode = node.role === 'adversarial-verifier'
@@ -1345,8 +1353,23 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
   // state (fresh, genuine schema-2, or invalid) falls through to the V2 validation unchanged.
   const journalState = readReviewJournal(opts, planContent);
   if (journalState.ok && journalState.journal && journalState.journal.schema_version === 1
-    && Object.prototype.hasOwnProperty.call(journalState.journal, 'legacy_import')) {
+    && Object.prototype.hasOwnProperty.call(journalState.journal, 'legacy_import')
+    // Belt-and-braces to readReviewJournal's fail-closed refuse: route on a VALIDATED cross-epoch import,
+    // never bare key presence. __legacy_attempts is the non-enumerable property attachLegacyImport sets
+    // ONLY after loadCommittedLegacyImport proves the committed transaction + snapshot chain, so a forged
+    // journal (already refused above) can never carry it through JSON into this predicate.
+    && Object.prototype.hasOwnProperty.call(journalState.journal, '__legacy_attempts')) {
     return { ok: true, legacy: true, review_gate: false };
+  }
+  // A code/security FANOUT review gate (replicated_majority / partitioned_all) is owned by the schema-1
+  // provisional-fanout machinery — reserveLogicalReviewGenerations, journal-owned generations, rolling
+  // open-ready top-up, and reduceLogicalReviewAttempt — even under a schema-2 plan. The V2 candidate-bound
+  // path has no equivalent reservation/top-up/crash-retry story, so the close takes the schema-1 path and
+  // its attempts land in a schema-1 journal (validated against schema2ReviewGateContracts). Sequence/single
+  // review closes stay on the V2 path unchanged.
+  if (logicalGateForNode(parseNodesFromContent(planContent), nodeInfo).kind === 'fanout'
+    && ['code-reviewer', 'security-reviewer'].includes(nodeInfo.role)) {
+    return { ok: true, legacy: false, review_gate: false };
   }
   const identity = reviewSchema.parseReviewEvidenceIdentity(evidenceContent);
   if (Object.prototype.hasOwnProperty.call(identity, 'execution_status')
@@ -3734,6 +3757,18 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
   return { ok: true };
 }
 
+// #699/#698 cross-feature seam: a schema-2 plan whose review gate is a code/security FANOUT
+// (replicated_majority / partitioned_all) is driven by the schema-1 provisional-fanout machinery
+// (reserveLogicalReviewGenerations + rolling top-up + reduceLogicalReviewAttempt), so its review journal
+// is a schema-1 journal — validated against the plan's schema2ReviewGateContracts. This predicate lets
+// readReviewJournal accept that schema-1 journal under a schema-2 plan WITHOUT weakening the bundle's
+// bare-mismatch refusal (schema-1 journal, no legacy_import) for any plan whose review is candidate-bound.
+function planReviewUsesSchema1Fanout(planContent) {
+  const nodes = parseNodesFromContent(planContent);
+  return nodes.some(node => ['code-reviewer', 'security-reviewer'].includes(node.role)
+    && logicalGateForNode(nodes, node).kind === 'fanout');
+}
+
 function readReviewJournal(opts, planContent) {
   const planHash = planHashFromContent(planContent);
   if (!planHash) return { ok: true, legacy: true, plan_hash: null, journal: null };
@@ -3838,7 +3873,8 @@ function readReviewJournal(opts, planContent) {
   // mismatch (schema-1 journal, no legacy_import, under a schema-2 plan) is still refused (bundle's #693/#696/
   // #697/#698 protection). A schema_version:2 journal is validated as V2.
   if (journal && journal.schema_version !== expectedJournalVersion
-    && !(journal.schema_version === 1 && Object.prototype.hasOwnProperty.call(journal, 'legacy_import'))) {
+    && !(journal.schema_version === 1 && Object.prototype.hasOwnProperty.call(journal, 'legacy_import'))
+    && !(journal.schema_version === 1 && planReviewUsesSchema1Fanout(planContent))) {
     return { ok: false, reason: 'review_journal_version_mismatch',
       detail: 'journal schema does not match verified plan contract', journalPath };
   }
@@ -3853,11 +3889,20 @@ function readReviewJournal(opts, planContent) {
   // majority rule where it is absent, then the epoch legacy-import chain.
   const valid = validateReviewJournalForPlan(journal, planHash, planContent);
   if (!valid.ok) return { ok: false, reason: valid.reason, detail: valid.detail, journalPath };
+  const declaresLegacyImport = Object.prototype.hasOwnProperty.call(journal, 'legacy_import');
   const imported = loadCommittedLegacyImport(opts, planHash,
-    Object.prototype.hasOwnProperty.call(journal, 'legacy_import') ? journal.legacy_import : null);
+    declaresLegacyImport ? journal.legacy_import : null);
   if (imported.applicable) {
     if (!imported.ok) return { ok: false, reason: imported.reason, journalPath };
     attachLegacyImport(journal, imported.parentJournal, imported.pointer);
+  } else if (declaresLegacyImport) {
+    // Fail-closed: a schema-1 journal that DECLARES a legacy_import pointer but has NO committed, validated
+    // replan-transaction backing it (file absent, or present but not a committed child for THIS plan) is a
+    // forged cross-epoch child. loadCommittedLegacyImport returns applicable:false there, which the guard
+    // above would otherwise treat as a non-fatal skip — leaving the unvalidated pointer in place so the
+    // version-mismatch exemption + validateSchema2ReviewEvidence route a schema-2 review close onto the
+    // schema-1 (V2-binding-free) path. Mere key presence is not provenance: refuse.
+    return { ok: false, reason: 'review_journal_legacy_import_transaction_invalid', journalPath };
   }
   const nodes = parseNodesFromContent(planContent);
   const identity = reviewJournalIdentityMatchesPlan(journal, nodes, readLedgerStatuses(planContent));
@@ -4068,6 +4113,13 @@ function beginReviewAttempt(opts, ctx) {
   const state = readReviewJournal({ ...opts, allowReviewJournalCreate: true,
     creatingNodeId: ctx.nodeInfo.id, creatingGeneration, creatingMembers: logicalGate.members }, ctx.planContent);
   if (!state.ok || state.legacy) return state;
+  // A code/security FANOUT under a schema-2 plan is routed here (schema-1 provisional machinery). A freshly
+  // created journal is stamped schema_version:2 by the plan contract; re-key the still-empty journal to the
+  // schema-1 shape before the first attempt lands so it is read back through validateReviewJournalForPlan.
+  if (logicalGate.kind === 'fanout' && state.journal.schema_version !== 1
+      && (state.journal.attempts || []).length === 0) {
+    state.journal = { schema_version: 1, plan_hash: state.journal.plan_hash, attempts: [] };
+  }
   // A settled failure is a terminal, replay-only transaction.  Re-emit its
   // original envelope without requiring the folded-pending members to reserve
   // new generations (which would mutate state before the replay).

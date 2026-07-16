@@ -734,6 +734,65 @@ function freezeLegacyFixture(execFn, command, validator, planPath, options) {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
+// A schema-1 review journal that merely CARRIES a legacy_import key — with NO committed replan-transaction
+// backing it — is a FORGED cross-epoch child. Bare key presence is not provenance: it must never route a
+// schema-2 review close onto the schema-1 (V2-binding-free) path. readReviewJournal fails closed with the
+// typed transaction-invalid reason, and the close refuses instead of dropping the V2 review_context/
+// candidate_digest/profile binding.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-forged-legacy-import-'));
+  try {
+    const project = 'issue-forged';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const rows = [
+      '| writer | tdd-guide | — | product.js | 1 | sequence | standard | — | — | — | — |',
+      '| review-a | code-reviewer | writer | — | 1 | sequence | reasoning | candidate approved | full candidate | sequence | — |',
+      '| finalize | finalize | review-a | — | 1 | sequence | — | — | — | — | — |',
+    ];
+    const body = [
+      '# Workflow Plan', '', '## Meta', 'project: ' + project, 'plan_schema_version: 2',
+      'epoch_schema_version: 2', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |', ...rows,
+      '', '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| writer | complete |', '| review-a | in_progress |', '| finalize | pending |', '',
+    ].join('\n');
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    // FORGED journal: schema_version 1, correct plan_hash, empty attempts, a bare attacker-controlled
+    // legacy_import key, and NO replan-transaction.json anywhere under .cache/.
+    fs.writeFileSync(path.join(cacheDir, 'review-attempts.json'),
+      JSON.stringify({ schema_version: 1, plan_hash: hash, attempts: [],
+        legacy_import: { forged: true, whatever: 'attacker-controlled' } }, null, 2) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review-a'), 'a'.repeat(40) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'review-a.md'),
+      'evidence-binding: review-a ' + 'a'.repeat(12) + '\nverdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open',
+      nodes: [{ id: 'review-a', role: 'code-reviewer', kind: 'read' }] }));
+    const common = { planPath, project,
+      shell: (_script, args) => args.includes('--resume-check')
+        ? { exitCode: 0, ok: true, result: 'ok' }
+        : { exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } },
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, value) => fs.writeFileSync(p, value),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: p => fs.readdirSync(p),
+      computeReviewCandidateDigest: () => 'd'.repeat(64),
+      captureWriterBarrierIdentity: id => id === 'writer' ? { baseline: 'a'.repeat(40),
+        anchored_ref: 'a'.repeat(40), open_token: 'w', generation: 'a'.repeat(12),
+        ref: 'refs/kaola-workflow/barrier/' + project + '/writer' } : null };
+    const forgedRead = readReviewJournal(common, fs.readFileSync(planPath, 'utf8'));
+    assert(forgedRead.ok === false
+      && forgedRead.reason === 'review_journal_legacy_import_transaction_invalid',
+    'a bare legacy_import key with no committed replan-transaction fails the journal read closed');
+    const forgedClose = runCloseNode({ ...common, nodeId: 'review-a' });
+    assert(forgedClose.result === 'refuse' && forgedClose.provisional !== true
+      && forgedClose.reason === 'review_context_mismatch',
+    'a forged legacy_import journal cannot route a schema-2 review close onto the schema-1 path');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
 // REPAIR-DIGEST-DRIFT: exclude only this run's control tree and .kw bookkeeping.
 {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-digest-'));

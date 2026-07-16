@@ -232,6 +232,7 @@ function testKeepOpenArchiveStamp() {
       '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 fixture333 | |',
       '| finalize (n2) | main-session-direct | evidence-binding: n2 fixture333 | |', ''
     ].join('\n'));
+    stampVerifiedLegacyPlan(planPath);
     const frozen333 = json(runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp));
     const FINAL_HASH = frozen333.planHash;
     assert(/^[0-9a-f]{64}$/.test(FINAL_HASH), '#333: fixture plan freezes with a real plan hash');
@@ -10372,6 +10373,7 @@ function testKeepOpenMergeFullChain() {
       '| code-reviewer (n2) | subagent-invoked | evidence-binding: n2 fixture860 | |',
       '| finalize (n3) | main-session-direct | evidence-binding: n3 fixture860 | |', ''
     ].join('\n'));
+    stampVerifiedLegacyPlan(plan860);
     const frozen860 = json(runNode(planValidatorScript, [plan860, '--freeze', '--json'], tmp));
     const planHash860 = frozen860.planHash;
     stContent = stContent
@@ -10517,6 +10519,7 @@ function testKeepOpenFinalizeFlagAlias() {
       '| code-reviewer (n2) | subagent-invoked | evidence-binding: n2 fixture861 | |',
       '| finalize (n3) | main-session-direct | evidence-binding: n3 fixture861 | |', ''
     ].join('\n'));
+    stampVerifiedLegacyPlan(plan861);
     const frozen861 = json(runNode(planValidatorScript, [plan861, '--freeze', '--json'], tmp));
     const planHash861 = frozen861.planHash;
     stContent = stContent
@@ -13535,7 +13538,13 @@ function makeHandoffPlan(nodesRows, ledgerRows, labels) {
     '## Node Ledger', '',
     '| id | status |',
     '|---|---|',
-  ]).concat(ledgerRows).concat(['']).join('\n');
+  ]).concat(ledgerRows).concat([
+    '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|---|---|---|---|',
+  ]).concat(parsedRows.map(cells => '| ' + cells[1] + ' (' + cells[0] + ') | pending | | |'))
+    .concat(['']).join('\n');
 }
 
 // Helper: plant a workflow-state.md stub (no issue_number → vacuous roadmap_staged).
@@ -13976,7 +13985,10 @@ function testFreezeCheckedGovernanceAckStale() {
     '| rv | code-reviewer | a | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| done | finalize | rv | — | 1 | sequence | — | — | — | — |', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
-    '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
+    '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', '',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| code-explorer (ex) | pending | | |', '| tdd-guide (a) | pending | | |',
+    '| code-reviewer (rv) | pending | | |', '| finalize (done) | pending | | |', ''].join('\n');
   const grepo = adaptiveTmp('gov-ack-stale-git');
   initGitRepoWithBareRemote(grepo);
   const proj = path.join(grepo, 'kaola-workflow', 'issue-408');
@@ -14466,6 +14478,7 @@ function testAdaptiveWorktreeProvisionedE2E() {
     ].join('\n');
     const planDst = path.join(projDst, 'workflow-plan.md');
     fs.writeFileSync(planDst, planContent);
+    stampVerifiedLegacyPlan(planDst);
     const frozen530 = json(runNode(planValidatorScript, [planDst, '--freeze', '--json'], wt530));
     const planHash530 = frozen530.planHash;
     fs.copyFileSync(planDst, path.join(projSrc, 'workflow-plan.md'));
@@ -15678,7 +15691,12 @@ function runFocusedReviewOutcomeTransport699() {
   const child = makeHandoffPlan([
     '| child-first | code-explorer | — | — | 1 | sequence |',
     '| child-finalize | finalize | child-first | — | 1 | sequence |',
-  ], ['| child-first | pending |', '| child-finalize | pending |']).replace('labels: enhancement', [
+  ], ['| child-first | pending |', '| child-finalize | pending |'])
+    // makeHandoffPlan already emits the fresh-plan G4 quad; strip the lines this child
+    // epoch overrides so the injected epoch block never duplicates a Meta field.
+    .replace('code_certifier: none\n', '').replace('security_certifier: none\n', '')
+    .replace('inherited_frontier_digest: none\n', '').replace('inherited_frontier_classes: none\n', '')
+    .replace('labels: enhancement', [
     'labels: enhancement', 'contract_version: 2', 'epoch_schema_version: 2',
     'epoch_lineage_id: ' + '1'.repeat(64), 'plan_epoch: 2',
     'parent_plan_hash: ' + '2'.repeat(64), 'parent_snapshot_manifest_digest: pending',
@@ -15842,6 +15860,10 @@ function testReviewerContractV2Conformance() {
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+      '| tdd-guide (writer) | pending | | |', '| code-reviewer (reviewer) | pending | | |',
+      '| finalize (finalize) | pending | | |', '',
     ].join('\n'));
     fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
     const freeze = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);

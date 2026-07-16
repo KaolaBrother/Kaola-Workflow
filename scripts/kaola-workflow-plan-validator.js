@@ -1224,15 +1224,20 @@ function hasSchema2GateMetadata(node) {
 // One canonical analyzer owns both the freeze-time activation fence and the
 // plan-hash-bound runtime journal contracts. A legacy plan may keep historical
 // metadata-free reviewer fanouts, but explicit G4 metadata is schema-2-only.
+// Schema-2 here means the PLAN contract (plan_schema_version: 2 — fresh authoring)
+// OR an active epoch contract (a re-plan child); the epoch-child lineage rules
+// stay keyed on the epoch fields alone (validateEpochContract), so a fresh
+// schema-2 plan authors gate metadata without an epoch block.
 // Once active, every code/security fanout is either emitted exactly once or
 // rejected: malformed and mixed groups can never disappear from the adapter.
 function resolveSchema2ReviewGateContracts(contract, nodes) {
   const rows = Array.isArray(nodes) ? nodes : [];
   const errors = [];
-  if (!contract || !contract.active) {
+  const schema2Plan = !!(contract && contract.fields && contract.fields.plan_schema_version === '2');
+  if (!contract || (!contract.active && !schema2Plan)) {
     const activated = rows.filter(hasSchema2GateMetadata).map(node => node.id).sort();
     if (activated.length) {
-      errors.push('G4: schema-2 gate metadata requires epoch_schema_version: 2; found on node(s): '
+      errors.push('G4: schema-2 gate metadata requires plan_schema_version: 2 or an active epoch contract; found on node(s): '
         + activated.join(', '));
     }
     return { contracts: [], errors };
