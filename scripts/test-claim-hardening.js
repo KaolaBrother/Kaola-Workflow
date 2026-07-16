@@ -1213,9 +1213,12 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     ].join('\n');
 
     // Freeze the plan to stamp a plan_hash (use validator --freeze).
-    // Write plan to main first, then freeze.
+    // Write plan to main first, then freeze. Schema 2 deliberately refuses a newly
+    // authored field-absent draft, so materialize the verified frozen legacy identity
+    // first (same pattern as the walkthrough's stampVerifiedLegacyPlan fixtures).
     const planPath = path.join(mainProjDir, 'workflow-plan.md');
-    fs.writeFileSync(planPath, planContent);
+    const preHash522 = require(PLAN_VALIDATOR522).computePlanHash(planContent);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + preHash522 + ' -->\n\n' + planContent);
 
     // Freeze via plan-validator so plan_hash is stamped (needed for --finalize-check).
     try {

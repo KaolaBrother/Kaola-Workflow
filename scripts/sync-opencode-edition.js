@@ -231,6 +231,19 @@ function rewriteClaudeScriptPaths(text) {
     /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
     '(prefer `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts`, then `./scripts`)'
   );
+  // (c) The standalone REPLAN_SCRIPT resolver added by the re-plan machinery — two shapes:
+  //   (c1) the two-line fallback pair (adapt + finalize): a $CLAUDE_PLUGIN_ROOT line followed by a
+  //        $HOME/.claude line → collapsed to ONE opencode-native fallback line.
+  text = text.replace(
+    /^([ \t]*)\[ -f "\$REPLAN_SCRIPT" \] \|\| REPLAN_SCRIPT="\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}"\n[ \t]*\[ -f "\$REPLAN_SCRIPT" \] \|\| REPLAN_SCRIPT="\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"$/gm,
+    '$1[ -f "$REPLAN_SCRIPT" ] || REPLAN_SCRIPT="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/kaola-workflow-replan.js"'
+  );
+  //   (c2) the for-loop path list (plan-run + workflow-next): the Claude pair inside the candidate
+  //        list → the single opencode-native candidate.
+  text = text.replace(
+    /"\$\{CLAUDE_PLUGIN_ROOT:\+\$CLAUDE_PLUGIN_ROOT\/scripts\/kaola-workflow-replan\.js\}" "\$HOME\/\.claude\/kaola-workflow\/scripts\/kaola-workflow-replan\.js"/g,
+    '"${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/kaola-workflow-replan.js"'
+  );
   return text;
 }
 
@@ -253,8 +266,9 @@ function rewriteClaudeModelNouns(text) {
   // "reasoning-class **Opus**-floor `synthesizer`" — plan-run's merge-conflict repair prose
   // (whitespace-flexible \s+ so the mid-sentence line wrap still matches).
   text = text.replace(/reasoning-class\s+\*\*Opus\*\*-floor/g, 'reasoning-tier-floor');
-  // "Opus orchestrator" — workflow-planner + contractor both use this exact noun phrase.
-  text = text.replace(/\bOpus orchestrator\b/g, 'reasoning-tier orchestrator');
+  // "Opus orchestrator" — workflow-planner + contractor both use this exact noun phrase
+  // (whitespace-flexible \s+ — canonical prose re-wraps have split it across a line break).
+  text = text.replace(/\bOpus\s+orchestrator\b/g, 'reasoning-tier orchestrator');
   // "separate Sonnet role" — contractor's hard-boundary heading prose.
   text = text.replace(/\bseparate Sonnet role\b/g, 'separate standard-tier role');
   // "stay on **Sonnet** even under" / "never promoted to Opus" — contractor's floor-pin bullet.
