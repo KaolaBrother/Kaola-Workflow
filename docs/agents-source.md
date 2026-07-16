@@ -46,8 +46,10 @@ re-fetched by the ECC refresh procedure.
   `model_reasoning_effort`.
 - `scripts/generate-reviewer-profiles.js` is the sole writer for
   `agents/code-reviewer.md`, `agents/profiles/higher/code-reviewer.md`,
-  `agents/adversarial-verifier.md`, and the six matching GitHub/GitLab/Gitea Codex TOMLs. Do not
-  hand-edit those outputs; edit the canonical JSON or generator, then run `--write` and `--check`.
+  `agents/adversarial-verifier.md`, `agents/security-reviewer.md`,
+  `agents/profiles/higher/security-reviewer.md`, and the nine matching GitHub/GitLab/Gitea Codex
+  TOMLs. Do not hand-edit those outputs; edit the canonical JSON or generator, then run `--write` and
+  `--check`.
 - OpenCode is a downstream transform of the generated Claude root. Its normalized reviewer core,
   behavior version, and behavior hash must remain identical even though its runtime frontmatter and
   permissions differ.

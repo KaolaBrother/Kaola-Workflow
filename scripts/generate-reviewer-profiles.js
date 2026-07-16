@@ -10,7 +10,7 @@ const BEHAVIOR_SOURCE = 'templates/reviewers/behavior-contracts.json';
 const ADAPTER_SOURCE = 'templates/reviewers/runtime-adapters.json';
 const ZERO_HASH = '0'.repeat(64);
 
-const ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier']);
+const ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
 const SECTION_IDS = Object.freeze({
   'code-reviewer': Object.freeze([
     'prompt-defense',
@@ -33,11 +33,24 @@ const SECTION_IDS = Object.freeze({
     'finding-contract',
     'receipt-contract',
   ]),
+  'security-reviewer': Object.freeze([
+    'prompt-defense',
+    'role-boundary',
+    'review-process',
+    'admission-policy',
+    'proof-burden',
+    'vulnerability-classes',
+    'false-positive-controls',
+    'remediation-routing',
+    'finding-contract',
+    'receipt-contract',
+  ]),
 });
 
 const EXPECTED_DOMAIN_OUTCOMES = Object.freeze({
   'code-reviewer': Object.freeze(['approved', 'changes_requested']),
   'adversarial-verifier': Object.freeze(['refuted', 'not_refuted', 'indeterminate']),
+  'security-reviewer': Object.freeze(['approved', 'changes_requested']),
 });
 
 const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
@@ -75,6 +88,22 @@ const REQUIRED_BEHAVIOR_TOKENS = Object.freeze({
     'domain_outcome: not_refuted',
     'domain_outcome: indeterminate',
     'claim_outcome',
+    'execution_status',
+    'gate_effect',
+  ]),
+  'security-reviewer': Object.freeze([
+    'OWASP',
+    'authentication',
+    'hardcoded secret',
+    'exploitability',
+    'CRITICAL',
+    'HIGH',
+    'candidate-caused',
+    'zero findings',
+    'fix_role=security',
+    'finding-anchor-v1',
+    'domain_outcome: approved',
+    'domain_outcome: changes_requested',
     'execution_status',
     'gate_effect',
   ]),
@@ -121,6 +150,22 @@ const OUTPUT_SPECS = Object.freeze([
     runtime: 'claude',
     variant: 'base',
     adapter: 'claude-base',
+    format: 'markdown',
+  }),
+  Object.freeze({
+    path: 'agents/security-reviewer.md',
+    role: 'security-reviewer',
+    runtime: 'claude',
+    variant: 'base',
+    adapter: 'claude-base',
+    format: 'markdown',
+  }),
+  Object.freeze({
+    path: 'agents/profiles/higher/security-reviewer.md',
+    role: 'security-reviewer',
+    runtime: 'claude',
+    variant: 'higher',
+    adapter: 'claude-higher',
     format: 'markdown',
   }),
   ...['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea'].flatMap(edition =>
@@ -202,6 +247,13 @@ function contradictoryDescription(role, description, body) {
   if (role === 'adversarial-verifier') {
     if (/(?:uncertainty|incomplete confirmation)[^.]{0,60}(?:passes|approves|supports)/.test(desc)
         || /precision-first[^.]{0,40}report only/.test(desc)) {
+      return true;
+    }
+  }
+  if (role === 'security-reviewer') {
+    if (/(?:approve|pass)[^.]{0,60}(?:despite|with|ignoring)[^.]{0,40}(?:critical|high|vulnerab)/.test(desc)
+        || /ignore[^.]{0,40}(?:vulnerabilit|finding|secret)/.test(desc)
+        || /zero findings[^.]{0,40}(?:fail|invalid|incomplete)/.test(desc)) {
       return true;
     }
   }

@@ -42,7 +42,7 @@ config_file = "./agents/kaola-workflow/code-reviewer.toml"
 nickname_candidates = ["Reviewer", "Critic", "Inspector"]
 
 [agents.security-reviewer]
-description = "Kaola-Workflow for Codex conditional Phase 5 security reviewer: audits sensitive changes without editing files."
+description = "Security vulnerability detection specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities, then routes fixes to the appropriate role."
 config_file = "./agents/kaola-workflow/security-reviewer.toml"
 nickname_candidates = ["Security", "Audit", "Threat"]
 
