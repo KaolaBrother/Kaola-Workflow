@@ -1595,4 +1595,92 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
   }
 }
 
+// --- #707: worktree-postured sink must archive the worktree's .cache node evidence; an
+// evidence-empty live folder whose ## Node Ledger proves recorded evidence must refuse loudly ----
+{
+  const sinkScript707 = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const planWithLedger707 = (rows) => {
+    const lines = [
+      '# Workflow Plan', '', '## Meta', 'labels: test', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+    ];
+    for (const r of rows) lines.push('| ' + r.id + ' | ' + (r.role || 'implementer') + ' | — | — | 1 | sequence |');
+    lines.push('', '## Node Ledger', '', '| id | status |', '|---|---|');
+    for (const r of rows) lines.push('| ' + r.id + ' | ' + r.status + ' |');
+    lines.push('');
+    return lines.join('\n');
+  };
+  const mkFixture707 = (project, withWorktreeEvidence) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-707-'));
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    const branch = 'workflow/' + project;
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+    git('checkout', '-b', branch);
+    const liveDir = path.join(root, 'kaola-workflow', project);
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
+      '# Kaola-Workflow State\n\n## Project\nname: ' + project + '\nstatus: active\n\n## Last Updated\n' + new Date().toISOString() + '\n');
+    fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), planWithLedger707([
+      { id: 'n1-impl', status: 'complete' },
+      { id: 'n2-finalize', role: 'finalize', status: 'in_progress' },
+    ]));
+    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable');
+    git('add', '-A'); git('commit', '-m', 'feat: deliverable + live state');
+    git('checkout', 'main');
+    if (withWorktreeEvidence) {
+      const wtPath = path.join(root, '.kw', 'worktrees', project);
+      execFileSync('git', ['-C', root, 'worktree', 'add', wtPath, branch], { encoding: 'utf8' });
+      const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
+      fs.mkdirSync(wtCache, { recursive: true });
+      fs.writeFileSync(path.join(wtCache, 'n1-impl.md'), 'worktree evidence n1\n');
+    }
+    return { root, branch };
+  };
+  const runSink707 = (root, branch, project) => spawnSync(process.execPath,
+    [sinkScript707, '--branch', branch, '--project', project, '--issue', '707', '--sink', '--json'],
+    { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+  const parseLast707 = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+
+  // (a) worktree-postured: the worktree's untracked node evidence lands in the archive + at HEAD.
+  {
+    const project = 'issue-97071';
+    const { root, branch } = mkFixture707(project, true);
+    try {
+      const r = runSink707(root, branch, project);
+      const p = parseLast707(r.stdout);
+      assert.strictEqual(p.status, 'sinked', '#707-gitlab-a: sink must complete, got ' + JSON.stringify(p) + '\nstderr: ' + r.stderr);
+      assert.strictEqual(r.status, 0, '#707-gitlab-a: sink must exit 0, got ' + r.status);
+      const archRel = (p.receipt && p.receipt.archive_dest) || ('kaola-workflow/archive/' + project);
+      assert.ok(fs.existsSync(path.join(root, archRel, '.cache', 'n1-impl.md')),
+        '#707-gitlab-a: the worktree .cache evidence must be archived, archive .cache holds: '
+        + JSON.stringify((() => { try { return fs.readdirSync(path.join(root, archRel, '.cache')); } catch (_) { return '<none>'; } })()));
+      let committed = false;
+      try { committed = execFileSync('git', ['-C', root, 'cat-file', '-t', 'HEAD:' + archRel + '/.cache/n1-impl.md'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'blob'; } catch (_) {}
+      assert.ok(committed, '#707-gitlab-a: the archived evidence must be committed at HEAD');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+  // (b) evidence-empty live folder + ledger-proven evidence → loud typed refusal, nothing deleted.
+  {
+    const project = 'issue-97072';
+    const { root, branch } = mkFixture707(project, false);
+    try {
+      const r = runSink707(root, branch, project);
+      const p = parseLast707(r.stdout);
+      assert.strictEqual(r.status, 1, '#707-gitlab-b: an evidence-empty archive attempt must exit 1, got ' + r.status + '\nstdout: ' + r.stdout);
+      assert.ok(p.result === 'refuse' && p.reason === 'sink_incomplete' && p.step === 'finalize'
+        && p.archive_refusal === 'node_evidence_missing'
+        && Array.isArray(p.missing) && p.missing.includes('.cache/n1-impl.md'),
+        '#707-gitlab-b: typed refusal (sink_incomplete/finalize/node_evidence_missing) required, got ' + JSON.stringify(p));
+      assert.ok(fs.existsSync(path.join(root, 'kaola-workflow', project, 'workflow-state.md')),
+        '#707-gitlab-b: the live project folder must survive the refusal');
+      assert.ok(!fs.existsSync(path.join(root, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
+        '#707-gitlab-b: no archived copy may exist after the refusal');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+  console.log('GitLab #707 worktree-evidence archive + evidence-empty refusal tests passed');
+}
+
 console.log('GitLab sink tests passed');

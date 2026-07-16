@@ -35,7 +35,7 @@ const {
 const roadmapModule = require('./kaola-gitlab-workflow-roadmap');
 const closureContract = require('./kaola-workflow-closure-contract');
 // #441: parseGoal — reads the `goal:` line from ## Meta in workflow-plan.md.
-const { parseGoal } = require('./kaola-gitlab-workflow-plan-validator');
+const { parseGoal, parseLedger } = require('./kaola-gitlab-workflow-plan-validator');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -1862,6 +1862,29 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     return { skipped: undefined, archived: false, archive_incomplete: true,
       missing: [], snapshot_error: snapshots.reason || snapshots.detail || 'snapshot_invalid' };
   }
+  // #707: fail-closed node-evidence floor for the archive-owning sink (opts.requireNodeEvidence).
+  // Both archive branches below (linked-run copy AND in-place rename) destroy the last live copy;
+  // the in-place rename path never runs verifyArchiveComplete at all ("trivially complete" —
+  // true for COPY fidelity, blind to a source that was ALREADY evidence-gutted). So the guard
+  // runs HERE, before any mutation (state stamping, sentinel rewrites, rename/copy): when the
+  // `## Node Ledger` proves node evidence was recorded during the run (complete rows) but the
+  // source folder no longer holds it, refuse and leave everything untouched. Opt-in because
+  // finalize paths archiving minimal/legacy folders enforce their evidence policy elsewhere; the
+  // sink is the last writer before the live copies disappear.
+  if (statusValue === 'closed' && opts && opts.requireNodeEvidence) {
+    const recordedEvidence = listRecordedNodeEvidence(src);
+    const missingEvidence = recordedEvidence.filter(rel => !fs.existsSync(path.join(src, ...rel.split('/'))));
+    if (missingEvidence.length) {
+      return {
+        archived: false, archive_incomplete: true, reason: 'node_evidence_missing',
+        missing: missingEvidence,
+        detail: 'the ## Node Ledger proves node evidence was recorded during the run (complete rows), but '
+          + missingEvidence.length + ' evidence file(s) are absent from the live folder being archived. '
+          + 'Archiving now would persist an evidence-empty archive and delete the last live copy. '
+          + 'Restore the run\'s .cache evidence (the worktree copy, if it still exists) and re-run.'
+      };
+    }
+  }
   const state = stateFile(root, project);
   let archiveIssueNumber = null;
   // #328: read issue_numbers early (before rename) so we have the full member list
@@ -1929,7 +1952,8 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // file that exists in the live SOURCE folder must survive into the copied DEST; a lossy copy
     // that dropped the frozen plan / finalization summary / a per-node .cache gate-evidence file
     // refuses here, before either live copy is deleted (see verifyArchiveComplete).
-    const v = verifyArchiveComplete(src, dest);
+    // #707: an evidence-requiring archiver additionally demands the ledger-proven node evidence in DEST.
+    const v = verifyArchiveComplete(src, dest, { requireLedgerEvidence: !!(opts && opts.requireNodeEvidence) });
     if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, dest };
     // (d) delete BOTH live copies — only after copy+verify confirmed.
     fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
@@ -3328,6 +3352,28 @@ function listSourceEvidenceFiles(srcDir) {
   return rels;
 }
 
+// #707: the run record that SURVIVES a gutted .cache/ — every `## Node Ledger` row whose status is
+// `complete` was evidence-checked at close time (the per-node lifecycle refuses to close a node
+// whose .cache/<node-id>.md is missing), so the ledger inside workflow-plan.md PROVES those
+// evidence files were recorded during the run even when the folder being archived no longer holds
+// them (the worktree-postured divergence: evidence written to the WORKTREE's live copy while the
+// archiver reads the MAIN checkout's). Returns the expected `.cache/<id>.md` relative paths;
+// [] when the folder has no parseable plan/ledger (legacy fast/full folders, discards, minimal
+// fixtures) so plan-less archives are never affected. n/a / pending / in_progress rows carry no
+// evidence obligation. Node ids are validated against the sanitizeNodeId grammar so a corrupted
+// ledger cell can never smuggle a path segment into the required set.
+function listRecordedNodeEvidence(dirPath) {
+  let content;
+  try { content = fs.readFileSync(path.join(dirPath, 'workflow-plan.md'), 'utf8'); } catch (_) { return []; }
+  let ledger;
+  try { ledger = parseLedger(content); } catch (_) { return []; }
+  const rels = [];
+  for (const [id, status] of ledger) {
+    if (status === 'complete' && /^[A-Za-z0-9_-]+$/.test(id)) rels.push('.cache/' + id + '.md');
+  }
+  return rels;
+}
+
 // #426/#676: verify a freshly-COPIED archive preserved every evidence file the live SOURCE held,
 // BEFORE either live copy is deleted. SOURCE-RELATIVE (see listSourceEvidenceFiles): `srcDir` is
 // the live folder, `destDir` the copied archive. Returns { ok, missing } where `missing` lists the
@@ -3341,7 +3387,15 @@ function listSourceEvidenceFiles(srcDir) {
 // evidence floor — plan / summary / fast-summary / node-evidence stay strictly source-relative —
 // it is the single #426 archive-integrity invariant (a state-less source is malformed and must not
 // be deleted before its archive is proven to carry the state file).
-function verifyArchiveComplete(srcDir, destDir) {
+//
+// #707 hardening (opt-in via opts.requireLedgerEvidence): a SOURCE-relative check is blind to a
+// source that was ALREADY gutted before the copy — a faithful copy of an evidence-empty folder
+// passes trivially, which is exactly how evidence-empty archives shipped. When the caller attests
+// it is archiving a completed run (the sink transaction), the `## Node Ledger`'s complete rows are
+// added to the required set, so an archive missing ledger-proven node evidence can NEVER pass —
+// regardless of what the source currently holds. Off by default: finalize paths that archive
+// minimal/legacy folders keep the unchanged source-relative contract.
+function verifyArchiveComplete(srcDir, destDir, opts) {
   if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'], mismatched: [] };
   try {
     const srcRoot = fs.lstatSync(srcDir);
@@ -3383,6 +3437,10 @@ function verifyArchiveComplete(srcDir, destDir) {
   // subtree prevented the recursive enumerator from observing it.
   const required = new Set(listSourceEvidenceFiles(srcDir));
   required.add('workflow-state.md');
+  // #707: ledger-proven node evidence is required in DEST even when the SOURCE no longer holds it.
+  if (opts && opts.requireLedgerEvidence) {
+    for (const rel of listRecordedNodeEvidence(srcDir)) required.add(rel);
+  }
   for (const rel of sourceFiles.keys()) required.add(rel);
   const missing = [];
   const mismatched = invalid.slice();
@@ -4046,6 +4104,8 @@ module.exports = {
   worktreePathFor,
   verifyImplPublished,
   verifyArchiveComplete,
+  // #707: ledger-proven node-evidence enumeration — the run record that survives a gutted .cache/.
+  listRecordedNodeEvidence,
   cmdVerifySink,
   // #686: barrier-ref archive-time reap (sanitizeBarrierTag) + the legacy keep-set sweep
   // (sweepBarrierRefs, cmdBarrierRefSweep) — exported for direct unit coverage.

@@ -1012,6 +1012,28 @@ function sinkCopyDir(src, dest) {
   }
 }
 
+// #707: land the staged worktree project copy per-FILE (union) instead of all-or-nothing. A file
+// the checkout already placed at the destination (branch-tracked content) is authoritative and is
+// NEVER overwritten; a file that exists ONLY in the staged worktree copy — untracked per-node
+// .cache/<node-id>.md evidence, crash-resume journals, timings — lands, so the finalize step
+// archives the run's REAL evidence. The old guard (`if (!fs.existsSync(mainProjDir))`) discarded
+// the ENTIRE stage whenever the live folder existed at all; on every worktree-postured run the
+// branch/planner-era main copy exists, so the worktree's node evidence was silently dropped and
+// archives landed evidence-empty. Sink journals never land — they are cycle-local scratch that
+// must not shadow the receipt path this transaction already resolved (#520 keeps them out of
+// commits regardless).
+const SINK_STAGE_SKIP = new Set(['sink-receipt.json', 'sink-fallback.json']);
+function sinkLandStagedUnion(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (SINK_STAGE_SKIP.has(entry.name)) continue;
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) { sinkLandStagedUnion(s, d); continue; }
+    if (!fs.existsSync(d)) fs.copyFileSync(s, d);
+  }
+}
+
 // #552: fail-closed backstop against the lane-group crash-window desync. A clean write-parallel group
 // completion DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path: it
 // runs the synthesizer + group barrier, merges every leg into the feature branch, then drops the key). So
@@ -1442,12 +1464,15 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         return;
       }
       // Land the staged worktree-only content now that checkout has resolved whether the branch
-      // itself tracks kaola-workflow/<project>/ — copy only when it's still absent; else discard
-      // the stage (the branch-tracked content already won and is authoritative).
+      // itself tracks kaola-workflow/<project>/. #707: per-FILE union — a checkout-resolved
+      // (branch-tracked) file is authoritative and is never overwritten, but a file that exists
+      // ONLY in the worktree copy (untracked per-node .cache evidence) always lands. The previous
+      // all-or-nothing guard discarded the whole stage whenever the live folder existed, dropping
+      // the run's node evidence on every worktree-postured sink (evidence-empty archives).
       if (wtStageDir) {
         try {
           const mainProjDir = path.join(mainRoot, 'kaola-workflow', args.project);
-          if (!fs.existsSync(mainProjDir)) sinkCopyDir(wtStageDir, mainProjDir);
+          sinkLandStagedUnion(wtStageDir, mainProjDir);
         } catch (_) {}
         try { fs.rmSync(wtStageDir, { recursive: true, force: true }); } catch (_) {}
       }
@@ -1474,7 +1499,41 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, {
           keepWorktree: false,
           excludeIssues: keepOpenAtFinalize ? finalizeMembers : [],
+          // #707: this sink destroys the last live copy — demand the ledger-proven node evidence.
+          requireNodeEvidence: true,
         });
+        // #707: an EVIDENCE-LOSING archive refusal must fail the sink LOUDLY — never proceed to
+        // stepDone/closure over it. Covers the node_evidence_missing refusal (ledger proves
+        // evidence was recorded during the run but the live folder being archived no longer holds
+        // it — the worktree-postured loss) and the #676 lossy-copy refusal; both name the lost
+        // files in `missing`, the discriminator used here. The snapshot_error family (missing:[]
+        // — e.g. state_missing on a journal-only live dir that holds nothing but the sink's own
+        // receipt) keeps its historical silent skip: there is no recorded evidence to lose there,
+        // and refusing would brick benign resumes. The finalize step is left NOT done so a re-run
+        // retries it after the operator restores the evidence; nothing was deleted (the refusal
+        // fires before any archive mutation).
+        if (archiveResult && archiveResult.archive_incomplete === true
+            && Array.isArray(archiveResult.missing) && archiveResult.missing.length > 0) {
+          receipt.archive_refusal = archiveResult.reason || archiveResult.snapshot_error || 'archive_incomplete';
+          receipt.updated_at = new Date().toISOString();
+          writeSinkReceipt(receiptPath, receipt);
+          process.stdout.write(JSON.stringify({
+            result: 'refuse',
+            reason: 'sink_incomplete',
+            step: 'finalize',
+            archive_refusal: archiveResult.reason || archiveResult.snapshot_error || 'archive_incomplete',
+            missing: archiveResult.missing || [],
+            branch: args.branch,
+            default_branch: defBranch,
+            detail: 'archiving kaola-workflow/' + args.project + '/ was refused ('
+              + (archiveResult.reason || archiveResult.snapshot_error || 'archive_incomplete') + '): '
+              + (archiveResult.detail || 'the archive would have lost evidence the run recorded')
+              + ' Refusing to report status:sinked. The finalize step is left NOT done so a re-run retries it; '
+              + 'the live project folder was not deleted.',
+          }) + '\n');
+          process.exitCode = 1;
+          return;
+        }
         // #700: carry the ACTUAL archive destination (possibly collision-suffixed to
         // archive/<project>.archived-<ts>/ when archive/<project>/ already exists) through the
         // receipt, so archive_commit stages/commits the exact dir — not a hardcoded plain path that
