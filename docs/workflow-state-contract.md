@@ -434,6 +434,32 @@ here for the full contract.
     older cycle's residue) must be deleted, never committed. See `docs/api.md` § Sink journal
     disposal at terminal success.
 
+  - **`claim_ts`** (cross-run staleness detection, #694) — the current run's `## Sink`
+    `claim_ts:` (read from `workflow-state.md` — the branch ref first, then the live/plain-archive/
+    every collision-suffixed-archive working-tree state), stamped into every fresh
+    `sink-receipt.json` build. At load time, a receipt whose recorded `claim_ts` (or `started_at`,
+    for a pre-#694 shape) predates the current claim's `claim_ts` belongs to an earlier run of the
+    SAME (reused) project name and is reinitialized rather than resumed — its recorded steps,
+    including a prior `closure: done`, are never replayed under the new run's flags. Absent in
+    receipts written before #694.
+
+  - **`keep_open_requested`** (cross-run keep-open intent, #694) — a boolean recording THIS run's
+    `--keep-issue-open` intent, stamped into every fresh receipt build alongside `claim_ts`. A
+    same-cycle flag flip against an already-`done` closure step (the recorded value differs from
+    the current invocation's) re-evaluates closure live instead of replaying the stale decision.
+    Also feeds the new terminal `keep_open_verify` guard (`step:"keep_open_verify"` on the
+    `sink_incomplete` refuse envelope), which runs on every path to success and refuses when
+    keep-open is in force but the forge still reports the issue closed after a backstop reopen
+    attempt.
+
+  - **`archive_dest`** (collision-suffixed archive tracking, #700) — the ACTUAL archive
+    destination path (relative to repo root) `archiveProjectDir` produced for the `finalize` step:
+    the plain `kaola-workflow/archive/<project>/` normally, or a collision-suffixed
+    `kaola-workflow/archive/<project>.archived-<ts>/` when the plain path already exists. The
+    `archive_commit` step stages/commits this exact directory instead of assuming the plain path,
+    and `disposeSinkJournals` sweeps its `.cache/` journals too. Absent when the `finalize` step
+    found no dest to record (e.g. a `--keep-worktree` flow that already archived on the branch).
+
 ## Workflow State Fields
 
 The `workflow-state.md` file contains several key blocks:

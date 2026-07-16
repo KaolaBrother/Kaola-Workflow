@@ -741,16 +741,33 @@ function assert(condition, message) {
       const ledgerRows = covered
         ? ['| seed | pending |', '| A | pending |', '| B | pending |', '| synth | pending |', '| review | pending |', '| finalize | pending |']
         : ['| seed | pending |', '| A | pending |', '| B | pending |', '| reviewL | pending |', '| synth | pending |', '| finalize | pending |'];
+      // Schema-2 freeze requires the exact one-row-per-node Required Agent Compliance set (#699).
+      const complianceRows = covered
+        ? ['| code-explorer (seed) | pending | | |', '| tdd-guide (A) | pending | | |', '| tdd-guide (B) | pending | | |', '| synthesizer (synth) | pending | | |', '| code-reviewer (review) | pending | | |', '| finalize (finalize) | pending | | |']
+        : ['| code-explorer (seed) | pending | | |', '| tdd-guide (A) | pending | | |', '| tdd-guide (B) | pending | | |', '| code-reviewer (reviewL) | pending | | |', '| synthesizer (synth) | pending | | |', '| finalize (finalize) | pending | | |'];
       const plan = [
         '# Workflow Plan — test-project', '',
         '## Meta',
         'plan_schema_version: 2',
+        'contract_version: 2',
+        // Unified schema-2 (#695): a plan that carries reviewer-contract-v2 gate metadata also carries the
+        // epoch contract (#699) and the validation policy (#693/#696/#697/#698). Epoch child fields use the
+        // canonical placeholder digests the replan fixtures use; the freeze validator checks format + graph.
+        'epoch_schema_version: 2',
+        'plan_epoch: 2',
+        'epoch_lineage_id: ' + '1'.repeat(64),
+        'parent_plan_hash: ' + '2'.repeat(64),
+        'parent_snapshot_manifest_digest: pending',
+        'claim_root_base_digest: ' + '3'.repeat(64),
+        'inherited_frontier_digest: ' + '4'.repeat(64),
+        'inherited_frontier_classes: code',
+        'source_evidence_digest: ' + '5'.repeat(64),
+        'transition_reason: review_repair_requires_replan',
+        'planner_binding: dispatch-ac11',
         'labels: area:scripts',
         'sink: CHANGELOG.md',
         'code_certifier: ' + (covered ? 'review' : 'reviewL'),
         'security_certifier: none',
-        'inherited_frontier_digest: none',
-        'inherited_frontier_classes: none',
         'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
         'validation_timeout_minutes: 5', '',
         '## Nodes', '',
@@ -761,6 +778,10 @@ function assert(condition, message) {
         '## Node Ledger', '',
         '| id | status |', '| --- | --- |',
         ...ledgerRows, '',
+        '## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |',
+        '| --- | --- | --- | --- |',
+        ...complianceRows, '',
       ].join('\n') + '\n';
       fs.writeFileSync(planPath, plan);
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');

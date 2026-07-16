@@ -1422,6 +1422,19 @@ function runMirrorHandoffCase(mirrorResponse) {
       '# Workflow Plan — test-project', '',
       '## Meta',
       'plan_schema_version: 2',
+      'contract_version: 2',
+      // Unified schema-2 (#695): schema-2 gate metadata requires the epoch contract. A docs-only child
+      // inherits nothing, so inherited_frontier_classes is 'none' with a 'none' digest — legal under the
+      // unified empty-frontier predicate (inheritedFrontierDigestValid).
+      'epoch_schema_version: 2',
+      'plan_epoch: 2',
+      'epoch_lineage_id: ' + '1'.repeat(64),
+      'parent_plan_hash: ' + '2'.repeat(64),
+      'parent_snapshot_manifest_digest: pending',
+      'claim_root_base_digest: ' + '3'.repeat(64),
+      'source_evidence_digest: ' + '5'.repeat(64),
+      'transition_reason: review_repair_requires_replan',
+      'planner_binding: dispatch-641',
       'labels: area:scripts',
       'sink: CHANGELOG.md',
       'code_certifier: none',
@@ -1438,6 +1451,13 @@ function runMirrorHandoffCase(mirrorResponse) {
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '| --- | --- | --- | --- |',
+      '| code-explorer (seed) | pending | | |',
+      '| ' + gateRole + ' (gate) | pending | | |',
+      '| doc-updater (w) | pending | | |',
+      '| finalize (finalize) | pending | | |', '',
     ].join('\n') + '\n';
   }
 
@@ -1513,6 +1533,47 @@ function runMirrorHandoffCase(mirrorResponse) {
       assert(freezeShelled === false, '#641-R2a-e2e: --freeze NEVER shelled on the refuse (no mutation)');
     } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
   }
+}
+
+// #695 unified empty-frontier predicate — the four-combo contract shared by validateEpochContract and
+// validateSchema2ReviewPlan: non-empty classes ⇒ hex64 digest; empty classes ⇒ 'none' OR hex64; anything
+// else refuses. Pins that a legitimately-authored fresh docs-only child ('none'/'none') and a runtime child
+// (empty-classes hex64) both freeze, while garbage and a non-empty-classes 'none' both refuse.
+{
+  const { validatePlan } = require('./kaola-workflow-plan-validator');
+  const frontierPlan = (classes, digest) => [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'plan_schema_version: 2', 'contract_version: 2', 'epoch_schema_version: 2', 'plan_epoch: 2',
+    'epoch_lineage_id: ' + '1'.repeat(64), 'parent_plan_hash: ' + '2'.repeat(64),
+    'parent_snapshot_manifest_digest: pending', 'claim_root_base_digest: ' + '3'.repeat(64),
+    'source_evidence_digest: ' + '5'.repeat(64), 'transition_reason: review_repair_requires_replan',
+    'planner_binding: dispatch-695', 'labels: area:scripts', 'sink: CHANGELOG.md',
+    'code_certifier: none', 'security_certifier: none',
+    'inherited_frontier_digest: ' + digest, 'inherited_frontier_classes: ' + classes, '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| seed     | code-explorer | —      | —              | 1 | sequence | — | — | — | — | — |',
+    '| gate     | adversarial-verifier | seed | —        | 1 | sequence | scratch | inspect-observation | scratch | sequence | — |',
+    '| w        | doc-updater   | seed   | docs/decisions/D-641-01.md | 1 | sequence | — | — | — | — | — |',
+    '| finalize | finalize      | gate,w | —              | 1 | sequence | — | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |',
+    '| code-explorer (seed) | pending | | |', '| adversarial-verifier (gate) | pending | | |',
+    '| doc-updater (w) | pending | | |', '| finalize (finalize) | pending | | |', '',
+  ].join('\n') + '\n';
+  const verdict = (classes, digest) => validatePlan(frontierPlan(classes, digest), { root: path.resolve(__dirname, '..') });
+  assert(verdict('none', 'none').result !== 'refuse',
+    '#695-frontier: empty classes + none digest is in-grammar');
+  assert(verdict('none', '4'.repeat(64)).result !== 'refuse',
+    '#695-frontier: empty classes + hex64 digest is in-grammar');
+  const garbage = verdict('none', 'not-a-real-digest');
+  assert(garbage.result === 'refuse' && (garbage.errors || []).some(e => /inherited_frontier/.test(e)),
+    '#695-frontier: empty classes + garbage digest refuses, got ' + JSON.stringify(garbage.errors));
+  const nonEmptyNone = verdict('code', 'none');
+  assert(nonEmptyNone.result === 'refuse' && (nonEmptyNone.errors || []).some(e => /inherited_frontier/.test(e)),
+    '#695-frontier: non-empty classes + none digest refuses, got ' + JSON.stringify(nonEmptyNone.errors));
 }
 
 // ---------------------------------------------------------------------------
