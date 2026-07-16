@@ -188,6 +188,41 @@ descriptive). Set `Working directory: ${ACTIVE_WORKTREE_PATH}` on every Agent ca
 `agent_type`, or drop the effort tier because the card was not in view — go get the card
 first (the summary line's `opened=` segment, or `.cache/<op>-envelope.json`).
 
+<!-- PIN: reviewer-contract-v2-execution -->
+#### Reviewer Contract Envelope, Validation, and Convergence
+
+Resolve the frozen plan contract before dispatch. A verified already-frozen plan whose
+hash-covered Meta predates the version field is the explicit legacy branch:
+`plan_schema_version: 1` and `contract_version: 1`. Preserve its existing token registry,
+`verdict`/`findings_blocking` evidence, and schema-1 journal byte-for-byte; never manufacture a
+schema-2 context or rewrite legacy state. Any new/mismatched/unknown version is a typed refusal.
+
+For a schema-2 review gate, the opener's dispatch card is the sole runtime envelope. Pass every
+field unchanged: `plan_schema_version`, `contract_version`, `behavior_contract_version`,
+`behavior_contract_hash`, `resolved_profile_hash`, `review_context_hash`, `review_context_path`,
+`candidate_digest`, graph-derived `gate_mode`, `logical_gate`, `gate_claim`, `gate_surface`, and
+`gate_aggregation`. Never infer a second mode, assemble a context from prose, substitute a local
+profile, or omit a field. The role reads the canonical file at `review_context_path` before it
+examines findings and echoes the card's required identity tokens; `execution_status` and
+`gate_effect` remain harness-owned.
+
+Before settling that gate, read the context's `validation_obligations`. For every inherited
+obligation, run the frozen schema-2 validation policy through the validation runner and persist its
+canonical receipt under `.cache/validation-vectors/`. Accept it only when the machine comparison
+finds the exact obligated command/vector identity, the current `candidate_digest`, and outcome
+`pass`; missing, drifted, failed, inconclusive, timed-out, signaled, or candidate-mutating execution
+leaves the gate open and routes validation repair. Never relabel an execution failure as an
+analytical `indeterminate` outcome.
+
+Use the already-resolved `$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js`; pass the exact hash-covered policy values and write one canonical JSON receipt per obligation without shell re-derivation.
+
+Honor close-time convergence outcomes structurally. `review_failed` follows the authoritative
+journal and existing agent-owned writer selection. `replan_required` with
+`review_scope_expanded` or `review_nonconvergent` is a settled durable handoff: surface the exact
+packet and stop this frozen run without calling `repair-node`, thawing the plan, activating another
+epoch, or choosing topology. The harness never selects a writer or replacement DAG.
+<!-- /PIN -->
+
 Immediately before every spawn, announce the dispatch:
 
 ```text

@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "coverage": [
+    "issue_matrices",
+    "v1_v2_split",
+    "malformed_identity",
+    "mismatched_identity",
+    "investigation_completion",
+    "change_gate_failure",
+    "finding_anchors",
+    "finding_uid_collision",
+    "strict_progress",
+    "sequence_reducer",
+    "replicated_majority_reducer",
+    "partitioned_all_reducer",
+    "g4_common_certifier",
+    "validation_pass",
+    "validation_fail",
+    "validation_inconclusive",
+    "validation_drift"
+  ],
+  "gate_modes": [
+    {
+      "name": "forward-reachable change gate despite sink bypass",
+      "plan": {
+        "nodes": [
+          { "id": "writer", "role": "tdd-guide", "dependsOn": [] },
+          { "id": "av", "role": "adversarial-verifier", "dependsOn": ["writer"] },
+          { "id": "bypass", "role": "code-explorer", "dependsOn": ["writer"] },
+          { "id": "finalize", "role": "finalize", "dependsOn": ["av", "bypass"] }
+        ],
+        "sinkId": "finalize",
+        "changeProducerIds": ["writer"]
+      },
+      "node_id": "av",
+      "expected": "change_gate"
+    },
+    {
+      "name": "read-only investigation",
+      "plan": {
+        "nodes": [
+          { "id": "probe", "role": "code-explorer", "dependsOn": [] },
+          { "id": "av", "role": "adversarial-verifier", "dependsOn": ["probe"] },
+          { "id": "finalize", "role": "finalize", "dependsOn": ["av"] }
+        ],
+        "sinkId": "finalize",
+        "changeProducerIds": []
+      },
+      "node_id": "av",
+      "expected": "investigation"
+    },
+    {
+      "name": "non adversarial node",
+      "plan": {
+        "nodes": [
+          { "id": "review", "role": "code-reviewer", "dependsOn": [] },
+          { "id": "finalize", "role": "finalize", "dependsOn": ["review"] }
+        ],
+        "sinkId": "finalize",
+        "changeProducerIds": []
+      },
+      "node_id": "review",
+      "expected": null
+    }
+  ],
+  "outcomes": [
+    { "role": "adversarial-verifier", "gate_mode": "investigation", "domain_outcome": "refuted", "expected_gate_effect": "none" },
+    { "role": "adversarial-verifier", "gate_mode": "investigation", "domain_outcome": "not_refuted", "expected_gate_effect": "none" },
+    { "role": "adversarial-verifier", "gate_mode": "investigation", "domain_outcome": "indeterminate", "expected_gate_effect": "none" },
+    { "role": "adversarial-verifier", "gate_mode": "change_gate", "domain_outcome": "not_refuted", "expected_gate_effect": "pass" },
+    { "role": "adversarial-verifier", "gate_mode": "change_gate", "domain_outcome": "refuted", "expected_gate_effect": "fail" },
+    { "role": "adversarial-verifier", "gate_mode": "change_gate", "domain_outcome": "indeterminate", "expected_gate_effect": "fail" },
+    { "role": "code-reviewer", "gate_mode": null, "domain_outcome": "approved", "blocking_findings": 0, "expected_gate_effect": "pass" },
+    { "role": "code-reviewer", "gate_mode": null, "domain_outcome": "changes_requested", "blocking_findings": 1, "expected_gate_effect": "fail" }
+  ],
+  "anchors": [
+    {
+      "kind": "candidate_range",
+      "path": "src/a.js",
+      "object_format": "sha1",
+      "tree_mode": "100644",
+      "object_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "start": 3,
+      "end": 9
+    },
+    {
+      "kind": "deleted_base_range",
+      "parent_candidate_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "path": "src/deleted.js",
+      "object_format": "sha1",
+      "tree_mode": "100644",
+      "object_id": "cccccccccccccccccccccccccccccccccccccccc",
+      "start": 0,
+      "end": 4,
+      "deletion_hunk_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    {
+      "kind": "tree_entry_change",
+      "path": "bin/tool",
+      "object_format": "sha1",
+      "base": { "tree_mode": "100644", "object_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" },
+      "candidate": { "tree_mode": "100755", "object_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
+    },
+    {
+      "kind": "required_absence",
+      "path": "config/required.json",
+      "acceptance_clause_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "candidate_tree_digest": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "kind": "evidence_observation",
+      "producer_evidence_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observation_key": "runner:validation-vector-mismatch"
+    }
+  ],
+  "reducers": [
+    {
+      "name": "sequence code approval",
+      "input": {
+        "aggregation": "sequence",
+        "role": "code-reviewer",
+        "gate_mode": null,
+        "expected_members": ["r1"],
+        "expected_surfaces": ["whole-tree"],
+        "receipts": [
+          { "node_id": "r1", "surface": "whole-tree", "execution_status": "complete", "domain_outcome": "approved", "blocking_findings": 0 }
+        ]
+      },
+      "expected": { "complete": true, "gate_effect": "pass", "domain_outcome": "approved" }
+    },
+    {
+      "name": "replicated blocker veto",
+      "input": {
+        "aggregation": "replicated_majority",
+        "role": "code-reviewer",
+        "gate_mode": null,
+        "expected_members": ["r1", "r2", "r3"],
+        "expected_surfaces": ["whole-tree", "whole-tree", "whole-tree"],
+        "receipts": [
+          { "node_id": "r1", "surface": "whole-tree", "execution_status": "complete", "domain_outcome": "approved", "blocking_findings": 0 },
+          { "node_id": "r2", "surface": "whole-tree", "execution_status": "complete", "domain_outcome": "approved", "blocking_findings": 0 },
+          { "node_id": "r3", "surface": "whole-tree", "execution_status": "complete", "domain_outcome": "changes_requested", "blocking_findings": 1 }
+        ]
+      },
+      "expected": { "complete": true, "gate_effect": "fail", "domain_outcome": "changes_requested" }
+    },
+    {
+      "name": "replicated adversarial tie is indeterminate",
+      "input": {
+        "aggregation": "replicated_majority",
+        "role": "adversarial-verifier",
+        "gate_mode": "change_gate",
+        "expected_members": ["a", "b"],
+        "expected_surfaces": ["claim", "claim"],
+        "receipts": [
+          { "node_id": "a", "surface": "claim", "execution_status": "complete", "domain_outcome": "not_refuted", "blocking_findings": 0 },
+          { "node_id": "b", "surface": "claim", "execution_status": "complete", "domain_outcome": "indeterminate", "blocking_findings": 0 }
+        ]
+      },
+      "expected": { "complete": true, "gate_effect": "fail", "domain_outcome": "indeterminate" }
+    },
+    {
+      "name": "partitioned all adversarial investigation",
+      "input": {
+        "aggregation": "partitioned_all",
+        "role": "adversarial-verifier",
+        "gate_mode": "investigation",
+        "expected_members": ["a", "b"],
+        "expected_surfaces": ["api", "storage"],
+        "receipts": [
+          { "node_id": "a", "surface": "api", "execution_status": "complete", "domain_outcome": "not_refuted", "blocking_findings": 0 },
+          { "node_id": "b", "surface": "storage", "execution_status": "complete", "domain_outcome": "refuted", "blocking_findings": 1 }
+        ]
+      },
+      "expected": { "complete": true, "gate_effect": "none", "domain_outcome": "refuted" }
+    }
+  ],
+  "validation": [
+    {
+      "name": "pass",
+      "obligations": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "required_pass_vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+      "vectors": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "outcome": "pass" }],
+      "current_candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": "pass"
+    },
+    {
+      "name": "fail",
+      "obligations": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "required_pass_vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+      "vectors": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "outcome": "fail" }],
+      "current_candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": "fail"
+    },
+    {
+      "name": "inconclusive",
+      "obligations": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "required_pass_vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+      "vectors": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "outcome": "inconclusive" }],
+      "current_candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": "inconclusive"
+    },
+    {
+      "name": "command drift",
+      "obligations": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "required_pass_vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+      "vectors": [{ "command_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "vector_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "outcome": "pass" }],
+      "current_candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": "drift"
+    },
+    {
+      "name": "candidate-bound pass after repair (inherited A vector id never reappears)",
+      "obligations": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "required_pass_vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+      "vectors": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vector_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "outcome": "pass" }],
+      "current_candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": "pass"
+    },
+    {
+      "name": "candidate drift (same command, pass bound to a stale candidate)",
+      "obligations": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "required_pass_vector_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+      "vectors": [{ "command_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "vector_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "candidate_digest": "1111111111111111111111111111111111111111111111111111111111111111", "outcome": "pass" }],
+      "current_candidate_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": "drift"
+    }
+  ],
+  "validation_policy": [
+    { "name": "valid schema-2 policy", "meta": ["validation_cwd: sub/dir", "validation_repetitions: 3", "validation_pass_rule: all", "validation_timeout_minutes: 10", "validation_env_allowlist: A,B"], "expected_ok": true },
+    { "name": "unknown validation field", "meta": ["validation_bogus: x"], "expected_reason": "validation_policy_unknown_field" },
+    { "name": "duplicate validation field", "meta": ["validation_repetitions: 1", "validation_repetitions: 2"], "expected_reason": "validation_policy_duplicate_field" },
+    { "name": "cwd path escape", "meta": ["validation_cwd: ../evil"], "expected_reason": "validation_cwd_invalid" },
+    { "name": "cwd absolute path", "meta": ["validation_cwd: /abs/path"], "expected_reason": "validation_cwd_invalid" },
+    { "name": "repetitions above range", "meta": ["validation_repetitions: 9"], "expected_reason": "validation_repetitions_invalid" },
+    { "name": "repetitions non-numeric", "meta": ["validation_repetitions: two"], "expected_reason": "validation_repetitions_invalid" },
+    { "name": "pass rule not all", "meta": ["validation_pass_rule: any"], "expected_reason": "validation_pass_rule_invalid" },
+    { "name": "timeout above range", "meta": ["validation_timeout_minutes: 999"], "expected_reason": "validation_timeout_invalid" },
+    { "name": "env allowlist bad key", "meta": ["validation_env_allowlist: 1BAD"], "expected_reason": "validation_env_allowlist_invalid" },
+    { "name": "env allowlist unsorted", "meta": ["validation_env_allowlist: B,A"], "expected_reason": "validation_env_allowlist_invalid" }
+  ]
+}

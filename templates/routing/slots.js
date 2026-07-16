@@ -47,6 +47,10 @@ const SLOTS = {
       gitea: "ACTIVE_WORKTREE_PATH=\"$(node -e \"try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}\" 2>/dev/null)\" || true\n[ -z \"$ACTIVE_WORKTREE_PATH\" ] && ACTIVE_WORKTREE_PATH=\"$(pwd)\"\nKAOLA_SCRIPTS=\"plugins/kaola-workflow-gitea/scripts\"\nif [ ! -f \"$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js\" ]; then\n  KAOLA_SCRIPTS=\"$(dirname \"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow-gitea/*/scripts/kaola-gitea-workflow-adaptive-node.js' -print -quit 2>/dev/null)\")\"\nfi",
     },
   },
+  'pr-review-validation-runner': {
+    command: "Use the already-resolved `$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js`; pass the exact hash-covered policy values and write one canonical JSON receipt per obligation without shell re-derivation.",
+    skill: "Resolve `kaola-workflow-validation-runner.js` from the same installed runtime as the adaptive node; pass the exact hash-covered policy values and write one canonical JSON receipt per obligation without shell re-derivation.",
+  },
 
   // ---- next (frontmatter 2-shape + H1; both forge-invariant) -----------
   "nx-frontmatter": {"command":"---\ndescription: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.\nargument-hint: (optional project name or task description)\n---","skill":"---\nname: kaola-workflow-next\ndescription: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and phase artifacts.\n---"},

@@ -637,6 +637,128 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T17: reviewer-contract-v2 runtime guidance. The authored contract spans four
+// distinct surface families: generated plan-run x6, adapt x6, finalize x6, and
+// workflow-planner x4. Every family is checked from a derived or exhaustive
+// runtime set, and each bounded block is mutation-tested so nearby prose cannot
+// make a missing machine field vacuously green.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  const adaptSurfaces = [
+    'commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+  ];
+  const finalizeSurfaces = [
+    'commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+  ];
+  const plannerSurfaces = [
+    'agents/workflow-planner.md',
+    'plugins/kaola-workflow/agents/workflow-planner.toml',
+    'plugins/kaola-workflow-gitlab/agents/workflow-planner.toml',
+    'plugins/kaola-workflow-gitea/agents/workflow-planner.toml',
+  ];
+  const bounded = (content, marker) => {
+    const start = content.indexOf(marker);
+    const end = start >= 0 ? content.indexOf('<!-- /PIN -->', start) : -1;
+    return start >= 0 && end > start ? content.slice(start, end) : '';
+  };
+  const checkBounded = (file, marker, tokens) => {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    const block = bounded(content, marker);
+    assert(block.length > 0, `T17: ${file} carries bounded block ${marker}`);
+    for (const token of tokens) {
+      assert(block.includes(token), `T17: ${file} block carries ${JSON.stringify(token)}`);
+      const mutated = block.split(token).join('');
+      assert(!mutated.includes(token), `T17 mutation: deleting ${JSON.stringify(token)} reds ${file}`);
+    }
+    assert(!/(?:#\d+|\bD-\d+-\d+\b|\bADR[- ]?\d+\b)/i.test(block),
+      `T17: ${file} reviewer-v2 block states rules without issue/decision provenance`);
+    if (file.startsWith('plugins/')) {
+      assert(!/(?:\bGitHub\b|\bGitLab\b|\bGitea\b|\bgh\b|\bglab\b|\btea\b)/.test(block),
+        `T17: ${file} reviewer-v2 block is forge-neutral`);
+    }
+    return content;
+  };
+
+  const executionTokens = [
+    '`plan_schema_version`', '`contract_version`', '`behavior_contract_version`',
+    '`behavior_contract_hash`', '`resolved_profile_hash`', '`review_context_hash`',
+    '`review_context_path`', '`candidate_digest`', '`gate_mode`', '`logical_gate`',
+    '`gate_claim`', '`gate_surface`', '`gate_aggregation`', '`validation_obligations`',
+    '`.cache/validation-vectors/`', '`replan_required`', '`review_scope_expanded`',
+    '`review_nonconvergent`', '`contract_version: 1`',
+    'never selects a writer or replacement DAG',
+  ];
+  for (const file of planRunSurfaces) {
+    checkBounded(file, '<!-- PIN: reviewer-contract-v2-execution -->', executionTokens);
+  }
+
+  const authoringTokens = [
+    '`plan_schema_version: 2`', '`validation_command`', '`validation_cwd`',
+    '`validation_repetitions`', '`validation_pass_rule: all`',
+    '`validation_timeout_minutes`', 'from 1 through 120', '`validation_env_allowlist`', '`gate_claim`',
+    '`gate_surface`', '`gate_aggregation`', '`certifies`', '`code_certifier`',
+    '`security_certifier`', '`inherited_frontier_digest`',
+    '`inherited_frontier_classes`', '`plan_schema_version: 1`', '`replan_required`',
+  ];
+  for (const file of adaptSurfaces) {
+    checkBounded(file, '<!-- PIN: reviewer-contract-v2-authoring -->', authoringTokens);
+  }
+  const adaptBlocks = adaptSurfaces.map(file => bounded(
+    fs.readFileSync(path.join(REPO, file), 'utf8'),
+    '<!-- PIN: reviewer-contract-v2-authoring -->',
+  ));
+  assert(adaptBlocks.every(block => block === adaptBlocks[0]),
+    'T17: all six adapt surfaces carry one byte-identical reviewer-v2 authoring block');
+
+  const finalizeTokens = [
+    '`plan_schema_version: 2`', '`contract_version: 2`', '`--verdict-check`',
+    '`code_certifier`', '`security_certifier`', '`resolved_profile_hash`',
+    '`review_context_hash`', '`candidate_digest`', '`validation_obligations`',
+    '`.cache/validation-vectors/`', '`contract_version: 1`',
+    'certifier receipt is stale',
+  ];
+  for (const file of finalizeSurfaces) {
+    checkBounded(file, '<!-- PIN: reviewer-contract-v2-finalization -->', finalizeTokens);
+  }
+  const finalizeBlocks = finalizeSurfaces.map(file => bounded(
+    fs.readFileSync(path.join(REPO, file), 'utf8'),
+    '<!-- PIN: reviewer-contract-v2-finalization -->',
+  ));
+  assert(finalizeBlocks.every(block => block === finalizeBlocks[0]),
+    'T17: all six finalize surfaces carry one byte-identical reviewer-v2 finalization block');
+
+  const plannerTokens = authoringTokens.concat([
+    '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+  ]);
+  for (const file of plannerSurfaces) {
+    const content = checkBounded(file, '<!-- PIN: reviewer-contract-v2-authoring -->', plannerTokens);
+    assert(/compact-plan posture/i.test(content), `T17: ${file} preserves compact-plan guidance`);
+    assert(/EXACT file paths/i.test(content), `T17: ${file} preserves exact-write-set guidance`);
+  }
+  const plannerTomls = plannerSurfaces.slice(1).map(file => fs.readFileSync(path.join(REPO, file), 'utf8'));
+  assert(plannerTomls.every(content => content === plannerTomls[0]),
+    'T17: the three forge-neutral workflow-planner TOMLs remain byte-identical');
+}
+
 // ===========================================================================
 // #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
 // bidirectional orphan-sentinel, the superset proof, and the by-construction

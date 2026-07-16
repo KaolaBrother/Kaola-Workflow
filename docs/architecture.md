@@ -480,10 +480,11 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   bricks an in-flight plan) and enforced as a hard merge gate in Finalization. `--verdict-check`
   (#251) goes one step further than `--gate-verify`: where gate-verify proves the reviewer
   *executed*, verdict-check proves it *approved* — it reads each completed gate node's
-  `.cache/{node-id}.md` evidence and requires a parseable `verdict: pass` with
-  `findings_blocking: 0` (an `adversarial-verifier` fan-out applies **majority-refute** over the
-  sibling per-instance evidence files; missing/unparseable counts as a refute), fail-closed on a
-  fail/missing/unparseable verdict — informational per-node in `kaola-workflow-commit-node.js`
+  `.cache/{node-id}.md` evidence. A verified contract-1 plan retains the parseable
+  `verdict: pass` / `findings_blocking: 0` vocabulary and legacy adversarial majority-refute
+  behavior. Contract 2 instead verifies normalized bound receipts and applies the declared reducer;
+  missing, failed, stale, or unparseable evidence is incomplete rather than a vote. Both paths fail
+  closed — informational per-node in `kaola-workflow-commit-node.js`
   and a hard blocking merge gate in Finalization. `--barrier-check`
   re-scans the files actually written and refuses a sensitive write with no `security-reviewer`
   node (audit H1), an out-of-allowlist production write (audit H3), or a foreign-project `kaola-workflow/archive/<X>/` write whose `<X>` is not the finalized project (#261 — scoping the blanket `kaola-workflow/` artifact exemption so a stray cross-issue archive folder cannot reach a protected branch undetected; companion defense-in-depth: `cmdFinalize` stages only the finalized project's own archive/rename/roadmap paths, and the Finalization Staging Guard typed-blocks a staged foreign `archive/<other>/`). It runs in two modes: the
@@ -540,6 +541,67 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
 **Consumer final-validation candidate-hash binding (issue #653, D-653-01).** The consumer (non-npm) `--finalize-check` gate previously accepted a bare `verdict: pass` with no binding to the tree it validated: a stale `final-validation.md` from an earlier candidate would silently pass. `kaola-workflow-plan-validator.js --candidate-hash --json` (a new producer mode, read-only, no tests executed) emits the deterministic `computeCodeTreeHash` snapshot of the current candidate over the SAME `validation_test_consumes` band the chain-receipt producer uses (the frozen plan is the shared band source), for the agent to record as a column-0 `validated_candidate_hash:` line in `.cache/final-validation.md`, computed LAST after every file the validation covered has landed. The consumer arm of `--finalize-check` now additionally refuses `final_validation_unbound` (no well-formed hash line — fail-closed) and `final_validation_stale` (the recorded hash no longer equals a fresh recompute — payload carries `recorded_candidate_hash` + `current_candidate_hash`), precedence-ordered `final_validation_unverified > final_validation_failed > final_validation_unbound > final_validation_stale`. The gate compares two hashes and never re-executes the validation command — #475's "the agent owns verification" boundary is unchanged. #648's citation fields (`source: cited:<node-id>`, `validated_command`, `validated_at_head`, `reuse_boundary`) are untouched; a citation additionally requires a FRESH `validated_candidate_hash` computed at citation time. See `docs/api.md` § Candidate-hash binding for consumer final-validation.
 
 **Selection evidence docking (issue #653, D-653-01).** On the no-issue-named auto-bundle branch, `workflow-next.md`'s router persists the `issue-scout`'s entire JSON recommendation verbatim (fenced, one-line `selection_mode: auto-bundle|single-issue` header) to `kaola-workflow/{project}/.cache/selection-evidence.md` before dispatching the executor — durable evidence of why a bundle was selected, previously visible only in the scout's dispatch reply. `cmdFinalize` probes for the file (`probeSelectionEvidence`, mirroring the attestation probe's archive-then-live candidate order) and attaches `selection_evidence: present|absent` to the closure receipt — advisory only, no invariant, no warning on absence (a user-named claim legitimately has none, since the scout never runs on that branch). See `docs/api.md` § Closure Contract and `docs/workflow-state-contract.md`.
+
+### Reviewer contract 2 state machine
+
+Newly authored adaptive plans use schema 2; a hash-verified frozen plan that predates the version
+field remains contract 1 and is never rewritten. The schema-2 path is one identity-bound state
+machine rather than a prompt convention:
+
+```text
+frozen schema-2 plan
+  │ graph + gate metadata + certifier metadata + validation policy
+  ▼
+derive gate mode ──► build canonical runtime-neutral context
+  │                    ├─► .cache/review-contexts/<hash>.json
+  │                    └─► runtime-specific profile hash stays in dispatch only
+  ▼
+dispatch exact member(s) ──► verify contract/context/behavior/profile/candidate identity
+  │                              (before parsing findings)
+  ▼
+normalize receipt(s) ──► .cache/review-receipts/<context>/<node>.json
+  │
+  ├─ investigation AV ──► analytical close, gate_effect:none, no repair attempt
+  │
+  └─ change gate ──► declared reducer ──► pass / review_failed / replan_required
+                         │
+                         └─► schema-2 .cache/review-attempts.json transaction
+```
+
+**Mode is graph authority.** `deriveGateMode` uses forward reachability: an adversarial verifier is
+a `change_gate` when a change producer reaches it and it reaches the sink; otherwise it is an
+`investigation`. This is intentionally not strict post-dominance. Required evidence, dispatch,
+close, reducer, repair projection, verdict checking, and Finalization all consume the same result.
+The reviewer cannot override it.
+
+**Execution, domain, and gate effect are independent.** The harness derives execution status from a
+terminal bound child result. The role supplies only its domain outcome. The harness derives gate
+effect. Thus an intrinsically uncertain but complete investigation can be `indeterminate` and still
+close analytically, while malformed or stale execution remains a failed execution requiring retry.
+A change-gate adversarial receipt passes only on `not_refuted`; code/security requires `approved`
+with no admitted blocker.
+
+**Finding lineage is immutable.** The harness validates one primary Git/evidence anchor and a
+structured trigger, then hashes them with the scope lineage to assign the finding UID. Discovery
+establishes the frontier once. Closure must account for every prior UID, bind new blockers to the
+repair delta, prove resolutions on the current candidate, strictly shrink the open set, and preserve
+comparable passing validation obligations. Scope expansion and two consecutive non-progress repairs
+produce settled `replan_required` handoffs; they do not choose a writer or replacement graph.
+Claim-preserving child-epoch activation is deliberately outside this state machine.
+
+**Reducers and G4 are structural.** `sequence` is one member;
+`replicated_majority` repeats one claim/surface with strict-majority rules and blocker veto;
+`partitioned_all` requires every distinct surface. The planner-designated code certifier and
+conditional security certifier must form a real common wall over all current and inherited
+producers. An inherited frontier becomes virtual producers before every current root, so a no-writer
+child plan cannot launder prior unapproved work. Finalization recomputes the role-specific candidate
+digest and accepts only fresh bound certifier receipts and validation vectors.
+
+**Validation is local and content-addressed.** The schema-2 validation policy refines the existing
+`validation_command` with cwd, repetition, all-pass, timeout, and environment-allowlist fields.
+`kaola-workflow-validation-runner.js` runs in a scrubbed environment, binds executable/toolchain and
+candidate identity, and reduces repeated runs to `pass`, `fail`, or `inconclusive`. This is an owned
+local gate; no hosted service is required to decide completion.
 
 ## Finalization and Sink Flow
 
@@ -662,8 +724,22 @@ All three `.toml` twins for a given profile are byte-identical
 (forge-neutral by the §341 contract — no CLI binaries, no forge brands) and carry the same
 `description` / `nickname_candidates` metadata as the managed `config/agents.toml` block.
 
-**md↔toml token-pin parity contract (#422).** Adding a feature paragraph to an
-`agents/<name>.md` requires mirroring the feature token into all three `.toml` twins before
+**Generated reviewer exception.** `code-reviewer` and `adversarial-verifier` are not maintained as
+independent Markdown/TOML prose. Their canonical behavior lives in
+`templates/reviewers/behavior-contracts.json`; the closed tool/model/transport adapters live in
+`templates/reviewers/runtime-adapters.json`; and `scripts/generate-reviewer-profiles.js` is the sole
+writer for the three Claude outputs and six Codex outputs. A shared `behavior_contract_hash` binds
+the normalized runtime-neutral core, while each render's `resolved_profile_hash` binds its complete
+bytes (with the self-hash slot normalized during verification). OpenCode derives from the generated
+Claude root and must preserve the normalized core and behavior identity.
+
+This generation contract proves deterministic source and installed filesystem bytes. It does not
+make stochastic foundation-model findings or prose identical, and it does not attest a proprietary
+runtime's private prompt-loader state. The Codex installer/preflight keeps inherit-by-omission and
+compares selected source, installed file, managed manifest, and plugin-cache identities separately.
+
+**md↔toml token-pin parity contract (#422).** For non-generated roles, adding a feature paragraph to
+an `agents/<name>.md` requires mirroring the feature token into all three `.toml` twins before
 the token can be pinned in `scripts/test-agent-profile-parity.js` `FEATURE_TOKENS`. The
 regression guard (`test-agent-profile-parity.js`) checks every pinned token against every
 `.md`+triple pair and reds the claude chain on any drift. `validate-script-sync.js`

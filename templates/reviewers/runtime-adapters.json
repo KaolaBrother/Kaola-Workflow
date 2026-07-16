@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "adapters": {
+    "claude-base": {
+      "tools": "claude-read-shell",
+      "model_policy_ref": "claude-standard",
+      "evidence_transport": "return-for-recording"
+    },
+    "claude-higher": {
+      "tools": "claude-read-shell",
+      "model_policy_ref": "claude-reasoning",
+      "evidence_transport": "return-for-recording"
+    },
+    "codex": {
+      "tools": "codex-read-shell",
+      "model_policy_ref": "codex-inherit-by-omission",
+      "evidence_transport": "write-seeded-cache"
+    }
+  }
+}

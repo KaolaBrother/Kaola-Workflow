@@ -1178,6 +1178,83 @@ assertIncludes('commands/workflow-next.md', 'selection-evidence');
 assertIncludes('commands/kaola-workflow-finalize.md', 'observed_gap_unseeded');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'run-gaps-manual.md');
 
+// Reviewer-contract-v2 integration wall: the deterministic validation runner must ship in every
+// manual edition, the lifecycle must expose one shared classifier/reducer contract, and all
+// authoring/execution/finalization prompt families must retain their generated machine envelope.
+assert(exists('scripts/kaola-workflow-validation-runner.js'),
+  'canonical validation runner is missing');
+assertManifestScript('kaola-workflow-validation-runner.js');
+{
+  const runner = require('./kaola-workflow-validation-runner.js');
+  for (const name of ['normalizePolicy', 'collectExecutionIdentity', 'computeLandableTreeDigest',
+    'reduceRuns', 'buildValidationVector', 'runValidation', 'qualifyLocalReviewers']) {
+    assert(typeof runner[name] === 'function', 'validation runner must export ' + name);
+  }
+  const schema = require('./kaola-workflow-adaptive-schema.js');
+  for (const name of ['deriveGateMode', 'buildReviewContext', 'validateReviewEvidenceBinding',
+    'normalizeFindingSet', 'reduceReviewReceipts', 'compareValidationObligations',
+    'assessReviewProgress', 'validateReviewJournalV2']) {
+    assert(typeof schema[name] === 'function', 'adaptive schema must export reviewer-v2 API ' + name);
+  }
+  const validator = require('./kaola-workflow-plan-validator.js');
+  for (const name of ['resolvePlanContract', 'buildPlanView', 'validateSchema2ReviewPlan',
+    'verifyVerdictBlock']) {
+    assert(typeof validator[name] === 'function', 'plan validator must export reviewer-v2 API ' + name);
+  }
+  const lifecycle = require('./kaola-workflow-adaptive-node.js');
+  for (const name of ['buildDispatch', 'runRecordEvidence', 'runCloseNode', 'readReviewJournal',
+    'computeReviewCandidateDigest']) {
+    assert(typeof lifecycle[name] === 'function', 'adaptive lifecycle must export reviewer-v2 seam ' + name);
+  }
+  assertIncludes('scripts/kaola-workflow-repair-state.js', 'missing-or-stale-review-receipt');
+}
+
+const reviewerV2AuthoringSurfaces = [
+  'commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+  'agents/workflow-planner.md',
+  'plugins/kaola-workflow/agents/workflow-planner.toml',
+  'plugins/kaola-workflow-gitlab/agents/workflow-planner.toml',
+  'plugins/kaola-workflow-gitea/agents/workflow-planner.toml',
+];
+for (const file of reviewerV2AuthoringSurfaces) {
+  assertIncludes(file, '<!-- PIN: reviewer-contract-v2-authoring -->');
+  assertIncludes(file, 'plan_schema_version: 2');
+  assertIncludes(file, 'contract_version: 1');
+}
+const reviewerV2ExecutionSurfaces = [
+  'commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+];
+for (const file of reviewerV2ExecutionSurfaces) {
+  assertIncludes(file, '<!-- PIN: reviewer-contract-v2-execution -->');
+  assertIncludes(file, 'review_context_hash');
+  assertIncludes(file, '.cache/validation-vectors/');
+}
+const reviewerV2FinalizationSurfaces = [
+  'commands/kaola-workflow-finalize.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+];
+for (const file of reviewerV2FinalizationSurfaces) {
+  assertIncludes(file, '<!-- PIN: reviewer-contract-v2-finalization -->');
+  assertIncludes(file, 'resolved_profile_hash');
+  assertIncludes(file, '.cache/validation-vectors/');
+}
+assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-validation-runner.js'),
+  'Claude validation chain must execute the deterministic validation-runner suite');
+
 // PROVENANCE_BAN: agent-facing prompt surfaces (agents/*.md, commands/*.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
 // PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,

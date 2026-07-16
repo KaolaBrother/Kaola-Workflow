@@ -9,6 +9,7 @@
 // claude chain (and pinned by all four validate-*-contracts.js, #422.3).
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
@@ -113,6 +114,155 @@ for (const tree of TOML_TREES) {
 for (const profile of fs.readdirSync(path.join(root, TOML_TREES[0])).filter(f => f.endsWith('.toml'))) {
   const triple = TOML_TREES.map(tree => read(`${tree}/${profile}`));
   assert(triple.every(content => content === triple[0]), `${profile} must be byte-identical across all three Codex trees`);
+}
+
+// Canonical reviewer profiles are generated from versioned behavior plus closed runtime adapters.
+// This block is deliberately self-contained so mutations exercise the real generator without
+// touching tracked files.
+let reviewerGenerator = null;
+try {
+  reviewerGenerator = require('./generate-reviewer-profiles.js');
+  assert(true, 'canonical reviewer profile generator loads');
+} catch (error) {
+  assert(false, `canonical reviewer profile generator must load: ${error.message}`);
+}
+
+if (reviewerGenerator) {
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const behaviorContracts = reviewerGenerator.loadBehaviorContracts(root);
+  const runtimeAdapters = reviewerGenerator.loadRuntimeAdapters(root);
+  const rendered = reviewerGenerator.renderProfiles(behaviorContracts, runtimeAdapters);
+  const byPath = new Map(rendered.map(profile => [profile.path, profile]));
+
+  const repositoryErrors = reviewerGenerator.checkGeneratedProfiles(root, {
+    behaviorContracts,
+    runtimeAdapters,
+  });
+  assert(repositoryErrors.length === 0,
+    `tracked reviewer profiles must equal canonical generation: ${repositoryErrors.join('; ')}`);
+
+  assert(rendered.length === 9, `reviewer generator must render exactly 9 profiles, got ${rendered.length}`);
+  assert(JSON.stringify([...byPath.keys()].sort()) === JSON.stringify([...reviewerGenerator.EXPECTED_OUTPUT_PATHS].sort()),
+    'reviewer generator output set must be complete and closed');
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reviewer-profiles-'));
+  const writeRendered = profiles => {
+    for (const profile of profiles) {
+      const target = path.join(tempRoot, profile.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, profile.content, 'utf8');
+    }
+  };
+  writeRendered(rendered);
+
+  const baselineErrors = reviewerGenerator.checkGeneratedProfiles(tempRoot, {
+    behaviorContracts,
+    runtimeAdapters,
+  });
+  assert(baselineErrors.length === 0,
+    `freshly rendered reviewer profiles must check clean: ${baselineErrors.join('; ')}`);
+
+  const mutationPath = rendered[0].path;
+  const originalMutationTarget = fs.readFileSync(path.join(tempRoot, mutationPath), 'utf8');
+  const mutationIndex = originalMutationTarget.indexOf('reviewer-behavior-core:start');
+  const oneByteMutation = originalMutationTarget.slice(0, mutationIndex)
+    + (originalMutationTarget[mutationIndex] === 'r' ? 'R' : 'r')
+    + originalMutationTarget.slice(mutationIndex + 1);
+  fs.writeFileSync(path.join(tempRoot, mutationPath), oneByteMutation, 'utf8');
+  assert(reviewerGenerator.checkGeneratedProfiles(tempRoot, { behaviorContracts, runtimeAdapters })
+    .some(error => error.includes('generated_profile_drift')),
+  'one-byte generated reviewer profile mutation must fail');
+  let oneByteHashRejected = false;
+  try { reviewerGenerator.verifyResolvedProfileHash(oneByteMutation); } catch (error) {
+    oneByteHashRejected = /mismatch/.test(error.message);
+  }
+  assert(oneByteHashRejected,
+    'one-byte mutation outside the self-hash slot must invalidate resolved_profile_hash');
+  fs.writeFileSync(path.join(tempRoot, mutationPath), originalMutationTarget, 'utf8');
+
+  const omittedPath = rendered[rendered.length - 1].path;
+  const omittedContent = fs.readFileSync(path.join(tempRoot, omittedPath), 'utf8');
+  fs.unlinkSync(path.join(tempRoot, omittedPath));
+  assert(reviewerGenerator.checkGeneratedProfiles(tempRoot, { behaviorContracts, runtimeAdapters })
+    .some(error => error.includes('generated_profile_missing')),
+  'omitted reviewer edition output must fail');
+  fs.writeFileSync(path.join(tempRoot, omittedPath), omittedContent, 'utf8');
+
+  const badAdapter = clone(runtimeAdapters);
+  badAdapter.adapters.codex.prompt = 'Use runtime-specific judgment prose.';
+  let freeFormAdapterRejected = false;
+  try { reviewerGenerator.validateRuntimeAdapters(badAdapter); } catch (error) {
+    freeFormAdapterRejected = /unknown|closed|prompt/.test(error.message);
+  }
+  assert(freeFormAdapterRejected, 'free-form reviewer adapter field must fail closed');
+
+  const contradictory = clone(behaviorContracts);
+  contradictory.roles['code-reviewer'].description =
+    'Report uncertain concerns and treat zero findings as a failed review.';
+  let contradictionRejected = false;
+  try { reviewerGenerator.validateBehaviorContracts(contradictory); } catch (error) {
+    contradictionRejected = /contradict/.test(error.message);
+  }
+  assert(contradictionRejected, 'reviewer description that contradicts its behavior core must fail');
+
+  const changedCore = clone(behaviorContracts);
+  changedCore.roles['code-reviewer'].sections[0].lines[0] += ' Changed without regeneration.';
+  assert(reviewerGenerator.checkGeneratedProfiles(tempRoot, {
+    behaviorContracts: changedCore,
+    runtimeAdapters,
+  }).some(error => error.includes('generated_profile_drift')),
+  'changed canonical behavior without regeneration must fail');
+
+  for (const pinKey of ['model', 'model_reasoning_effort']) {
+    const codexPath = rendered.find(profile => profile.runtime === 'codex').path;
+    const codexOriginal = fs.readFileSync(path.join(tempRoot, codexPath), 'utf8');
+    fs.writeFileSync(path.join(tempRoot, codexPath), `${pinKey} = "forbidden"\n${codexOriginal}`, 'utf8');
+    const errors = reviewerGenerator.checkGeneratedProfiles(tempRoot, { behaviorContracts, runtimeAdapters });
+    assert(errors.some(error => error.includes('codex_model_pin_forbidden')),
+      `Codex reviewer ${pinKey} pin must fail inherit-by-omission`);
+    fs.writeFileSync(path.join(tempRoot, codexPath), codexOriginal, 'utf8');
+  }
+
+  const duplicateHashProfile = rendered[0].content.replace(
+    /^(resolved_profile_hash:\s*[0-9a-f]{64})$/m,
+    '$1\n$1',
+  );
+  let duplicateHashRejected = false;
+  try { reviewerGenerator.verifyResolvedProfileHash(duplicateHashProfile); } catch (error) {
+    duplicateHashRejected = /unique|multiple|resolved_profile_hash/.test(error.message);
+  }
+  assert(duplicateHashRejected, 'duplicate reviewer resolved-profile self-hash field must fail');
+
+  for (const profile of rendered) {
+    assert(profile.content.endsWith('\n') && !profile.content.includes('\r'),
+      `${profile.path} must use LF and exactly one final newline`);
+    assert(reviewerGenerator.verifyResolvedProfileHash(profile.content),
+      `${profile.path} resolved_profile_hash must bind every rendered byte`);
+    assert(!reviewerGenerator.PROVENANCE_BAN.test(profile.content),
+      `${profile.path} must contain no issue or decision provenance`);
+    if (profile.runtime === 'codex') {
+      assert(!/^model\s*=/m.test(profile.content), `${profile.path} must omit Codex model`);
+      assert(!/^model_reasoning_effort\s*=/m.test(profile.content),
+        `${profile.path} must omit Codex model_reasoning_effort`);
+    }
+  }
+
+  for (const role of reviewerGenerator.ROLES) {
+    const roleProfiles = rendered.filter(profile => profile.role === role);
+    const cores = roleProfiles.map(profile => reviewerGenerator.extractBehaviorCore(profile.content));
+    assert(cores.every(core => core === cores[0]),
+      `${role} normalized behavior core must be byte-identical across Claude and Codex renders`);
+    const behaviorHashes = new Set(roleProfiles.map(profile => profile.behavior_contract_hash));
+    assert(behaviorHashes.size === 1, `${role} must have one normalized behavior_contract_hash`);
+    const codexProfiles = roleProfiles.filter(profile => profile.runtime === 'codex');
+    assert(codexProfiles.every(profile => profile.content === codexProfiles[0].content),
+      `${role} Codex profiles must be forge-neutral and byte-identical`);
+  }
+
+  const manifest = reviewerGenerator.manifestForProfiles(rendered);
+  assert(manifest.schema_version === 1 && manifest.profiles.length === rendered.length,
+    'reviewer manifest must cover the complete deterministic render set');
+  fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
 // Dispatch assertions must describe inherited parent runtime strength plus declarative role metadata.

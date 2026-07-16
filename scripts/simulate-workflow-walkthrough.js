@@ -1425,11 +1425,34 @@ const ADAPTIVE_PLAN = [
   ''
 ].join('\n');
 
+function stampVerifiedLegacyPlan(planPath, validatorPath) {
+  const content = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)) return;
+  const validator = require(validatorPath || planValidatorScript);
+  const hash = validator.computePlanHash(content);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
+}
+
+function runLegacyFreeze(validatorPath, planPath, cwd, extraArgs) {
+  stampVerifiedLegacyPlan(planPath, validatorPath);
+  return runNode(validatorPath, [planPath, '--freeze', ...(extraArgs || [])], cwd);
+}
+
+function freezeLegacyContent(validator, content) {
+  const hash = validator.computePlanHash(content);
+  return validator.freezePlan('<!-- plan_hash: ' + hash + ' -->\n\n' + content);
+}
+
 function plantFrozenPlan(root, project, planText) {
   const dir = path.join(root, 'kaola-workflow', project);
   fs.mkdirSync(dir, { recursive: true });
   const planPath = path.join(dir, 'workflow-plan.md');
   fs.writeFileSync(planPath, planText);
+  // These walkthrough cases model byte-preserved, already-adopted legacy-v1
+  // plans. Schema 2 deliberately refuses a newly authored field-absent draft,
+  // so materialize the verified frozen identity before exercising the same
+  // validator transaction. Do not weaken the production new-plan boundary.
+  stampVerifiedLegacyPlan(planPath, planValidatorScript);
   // freeze in place via the validator (stamps plan_hash)
   const r = runNode(planValidatorScript, [planPath, '--freeze'], root);
   assert(r.status === 0, 'plantFrozenPlan: freeze should exit 0, got ' + r.status + ' ' + r.stderr);
@@ -2541,7 +2564,7 @@ function testMetricOptimizerContract() {
           '| review | code-reviewer | opt | — | 1 | sequence |',
           '| adv | adversarial-verifier | review | — | 1 | sequence |',
           '| done | finalize | adv | — | 1 | sequence |', '']).join('\n'));
-      runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      runLegacyFreeze(planValidatorScript, planPath, grepo);
       fs.mkdirSync(path.join(grepo, 'src'), { recursive: true });
       fs.writeFileSync(path.join(grepo, 'src', 'hot.js'), 'let v = 0;\n');
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
@@ -3042,7 +3065,7 @@ function testAdaptiveGateBarrierEnforcement() {
         '| done | finalize | rv | — | 1 | sequence |', '',
         '## Node Ledger', '', '| id | status |', '|---|---|',
         '| impl | complete |', '| rv | complete |', '| done | complete |', ''].join('\n'));
-      runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      runLegacyFreeze(planValidatorScript, planPath, grepo);
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
       // Surprise sensitive write + a declared write, committed (cumulative diff vs origin/main base).
@@ -3146,7 +3169,7 @@ function testAdaptivePerInstanceBarrier() {
       fs.mkdirSync(proj, { recursive: true });
       const planPath = path.join(proj, 'workflow-plan.md');
       fs.writeFileSync(planPath, mkPlan());
-      runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      runLegacyFreeze(planValidatorScript, planPath, grepo);
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
       // node a starts -> record its baseline (resume-safe, persisted in .cache).
@@ -3212,7 +3235,7 @@ function testAdaptivePerInstanceBarrierHardening() {
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, plan);
     if (freeze) {
-      const fr = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      const fr = runLegacyFreeze(planValidatorScript, planPath, grepo);
       assert(fr.status === 0, 'mkRepo --freeze should exit 0, got ' + fr.status + ' ' + fr.stderr);
       // #389: the freeze write routes through writeFileAtomicReplace (tmp + fsync + rename), so it
       // leaves NO `.workflow-plan.md.*.tmp` sidecar behind after a clean rename. A surviving sidecar
@@ -4302,7 +4325,7 @@ function testBundle424432433NodeSeeding() {
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, SEED_PLAN);
     // freeze the plan (stamps plan_hash so --resume-check passes)
-    const fz = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    const fz = runLegacyFreeze(planValidatorScript, planPath, grepo);
     assert(fz.status === 0, '#433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
     spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
     spawnSync('git', ['commit', '-m', 'frozen plan'], { cwd: grepo, encoding: 'utf8' });
@@ -4427,7 +4450,7 @@ function testAdaptiveDurableConsentHalt() {
 
     // constraint-3: appending the marker to the Node Ledger after freeze must NOT break resume-check
     // (computePlanHash covers ## Meta + ## Nodes only).
-    const frozen = planValidator.freezePlan(base.join('\n'));
+    const frozen = freezeLegacyContent(planValidator, base.join('\n'));
     assert(frozen.frozen, 'E2: base plan should freeze');
     assert(planValidator.revalidateForResume(frozen.content.trimEnd() + '\nconsent_halt: pending\n').ok === true,
       'E2 constraint-3: appending consent_halt to the Node Ledger must NOT break resume-check');
@@ -4474,7 +4497,7 @@ function testAdaptiveAuthoringEntryGuard() {
     fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| done | finalize | — | — | 1 | sequence |', ''].join('\n'));
-    const fr = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);
+    const fr = runLegacyFreeze(planValidatorScript, planPath, tmp, ['--json']);
     assert(fr.status === 0 && JSON.parse(fr.stdout).frozen === true,
       'D8: validator --freeze must be toggle-agnostic, got status ' + fr.status + ' ' + fr.stdout);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
@@ -4584,7 +4607,7 @@ function testAdaptiveTier2Composition() {
 
     // REGRESSION: plan_hash covers ## Meta labels — tampering labels after freeze must fail resume-check.
     const planValidator = require(planValidatorScript);
-    const frozen = planValidator.freezePlan([
+    const frozen = freezeLegacyContent(planValidator, [
       '# Plan', '', '## Meta', 'labels: security', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4719,7 +4742,7 @@ function testAdaptiveAuditFixes() {
 
     // B3: and the plan_hash must cover post-fence content — appending such a node after freeze
     // must fail --resume-check (hash mismatch), not pass silently.
-    const clean = planValidator.freezePlan([
+    const clean = freezeLegacyContent(planValidator, [
       '# Plan', '', '## Meta', '', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
@@ -4867,7 +4890,7 @@ function testAdaptiveAuditCoverage() {
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |', ''
     ].join('\n'));
-    const froze = runNode(planValidatorScript, [resumePlan, '--freeze'], tmp);
+    const froze = runLegacyFreeze(planValidatorScript, resumePlan, tmp);
     assert(froze.status === 0, 'I5: --freeze must exit 0, got ' + froze.status + ' ' + froze.stderr);
     const okRun = runNode(planValidatorScript, [resumePlan, '--resume-check', '--json'], tmp);
     const okJson = JSON.parse(okRun.stdout);
@@ -5549,7 +5572,7 @@ function testPlanConsumerFenceMatrix() {
       }
       const planPath = path.join(tmp, name + '.md');
       fs.writeFileSync(planPath, plan);
-      const freeze = runNode(validatorPath, [planPath, '--freeze', '--json'], tmp);
+      const freeze = runLegacyFreeze(validatorPath, planPath, tmp, ['--json']);
       assert(freeze.status === 0, name + ' fenced plan must freeze, got ' + freeze.stderr + freeze.stdout);
       const frozen = read(planPath);
       const hm = /<!-- plan_hash: ([a-f0-9]+) -->/.exec(frozen);
@@ -5607,7 +5630,7 @@ function testNodeBriefAuthoritativeSectionMatrix() {
     hashes.push(validator.computePlanHash(validBriefs));
     const planPath = path.join(tmp, name + '-briefs.md');
     fs.writeFileSync(planPath, validBriefs);
-    const freeze = runNode(validatorPath, [planPath, '--freeze', '--json'], tmp);
+    const freeze = runLegacyFreeze(validatorPath, planPath, tmp, ['--json']);
     assert(freeze.status === 0, name + ': authoritative Briefs plan must freeze, got ' + freeze.stdout + freeze.stderr);
     const resume = runNode(validatorPath, [planPath, '--resume-check', '--json'], tmp);
     assert(resume.status === 0 && JSON.parse(resume.stdout).ok === true, name + ': authoritative Briefs plan must resume');
@@ -13408,13 +13431,30 @@ function testAdaptiveSelectSelectorSourceFanoutMember() {
 // No ## Sink / issue_number → roadmap_staged is vacuously true (hermetic).
 function makeHandoffPlan(nodesRows, ledgerRows, labels) {
   const labelLine = Array.isArray(labels) ? labels.join(', ') : (labels || 'enhancement');
+  const parsedRows = nodesRows.map(row => row.split('|').slice(1, -1).map(cell => cell.trim()));
+  const codeReviewer = parsedRows.find(cells => cells[1] === 'code-reviewer');
+  const securityReviewer = parsedRows.find(cells => cells[1] === 'security-reviewer');
+  const schema2Rows = parsedRows.map(cells => {
+    const role = cells[1];
+    const gate = ['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate'].includes(role);
+    const metadata = gate ? ['review-change', 'code-tree', 'sequence', '—'] : ['—', '—', '—', '—'];
+    return '| ' + cells.concat(metadata).join(' | ') + ' |';
+  });
   return [
     '# Workflow Plan — issue #255-sim', '',
-    '## Meta', 'labels: ' + labelLine, '',
+    '## Meta',
+    'plan_schema_version: 2',
+    'labels: ' + labelLine,
+    'code_certifier: ' + (codeReviewer ? codeReviewer[0] : 'none'),
+    'security_certifier: ' + (securityReviewer ? securityReviewer[0] : 'none'),
+    'inherited_frontier_digest: none',
+    'inherited_frontier_classes: none',
+    'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+    'validation_timeout_minutes: 5', '',
     '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-  ].concat(nodesRows).concat([
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+  ].concat(schema2Rows).concat([
     '',
     '## Node Ledger', '',
     '| id | status |',
@@ -13847,12 +13887,18 @@ function testAdaptiveHandoffFreezeChainTwoSpawns() {
 // ack freezes (control). This is the assertion the design's own #408 test-plan named but omitted.
 // ---------------------------------------------------------------------------
 function testFreezeCheckedGovernanceAckStale() {
-  const PLAN = ['# Workflow Plan — issue #408', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
-    '| ex | code-explorer | — | — | 1 | sequence |',
-    '| a | tdd-guide | ex | aaa/x.js | 1 | sequence |',
-    '| rv | code-reviewer | a | — | 1 | sequence |',
-    '| done | finalize | rv | — | 1 | sequence |', '',
+  const PLAN = ['# Workflow Plan — issue #408', '', '## Meta',
+    'plan_schema_version: 2', 'labels: enhancement',
+    'code_certifier: rv', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+    'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+    'validation_timeout_minutes: 5', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    '| ex | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+    '| a | tdd-guide | ex | aaa/x.js | 1 | sequence | — | — | — | — |',
+    '| rv | code-reviewer | a | — | 1 | sequence | review-change | code-tree | sequence | — |',
+    '| done | finalize | rv | — | 1 | sequence | — | — | — | — |', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
     '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
   const grepo = adaptiveTmp('gov-ack-stale-git');
@@ -14417,7 +14463,14 @@ function testAdaptiveWorktreeMirrorNoManualCopy() {
 
     // Step 2: author an UNFROZEN plan into the MAIN project folder (handoff freezes it).
     const mainPlanPath = path.join(tmp, 'kaola-workflow', 'issue-935', 'workflow-plan.md');
-    fs.writeFileSync(mainPlanPath, ADAPTIVE_PLAN);
+    fs.writeFileSync(mainPlanPath, makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |', '| impl | pending |', '| review | pending |', '| done | pending |',
+    ]));
 
     // Step 3: REAL handoff (cwd = main) — freezes + mirrors. No manual cp anywhere.
     const hr = runNode(handoffScript, ['--project', 'issue-935', '--json'], tmp);
@@ -15130,7 +15183,7 @@ function testGateEvidenceNonceRotation654() {
       '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', ''
     ].join('\n'));
     fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
-    const freeze = runNode(planValidatorScript, [planPath, '--freeze'], tmp);
+    const freeze = runLegacyFreeze(planValidatorScript, planPath, tmp);
     assert(freeze.status === 0, '#654 walkthrough plan freezes: ' + freeze.stderr + freeze.stdout);
     spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
     spawnSync('git', ['commit', '-m', 'freeze repair fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
@@ -15188,6 +15241,305 @@ function testGateEvidenceNonceRotation654() {
     assert(reviewerClose.result === 'ok' && reviewerClose.closed === 'reviewer', '#654 successful reviewer close');
     console.log('testGateEvidenceNonceRotation654: PASSED');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+function testReviewerContractV2Conformance() {
+  const schema = require('./kaola-workflow-adaptive-schema');
+  const validator = require('./kaola-workflow-plan-validator');
+  const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts', 'reviewer-conformance-fixtures.json'), 'utf8'));
+  // R6: the corpus is executable rows driven through the real classifier/reducer/parser, not coverage labels.
+  assert(fixture.gate_modes.length >= 3 && fixture.outcomes.length >= 6
+    && fixture.reducers.length >= 4 && fixture.validation.length >= 6
+    && Array.isArray(fixture.validation_policy) && fixture.validation_policy.length >= 6
+    && fixture.anchors.length >= 5,
+  'review-v2 walkthrough loads a data-driven executable conformance corpus (not coverage labels)');
+  assert(typeof schema.deriveGateMode === 'function'
+    && typeof schema.reduceReviewReceipts === 'function'
+    && typeof validator.resolvePlanContract === 'function'
+    && typeof validator.buildPlanView === 'function',
+  'review-v2 walkthrough reaches the shared classifier/reducer/version/plan-view APIs');
+  const change = fixture.gate_modes[0];
+  const node = change.plan.nodes.find(n => n.id === change.node_id);
+  assert(schema.deriveGateMode(change.plan, node) === 'change_gate',
+    'review-v2 walkthrough preserves forward-reachability change-gate semantics');
+  const investigation = schema.reduceReviewReceipts({
+    aggregation: 'sequence', role: 'adversarial-verifier', gate_mode: 'investigation',
+    expected_members: ['av'], expected_surfaces: ['claim'],
+    receipts: [{ node_id: 'av', surface: 'claim', execution_status: 'complete', domain_outcome: 'indeterminate', blocking_findings: 0 }],
+  });
+  assert(investigation.complete === true && investigation.gate_effect === 'none',
+    'review-v2 walkthrough accepts a complete bound indeterminate investigation analytically');
+
+  // R5 — every schema-2 gate role has ONE runtime-neutral behavior identity, or fails the open identically.
+  // A contract-2 context requires behavior contract version 2 exactly; a v1/absent identity is a silent
+  // downgrade and must refuse.
+  {
+    const adaptiveNode = require('./kaola-workflow-adaptive-node');
+    const baseContext = {
+      contract_version: 2, plan_schema_version: 2, plan_hash: '2'.repeat(64),
+      claim_identity_digest: '3'.repeat(64), epoch_lineage_id: '4'.repeat(64), epoch: 1,
+      logical_gate: { key: 'gate', kind: 'sequence', members: ['g'], claim_digest: '5'.repeat(64),
+        surface_digests: ['6'.repeat(64)], aggregation: 'sequence', certified_producers: ['writer'] },
+      gate_mode: 'change_gate', claim_root_base: { commit: 'a'.repeat(40), digest: '7'.repeat(64) },
+      candidate_digest: '8'.repeat(64), inherited_frontier: { digest: 'none', classes: [] },
+      scope_lineage_id: '9'.repeat(64), review_phase: 'discovery', attempt_ordinal: 1,
+      acceptance_evidence: [{ kind: 'gate_claim', digest: 'a'.repeat(64) }],
+      prior_findings: [], repair_delta: null, validation_obligations: [],
+    };
+    const v1Downgrade = schema.buildReviewContext({ ...baseContext, behavior_contract_version: 1,
+      behavior_contract_hash: '1'.repeat(64) });
+    assert(v1Downgrade.ok === false && v1Downgrade.reason === 'review_context_identity_malformed',
+      'R5 a contract-2 context refuses a v1 behavior identity (no silent downgrade)');
+    for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer', 'main-session-gate']) {
+      const claudeId = adaptiveNode.resolveReviewerProfileIdentity(role, { reviewRuntime: 'claude',
+        reviewProfilePath: path.join(repoRoot, 'agents', role + '.md') });
+      const codexId = adaptiveNode.resolveReviewerProfileIdentity(role, { reviewRuntime: 'codex',
+        reviewProfilePath: path.join(repoRoot, 'plugins', 'kaola-workflow', 'agents', role + '.toml') });
+      if (claudeId.ok && codexId.ok) {
+        assert(claudeId.behavior_contract_version === 2 && codexId.behavior_contract_version === 2
+          && claudeId.behavior_contract_hash === codexId.behavior_contract_hash,
+          'R5 ' + role + ' has ONE runtime-neutral v2 behavior identity across editions');
+        const ctxC = schema.buildReviewContext({ ...baseContext, behavior_contract_version: 2,
+          behavior_contract_hash: claudeId.behavior_contract_hash });
+        const ctxX = schema.buildReviewContext({ ...baseContext, behavior_contract_version: 2,
+          behavior_contract_hash: codexId.behavior_contract_hash });
+        assert(ctxC.ok && ctxX.ok && ctxC.context_hash === ctxX.context_hash && ctxC.bytes === ctxX.bytes,
+          'R5 ' + role + ' schema-2 context bytes are byte-identical across editions');
+        assert(!claudeId.profile_path || !ctxC.bytes.includes(claudeId.resolved_profile_hash),
+          'R5 ' + role + ' runtime-specific resolved_profile_hash never enters the runtime-neutral context');
+      } else {
+        assert(claudeId.ok === false && codexId.ok === false
+          && claudeId.reason === codexId.reason && claudeId.reason === 'review_profile_identity_unavailable',
+          'R5 ' + role + ' without an embedded identity fails schema-2 open identically across editions (fail-closed)');
+      }
+    }
+  }
+
+  // Stateful contract-v2 path: freeze -> writer -> bound reviewer dispatch ->
+  // stale identity refusal -> normalized receipt/journal -> final verdict gate.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-review-v2-walk-')));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-review-v2';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — reviewer contract v2', '',
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: enhancement',
+      'code_certifier: reviewer',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'validation_command: node --check lib/impl.js',
+      'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
+      '| reviewer | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize | reviewer | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '|---|---|',
+      '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+    const freeze = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);
+    const freezeOut = JSON.parse(freeze.stdout);
+    const frozenContract = validator.resolvePlanContract(fs.readFileSync(planPath, 'utf8'), { requireFrozen: true });
+    assert(freeze.status === 0 && frozenContract.ok === true && frozenContract.contract_version === 2,
+      'review-v2 stateful fixture freezes explicitly as contract v2: ' + freeze.stdout + freeze.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['commit', '-m', 'review v2 fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+
+    const openedWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    const writerRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8',
+        input: 'evidence-binding: writer ' + openedWriter.nonce
+          + '\nRED: old behavior reproduced\nGREEN: new behavior passes\n',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(writerRecord.status === 0, 'review-v2 writer evidence records: ' + writerRecord.stdout + writerRecord.stderr);
+    const writerClose = json(runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    assert(writerClose.opened && writerClose.opened.id === 'reviewer',
+      'review-v2 reviewer opens after writer close');
+    const dispatch = writerClose.opened.dispatch;
+    assert(dispatch.contract_version === 2 && /^[0-9a-f]{64}$/.test(dispatch.review_context_hash)
+      && /^[0-9a-f]{64}$/.test(dispatch.resolved_profile_hash)
+      && /^[0-9a-f]{64}$/.test(dispatch.candidate_digest),
+    'review-v2 dispatch carries bound context/profile/candidate identities');
+    assert(fs.existsSync(path.join(projectDir, dispatch.review_context_path)),
+      'review-v2 runtime-neutral context is persisted at the dispatch path');
+    const discoveryContext = JSON.parse(fs.readFileSync(path.join(projectDir, dispatch.review_context_path), 'utf8'));
+    assert(discoveryContext.review_phase === 'discovery'
+      && fs.existsSync(path.join(cacheDir, 'review-claim-roots')),
+      'review-v2 discovery persists a claim-time root base under review-claim-roots/');
+
+    const reviewEvidence = (boundDispatch, candidate, domainOutcome, extraRows) => [
+      'evidence-binding: reviewer ' + writerClose.opened.nonce,
+      'contract_version: 2',
+      'review_context_hash: ' + boundDispatch.review_context_hash,
+      'behavior_contract_hash: ' + boundDispatch.behavior_contract_hash,
+      'resolved_profile_hash: ' + boundDispatch.resolved_profile_hash,
+      'candidate_digest: ' + candidate,
+      'domain_outcome: ' + domainOutcome,
+      'gate_claim: ' + boundDispatch.gate_claim,
+      'gate_surface: ' + boundDispatch.gate_surface,
+      'gate_aggregation: ' + boundDispatch.gate_aggregation,
+      ...(extraRows || []), '',
+    ].join('\n');
+    const staleRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, 'f'.repeat(64), 'approved', ['findings_none: true']),
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(staleRecord.status === 0,
+      'record-evidence remains a verbatim transport for stale review bytes: ' + staleRecord.stdout + staleRecord.stderr);
+    const staleClose = runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp);
+    assert(staleClose.status !== 0 && JSON.parse(staleClose.stdout).reason === 'review_candidate_mismatch'
+      && !fs.existsSync(path.join(cacheDir, 'review-receipts'))
+      && !fs.existsSync(path.join(cacheDir, 'review-attempts.json')),
+    'review-v2 stale candidate refuses before finding parsing, receipt creation, or journal creation: '
+      + staleClose.stdout + staleClose.stderr);
+    const discoveryFinding = {
+      failure_class: 'correctness',
+      trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+        expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+      primary_anchor: { kind: 'evidence_observation',
+        producer_evidence_digest: schema.sha256Hex(fs.readFileSync(path.join(cacheDir, 'writer.md'), 'utf8')),
+        observation_key: 'writer:review-v2-regression' },
+      secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
+      status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+    };
+    const reviewRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8', input: reviewEvidence(dispatch, dispatch.candidate_digest,
+          'changes_requested', ['finding_json: ' + JSON.stringify(discoveryFinding)]),
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(reviewRecord.status === 0, 'review-v2 bound reviewer evidence records: ' + reviewRecord.stdout + reviewRecord.stderr);
+    const discoveryClose = json(runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
+    assert(discoveryClose.result === 'review_failed' && discoveryClose.attempt_id,
+      'review-v2 discovery failure persists a repairable schema-v2 attempt');
+    const repair = json(runNode(adaptiveNodeScript,
+      ['repair-node', '--project', project, '--attempt-id', discoveryClose.attempt_id,
+        '--node-id', 'writer', '--json'], tmp));
+    assert(repair.result === 'ok' && repair.consumed_by === 'writer' && repair.baselineReused === true,
+      'review-v2 failed attempt is consumed through the unchanged anti-laundering repair path');
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
+    const repairedWriterRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8',
+        input: 'evidence-binding: writer ' + openedWriter.nonce
+          + '\nRED: review regression reproduced\nGREEN: repair passes\n',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(repairedWriterRecord.status === 0, 'review-v2 repaired writer evidence records');
+    const repairedWriterClose = json(runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
+    const closureDispatch = repairedWriterClose.opened && repairedWriterClose.opened.dispatch;
+    assert(closureDispatch && closureDispatch.contract_version === 2,
+      'review-v2 repaired writer opens a fresh closure context');
+    const closureContext = JSON.parse(fs.readFileSync(path.join(projectDir, closureDispatch.review_context_path), 'utf8'));
+    assert(closureContext.review_phase === 'closure'
+      && closureContext.repair_delta.repair_attempt_id === discoveryClose.attempt_id
+      && closureContext.repair_delta.paths.some(row => row.path === 'lib/impl.js'),
+    'review-v2 closure context binds the consumed repair attempt and exact changed path');
+    // R4: the scope lineage is stable across the discovery -> repair -> closure lifecycle because the
+    // claim-root base is captured once and reused. A moving HEAD or gate identity does not reset it, so the
+    // closure reads the prior frontier by scope lineage rather than falling back to a fresh discovery.
+    assert(closureContext.scope_lineage_id === discoveryContext.scope_lineage_id
+      && closureContext.epoch_lineage_id === discoveryContext.epoch_lineage_id
+      && JSON.stringify(closureContext.claim_root_base) === JSON.stringify(discoveryContext.claim_root_base),
+    'review-v2 R4: scope_lineage_id + claim_root_base are preserved from discovery into closure');
+    const priorUid = schema.normalizeFindingSet([discoveryFinding], {
+      scope_lineage_id: closureContext.scope_lineage_id,
+    }).findings[0].uid;
+    const resolvedFinding = { ...discoveryFinding, uid: priorUid, status: 'resolved' };
+    // A resolution must cite an authoritative current-candidate validation vector: seed a real passing
+    // vector for the repaired candidate so its vector_id / receipt_sha256 are the only digests that bind.
+    const runner = require('./kaola-workflow-validation-runner');
+    const closureExecIdentity = { comparable: true, digest: 'a2'.repeat(32), incomparability_classes: [] };
+    const closureVector = runner.buildValidationVector({
+      command_id: 'c1'.repeat(32), candidate_digest: closureDispatch.candidate_digest,
+      execution_identity: closureExecIdentity,
+      runs: [{ index: 0, exit_code: 0, signal: null, timed_out: false,
+        pre_candidate_digest: closureDispatch.candidate_digest,
+        post_candidate_digest: closureDispatch.candidate_digest,
+        execution_identity_digest: closureExecIdentity.digest, failure_signature_sha256: '0'.repeat(64) }],
+    }, []);
+    const vectorDir = path.join(cacheDir, 'validation-vectors');
+    fs.mkdirSync(vectorDir, { recursive: true });
+    fs.writeFileSync(path.join(vectorDir, closureVector.vector_id + '.json'),
+      runner.canonicalJson(closureVector) + '\n');
+    const resolution = { uid: priorUid, repair_attempt_id: discoveryClose.attempt_id,
+      validation_vector_digest: closureVector.vector_id, evidence_digest: closureVector.receipt_sha256,
+      candidate_digest: closureDispatch.candidate_digest };
+    const closureEvidence = [
+      'evidence-binding: reviewer ' + repairedWriterClose.opened.nonce,
+      'contract_version: 2',
+      'review_context_hash: ' + closureDispatch.review_context_hash,
+      'behavior_contract_hash: ' + closureDispatch.behavior_contract_hash,
+      'resolved_profile_hash: ' + closureDispatch.resolved_profile_hash,
+      'candidate_digest: ' + closureDispatch.candidate_digest,
+      'domain_outcome: approved',
+      'gate_claim: ' + closureDispatch.gate_claim,
+      'gate_surface: ' + closureDispatch.gate_surface,
+      'gate_aggregation: ' + closureDispatch.gate_aggregation,
+      'finding_json: ' + JSON.stringify(resolvedFinding),
+      'resolution_json: ' + JSON.stringify(resolution), '',
+    ].join('\n');
+    const closureRecord = spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'reviewer', '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8', input: closureEvidence,
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    assert(closureRecord.status === 0, 'review-v2 closure evidence records');
+    const reviewerCloseRun = runNode(adaptiveNodeScript,
+      ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp);
+    assert(reviewerCloseRun.status === 0,
+      'review-v2 strict-progress closure command succeeds: ' + reviewerCloseRun.stdout + reviewerCloseRun.stderr);
+    const reviewerClose = JSON.parse(reviewerCloseRun.stdout);
+    assert(reviewerClose.result === 'ok' && reviewerClose.closed === 'reviewer',
+      'review-v2 strict-progress closure settles through the normal close transaction');
+
+    const receiptPath = path.join(cacheDir, 'review-receipts', closureDispatch.review_context_hash, 'reviewer.json');
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+    assert(receipt.contract_version === 2 && receipt.gate_effect === 'pass'
+      && receipt.candidate_digest === closureDispatch.candidate_digest,
+    'review-v2 normalized receipt preserves exact contract and candidate identity');
+    const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(journal.schema_version === 2 && journal.contract_version === 2
+      && journal.attempts.length === 2 && journal.attempts[1].lifecycle_settled === true
+      && journal.attempts[1].progress.progress === true,
+    'review-v2 discovery plus strict-progress closure persist two settled schema-v2 attempts');
+    assert(schema.validateReviewJournal(journal, freezeOut.planHash, 2).ok === true,
+      'review-v2 persisted journal revalidates against the exact frozen plan hash');
+    const forgedProfileJournal = JSON.parse(JSON.stringify(journal));
+    forgedProfileJournal.attempts[1].profile_hashes = ['f'.repeat(64)];
+    assert(schema.validateReviewJournal(forgedProfileJournal, freezeOut.planHash, 2).reason
+      === 'review_journal_receipt_binding_mismatch',
+    'review-v2 journal cannot rewrite receipt-derived profile identity');
+    const forgedProgressJournal = JSON.parse(JSON.stringify(journal));
+    forgedProgressJournal.attempts[1].progress.consecutive_nonprogress = 9;
+    assert(schema.validateReviewJournal(forgedProgressJournal, freezeOut.planHash, 2).reason
+      === 'review_journal_progress_mismatch',
+    'review-v2 journal recomputes strict progress instead of trusting stored counters');
+    const verdict = runNode(planValidatorScript, [planPath, '--verdict-check', '--json'], tmp);
+    assert(verdict.status === 0 && JSON.parse(verdict.stdout).ok === true,
+      'review-v2 final verdict gate consumes the normalized receipt successfully: ' + verdict.stdout);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testReviewerContractV2Conformance: PASSED');
 }
 
 function buildRegistry() {
@@ -15461,6 +15813,7 @@ function buildRegistry() {
   add('testCodexDispatchModeThreading603',                testCodexDispatchModeThreading603);
   add('testRunProgressMirror605',                         testRunProgressMirror605);
   add('testGateEvidenceNonceRotation654',                 testGateEvidenceNonceRotation654);
+  add('testReviewerContractV2Conformance',                testReviewerContractV2Conformance);
   return reg;
 }
 
@@ -16722,6 +17075,7 @@ function testAdaptiveLedgerHeaderInvalid425() {
   try {
     const planPath = path.join(tmp, 'plan.md');
     fs.writeFileSync(planPath, planBody);
+    stampVerifiedLegacyPlan(planPath, planValidatorScript);
     const r = runNode(planValidatorScript, [planPath, '--freeze', '--repair', '--json'], tmp);
     assert(r.status === 0,
       '#425: --freeze --repair on a `| node |` header plan must exit 0, got ' + r.status + ' stderr: ' + r.stderr);
@@ -17413,7 +17767,7 @@ function testTwoLanesInOneCheckout579() {
 function testSummaryDispatchSegments602() {
   const SUMMARY_SEG = /opened=\S+ role=\S+ task=\S+ mode=\S+ effort=\S+/;
   const freezeCommit = (grepo, planPath) => {
-    const fz = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    const fz = runLegacyFreeze(planValidatorScript, planPath, grepo);
     assert(fz.status === 0, '#602: freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
     spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
     spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
@@ -17555,7 +17909,7 @@ function testCodexDispatchModeThreading603() {
       '#603 (a): state must persist codex_dispatch_mode: v2-task-name, got:\n' + state);
     const planPath = path.join(grepo, 'kaola-workflow', 'issue-6031', 'workflow-plan.md');
     fs.writeFileSync(planPath, NODE_PLAN('6031'));
-    runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    runLegacyFreeze(planValidatorScript, planPath, grepo);
     spawnSync('git', ['-C', grepo, 'add', '-A'], { encoding: 'utf8' });
     spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
@@ -17581,7 +17935,7 @@ function testCodexDispatchModeThreading603() {
       '#603 (b): absent flag -> state must NOT carry a codex_dispatch_mode field, got:\n' + state);
     const planPath = path.join(grepo, 'kaola-workflow', 'issue-6032', 'workflow-plan.md');
     fs.writeFileSync(planPath, NODE_PLAN('6032'));
-    runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    runLegacyFreeze(planValidatorScript, planPath, grepo);
     spawnSync('git', ['-C', grepo, 'add', '-A'], { encoding: 'utf8' });
     spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
@@ -17630,7 +17984,7 @@ function testRunProgressMirror605() {
     const mainProj = path.join(tmp, 'kaola-workflow', proj);
     fs.mkdirSync(mainProj, { recursive: true });
     fs.writeFileSync(path.join(mainProj, 'workflow-plan.md'), PLAN(proj.replace('issue-', '')));
-    runNode(planValidatorScript, [path.join(mainProj, 'workflow-plan.md'), '--freeze'], tmp);
+    runLegacyFreeze(planValidatorScript, path.join(mainProj, 'workflow-plan.md'), tmp);
     spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
     spawnSync('git', ['-C', tmp, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
   };

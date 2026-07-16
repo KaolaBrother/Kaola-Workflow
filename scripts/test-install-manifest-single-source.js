@@ -126,4 +126,19 @@ for (const forge of manifest.FORGES) {
   );
 }
 
+// --- 5. The forge-neutral validation runner is installed from the single source manifest. ---
+// It deliberately keeps the canonical base name in every tree; registration must be exact (once),
+// and every emitted per-forge source must physically exist so create-on-missing cannot ship silently.
+for (const forge of manifest.FORGES) {
+  const scripts = manifest.supportScripts(forge);
+  const runnerName = 'kaola-workflow-validation-runner.js';
+  assert.strictEqual(scripts.filter(name => name === runnerName).length, 1,
+    `validation runner must be registered exactly once for ${forge}: [${scripts.join(', ')}]`);
+  const sourceDir = forge === 'github'
+    ? path.join(root, 'scripts')
+    : path.join(root, 'plugins', `kaola-workflow-${forge}`, 'scripts');
+  assert.ok(fs.existsSync(path.join(sourceDir, runnerName)),
+    `validation runner manifest source must exist for ${forge}: ${path.join(sourceDir, runnerName)}`);
+}
+
 console.log('test-install-manifest-single-source (#407/#412): PASSED');

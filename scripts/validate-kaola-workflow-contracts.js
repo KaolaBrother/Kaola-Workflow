@@ -1003,6 +1003,84 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
+// Reviewer-contract-v2 repository/install wall. Generated sources, all three Codex installer
+// editions, the root/plugin-cache preflight, validation-runner distribution, and reviewer-v2
+// lifecycle APIs must agree before any installed-scope compliance claim can be made.
+{
+  const generator = require('./generate-reviewer-profiles.js');
+  const generatedErrors = generator.checkGeneratedProfiles(root);
+  assert(generatedErrors.length === 0,
+    'generated reviewer profiles must be current: ' + generatedErrors.join('; '));
+
+  const editionRoots = [
+    'plugins/kaola-workflow',
+    'plugins/kaola-workflow-gitlab',
+    'plugins/kaola-workflow-gitea',
+  ];
+  const installerFiles = [];
+  for (const edition of editionRoots) {
+    const installerFile = edition + '/scripts/install-codex-agent-profiles.js';
+    installerFiles.push(read(installerFile));
+    const installer = require(path.join(root, installerFile));
+    const sourceCheck = installer.validateSourceProfiles(path.join(root, edition));
+    assert(sourceCheck.ok, edition + ' reviewer/profile source contract failed: ' + sourceCheck.errors.join('; '));
+    assert(sourceCheck.repair === null, edition + ' current source must not carry a repair command');
+    for (const role of ['code-reviewer', 'adversarial-verifier']) {
+      const entry = sourceCheck.entries.find(candidate => candidate.role === role);
+      assert(entry && entry.profileContract,
+        edition + ' must expose generated reviewer identity for ' + role);
+      assert(entry.profileContract.behavior_contract_version === 2,
+        edition + ' must bind behavior contract version 2 for ' + role);
+      assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
+        && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
+      edition + ' must bind behavior and resolved profile hashes for ' + role);
+      assert(!/^model(?:_reasoning_effort)?\s*=/m.test(entry.sourceText),
+        edition + ' reviewer profiles must inherit the parent model by omission');
+    }
+  }
+  assert(new Set(installerFiles).size === 1,
+    'all three Codex profile installers must remain byte-identical');
+
+  const preflightFiles = [
+    'scripts/kaola-workflow-codex-preflight.js',
+    ...editionRoots.map(edition => edition + '/scripts/kaola-workflow-codex-preflight.js'),
+  ].map(read);
+  assert(new Set(preflightFiles).size === 1,
+    'root and all three Codex preflights must remain byte-identical');
+  assert(preflightFiles[0].includes("scope: 'repository'")
+    && preflightFiles[0].includes("scope: 'plugin_cache'")
+    && preflightFiles[0].includes('pluginCacheStale'),
+  'Codex doctor must fail closed over repository and read-only plugin-cache profile drift');
+
+  const runnerFiles = [
+    'scripts/kaola-workflow-validation-runner.js',
+    ...editionRoots.map(edition => edition + '/scripts/kaola-workflow-validation-runner.js'),
+  ].map(read);
+  assert(new Set(runnerFiles).size === 1,
+    'canonical validation runner and all three installed copies must remain byte-identical');
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  for (const forge of manifest.FORGES) {
+    assert(manifest.supportScripts(forge).includes('kaola-workflow-validation-runner.js'),
+      'install manifest must ship the validation runner for ' + forge);
+  }
+
+  for (const edition of editionRoots) {
+    const schema = require(path.join(root, edition, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+    for (const name of ['deriveGateMode', 'buildReviewContext', 'validateReviewEvidenceBinding',
+      'reduceReviewReceipts', 'compareValidationObligations', 'validateReviewJournalV2']) {
+      assert(typeof schema[name] === 'function', edition + ' adaptive schema must export ' + name);
+    }
+  }
+  for (const file of [
+    `${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`,
+    `${pluginRoot}/agents/workflow-planner.toml`,
+  ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-authoring -->');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`,
+    '<!-- PIN: reviewer-contract-v2-execution -->');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`,
+    '<!-- PIN: reviewer-contract-v2-finalization -->');
+}
+
 // PROVENANCE_BAN: Codex prompt surfaces (agents/*.toml, skills/*/SKILL.md) must not embed
 // issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
 // PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,

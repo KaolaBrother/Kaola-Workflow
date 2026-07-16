@@ -21,8 +21,25 @@ here for the full contract.
 - Fast-path projects use `fast-summary.md` instead of the full Phase 1-5 set.
 - Adaptive-path projects (`workflow_path: adaptive`, issue #227) use
   `workflow-plan.md` instead of the full Phase 1-5 set — the frozen DAG is the
-  spine. It contains a `## Meta` block (frozen issue `labels:`), a machine-readable
-  `## Nodes` table (`| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | wait_budget_minutes |`;
+  spine. Contract resolution is explicit and hash-bound. A verified already-frozen plan whose
+  `## Meta` predates `plan_schema_version` is contract 1 and remains byte-preserving; a newly
+  authored plan must carry `plan_schema_version: 2`, which maps to dispatch/journal contract 2.
+  Missing, explicit-new-v1, duplicate, unknown, or plan/dispatch-mismatched versions refuse before
+  spawn or state mutation.
+
+  A contract-1 `## Nodes` table retains the legacy columns
+  `| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | wait_budget_minutes |`.
+  A schema-2 plan records the frozen validation policy (`validation_command`, cwd, repetitions,
+  all-pass rule, timeout, environment allowlist), `code_certifier`, `security_certifier`, and the
+  inherited frontier digest/classes in `## Meta`, and uses this node header:
+
+  ```text
+  | id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |
+  ```
+
+  Every schema-2 gate declares a claim, surface, and `sequence`, `replicated_majority`, or
+  `partitioned_all` aggregation. A graph-derived change-gate adversarial verifier carries a sorted
+  producer list in `certifies`; an investigation verifier carries none. In both versions,
   `shape` ∈ `sequence` / `fanout(<group>)` / `loop(<cap>)` / `select(<group>)` (issue #263 Classify-And-Act);
   `selector_source` names the read-only classifier node whose `.cache` evidence determines which
   `select` arm executes — absent or `—` for non-arm nodes (backward-compatible: missing column treated as non-arm);
@@ -30,7 +47,8 @@ here for the full contract.
   validated or used by the grammar or gates, though its text still feeds `plan_hash`
   as part of `## Nodes`, so keep it present and stable; `wait_budget_minutes` is optional, with an
   absent/blank/dash cell preserving the tier-derived dispatch default and a validated integer cell
-  freezing an extension of that floor), a `## Node Ledger` (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
+  freezing an extension of that floor). The plan also contains a `## Node Ledger`
+  (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
   and a script-computed `plan_hash` (an HTML comment `<!-- plan_hash: <sha256> -->`)
   that **lives inside `workflow-plan.md`** — never in `workflow-state.md`, because
   repair-state runs precisely when `workflow-state.md` is missing. The validator/claim
@@ -56,8 +74,25 @@ here for the full contract.
     attaches `selection_evidence: present|absent` to the closure receipt (advisory only — a
     user-named claim legitimately has none, since the scout never runs on that branch). See
     `docs/api.md` § Closure Contract.
-  - `review-attempts.json` (D-682-01) — the authoritative, plan-bound review transaction journal.
-    It is schema version 1 and carries the frozen `plan_hash` plus immutable attempts keyed by a
+  - `review-contexts/<context-hash>.json` (contract 2) — canonical runtime-neutral gate context.
+    The hash binds plan/behavior/claim/epoch/logical-gate identity, graph-derived gate mode, claim
+    root, landable candidate, inherited frontier, stable scope lineage, discovery/closure phase,
+    prior findings, repair delta, and validation obligations. Runtime/model/tool names,
+    `resolved_profile_hash`, evidence transport, timestamps, and absolute paths are forbidden here;
+    runtime-specific profile identity travels in the dispatch envelope instead.
+  - `review-receipts/<context-hash>/<node-id>.json` (contract 2) — canonical normalized member
+    receipt written only after contract/context/behavior/profile/candidate binding succeeds. It
+    carries the harness-derived execution status and gate effect, the role's normalized domain
+    outcome, immutable findings/resolutions, validation vectors, surface/certifier identity, and raw
+    evidence digest. Missing, failed, duplicate, or mismatched receipts never become reducer votes.
+  - `validation-vectors/<vector>.json` (contract 2) — canonical local validation-runner receipts.
+    A vector binds exact command, cwd/policy, secret-safe effective-environment digests,
+    executable/toolchain identity, repeated results, and the landable candidate. Only a comparable
+    current-candidate `pass` can satisfy an inherited validation obligation; `fail`,
+    `inconclusive`, missing, or drifted identity cannot count as review progress.
+  - `review-attempts.json` — the authoritative, plan-bound review transaction journal, interpreted
+    under the frozen contract version. A contract-1 plan accepts only journal schema 1 and carries
+    the frozen `plan_hash` plus immutable attempts keyed by a
     canonical logical-gate identity (gate kind + sorted origin/member sets), contiguous positive
     gate-local ordinals, candidate and receipt digests, exact evidence generations, canonical
     findings/routing rows, original producer barrier bindings, settlement state, and repair
@@ -65,6 +100,14 @@ here for the full contract.
     authoritative within a logical gate. The candidate digest excludes the active project subtree,
     `.kw/`, and `.git/`, so journal/ledger/cache transitions cannot change the reviewed product
     identity.
+
+    A contract-2 plan accepts only journal schema/contract 2. Each change-gate attempt additionally
+    binds epoch and scope lineage, gate mode, context/profile hashes, review phase, prior/current UID
+    frontiers, immutable findings/resolutions, repair delta, validation obligations/vectors,
+    reducer result, progress idempotency key/counter, and optional typed stop reason. Contract
+    crossing, future versions, or self-consistent journal rewrites refuse; there is no in-place
+    schema-1 journal upgrade. Complete investigation adversarial receipts are analytical evidence
+    only and create no product-repair journal attempt.
 
     The journal is evidence for the existing ledger/running-set lifecycle, not another scheduler.
     An attempt is written before a gate lifecycle transition. A failed sequence or fully-voted
@@ -84,6 +127,13 @@ here for the full contract.
     key: five are allowed and the sixth refuses as `repair_limit_reached`. Canonical routing remains
     in the journal; `findings-route.json` is only a regenerable projection. See `docs/api.md` §
     Authoritative review journal and direct repair.
+
+    Under contract 2, closure preserves stable anchor-derived finding UIDs and accounts for the
+    complete prior frontier. New blockers must bind to the repair delta; resolutions and progress
+    bind the current candidate and comparable passing validation. `review_scope_expanded` and two
+    consecutive non-progress attempts (`review_nonconvergent`) settle as `replan_required` and stop
+    the frozen run. That durable packet is only a handoff: this contract does not thaw the plan,
+    choose replacement topology, or activate a child epoch.
   - `running-set.json` — tracks which nodes are currently in the running set
     (`{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`; per-node fields: `id`, `role`, `kind`,
     `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at

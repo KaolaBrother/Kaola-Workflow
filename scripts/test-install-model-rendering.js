@@ -10,6 +10,18 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
 const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
+const reviewerGenerator = require('./generate-reviewer-profiles');
+
+function renderClaudeInstalledReviewer(source) {
+  let rendered = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
+  const matches = [...rendered.matchAll(/^resolved_profile_hash:\s*([0-9a-f]{64})\s*$/gm)];
+  assert.strictEqual(matches.length, 1, 'generated Claude reviewer must carry one resolved_profile_hash');
+  const actual = matches[0][1];
+  const offset = matches[0].index + matches[0][0].indexOf(actual);
+  const normalized = rendered.slice(0, offset) + '0'.repeat(64) + rendered.slice(offset + 64);
+  const next = reviewerGenerator.sha256(normalized);
+  return rendered.slice(0, offset) + next + rendered.slice(offset + 64);
+}
 
 // The supported inheritance representation is omission, while an exact historical full pin is
 // stale migration input rather than fresh schema input.
@@ -23,6 +35,83 @@ const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install
     'installer exports the profile pin migration classifier');
   assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(pinned), 'legacy_pinned',
     'an exact historical Sol/medium pair is stale migration input, not fresh');
+}
+
+// Reviewer profiles are generated contracts, not merely syntactically valid TOML. The installer
+// wall must reject contract/version/hash drift before any repository or installed-scope write.
+{
+  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
+  const reviewer = fs.readFileSync(path.join(pluginRoot, 'agents', 'code-reviewer.toml'), 'utf8');
+  const cases = [
+    {
+      label: 'missing behavior contract version',
+      text: reviewer.replace(/^behavior_contract_version = 2\n/m, ''),
+      code: 'reviewer_contract_version_missing',
+    },
+    {
+      label: 'explicit v1/v2 mismatch',
+      text: reviewer.replace(/^behavior_contract_version = 2$/m, 'behavior_contract_version = 1'),
+      code: 'reviewer_contract_version_mismatch',
+    },
+    {
+      label: 'behavior hash mismatch',
+      text: reviewer.replace(/^behavior_contract_hash = "[0-9a-f]{64}"$/m,
+        'behavior_contract_hash = "' + '0'.repeat(64) + '"'),
+      code: 'reviewer_behavior_hash_mismatch',
+    },
+    {
+      label: 'resolved profile hash mismatch',
+      text: reviewer.replace('Precision-first code review specialist',
+        'Precision-first code-review specialist'),
+      code: 'reviewer_resolved_profile_hash_mismatch',
+    },
+    {
+      label: 'foreign adapter field',
+      text: reviewer.replace(/^developer_instructions =/m,
+        'adapter_prompt = "foreign"\ndeveloper_instructions ='),
+      code: 'reviewer_adapter_field_forbidden',
+    },
+    {
+      label: 'foreign adapter field after instructions',
+      text: reviewer + '\nadapter_prompt = "foreign"\n',
+      code: 'reviewer_adapter_field_forbidden',
+    },
+    {
+      label: 'foreign adapter table after instructions',
+      text: reviewer + '\n[adapter]\nprompt = "foreign"\n',
+      code: 'reviewer_adapter_table_forbidden',
+    },
+    {
+      label: 'foreign dotted adapter field after instructions',
+      text: reviewer + '\nadapter.prompt = "foreign"\n',
+      code: 'reviewer_adapter_field_forbidden',
+    },
+  ];
+  for (const fixture of cases) {
+    const reasons = codexProfileInstaller.validateProfileText(fixture.text, 'code-reviewer');
+    assert(reasons.some(reason => reason.includes(fixture.code)),
+      fixture.label + ' must fail with ' + fixture.code + '; got ' + JSON.stringify(reasons));
+  }
+  const sourceCheck = codexProfileInstaller.validateSourceProfiles(pluginRoot);
+  assert(sourceCheck.ok,
+    'repository reviewer profiles and config catalog must be reconciled before install: ' +
+    sourceCheck.errors.join('; '));
+
+  const staleRepository = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-reviewer-source-drift-'));
+  try {
+    fs.cpSync(path.join(pluginRoot, 'config'), path.join(staleRepository, 'config'), { recursive: true });
+    fs.cpSync(path.join(pluginRoot, 'agents'), path.join(staleRepository, 'agents'), { recursive: true });
+    const stalePath = path.join(staleRepository, 'agents', 'code-reviewer.toml');
+    fs.writeFileSync(stalePath, fs.readFileSync(stalePath, 'utf8').replace(
+      'Precision-first code review specialist', 'Precision-first stale code review specialist'));
+    const staleCheck = codexProfileInstaller.validateSourceProfiles(staleRepository);
+    assert(!staleCheck.ok, 'modified repository reviewer profile must fail source validation');
+    assert.strictEqual(staleCheck.repair,
+      'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check',
+      'repository drift must carry the exact generator repair command');
+  } finally {
+    fs.rmSync(staleRepository, { recursive: true, force: true });
+  }
 }
 
 function readInstalledCommand(name) {
@@ -50,7 +139,7 @@ function parseCodexAgentMetadata(pluginRoot) {
 }
 
 try {
-  execFileSync(
+  const higherInstallOutput = execFileSync(
     'bash',
     ['install.sh', '--yes', '--forge=github', '--profile=higher', '--with-fast', '--with-full', '--no-settings-merge'],
     {
@@ -112,7 +201,32 @@ try {
     const frontmatter = installed.slice(0, fmEnd === -1 ? installed.length : fmEnd);
     assert(/\bmodel:\s*inherit\b/.test(frontmatter), agent+' installed frontmatter must be model: inherit');
     assert(installed.includes('kaola-workflow-managed-agent: true'), agent+' installed file must keep managed marker');
+    if (agent === 'code-reviewer' || agent === 'adversarial-verifier') {
+      const baseSource = path.join(root, 'agents', agent + '.md');
+      const higherSource = path.join(root, 'agents', 'profiles', 'higher', agent + '.md');
+      const selectedSource = fs.existsSync(higherSource) ? higherSource : baseSource;
+      const expectedInstalled = renderClaudeInstalledReviewer(fs.readFileSync(selectedSource, 'utf8'));
+      assert.strictEqual(installed, expectedInstalled,
+        agent + ' installed bytes must equal the selected generated source after the documented inherit rewrite');
+      assert.doesNotThrow(() => reviewerGenerator.verifyResolvedProfileHash(installed),
+        agent + ' installed resolved_profile_hash must bind the complete installed bytes');
+      assert.strictEqual(reviewerGenerator.extractBehaviorCore(installed),
+        reviewerGenerator.extractBehaviorCore(fs.readFileSync(selectedSource, 'utf8')),
+      agent + ' installed behavior core must byte-match the generated source core');
+    }
   }
+  const claudeManifestLines = fs.readFileSync(
+    path.join(tmp, '.claude', 'agents', '.kaola-workflow-agent-manifest'), 'utf8').trim().split('\n');
+  for (const role of ['code-reviewer', 'adversarial-verifier']) {
+    const row = claudeManifestLines.find(line => line.startsWith(role + '.md\t'));
+    assert(row, 'Claude managed-agent manifest must carry ' + role);
+    const columns = row.split('\t');
+    assert(columns.length === 5 && columns[2] === '2'
+      && /^[0-9a-f]{64}$/.test(columns[3]) && /^[0-9a-f]{64}$/.test(columns[4]),
+    'Claude managed-agent manifest must record installed sha, behavior version/hash, and resolved profile hash for ' + role);
+  }
+  assert(higherInstallOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
+    'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');
 
   // Default profile is `higher`: an install with no `--profile` flag renders the
   // three reviewer agents on Opus (this is what locks the default — not an explicit
@@ -326,6 +440,24 @@ try {
         assert(body.includes('nickname_candidates = ' + expected.nicknameLine + '\n'),
           '#581: installed ' + file + ' must carry config nickname_candidates metadata');
       }
+      const installedProfileManifest = JSON.parse(fs.readFileSync(
+        path.join(projectAgentsDir, '.kaola-managed-profiles.json'), 'utf8'));
+      for (const role of ['code-reviewer', 'adversarial-verifier']) {
+        const file = role + '.toml';
+        const sourceBytes = fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', file));
+        const installedBytes = fs.readFileSync(path.join(projectAgentsDir, file));
+        assert(sourceBytes.equals(installedBytes),
+          '#reviewer-contract: installed ' + file + ' must byte-match its selected source');
+        const text = installedBytes.toString('utf8');
+        const behaviorVersion = Number(text.match(/^behavior_contract_version = (\d+)$/m)[1]);
+        const behaviorHash = text.match(/^behavior_contract_hash = "([0-9a-f]{64})"$/m)[1];
+        const profileHash = text.match(/^resolved_profile_hash = "([0-9a-f]{64})"$/m)[1];
+        assert.deepStrictEqual(installedProfileManifest.profile_contracts[file], {
+          behavior_contract_version: behaviorVersion,
+          behavior_contract_hash: behaviorHash,
+          resolved_profile_hash: profileHash,
+        }, '#reviewer-contract: manifest must bind behavior/profile identity for ' + file);
+      }
 
       // AC2: managed [agents.*] block in the positional-form project's .codex/config.toml
       const projectConfigPath = path.join(cproj, '.codex', 'config.toml');
@@ -450,6 +582,28 @@ try {
       assert.strictEqual(preflight.status, 0, '#581: preflight over fresh project profiles must pass: ' + preflight.stderr + preflight.stdout);
       let preflightJson = JSON.parse(preflight.stdout);
       assert.strictEqual(preflightJson.dispatch_mode, 'v1-thread-id', '#581: preflight reports v1-thread-id by default');
+      const reviewerProfilePath = path.join(projectAgentsDir, 'code-reviewer.toml');
+      const reviewerProfileBeforeDrift = fs.readFileSync(reviewerProfilePath, 'utf8');
+      fs.writeFileSync(reviewerProfilePath, reviewerProfileBeforeDrift.replace(
+        'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+      const reviewerDrift = spawnSync(process.execPath,
+        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+      assert.notStrictEqual(reviewerDrift.status, 0,
+        '#reviewer-contract: modified installed project profile must fail preflight');
+      const reviewerDriftJson = JSON.parse(reviewerDrift.stdout);
+      assert.strictEqual(reviewerDriftJson.status, 'profiles_stale',
+        '#reviewer-contract: exact-byte drift must be classified profiles_stale');
+      assert.strictEqual(reviewerDriftJson.repair, `node ${codexInstallerPath} ${cproj}`,
+        '#reviewer-contract: project drift must name the exact scoped installer command');
+      const repairedReviewer = spawnSync(process.execPath,
+        [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+      assert.strictEqual(repairedReviewer.status, 0,
+        '#reviewer-contract: project drift autofix must reinstall exact source bytes: ' + repairedReviewer.stderr);
+      assert(fs.readFileSync(reviewerProfilePath).equals(
+        fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'code-reviewer.toml'))),
+      '#reviewer-contract: project autofix must restore exact selected source bytes');
       const legacyProfilePath = path.join(projectAgentsDir, 'implementer.toml');
       const inheritedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
       fs.writeFileSync(legacyProfilePath, inheritedProfile.replace(/^developer_instructions/m,

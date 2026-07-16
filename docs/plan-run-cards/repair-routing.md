@@ -23,6 +23,27 @@ refuse with `review_attempt_unresolved`. Five consumed repairs are allowed per c
 gate; the sixth returns `repair_limit_reached`. Zero candidates and multiple candidates leave
 `owning_node: null`; multiple owners never imply selection.
 
+**Semantic-owner admissibility (the graph-maximal-vs-owner bridge).** `repair-node` admits only a
+graph-maximal executed producer, but a serial *tail* writer can be graph-maximal while owning none
+of the attempt's blocking findings. `route_candidates` now carries real `ownership_candidates`
+(schema-1 from the affected file, schema-2 from the finding's immutable primary-anchor path), so the
+reopen is cross-checked against ownership. Two outcomes surface when the requested writer is not the
+semantic owner (both zero-mutation):
+
+- **`repair_writer_ownership_mismatch`** — the requested node *is* graph-maximal but owns NONE of the
+  still-open blocking findings, so reopening it cannot repair the flagged code. The envelope names the
+  `semantic_owner` (and `ownership_candidates`); re-run `repair-node --node-id {semantic_owner}`.
+- **`repair_requires_replan` with `reason: dependent_producer_replay_required`** — the requested node
+  IS the unique semantic owner but a NON-maximal upstream writer whose completed downstream writers
+  (`blocking_descendants`) would have to be replayed to reopen it safely. The descendant-replay
+  transaction is not performed in-plan; the envelope names `semantic_owner` + `blocking_descendants`
+  so a replacement plan (`/kaola-workflow-adapt`) can re-derive from the owner (see #699).
+
+When ownership is unresolvable — an anchor-less finding (e.g. an `evidence_observation` anchor carries
+no path) or a legacy attempt whose rows still hold `ownership_candidates: []` — the bridge stays inert:
+it never falsely accuses a maximal writer of a mismatch, and a non-maximal request simply degrades to
+the generic `repair_requires_replan`.
+
 ## 1. Reading the refusal envelope
 
 When `close-and-open-next` refuses, the output is a typed envelope:
@@ -231,4 +252,6 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 | `member_vacuity` | No-op leg → re-dispatch the leg's role (or declare `no_op:` in evidence) |
 | `merge_conflict` | Terminal escalation after K=3 repairs → `write-halt --reason merge_conflict` (RESUMABLE) |
 | crash / mid-run failure | `repair-node` (keeps original baseline) |
+| `repair_writer_ownership_mismatch` | Maximal writer owns no blocking finding → `repair-node --node-id {semantic_owner}` |
+| `dependent_producer_replay_required` | Non-maximal owner with completed downstream writers → replan from `semantic_owner` (`/kaola-workflow-adapt`, #699) |
 | `plan_hash_mismatch` | Plan tampered → re-run `--freeze-checked` → `--freeze` |

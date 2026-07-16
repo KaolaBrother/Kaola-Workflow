@@ -28,7 +28,7 @@
 //
 // --doctor mode is READ-ONLY (never runs the installer): it reports user, project,
 // and plugin-cache scope freshness with concrete per-scope repair commands. Plugin
-// cache findings are evidence-only and never set the exit code (#332 AC11).
+// cache inspection is read-only, but exact source-byte or schema drift fails the doctor gate.
 //
 // TRUE 4-tree byte-identical: requires ONLY fs + path + os + inline regex. No
 // require() of edition-specific scripts. The #332 schema regexes + constants below
@@ -47,6 +47,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 const BEGIN_MARKER = '# BEGIN kaola-workflow agents';
 const END_MARKER = '# END kaola-workflow agents';
@@ -83,6 +84,13 @@ const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
 const CODEX_REASONING_EFFORT = 'xhigh';
 const MANIFEST_SCHEMA_VERSION = 1;
+const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier']);
+const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 2;
+const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
+const REVIEWER_TOP_LEVEL_FIELDS = Object.freeze([
+  'name', 'description', 'nickname_candidates', 'behavior_contract_version',
+  'behavior_contract_hash', 'resolved_profile_hash', 'developer_instructions',
+]);
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -113,6 +121,112 @@ function parseStringArrayLine(top, key) {
 function sameStringArray(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
   return a.every((v, i) => v === b[i]);
+}
+
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function reviewerProfileContract(text, role) {
+  const reasons = [];
+  if (!REVIEWER_ROLES.includes(role)) return { reasons, identity: null };
+  const source = String(text);
+  const instructionMatch = /^developer_instructions\s*=\s*"""[\s\S]*?"""/m.exec(source);
+  const instructionIndex = instructionMatch ? instructionMatch.index : -1;
+  const header = instructionIndex < 0 ? source : source.slice(0, instructionIndex);
+  const suffix = instructionMatch
+    ? source.slice(instructionMatch.index + instructionMatch[0].length)
+    : '';
+  const fields = [
+    ...[...header.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
+    ...(instructionMatch ? ['developer_instructions'] : []),
+    ...[...suffix.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
+  ];
+  for (const field of fields) {
+    if (!REVIEWER_TOP_LEVEL_FIELDS.includes(field)) reasons.push(`reviewer_adapter_field_forbidden: ${field}`);
+  }
+  for (const field of REVIEWER_TOP_LEVEL_FIELDS) {
+    if (fields.filter(value => value === field).length > 1) reasons.push(`reviewer_top_level_field_duplicate: ${field}`);
+  }
+  for (const table of [...header.matchAll(/^\s*\[([^\]]+)\]\s*$/gm),
+    ...suffix.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)]) {
+    reasons.push(`reviewer_adapter_table_forbidden: ${table[1]}`);
+  }
+
+  const topVersions = [...header.matchAll(/^behavior_contract_version\s*=\s*(\d+)\s*$/gm)];
+  if (topVersions.length === 0) reasons.push('reviewer_contract_version_missing');
+  const topVersion = topVersions.length === 1 ? Number(topVersions[0][1]) : null;
+  const coreStarts = source.split('<!-- reviewer-behavior-core:start -->').length - 1;
+  const coreEnds = source.split('<!-- reviewer-behavior-core:end -->').length - 1;
+  let core = '';
+  if (coreStarts !== 1 || coreEnds !== 1) {
+    reasons.push(`reviewer_behavior_core_invalid: starts=${coreStarts} ends=${coreEnds}`);
+  } else {
+    const start = source.indexOf('<!-- reviewer-behavior-core:start -->');
+    const end = source.indexOf('<!-- reviewer-behavior-core:end -->', start);
+    core = source.slice(start, end + '<!-- reviewer-behavior-core:end -->'.length);
+  }
+  const coreRoleMatch = /^role:\s*([^\n]+)$/m.exec(core);
+  if (!coreRoleMatch || coreRoleMatch[1] !== role) reasons.push('reviewer_behavior_core_role_mismatch');
+  const coreVersionMatch = /^behavior_contract_version:\s*(\d+)$/m.exec(core);
+  const coreVersion = coreVersionMatch ? Number(coreVersionMatch[1]) : null;
+  if (coreVersion === null) reasons.push('reviewer_behavior_core_version_missing');
+  if (topVersion !== null && coreVersion !== null && topVersion !== coreVersion) {
+    reasons.push(`reviewer_contract_version_mismatch: top=${topVersion} core=${coreVersion}`);
+  } else if (topVersion !== null && topVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
+    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${topVersion}`);
+  }
+
+  const topBehaviorMatches = [...header.matchAll(/^behavior_contract_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
+  const topBehaviorHash = topBehaviorMatches.length === 1 ? topBehaviorMatches[0][1] : null;
+  if (!topBehaviorHash) reasons.push('reviewer_behavior_hash_missing');
+  const coreBehaviorMatch = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(core);
+  const coreBehaviorHash = coreBehaviorMatch ? coreBehaviorMatch[1] : null;
+  if (!coreBehaviorHash) reasons.push('reviewer_behavior_core_hash_missing');
+  if (topBehaviorHash && coreBehaviorHash && topBehaviorHash !== coreBehaviorHash) {
+    reasons.push(`reviewer_behavior_hash_mismatch: top=${topBehaviorHash} core=${coreBehaviorHash}`);
+  }
+
+  const resolvedMatches = [...source.matchAll(/^resolved_profile_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
+  let resolvedProfileHash = null;
+  if (resolvedMatches.length === 0) {
+    reasons.push('reviewer_resolved_profile_hash_missing');
+  } else if (resolvedMatches.length !== 1) {
+    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedMatches.length}`);
+  } else {
+    resolvedProfileHash = resolvedMatches[0][1];
+    const match = resolvedMatches[0];
+    const valueOffset = match.index + match[0].indexOf(resolvedProfileHash);
+    const normalized = source.slice(0, valueOffset) + '0'.repeat(64)
+      + source.slice(valueOffset + resolvedProfileHash.length);
+    const expected = sha256Hex(normalized);
+    if (resolvedProfileHash !== expected) {
+      reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
+    }
+  }
+  const identity = topVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
+      && coreVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
+      && topBehaviorHash && topBehaviorHash === coreBehaviorHash && resolvedProfileHash
+    ? {
+      behavior_contract_version: topVersion,
+      behavior_contract_hash: topBehaviorHash,
+      resolved_profile_hash: resolvedProfileHash,
+    }
+    : null;
+  return { reasons: [...new Set(reasons)], identity };
+}
+
+function repositoryRepairCommand(scriptDir) {
+  let cursor = path.resolve(scriptDir);
+  for (let i = 0; i < 5; i++) {
+    if (fs.existsSync(path.join(cursor, 'scripts', 'generate-reviewer-profiles.js'))) {
+      return `cd ${cursor} && ${REVIEWER_SOURCE_REPAIR}`;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return 'Refresh the kaola-workflow plugin source, then re-run the profile installer.';
 }
 
 function stripTomlComment(line) {
@@ -824,7 +938,9 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
-  return reasons;
+  reasons.push(...reviewerProfileContract(text, role).reasons);
+
+  return [...new Set(reasons)];
 }
 
 function classifyProfilePinPosture(text) {
@@ -867,7 +983,7 @@ function readTemplateRoles(scriptDir) {
   for (const line of lines) {
     const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
     if (head) {
-      current = { role: head[1], description: null, nicknameCandidates: [] };
+      current = { role: head[1], description: null, nicknameCandidates: [], configFile: null, basename: null };
       roles.push(current.role);
       entries.push(current);
       continue;
@@ -882,12 +998,39 @@ function readTemplateRoles(scriptDir) {
     if (nick) {
       const parsed = parseStringArrayLine(line, 'nickname_candidates');
       current.nicknameCandidates = parsed.valid ? parsed.values : [];
+      continue;
+    }
+    const configFile = line.match(/^config_file\s*=\s*"([^"]*)"\s*$/);
+    if (configFile) {
+      current.configFile = configFile[1];
+      current.basename = path.basename(configFile[1]);
     }
   }
   if (roles.length === 0) {
     return { roles: [], entries: [], error: `template_missing: no [agents.*] entries found in ${templatePath}` };
   }
-  return { roles, entries, error: null };
+  const sourceErrors = [];
+  const sourceAgentsDir = path.join(scriptDir, '..', 'agents');
+  for (const entry of entries) {
+    if (!entry.basename) {
+      sourceErrors.push(`agents.toml [agents.${entry.role}] has no config_file line`);
+      continue;
+    }
+    const sourcePath = path.join(sourceAgentsDir, entry.basename);
+    if (!fs.existsSync(sourcePath)) {
+      sourceErrors.push(`source_profile_missing: ${sourcePath}`);
+      continue;
+    }
+    const sourceText = fs.readFileSync(sourcePath, 'utf8');
+    entry.sourcePath = sourcePath;
+    entry.sourceText = sourceText;
+    entry.sourceSha256 = 'sha256:' + sha256Hex(Buffer.from(sourceText, 'utf8'));
+    entry.profileContract = reviewerProfileContract(sourceText, entry.role).identity;
+    for (const reason of validateProfileText(sourceText, entry.role, entry)) {
+      sourceErrors.push(`agents/${entry.basename}: ${reason}`);
+    }
+  }
+  return { roles, entries, error: null, sourceErrors };
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,6 +1182,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
   // Inspect the agents dir contents: malformed required profiles + stale/extra files.
   const malformed = [];
   const legacyPinnedProfiles = [];
+  const staleProfileMap = new Map();
   const staleFiles = [];
   const extraUnmanaged = [];
   const manifest = readManifest(agentsDir);
@@ -1046,11 +1190,19 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     ? new Set(Object.keys(manifest.files))
     : new Set();
 
-  let manifestStatus = 'absent';
+  const manifestFileExists = fs.existsSync(path.join(agentsDir, MANIFEST_BASENAME));
+  let manifestStatus = manifestFileExists ? 'invalid' : 'absent';
   if (manifest) {
     manifestStatus = (typeof manifest.schema_version === 'number' && manifest.schema_version > MANIFEST_SCHEMA_VERSION)
       ? 'unsupported'
-      : 'present';
+      : (manifest.schema_version === MANIFEST_SCHEMA_VERSION ? 'present' : 'outdated');
+  }
+
+  function addStaleProfile(role, file, reason) {
+    const key = `${role}\0${file}`;
+    if (!staleProfileMap.has(key)) staleProfileMap.set(key, { role, file, reasons: [] });
+    const item = staleProfileMap.get(key);
+    if (!item.reasons.includes(reason)) item.reasons.push(reason);
   }
 
   if (fs.existsSync(agentsDir)) {
@@ -1064,12 +1216,40 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
         let txt = '';
         try { txt = fs.readFileSync(path.join(agentsDir, name), 'utf8'); } catch { txt = ''; }
         const posture = classifyProfilePinPosture(txt);
-        const reasons = validateProfileText(txt, role, metaByRole.get(role));
+        const expected = metaByRole.get(role) || null;
+        const reasons = validateProfileText(txt, role, expected);
+        const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
         if (posture === 'legacy_pinned') {
           const nonPinReasons = reasons.filter(reason => !LEGACY_PIN_ONLY_REASONS.has(reason));
           if (nonPinReasons.length === 0) legacyPinnedProfiles.push({ role, file: name });
           else malformed.push({ role, file: name, reasons: nonPinReasons });
-        } else if (reasons.length > 0) malformed.push({ role, file: name, reasons });
+        } else if (reasons.length > 0) {
+          if (sourceDrift && REVIEWER_ROLES.includes(role)) {
+            addStaleProfile(role, name, 'profile_bytes_mismatch: installed profile differs from bundled source');
+            for (const reason of reasons) addStaleProfile(role, name, reason);
+          } else {
+            malformed.push({ role, file: name, reasons });
+          }
+        } else if (sourceDrift) {
+          addStaleProfile(role, name, 'profile_bytes_mismatch: installed profile differs from bundled source');
+        }
+
+        if (manifest && manifest.schema_version === MANIFEST_SCHEMA_VERSION) {
+          const actualFileHash = 'sha256:' + sha256Hex(Buffer.from(txt, 'utf8'));
+          const recordedFileHash = manifest.files && manifest.files[name];
+          if (recordedFileHash !== actualFileHash) {
+            addStaleProfile(role, name,
+              `manifest_file_hash_mismatch: expected=${actualFileHash} got=${recordedFileHash || 'missing'}`);
+          }
+          if (REVIEWER_ROLES.includes(role)) {
+            const actualIdentity = reviewerProfileContract(txt, role).identity;
+            const recordedIdentity = manifest.profile_contracts && manifest.profile_contracts[name];
+            if (!actualIdentity || JSON.stringify(recordedIdentity) !== JSON.stringify(actualIdentity)) {
+              addStaleProfile(role, name, 'manifest_profile_contract_mismatch');
+              manifestStatus = 'outdated';
+            }
+          }
+        }
       } else if (manifestFiles.has(name) || RETIRED_PROFILE_FILES.includes(name)) {
         staleFiles.push(name);
       } else {
@@ -1080,6 +1260,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
 
   malformed.sort((a, b) => a.role.localeCompare(b.role));
   legacyPinnedProfiles.sort((a, b) => a.role.localeCompare(b.role));
+  const staleProfiles = [...staleProfileMap.values()].sort((a, b) => a.role.localeCompare(b.role));
   staleFiles.sort();
   extraUnmanaged.sort();
 
@@ -1093,6 +1274,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     missingProfiles,
     malformed,
     legacyPinnedProfiles,
+    staleProfiles,
     staleFiles,
     extraUnmanaged,
     manifest: manifestStatus,
@@ -1209,7 +1391,8 @@ function runPreflight(opts) {
   const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
 
   // --- Read template roles (may fail gracefully) ---
-  const { roles: templateRoles, entries: templateEntries, error: templateError } = readTemplateRoles(scriptDir);
+  const template = readTemplateRoles(scriptDir);
+  const { roles: templateRoles, entries: templateEntries, error: templateError, sourceErrors = [] } = template;
   if (templateError) {
     return {
       exitCode: 2,
@@ -1219,6 +1402,18 @@ function runPreflight(opts) {
         stale: true,
         safe_autofix: false,
         repair: 'Install or update kaola-workflow to get the bundled config/agents.toml',
+      },
+    };
+  }
+  if (sourceErrors.length > 0) {
+    return {
+      exitCode: 2,
+      result: {
+        status: 'profile_source_stale',
+        malformed: sourceErrors,
+        stale: true,
+        safe_autofix: false,
+        repair: repositoryRepairCommand(scriptDir),
       },
     };
   }
@@ -1326,7 +1521,7 @@ function runPreflight(opts) {
         status: 'profile_schema_version_unsupported',
         stale: true,
         extra_unmanaged: scope.extraUnmanaged,
-        repair: `The local profile manifest (${path.join(agentsDir, MANIFEST_BASENAME)}) declares an unsupported schema_version — upgrade kaola-workflow, then re-run install-codex-agent-profiles.js --project-root ${projectRoot}`,
+        repair: `The local profile manifest (${path.join(agentsDir, MANIFEST_BASENAME)}) declares an unsupported schema_version — upgrade kaola-workflow, then run node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${projectRoot}`,
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
@@ -1350,7 +1545,10 @@ function runPreflight(opts) {
   const missingProfiles = [...new Set([...scope.missingProfiles, ...missingPlanProfiles])];
   const missingFromBlock = requiredRoles.filter(r => !scope.rolesInBlock.includes(r));
 
-  const repairCmd = `run install-codex-agent-profiles.js --project-root ${projectRoot}`;
+  const installerForRepair = findInstaller(scriptDir);
+  const repairCmd = installerForRepair
+    ? `node ${installerForRepair} ${projectRoot}`
+    : 'install-codex-agent-profiles.js not found alongside this script.';
 
   // --- Priority-ordered staleness classification ---
   // profiles_malformed / profiles_stale / profiles_missing / config_stale outrank
@@ -1358,12 +1556,14 @@ function runPreflight(opts) {
   const blockMissing = !scope.blockFound;
   const malformedFirst = scope.malformed.length > 0;
   const legacyPinsPresent = scope.legacyPinnedProfiles.length > 0;
+  const profileDriftPresent = scope.staleProfiles.length > 0
+    || (scope.manifest !== 'present' && scope.missingProfiles.length === 0 && scope.blockFound);
   const staleFilesPresent = scope.staleFiles.length > 0;
   const profilesMissing = missingProfiles.length > 0;
   const configStale = blockMissing || missingFromBlock.length > 0;
   const onlyBlockRolesStale = scope.staleRolesInBlock.length > 0;
 
-  const isStale = malformedFirst || legacyPinsPresent || staleFilesPresent || profilesMissing || configStale || onlyBlockRolesStale;
+  const isStale = malformedFirst || legacyPinsPresent || profileDriftPresent || staleFilesPresent || profilesMissing || configStale || onlyBlockRolesStale;
 
   if (!isStale) {
     return {
@@ -1418,6 +1618,30 @@ function runPreflight(opts) {
       return {
         status: 'profiles_stale',
         stale_profiles: scope.legacyPinnedProfiles,
+        extra_unmanaged: scope.extraUnmanaged,
+        stale: true,
+        repair: repairCmd,
+        safe_autofix: true,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(scope),
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
+        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
+        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
+        effective_subagent_width: scope.effective_subagent_width,
+        min_wait_timeout_ms: scope.min_wait_timeout_ms,
+        max_wait_timeout_ms: scope.max_wait_timeout_ms,
+        default_wait_timeout_ms: scope.default_wait_timeout_ms,
+      };
+    }
+    if (profileDriftPresent) {
+      return {
+        status: 'profiles_stale',
+        stale_profiles: scope.staleProfiles,
+        manifest: scope.manifest,
         extra_unmanaged: scope.extraUnmanaged,
         stale: true,
         repair: repairCmd,
@@ -1536,7 +1760,7 @@ function runPreflight(opts) {
   }
 
   // --- Try autofix ---
-  const installerPath = findInstaller(scriptDir);
+  const installerPath = installerForRepair;
   if (!installerPath) {
     const r = staleResult();
     return {
@@ -1604,6 +1828,8 @@ function runPreflight(opts) {
   const stillStale =
     after.malformed.length > 0 ||
     after.legacyPinnedProfiles.length > 0 ||
+    after.staleProfiles.length > 0 ||
+    after.manifest !== 'present' ||
     after.staleFiles.length > 0 ||
     afterMissingProfiles.length > 0 ||
     !after.blockFound ||
@@ -1664,19 +1890,20 @@ function runPreflight(opts) {
 // ---------------------------------------------------------------------------
 // #332 doctor mode — READ-ONLY multi-scope reporting. Never runs the installer.
 // Scopes: user (<home>/.codex), project (<projectRoot>/.codex), plugin_cache
-// (cached source profiles, schema-only, evidence-only — excluded from exit code).
+// (cached source profiles, exact-byte + schema proof, read-only but gate-affecting).
 // ---------------------------------------------------------------------------
 function scopeIsStale(s) {
   return s.exists && (
     s.malformed.length > 0 ||
     s.legacyPinnedProfiles.length > 0 ||
+    s.staleProfiles.length > 0 ||
     s.staleFiles.length > 0 ||
     s.missingProfiles.length > 0 ||
     !s.blockFound ||
     s.missingFromBlock.length > 0 ||
     s.staleRolesInBlock.length > 0 ||
     s.conflictingRolesOutside.length > 0 ||
-    s.manifest === 'unsupported' ||
+    s.manifest !== 'present' ||
     s.codex_v2_role_transport_ready === false
   );
 }
@@ -1699,7 +1926,8 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     missing_roles: scope.missingProfiles,
     missing_from_block: scope.missingFromBlock,
     malformed: scope.malformed,
-    stale_profiles: scope.legacyPinnedProfiles,
+    stale_profiles: [...scope.legacyPinnedProfiles, ...scope.staleProfiles],
+    profile_byte_drift: scope.staleProfiles,
     stale_files: scope.staleFiles,
     stale_roles_in_block: scope.staleRolesInBlock,
     conflicting_roles_outside: scope.conflictingRolesOutside,
@@ -1756,7 +1984,8 @@ function findPluginCacheAgentDirs(home) {
 
 function runDoctor(opts) {
   const { projectRoot, home, scriptDir } = opts;
-  const { roles: templateRoles, entries: templateEntries, error: templateError } = readTemplateRoles(scriptDir);
+  const template = readTemplateRoles(scriptDir);
+  const { roles: templateRoles, entries: templateEntries, error: templateError, sourceErrors = [] } = template;
 
   if (templateError) {
     return {
@@ -1766,6 +1995,26 @@ function runDoctor(opts) {
   }
 
   const scopes = [];
+
+  scopes.push({
+    scope: 'repository',
+    codex_dir: path.join(scriptDir, '..', 'agents'),
+    exists: true,
+    managed_block: 'n/a',
+    profiles: templateRoles,
+    missing_roles: [],
+    missing_from_block: [],
+    malformed: sourceErrors,
+    stale_profiles: [],
+    profile_byte_drift: [],
+    stale_files: [],
+    stale_roles_in_block: [],
+    conflicting_roles_outside: [],
+    extra_unmanaged: [],
+    manifest: 'n/a',
+    read_only: true,
+    repair: repositoryRepairCommand(scriptDir),
+  });
 
   // user scope
   const userCodex = path.join(home, '.codex');
@@ -1785,9 +2034,10 @@ function runDoctor(opts) {
     false,
   ));
 
-  // plugin_cache scope(s) — schema-only, evidence-only, read-only.
+  // plugin_cache scope(s) — exact-byte + schema proof, read-only but gate-affecting.
   for (const c of findPluginCacheAgentDirs(home)) {
     const malformed = [];
+    const staleProfiles = [];
     let names = [];
     try { names = fs.readdirSync(c.dir); } catch { names = []; }
     for (const name of names) {
@@ -1797,9 +2047,15 @@ function runDoctor(opts) {
       try { txt = fs.readFileSync(path.join(c.dir, name), 'utf8'); } catch { txt = ''; }
       const expected = (templateEntries || []).find(e => e.role === role) || null;
       const reasons = validateProfileText(txt, role, expected);
-      if (reasons.length > 0) malformed.push({ role, file: name, reasons });
+      const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
+      if (sourceDrift) {
+        staleProfiles.push({ role, file: name, reasons: [
+          'profile_bytes_mismatch: cached profile differs from bundled source', ...reasons,
+        ] });
+      } else if (reasons.length > 0) malformed.push({ role, file: name, reasons });
     }
     malformed.sort((a, b) => a.role.localeCompare(b.role));
+    staleProfiles.sort((a, b) => a.role.localeCompare(b.role));
     scopes.push({
       scope: 'plugin_cache',
       codex_dir: c.dir,
@@ -1809,6 +2065,8 @@ function runDoctor(opts) {
       missing_roles: [],
       missing_from_block: [],
       malformed,
+      stale_profiles: staleProfiles,
+      profile_byte_drift: staleProfiles,
       stale_files: [],
       stale_roles_in_block: [],
       conflicting_roles_outside: [],
@@ -1837,8 +2095,9 @@ function runDoctor(opts) {
     });
   }
 
-  // Exit code: only user + project scopes set it; plugin_cache is evidence-only.
-  const gating = scopeIsStale(userScope) || scopeIsStale(projectScope);
+  const pluginCacheStale = scopes.some(scope => scope.scope === 'plugin_cache'
+    && (scope.malformed.length > 0 || scope.stale_profiles.length > 0));
+  const gating = sourceErrors.length > 0 || scopeIsStale(userScope) || scopeIsStale(projectScope) || pluginCacheStale;
   return {
     exitCode: gating ? 1 : 0,
     result: { status: gating ? 'stale' : 'ok', scopes },
@@ -1865,9 +2124,11 @@ if (require.main === module) {
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     } else {
       for (const s of (result.scopes || [])) {
-        const stale = (s.scope !== 'plugin_cache')
-          ? (s.exists && (s.malformed.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest === 'unsupported' || s.codex_v2_role_transport_ready === false))
-          : (s.malformed.length > 0);
+        const stale = s.scope === 'repository'
+          ? s.malformed.length > 0
+          : (s.scope === 'plugin_cache'
+            ? (s.malformed.length > 0 || s.stale_profiles.length > 0)
+            : (s.exists && (s.malformed.length || s.profile_byte_drift.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest !== 'present' || s.codex_v2_role_transport_ready === false)));
         const state = !s.exists ? 'absent' : (stale ? 'stale' : 'ok');
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
         if (stale) process.stdout.write(`  repair: ${s.repair}\n`);
@@ -1929,6 +2190,7 @@ module.exports = {
   checkManagedBlock,
   checkProfiles,
   validateProfileText,
+  reviewerProfileContract,
   classifyProfilePinPosture,
   inspectScope,
   readManifest,
@@ -1942,6 +2204,9 @@ module.exports = {
   CODEX_STANDARD_EFFORT,
   CODEX_REASONING_MODEL,
   CODEX_REASONING_EFFORT,
+  REVIEWER_ROLES,
+  REVIEWER_BEHAVIOR_CONTRACT_VERSION,
+  REVIEWER_SOURCE_REPAIR,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
   codexV2TransportEnvelope,

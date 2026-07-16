@@ -478,6 +478,50 @@ function parseGoal(content) {
   const m = String(meta || '').match(/^goal:[ \t]*(.*)$/m);
   return { goal: m ? m[1].trim() : null };
 }
+
+function metaFieldValues(content, name) {
+  const body = classifier.sectionBody(content, 'Meta');
+  const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('^' + escaped + ':[ \\t]*(.*?)[ \\t]*$', 'gm');
+  const values = [];
+  let match;
+  while ((match = re.exec(String(body || ''))) !== null) values.push(match[1]);
+  return values;
+}
+
+// Explicit plan/dispatch contract boundary. A hash-verified frozen plan whose
+// hash-covered Meta predates plan_schema_version is the one legal implicit case
+// and maps to legacy v1. An unfrozen draft never receives that inference.
+function resolvePlanContract(content, opts) {
+  opts = opts || {};
+  const values = metaFieldValues(content, 'plan_schema_version');
+  const stored = readStoredHash(content);
+  const computed = computePlanHash(content);
+  const frozenVerified = !!stored && stored === computed;
+  const refuse = (reason, detail) => ({ ok: false, result: 'refuse', reason, detail: detail || null,
+    plan_schema_version: null, contract_version: null });
+  if (opts.requireFrozen && !stored) return refuse('plan_not_frozen', 'plan_hash missing');
+  if (opts.requireFrozen && stored !== computed) return refuse('plan_hash_mismatch', 'plan_hash mismatch');
+  if (values.length > 1) return refuse('plan_schema_version_duplicate');
+  if (values.length === 0) {
+    if (frozenVerified) {
+      return { ok: true, result: 'pass', source: 'verified-legacy-frozen',
+        plan_schema_version: 1, contract_version: 1 };
+    }
+    return refuse('plan_schema_version_missing');
+  }
+  if (!/^[0-9]+$/.test(values[0])) return refuse('plan_schema_version_unknown');
+  const version = Number(values[0]);
+  if (version === 1) {
+    if (opts.forFreeze && !frozenVerified) return refuse('plan_schema_version_legacy_new');
+    if (!frozenVerified && opts.requireFrozen) return refuse('plan_schema_version_legacy_new');
+    return { ok: true, result: 'pass', source: frozenVerified ? 'verified-explicit-legacy' : 'legacy-draft-read',
+      plan_schema_version: 1, contract_version: 1 };
+  }
+  if (version !== schema.REVIEW_PLAN_SCHEMA_VERSION) return refuse('plan_schema_version_unknown');
+  return { ok: true, result: 'pass', source: 'schema-2',
+    plan_schema_version: 2, contract_version: 2 };
+}
 // #439 (D-419 Part 4): the per-plan `speculative_open_policy` lives in `## Meta` as a single
 // `speculative_open_policy: off | consent | auto` line — hash-covered for free (computePlanHash
 // normalizes the WHOLE `## Meta` body), Meta-SCOPED read (decoy-immune; same scoping as parseGoal/
@@ -512,6 +556,62 @@ function parseValidationCommand(content) {
   const meta = classifier.sectionBody(content, 'Meta');
   const m = String(meta || '').match(/^validation_command:[ \t]*(.+?)[ \t]*$/m);
   return m ? m[1].trim() : null;
+}
+
+// D-547 compatibility mapping plus schema-2 runner refinements. Returns a
+// typed result so freeze/open/finalization all consume one normalized policy.
+function parseValidationPolicy(content, opts) {
+  opts = opts || {};
+  const contract = opts.contract || resolvePlanContract(content, { requireFrozen: false, forFreeze: false });
+  const version = contract && contract.ok ? contract.plan_schema_version
+    : (metaFieldValues(content, 'plan_schema_version')[0] === '2' ? 2 : 1);
+  const command = parseValidationCommand(content);
+  if (version === 1) {
+    return { ok: true, plan_schema_version: 1, contract_version: 1, command, cwd: '.', repetitions: 1,
+      pass_rule: 'all', timeout_minutes: null, env_allowlist: [], runner_required: false, source: 'legacy-d547' };
+  }
+  const allowed = new Set(['validation_command', 'validation_cwd', 'validation_repetitions',
+    'validation_pass_rule', 'validation_timeout_minutes', 'validation_env_allowlist', 'validation_test_consumes']);
+  const meta = classifier.sectionBody(content, 'Meta');
+  const seenValidationFields = [];
+  for (const line of String(meta || '').split('\n')) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*):/.exec(line);
+    if (match && match[1].startsWith('validation_')) seenValidationFields.push(match[1]);
+  }
+  const unknown = seenValidationFields.find(name => !allowed.has(name));
+  if (unknown) return { ok: false, reason: 'validation_policy_unknown_field', field: unknown };
+  for (const name of allowed) {
+    if (metaFieldValues(content, name).length > 1) return { ok: false, reason: 'validation_policy_duplicate_field', field: name };
+  }
+  const one = (name, fallback) => {
+    const values = metaFieldValues(content, name);
+    return values.length ? values[0].trim() : fallback;
+  };
+  const cwdRaw = one('validation_cwd', '.').replace(/^\.\//, '');
+  const cwdParts = cwdRaw.split('/');
+  if (!cwdRaw || path.isAbsolute(cwdRaw) || /^[A-Za-z]:/.test(cwdRaw) || cwdRaw.includes('\\')
+    || cwdParts.some(part => !part || part === '..' || part === '.')) {
+    if (cwdRaw !== '.') return { ok: false, reason: 'validation_cwd_invalid' };
+  }
+  const repetitionsRaw = one('validation_repetitions', '1');
+  const timeoutRaw = one('validation_timeout_minutes', '');
+  const passRule = one('validation_pass_rule', 'all');
+  if (!/^[1-5]$/.test(repetitionsRaw)) return { ok: false, reason: 'validation_repetitions_invalid' };
+  if (passRule !== 'all') return { ok: false, reason: 'validation_pass_rule_invalid' };
+  if (timeoutRaw && (!/^[0-9]+$/.test(timeoutRaw) || Number(timeoutRaw) < 1 || Number(timeoutRaw) > 120)) {
+    return { ok: false, reason: 'validation_timeout_invalid' };
+  }
+  const envRaw = one('validation_env_allowlist', '');
+  const env = envRaw ? envRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
+  const sorted = Array.from(new Set(env)).sort();
+  if (env.some(name => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+    || JSON.stringify(env) !== JSON.stringify(sorted)) {
+    return { ok: false, reason: 'validation_env_allowlist_invalid' };
+  }
+  return { ok: true, plan_schema_version: 2, contract_version: 2, command,
+    cwd: cwdRaw || '.', repetitions: Number(repetitionsRaw), pass_rule: 'all',
+    timeout_minutes: timeoutRaw ? Number(timeoutRaw) : null, env_allowlist: sorted,
+    runner_required: true, source: 'schema-2' };
 }
 // #547 (D-547-01): the OPTIONAL per-plan widening of the validation code-tree-hash "keep-as-code" set,
 // in `## Meta` as `validation_test_consumes: a/b.md, c.md` (comma list). It UNIONS with the built-in
@@ -646,6 +746,17 @@ function parseNodes(content) {
       // declares an adversarial-verifier READ gate whose verdict is rendered from .cache evidence + scratch
       // (never the worktree tree/diff), the contract that lets a LEGLESS parent writer co-open behind it (R2).
       observes: (() => { const v = get('observes'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
+      // Reviewer contract v2 gate metadata. These columns are hash-covered with
+      // the rest of ## Nodes. Legacy tables omit them and therefore parse to the
+      // exact empty values below without changing their frozen bytes.
+      gateClaim: (() => { const v = get('gate_claim'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      gateSurface: (() => { const v = get('gate_surface'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      gateAggregation: (() => { const v = get('gate_aggregation'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
+      certifiesRaw: (() => { const v = get('certifies'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      certifies: (() => {
+        const v = get('certifies');
+        return (v && v !== '—' && v !== '-') ? v.split(',').map(x => x.trim()).filter(Boolean) : [];
+      })(),
     });
   }
   return nodes;
@@ -1029,6 +1140,265 @@ function producesCode(node) {
   return false;
 }
 
+// Schema-2 / validation-aware producer predicate for the G4 common-certifier wall. A non-terminal WRITE
+// role "produces code" when ANY declared write is NOT validation-invisible under the runner's D-547
+// classification — which keeps README.md / CHANGELOG.md / docs/api.md and the plan's
+// validation_test_consumes band as VERDICT-AFFECTING (code-relevant) prose. producesCode() alone uses
+// isDocsPath, treating all `.md` as inert; that lets a downstream doc-updater mutate test-consumed prose
+// after the designated certifier and stale its receipt without G4 ever refusing the topology. IMPLEMENT
+// roles always produce code; the finalize sink keeps its existing non-docs-only escape (nothing
+// post-dominates the sink, so its own CHANGELOG/README/state bookkeeping is not a reviewable producer).
+function producesValidationVisibleCode(node, project, testConsumedExtra) {
+  if (IMPLEMENT_ROLES.has(node.role)) return true;
+  if (node.role === TERMINAL_ROLE) {
+    for (const p of node.writeSet) if (!isDocsPath(p)) return true;
+    return false;
+  }
+  if (!WRITE_ROLES.has(node.role)) return false;
+  for (const p of node.writeSet) if (!isValidationInvisible(p, project, testConsumedExtra)) return true;
+  return false;
+}
+
+// Canonical adapter from the Markdown-owned validator node shape to the pure
+// adaptive-schema graph contract. `changeProducerIds` deliberately includes
+// declared certifies ids in addition to code/sensitive producers: schema-2 AV
+// metadata may certify a producer class whose role alone is read-only.
+function buildPlanView(contentOrNodes, opts) {
+  opts = opts || {};
+  const content = typeof contentOrNodes === 'string' ? contentOrNodes : null;
+  const nodes = Array.isArray(contentOrNodes) ? contentOrNodes : parseNodes(content || '');
+  const labels = opts.labels !== undefined ? opts.labels
+    : (content !== null ? parseLabels(classifier.sectionBody(content, 'Meta')) : null);
+  const normalized = nodes.map(node => ({
+    id: node.id,
+    role: node.role,
+    dependsOn: (node.dependsOn || []).slice(),
+    gateClaim: node.gateClaim || '',
+    gateSurface: node.gateSurface || '',
+    gateAggregation: node.gateAggregation || '',
+    certifies: (node.certifies || []).slice(),
+    shape: node.shape,
+  }));
+  // Schema-2 callers pass `testConsumedPaths` (even []) to switch the code-producer classification onto the
+  // validation-aware predicate so test-consumed prose writers join the change-producer set; v1 callers omit
+  // it and keep the historical isDocsPath-based `producesCode`, so v1 gate-mode classification is unchanged.
+  const codeProducer = opts.testConsumedPaths !== undefined
+    ? (node => producesValidationVisibleCode(node, opts.project, opts.testConsumedPaths))
+    : producesCode;
+  const changeProducerIds = new Set();
+  for (const node of nodes) {
+    if (codeProducer(node) || nodeIsSensitive(node)) changeProducerIds.add(node.id);
+    for (const id of (node.certifies || [])) changeProducerIds.add(id);
+  }
+  if (labelsAreSensitive(labels)) {
+    for (const node of nodes) if (codeProducer(node)) changeProducerIds.add(node.id);
+  }
+  for (const id of (opts.actualWriterIds || [])) changeProducerIds.add(String(id));
+  return {
+    nodes: normalized,
+    sinkId: uniqueSink(nodes),
+    changeProducerIds: [...changeProducerIds].sort(),
+  };
+}
+
+function forwardReaches(nodes, from, to, removed) {
+  if (from === to) return true;
+  const excluded = removed || new Set();
+  if (excluded.has(from) || excluded.has(to)) return false;
+  const adj = adjacency(nodes);
+  const seen = new Set([from]);
+  const stack = [...(adj.get(from) || [])];
+  while (stack.length) {
+    const current = stack.pop();
+    if (excluded.has(current) || seen.has(current)) continue;
+    if (current === to) return true;
+    seen.add(current);
+    stack.push(...(adj.get(current) || []));
+  }
+  return false;
+}
+
+function exactPostDominates(nodes, producerId, certifierIds, sink) {
+  const removed = new Set(certifierIds);
+  return !forwardReaches(nodes, producerId, sink, removed);
+}
+
+function resolveLogicalCertifier(nodes, reference) {
+  const ref = String(reference || '').trim();
+  if (!ref || ref === 'none') return null;
+  const direct = nodes.find(node => node.id === ref);
+  if (direct) return { kind: 'sequence', key: ref, members: [direct] };
+  let label = ref;
+  const match = /^(?:group|fanout)\(([^)]+)\)$/.exec(ref);
+  if (match) label = match[1].trim();
+  const members = nodes.filter(node => node.shape && node.shape.kind === 'fanout'
+    && node.shape.group === label);
+  if (!members.length) return null;
+  return { kind: 'group', key: label, members };
+}
+
+function validateCommonCertifier(nodes, sink, reference, role, producerIds, inherited) {
+  const certifier = resolveLogicalCertifier(nodes, reference);
+  if (!certifier) return { ok: false, reason: 'g4_certifier_missing', role, reference };
+  if (certifier.members.some(node => node.role !== role)) {
+    return { ok: false, reason: 'g4_certifier_role_mismatch', role, reference };
+  }
+  if (certifier.kind === 'sequence' && certifier.members[0].gateAggregation
+    && certifier.members[0].gateAggregation !== 'sequence') {
+    return { ok: false, reason: 'g4_certifier_aggregation_mismatch', role, reference };
+  }
+  if (certifier.kind === 'group') {
+    const aggregation = new Set(certifier.members.map(node => node.gateAggregation));
+    if (aggregation.size !== 1 || !['replicated_majority', 'partitioned_all'].includes([...aggregation][0])) {
+      return { ok: false, reason: 'g4_certifier_aggregation_mismatch', role, reference };
+    }
+  }
+  const memberIds = certifier.members.map(node => node.id);
+  for (const producerId of producerIds) {
+    if (certifier.kind === 'sequence') {
+      if (!forwardReaches(nodes, producerId, memberIds[0])
+        || !exactPostDominates(nodes, producerId, memberIds, sink)) {
+        return { ok: false, reason: 'g4_common_certifier_uncovered', role, producer_id: producerId, reference };
+      }
+    } else {
+      if (memberIds.some(member => !forwardReaches(nodes, producerId, member))
+        || !exactPostDominates(nodes, producerId, memberIds, sink)) {
+        return { ok: false, reason: 'g4_common_certifier_uncovered', role, producer_id: producerId, reference };
+      }
+    }
+  }
+  if (inherited) {
+    const roots = nodes.filter(node => !(node.dependsOn || []).some(id => nodes.some(n => n.id === id)));
+    for (const root of roots) {
+      if (certifier.kind === 'sequence') {
+        if (!forwardReaches(nodes, root.id, memberIds[0]) || !exactPostDominates(nodes, root.id, memberIds, sink)) {
+          return { ok: false, reason: 'g4_inherited_frontier_uncovered', role, root_id: root.id, reference };
+        }
+      } else if (memberIds.some(member => !forwardReaches(nodes, root.id, member))
+        || !exactPostDominates(nodes, root.id, memberIds, sink)) {
+        return { ok: false, reason: 'g4_inherited_frontier_uncovered', role, root_id: root.id, reference };
+      }
+    }
+  }
+  return { ok: true, certifier: { kind: certifier.kind, key: certifier.key, members: memberIds.sort() } };
+}
+
+// Schema-2 gate metadata + G4. Returns structured errors so validatePlan can
+// retain its existing aggregate plan_invalid envelope while tests/future callers
+// inspect exact failure families.
+function validateSchema2ReviewPlan(content, nodes, sink, opts) {
+  opts = opts || {};
+  const errors = [];
+  const failures = [];
+  const fail = (reason, detail) => {
+    failures.push({ reason, ...detail });
+    errors.push('G4/' + reason + ': ' + Object.entries(detail || {}).map(([k, v]) => k + '=' + v).join(' '));
+  };
+  const testConsumedExtra = parseValidationTestConsumes(content);
+  const producesCodeV2 = node => producesValidationVisibleCode(node, opts.project, testConsumedExtra);
+  const planView = buildPlanView(content, { ...opts, testConsumedPaths: testConsumedExtra });
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  for (const node of nodes) {
+    const gate = GATE_VERDICT_ROLES.has(node.role);
+    const metadata = [node.gateClaim, node.gateSurface, node.gateAggregation, node.certifiesRaw].some(Boolean);
+    if (!gate && metadata) fail('gate_metadata_on_nongate', { node_id: node.id });
+    if (!gate) continue;
+    if (!node.gateClaim || !node.gateSurface || !schema.REVIEW_AGGREGATIONS.includes(node.gateAggregation)) {
+      fail('gate_metadata_missing', { node_id: node.id });
+      continue;
+    }
+    if (node.gateAggregation === 'sequence' && node.shape.kind === 'fanout') {
+      fail('gate_aggregation_shape_mismatch', { node_id: node.id });
+    }
+    if (node.gateAggregation !== 'sequence' && node.shape.kind !== 'fanout') {
+      fail('gate_aggregation_shape_mismatch', { node_id: node.id });
+    }
+    const sortedCertifies = Array.from(new Set(node.certifies)).sort();
+    if (JSON.stringify(node.certifies) !== JSON.stringify(sortedCertifies)) {
+      fail('gate_certifies_not_canonical', { node_id: node.id });
+    }
+    if (node.certifies.some(id => !byId.has(id))) fail('gate_certifies_unknown_producer', { node_id: node.id });
+    if (node.role === 'adversarial-verifier') {
+      const mode = schema.deriveGateMode(planView, planView.nodes.find(n => n.id === node.id));
+      if (mode === 'change_gate' && node.certifies.length === 0) fail('gate_certifies_missing', { node_id: node.id });
+      if (mode === 'investigation' && node.certifies.length !== 0) fail('investigation_certifies_nonempty', { node_id: node.id });
+      for (const producer of node.certifies) {
+        if (!forwardReaches(nodes, producer, node.id) || !forwardReaches(nodes, node.id, sink)) {
+          fail('gate_certifies_unreachable', { node_id: node.id, producer_id: producer });
+        }
+      }
+    } else if (node.certifies.length !== 0) {
+      fail('gate_certifies_role_invalid', { node_id: node.id });
+    }
+  }
+  const fanoutGroups = new Map();
+  for (const node of nodes.filter(n => n.shape && n.shape.kind === 'fanout' && GATE_VERDICT_ROLES.has(n.role))) {
+    const key = node.shape.group + '\u001f' + (node.dependsOn || []).slice().sort().join(',');
+    if (!fanoutGroups.has(key)) fanoutGroups.set(key, []);
+    fanoutGroups.get(key).push(node);
+  }
+  for (const members of fanoutGroups.values()) {
+    const roles = new Set(members.map(node => node.role));
+    const claims = new Set(members.map(node => node.gateClaim));
+    const aggregations = new Set(members.map(node => node.gateAggregation));
+    const modes = new Set(members.filter(n => n.role === 'adversarial-verifier')
+      .map(n => schema.deriveGateMode(planView, planView.nodes.find(p => p.id === n.id))));
+    if (roles.size !== 1 || claims.size !== 1 || aggregations.size !== 1 || modes.size > 1) {
+      fail('gate_group_identity_mismatch', { group: members[0].shape.group });
+      continue;
+    }
+    const aggregation = [...aggregations][0];
+    const surfaces = members.map(node => node.gateSurface);
+    if (aggregation === 'replicated_majority' && new Set(surfaces).size !== 1) {
+      fail('gate_replica_surface_mismatch', { group: members[0].shape.group });
+    }
+    if (aggregation === 'partitioned_all' && new Set(surfaces).size !== surfaces.length) {
+      fail('gate_partition_surface_duplicate', { group: members[0].shape.group });
+    }
+  }
+
+  const codeRefValues = metaFieldValues(content, 'code_certifier');
+  const secRefValues = metaFieldValues(content, 'security_certifier');
+  const inheritedDigestValues = metaFieldValues(content, 'inherited_frontier_digest');
+  const inheritedClassValues = metaFieldValues(content, 'inherited_frontier_classes');
+  if ([codeRefValues, secRefValues, inheritedDigestValues, inheritedClassValues].some(values => values.length !== 1)) {
+    fail('g4_meta_missing_or_duplicate', {});
+    return { ok: false, errors, failures, planView };
+  }
+  const inheritedDigest = inheritedDigestValues[0].trim();
+  const inheritedClassesRaw = inheritedClassValues[0].trim();
+  const inheritedClasses = inheritedClassesRaw === 'none' ? [] : inheritedClassesRaw.split(',').map(x => x.trim()).filter(Boolean);
+  if (!(inheritedDigest === 'none' || /^[0-9a-f]{64}$/i.test(inheritedDigest))
+    || inheritedClasses.some(value => !['code', 'security'].includes(value))
+    || JSON.stringify(inheritedClasses) !== JSON.stringify(Array.from(new Set(inheritedClasses)).sort())
+    || ((inheritedDigest === 'none') !== (inheritedClasses.length === 0))) {
+    fail('g4_inherited_frontier_invalid', {});
+  }
+  const codeProducers = nodes.filter(producesCodeV2).map(node => node.id)
+    .concat((opts.actualWriterIds || []).map(String));
+  const sensitiveByLabel = labelsAreSensitive(parseLabels(classifier.sectionBody(content, 'Meta')));
+  const securityProducers = nodes.filter(node => nodeIsSensitive(node) || (sensitiveByLabel && producesCodeV2(node))).map(node => node.id);
+  const codeRequired = codeProducers.length > 0 || inheritedClasses.includes('code');
+  const securityRequired = securityProducers.length > 0 || inheritedClasses.includes('security');
+  const codeRef = codeRefValues[0].trim();
+  const securityRef = secRefValues[0].trim();
+  if (codeRequired) {
+    const result = validateCommonCertifier(nodes, sink, codeRef, 'code-reviewer', codeProducers, inheritedClasses.includes('code'));
+    if (!result.ok) fail(result.reason, result);
+  } else if (codeRef !== 'none') {
+    const result = validateCommonCertifier(nodes, sink, codeRef, 'code-reviewer', [], false);
+    if (!result.ok) fail(result.reason, result);
+  }
+  if (securityRequired) {
+    const result = validateCommonCertifier(nodes, sink, securityRef, 'security-reviewer', securityProducers, inheritedClasses.includes('security'));
+    if (!result.ok) fail(result.reason, result);
+  } else if (securityRef !== 'none') {
+    const result = validateCommonCertifier(nodes, sink, securityRef, 'security-reviewer', [], false);
+    if (!result.ok) fail(result.reason, result);
+  }
+  return { ok: errors.length === 0, errors, failures, planView };
+}
+
 // #509 (D-509-01, Option A): is THIS adversarial-verifier node a CHANGE GATE rather than an
 // investigation skeptic? It is a change gate iff it LIES ON A PATH from SOME code-producing
 // (producesCode) or sensitive (nodeIsSensitive || sensitive labels) node to the unique sink — i.e.
@@ -1047,20 +1417,9 @@ function producesCode(node) {
 // code-producing node, mirroring the G2 union at gateUncovered/checkGate.
 function advVerifierIsChangeGate(node, nodes, sink, labels) {
   if (!node || node.role !== 'adversarial-verifier' || !sink) return false;
-  const fwd = adjacency(nodes);
-  // This verifier must be able to reach the sink at all (it lies "before" the sink on some path).
-  if (node.id !== sink && !reachableSet(fwd, node.id).has(sink)) return false;
-  const sensitiveByLabel = labelsAreSensitive(labels);
-  const isCodeOrSensitive = n =>
-    n.id !== node.id &&
-    (producesCode(n) || nodeIsSensitive(n) || (sensitiveByLabel && producesCode(n)));
-  // Lies on a path from a code/sensitive node iff some code/sensitive node forward-reaches this
-  // verifier (the verifier→sink leg is established above).
-  for (const n of nodes) {
-    if (!isCodeOrSensitive(n)) continue;
-    if (reachableSet(fwd, n.id).has(node.id)) return true;
-  }
-  return false;
+  const view = buildPlanView(nodes, { labels });
+  view.sinkId = sink;
+  return schema.deriveGateMode(view, view.nodes.find(n => n.id === node.id)) === 'change_gate';
 }
 
 // --- #231 runtime gate enforcement ------------------------------------------
@@ -1129,6 +1488,8 @@ function verifyVerdictBlock(content, opts) {
   const readCache = opts.readCache || (() => null);
   const globCache = opts.globCache || (() => []);
   const nodes = parseNodes(content);
+  const contract = resolvePlanContract(content, { requireFrozen: false });
+  const schema2 = contract.ok && contract.contract_version === 2;
   // #406: DUAL-EMIT — {result, reasonCode} ADDED alongside the established `ok` on every return.
   // Consumers (commit-node verdictCheck.ok) still read `ok`; the typed fields are additive shims.
   if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
@@ -1136,7 +1497,84 @@ function verifyVerdictBlock(content, opts) {
   // an investigation skeptic (post-dominates no code/sensitive node) is exempt REGARDLESS of shape.
   const vbSink = uniqueSink(nodes);
   const vbLabels = parseLabels(classifier.sectionBody(content, 'Meta'));
+  let schema2Candidate;
+  const currentSchema2Candidate = () => {
+    if (schema2Candidate !== undefined) return schema2Candidate;
+    try {
+      const runner = require('./kaola-workflow-validation-runner');
+      schema2Candidate = opts.computeCandidateDigest
+        ? opts.computeCandidateDigest()
+        : runner.computeLandableTreeDigest(opts.root || process.cwd(), {
+          test_consumed_paths: parseValidationTestConsumes(content),
+        });
+    } catch (_) { schema2Candidate = null; }
+    return schema2Candidate;
+  };
+  function checkSchema2One(node) {
+    if (!GATE_VERDICT_ROLES.has(node.role)) {
+      return { ok: true, nodeId: node.id, role: node.role, verdict: null, found: false };
+    }
+    const planView = buildPlanView(content);
+    const viewNode = planView.nodes.find(candidate => candidate.id === node.id);
+    const gateMode = node.role === 'adversarial-verifier'
+      ? schema.deriveGateMode(planView, viewNode) : 'change_gate';
+    const group = node.shape && node.shape.kind === 'fanout'
+      ? nodes.filter(candidate => candidate.role === node.role
+        && candidate.shape && candidate.shape.kind === 'fanout'
+        && candidate.shape.group === node.shape.group
+        && JSON.stringify(candidate.dependsOn.slice().sort()) === JSON.stringify(node.dependsOn.slice().sort()))
+          .sort((a, b) => a.id.localeCompare(b.id))
+      : [node];
+    const receipts = [];
+    for (const member of group) {
+      const evidence = readCache(member.id + '.md');
+      if (!evidence) return { ok: false, nodeId: node.id, role: node.role, found: false,
+        reason: 'schema-2 review evidence missing for ' + member.id };
+      const identity = schema.parseReviewEvidenceIdentity(evidence);
+      if (!/^[0-9a-f]{64}$/i.test(String(identity.review_context_hash || ''))) {
+        return { ok: false, nodeId: node.id, role: node.role, found: true,
+          reason: 'schema-2 review_context_hash missing or malformed for ' + member.id };
+      }
+      const receiptRaw = readCache('review-receipts/' + identity.review_context_hash + '/' + member.id + '.json');
+      let receipt;
+      try { receipt = JSON.parse(receiptRaw); }
+      catch (_) { return { ok: false, nodeId: node.id, role: node.role, found: true,
+        reason: 'schema-2 normalized receipt missing or malformed for ' + member.id };
+      }
+      if (receipt.schema_version !== 2 || receipt.contract_version !== 2
+        || receipt.node_id !== member.id || receipt.review_context_hash !== identity.review_context_hash
+        || receipt.execution_status !== 'complete' || receipt.candidate_digest !== identity.candidate_digest
+        || receipt.behavior_contract_hash !== identity.behavior_contract_hash
+        || receipt.resolved_profile_hash !== identity.resolved_profile_hash) {
+        return { ok: false, nodeId: node.id, role: node.role, found: true,
+          reason: 'schema-2 receipt identity mismatch for ' + member.id };
+      }
+      receipts.push(receipt);
+    }
+    const currentCandidate = currentSchema2Candidate();
+    if (!currentCandidate || receipts.some(receipt => receipt.candidate_digest !== currentCandidate)) {
+      return { ok: false, nodeId: node.id, role: node.role, found: true,
+        reason: 'schema-2 certifier receipt is stale for the current candidate' };
+    }
+    const reduced = schema.reduceReviewReceipts({
+      aggregation: node.gateAggregation,
+      role: node.role,
+      gate_mode: gateMode,
+      expected_members: group.map(member => member.id),
+      expected_surfaces: group.map(member => member.gateSurface),
+      receipts,
+    });
+    if (!reduced.complete) return { ok: false, nodeId: node.id, role: node.role, found: true,
+      reason: reduced.reason };
+    const ok = reduced.gate_effect === 'pass' || reduced.gate_effect === 'none';
+    return { ok, nodeId: node.id, role: node.role, found: true,
+      verdict: ok ? 'pass' : 'fail', findings_blocking: reduced.blocking_findings,
+      domain_outcome: reduced.domain_outcome, gate_effect: reduced.gate_effect,
+      exempt: reduced.gate_effect === 'none' ? 'investigation_adversarial_verifier' : undefined,
+      reason: ok ? undefined : 'schema-2 review gate did not pass' };
+  }
   function checkOne(node) {
+    if (schema2) return checkSchema2One(node);
     const role = node.role;
     if (!GATE_VERDICT_ROLES.has(role)) {
       return { ok: true, nodeId: node.id, role, verdict: null, findings_blocking: null, found: false };
@@ -1512,6 +1950,18 @@ function validatePlan(content, opts) {
     return { result: 'refuse', reason: 'briefs_section_ambiguous', operator_hint: getOperatorHint('briefs_section_ambiguous'), errors: ['## Node Briefs section identity is ambiguous'], planHash: computePlanHash(content) };
   }
   const nodes = parseNodes(content);
+  const schemaVersionValues = metaFieldValues(content, 'plan_schema_version');
+  if (schemaVersionValues.length > 1) {
+    return { result: 'refuse', reason: 'plan_schema_version_duplicate', operator_hint: getOperatorHint('plan_invalid'),
+      errors: ['## Meta carries more than one plan_schema_version field'], planHash: computePlanHash(content) };
+  }
+  if (schemaVersionValues.length === 1
+    && !['1', String(schema.REVIEW_PLAN_SCHEMA_VERSION)].includes(schemaVersionValues[0].trim())) {
+    return { result: 'refuse', reason: 'plan_schema_version_unknown', operator_hint: getOperatorHint('plan_invalid'),
+      errors: ['unknown plan_schema_version: ' + schemaVersionValues[0]], planHash: computePlanHash(content) };
+  }
+  const planSchemaVersion = schemaVersionValues.length === 1 ? Number(schemaVersionValues[0].trim()) : 1;
+  const contractVersion = planSchemaVersion === 2 ? 2 : 1;
   // audit B1: read labels ONLY from the hash-covered `## Meta` section. parseLabels used to
   // scan the whole document, so a decoy `labels:` line placed OUTSIDE `## Meta` (which the
   // plan_hash does not cover) could override the real labels and silently drop the G2 gate,
@@ -1572,6 +2022,23 @@ function validatePlan(content, opts) {
   // #634: the metric-optimizer optimize(<id>) Meta contracts (Map<nodeId,contract>), parsed once for the
   // OPT-1..OPT-4/OPT-6 field rules below and the OPT-5 gate rule in the gates block. plan_hash-covered.
   const optimizeContracts = parseOptimizeContracts(content);
+
+  if (planSchemaVersion === 2) {
+    const validationPolicy = parseValidationPolicy(content, {
+      contract: { ok: true, plan_schema_version: 2, contract_version: 2 },
+    });
+    if (!validationPolicy.ok) {
+      return { result: 'refuse', reason: validationPolicy.reason, operator_hint: getOperatorHint('plan_invalid'),
+        errors: [validationPolicy.reason + (validationPolicy.field ? ': ' + validationPolicy.field : '')],
+        planHash: computePlanHash(content), plan_schema_version: 2, contract_version: 2 };
+    }
+    const hasCodeProducer = nodes.some(producesCode);
+    if (hasCodeProducer && (!validationPolicy.command || !validationPolicy.timeout_minutes)) {
+      return { result: 'refuse', reason: 'validation_policy_required', operator_hint: getOperatorHint('plan_invalid'),
+        errors: ['schema-2 code-producing plans require validation_command and validation_timeout_minutes'],
+        planHash: computePlanHash(content), plan_schema_version: 2, contract_version: 2 };
+    }
+  }
 
   // #655: validate the optional general override once on the validator-shaped node.
   // Direct typed returns keep callers from classifying these stable refusal families by text.
@@ -2123,6 +2590,10 @@ function validatePlan(content, opts) {
 
   // gates (need a unique sink to be decidable)
   if (sink) {
+    if (planSchemaVersion === 2) {
+      const reviewPlan = validateSchema2ReviewPlan(content, nodes, sink, opts);
+      errors.push(...reviewPlan.errors);
+    }
     // G1: code-reviewer post-dominates every code-producing node (implement roles, plus a
     // doc-updater/other write role that writes non-docs — so code can't dodge review by
     // routing through doc-updater).
@@ -2271,7 +2742,8 @@ function validatePlan(content, opts) {
   }
 
   const planHash = computePlanHash(content);
-  if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink };
+  if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink,
+    plan_schema_version: planSchemaVersion, contract_version: contractVersion };
 
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
   const reasons = [];
@@ -2289,6 +2761,8 @@ function validatePlan(content, opts) {
     result: 'in-grammar', decision, planHash, sink,
     risk: { sensitivity, blastRadius, uncertain, reasons },
     nodeCount: nodes.length,
+    plan_schema_version: planSchemaVersion,
+    contract_version: contractVersion,
     diagnostics: { wideFanout: wideFanouts },
   };
 }
@@ -2307,6 +2781,8 @@ function revalidateForResume(content, opts) {
   const computed = computePlanHash(content);
   if (!stored) return refuse('plan_not_frozen', 'plan_hash missing — plan is not frozen');
   if (stored !== computed) return refuse('plan_hash_mismatch', 'plan_hash mismatch — workflow-plan.md tampered after freeze');
+  const contract = resolvePlanContract(content, { requireFrozen: true });
+  if (!contract.ok) return refuse(contract.reason, contract.detail || contract.reason);
   const nodes = parseNodes(content);
   if (!nodes.length) return refuse('nodes_unparseable', 'workflow-plan.md ## Nodes unparseable');
   // Same input-size backstop as validatePlan: the resume path also calls hasCycle, so an
@@ -2321,13 +2797,20 @@ function revalidateForResume(content, opts) {
   }
   if (hasCycle(nodes)) return refuse('cycle', 'cycle detected');
   if (!uniqueSink(nodes)) return refuse('no_unique_sink', 'no unique sink');
-  return { ok: true, result: 'pass', reasonCode: null, planHash: computed };
+  return { ok: true, result: 'pass', reasonCode: null, planHash: computed,
+    plan_schema_version: contract.plan_schema_version, contract_version: contract.contract_version };
 }
 
 // Freeze: validate, and if in-grammar, inject/update the plan_hash comment.
 // #340: opts thread the repo root so Check 1's anchor-gated agent-registration surface
 // resolves against the validated root (not process.cwd()); backward-compatible (opts optional).
 function freezePlan(content, opts) {
+  const contract = resolvePlanContract(content, { forFreeze: true });
+  if (!contract.ok) {
+    return { result: 'refuse', reason: contract.reason, errors: [contract.detail || contract.reason],
+      planHash: computePlanHash(content), frozen: false,
+      plan_schema_version: null, contract_version: null };
+  }
   const v = validatePlan(content, opts || {});
   if (v.result !== 'in-grammar') return { ...v, frozen: false };
   const stamped = injectHash(content, v.planHash);
@@ -2846,6 +3329,13 @@ function main() {
     // The handoff runs its decision-record governance off this payload, then SPAWN 2
     // (--freeze --governance-ack <planHash>) re-validates, asserts the hash is unchanged, writes
     // atomically, and folds --resume-check into its emission. refuse → same {result:'refuse',errors}.
+    const contract = resolvePlanContract(content, { forFreeze: true });
+    if (!contract.ok) {
+      const out = { result: 'refuse', reason: contract.reason, operator_hint: getOperatorHint('plan_invalid'),
+        errors: [contract.detail || contract.reason], frozen: false };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors.join('; ')) + '\n');
+      process.exitCode = 1; return;
+    }
     const v = validatePlan(content, { root });
     if (v.result !== 'in-grammar') {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors: v.errors }) : 'typed refusal (out of grammar): ' + (v.errors || []).join('; ')) + '\n');
@@ -3788,6 +4278,10 @@ module.exports = {
   parseNodeBriefs,
   nodeBriefsPresent,
   parseNodes,
+  resolvePlanContract,
+  buildPlanView,
+  validateSchema2ReviewPlan,
+  advVerifierIsChangeGate,
   resolveAdversarialFanoutGroup,
   validateWaitBudgetNode,
   parseLabels,
@@ -3798,6 +4292,7 @@ module.exports = {
   parseOptimizeContracts,
   optimizeHeaderCounts,
   parseValidationCommand,
+  parseValidationPolicy,
   parseValidationTestConsumes,
   testConsumes,
   isValidationInvisible,

@@ -1,7 +1,8 @@
-# Vendored Claude Code Agents
+# Agent Sources and Reviewer Generation
 
 Kaola-Workflow vendors the Claude Code agent prompts it needs so users do not
-have to install Everything Claude Code (ECC) separately.
+have to install Everything Claude Code (ECC) separately. Reviewer profiles have
+an additional local canonical-generation contract documented below.
 
 ## Upstream
 
@@ -21,17 +22,49 @@ have to install Everything Claude Code (ECC) separately.
 | `agents/planner.md` | `agents/planner.md` | `c311f492bd1d3bae077c86716163966789eefae2` |
 | `agents/tdd-guide.md` | `agents/tdd-guide.md` | `1d0849840f0f5ed76541a48b2b4b0912b8926024` |
 
-## Locally Forked Agents (derived from ECC)
+## Local and Generated Reviewer Sources
 
-`agents/code-reviewer.md` and `agents/security-reviewer.md` were originally vendored from the same
-ECC upstream (see **Upstream** above) but have since been **forked into local Kaola-Workflow agents**
-(issue #279 follow-up) so they can carry the project's machine-readable findings-emission contract
-directly in their bodies. They remain derived works under the upstream **MIT License, Copyright (c)
-2026 Affaan Mustafa** — that attribution is honored here at the project level rather than per-file
-(the agent files now carry only the `kaola-workflow-managed-agent` marker, not per-file provenance).
-They are no longer byte-tracked to upstream and are NOT re-fetched by the Refresh Procedure;
-`validate-vendored-agents.js` validates them as local (provenance-exempt) managed agents. Their
-`agents/profiles/higher/` model-variant copies are forked likewise.
+`agents/security-reviewer.md` was originally vendored from the same ECC upstream but is now a local
+Kaola-Workflow fork carrying the project's machine-readable findings contract. `code-reviewer` also
+began as an ECC-derived local fork, but its current profile is generated from Kaola-Workflow's
+versioned canonical reviewer source. The ECC-derived work remains under the upstream **MIT License,
+Copyright (c) 2026 Affaan Mustafa**; that attribution is honored here at project level rather than
+inside generated agent-facing prompt bytes.
+
+`adversarial-verifier` is locally authored by Kaola-Workflow and is not derived from ECC. Both
+generated reviewer roles are local/provenance-exempt for `validate-vendored-agents.js`; neither is
+re-fetched by the ECC refresh procedure.
+
+### Canonical reviewer behavior and adapters
+
+- `templates/reviewers/behavior-contracts.json` is the strict canonical behavior source for
+  `code-reviewer` and `adversarial-verifier`. It owns behavior version, runtime-neutral description,
+  nickname candidates, stable section ids/lines, outcome vocabulary, and finding schema.
+- `templates/reviewers/runtime-adapters.json` is closed adapter data only: tools, model-policy
+  reference, and evidence transport. It cannot contain arbitrary prompt prose. Codex uses
+  `codex-inherit-by-omission`, so generated TOMLs contain neither `model` nor
+  `model_reasoning_effort`.
+- `scripts/generate-reviewer-profiles.js` is the sole writer for
+  `agents/code-reviewer.md`, `agents/profiles/higher/code-reviewer.md`,
+  `agents/adversarial-verifier.md`, and the six matching GitHub/GitLab/Gitea Codex TOMLs. Do not
+  hand-edit those outputs; edit the canonical JSON or generator, then run `--write` and `--check`.
+- OpenCode is a downstream transform of the generated Claude root. Its normalized reviewer core,
+  behavior version, and behavior hash must remain identical even though its runtime frontmatter and
+  permissions differ.
+
+### Identity and proof boundary
+
+Every render carries `behavior_contract_version`, `behavior_contract_hash`, and
+`resolved_profile_hash`. The behavior hash covers canonical JSON for the runtime-neutral role
+contract and excludes adapter data. The resolved hash covers the complete rendered UTF-8 profile
+after replacing its one self-hash value with exactly 64 zeroes; this binds all other bytes, including
+adapter/frontmatter structure and final newline.
+
+The normalized behavior-core bytes and behavior identity are deterministic across runtimes. That is
+contract equivalence, not a promise that stochastic models will emit identical findings, prose, or
+domain outcomes. Generator, installer, preflight, managed manifest, and doctor checks prove selected
+source and installed filesystem bytes. They deliberately do not claim that a proprietary runtime
+loaded particular prompt bytes; no public prompt-loader introspection contract is available here.
 
 ## Local Overrides
 
@@ -71,8 +104,8 @@ They are no longer byte-tracked to upstream and are NOT re-fetched by the Refres
 ## Refresh Procedure
 
 1. Choose the upstream commit to vendor and update the pinned commit above.
-2. Fetch the same 6 upstream files from `affaan-m/everything-claude-code` (code-reviewer and
-   security-reviewer are no longer vendored — see **Locally Forked Agents** above).
+2. Fetch the same 6 upstream files from `affaan-m/everything-claude-code` (`security-reviewer` and
+   generated `code-reviewer` are not re-vendored — see **Local and Generated Reviewer Sources**).
 3. Preserve each file's YAML front matter as the first bytes of the file.
 4. Insert the Kaola attribution comment immediately after the closing front
    matter delimiter. Do not place attribution before the first `---`.
@@ -81,6 +114,8 @@ They are no longer byte-tracked to upstream and are NOT re-fetched by the Refres
 
    ```bash
    node scripts/validate-vendored-agents.js
+   node scripts/generate-reviewer-profiles.js --check
+   node scripts/test-agent-profile-parity.js
    npm test
    ```
 

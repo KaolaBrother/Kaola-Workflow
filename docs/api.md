@@ -348,6 +348,187 @@ The read-axis scheduler (#303/#375/#377/#438/#439) marks N rows `in_progress`, b
 - **`validation_command: <cmd>`** (hash-covered; reader-only, no freeze gate) — the consumer's validation command, recorded ONCE by the planner at freeze (`plan-validator.js parseValidationCommand`). Each node and Finalization reuse it instead of re-deriving a full-suite command per node (the "record once, cite don't re-run" discipline; closes the Stage-1 omission). Absent ⇒ `null`.
 - **`validation_test_consumes: a/b.md, c.md`** (hash-covered; `parseValidationTestConsumes`) — the OPTIONAL widening of the code-tree-hash keep-as-code set for a self-hosting fork whose chain tests read prose beyond the built-in `SELF_HOST_TEST_CONSUMED`. Listed files stay code-relevant for the receipt freshness hash (so a real change to them is never cited-as-unchanged). The producer records the resolved list in the receipt so the gate replays the identical band. Absent ⇒ `[]`.
 
+#### Schema-2 extension of the same validation namespace
+
+`parseValidationPolicy(content, {contract})` preserves the D-547-01 field instead of adding a
+second command authority. For a verified contract-1 plan it returns this explicit compatibility
+mapping without changing the frozen plan or imposing runner semantics:
+
+```json
+{
+  "plan_schema_version": 1,
+  "contract_version": 1,
+  "command": "<validation_command or null>",
+  "cwd": ".",
+  "repetitions": 1,
+  "pass_rule": "all",
+  "timeout_minutes": null,
+  "env_allowlist": [],
+  "runner_required": false,
+  "source": "legacy-d547"
+}
+```
+
+Schema 2 refines that same `validation_command` with hash-covered sibling fields:
+
+| Field | Contract |
+|---|---|
+| `validation_cwd` | Normalized repository-relative path; default `.`; no absolute path, drive prefix, backslash, or empty/`.`/`..` segment except the sole default `.`. |
+| `validation_repetitions` | Integer `1..5`; default `1`. |
+| `validation_pass_rule` | Exactly `all`. |
+| `validation_timeout_minutes` | Integer `1..120`; required with `validation_command` on a code-producing schema-2 plan. |
+| `validation_env_allowlist` | Canonically sorted, duplicate-free comma list of shell identifiers; default empty. |
+
+Unknown or duplicate `validation_*` fields refuse as `validation_policy_unknown_field` or
+`validation_policy_duplicate_field`. Invalid values refuse as `validation_cwd_invalid`,
+`validation_repetitions_invalid`, `validation_pass_rule_invalid`, `validation_timeout_invalid`, or
+`validation_env_allowlist_invalid`. A code-producing schema-2 plan lacking the command or timeout
+refuses as `validation_policy_required` inside the ordinary `plan_invalid` freeze envelope.
+
+`kaola-workflow-validation-runner.js` executes this policy locally:
+
+```bash
+node scripts/kaola-workflow-validation-runner.js run \
+  --command '<exact frozen command>' \
+  --cwd . --repetitions 1 --timeout-minutes 30 \
+  --env-allowlist KEY_A,KEY_B --output <receipt.json>
+```
+
+The child starts from a scrubbed environment containing only deterministic/platform-minimum keys
+plus the allowlist. Durable identity includes exact command bytes, normalized cwd and policy,
+digests of effective allowlisted values, Node/shell/simple-command executable realpath-mode-version
+identity, relevant lock/toolchain files, and the landable candidate digest. Raw secret values and raw
+child output are not stored. Each repetition records exit/signal/timeout, output digests, a normalized
+failure signature, and equal pre/post candidate digests. Reduction is exact: all comparable zero
+exits are `pass`; all comparable nonzero exits with one stable failure signature are `fail`; mixed
+results, timeout, signal, candidate mutation, or incomparable identity are `inconclusive`.
+`vector_id` hashes deterministic semantic fields only; `receipt_sha256` also binds audit timestamps.
+
+The opt-in `qualify-local` subcommand runs local Claude and Codex probes through injectable process
+adapters and records contract/profile/context identities plus invariant-class outcomes. It compares
+contract conformance, never equality of natural-language findings, explanations, or verdict prose.
+The runner is a self-contained local authority; no external pipeline is part of the contract.
+
+### Reviewer contract 2: plan, context, receipt, and refusal API
+
+#### Contract selection and authoring schema
+
+`resolvePlanContract` is the single version boundary:
+
+- a hash-verified already-frozen plan with no `plan_schema_version` is contract 1
+  (`source: verified-legacy-frozen`) and remains byte-preserving;
+- a new draft must declare `plan_schema_version: 2`;
+- a new field-absent draft refuses `plan_schema_version_missing`;
+- a newly authored explicit version 1 refuses `plan_schema_version_legacy_new`; and
+- duplicate or unsupported values refuse `plan_schema_version_duplicate` or
+  `plan_schema_version_unknown`.
+
+Schema-2 `## Meta` additionally carries `code_certifier`, `security_certifier`,
+`inherited_frontier_digest`, and `inherited_frontier_classes`. The schema-2 node header is:
+
+```text
+| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |
+```
+
+Every gate has a nonempty `gate_claim` and `gate_surface` and an aggregation of `sequence`,
+`replicated_majority`, or `partitioned_all`. A change-gate `adversarial-verifier` carries a sorted
+`certifies` producer list; an investigation verifier carries an empty list; code/security producer
+sets are validator-derived. Plan schema 2 maps only to dispatch `contract_version: 2`; a missing,
+future, or mismatched plan/dispatch/journal version refuses before spawn or lifecycle mutation.
+
+#### Graph-derived mode and three independent axes
+
+`deriveGateMode(planView, node)` is the only mode classifier. It returns `null` for other roles. An
+`adversarial-verifier` is `change_gate` exactly when it can forward-reach the unique sink and at least
+one declared/derived change producer can forward-reach it; otherwise it is `investigation`. This is
+forward reachability, not strict post-dominance. Required-token seeding, dispatch, close, journal,
+reducer, repair-state, verdict, and final freshness checks all consume this result rather than role
+prose or a caller-supplied mode.
+
+The normalized result has separate axes:
+
+| Axis | Values | Owner |
+|---|---|---|
+| `execution_status` | `complete` or `failed` | Harness, from terminal execution and identity/evidence verification. |
+| `domain_outcome` | code/security: `approved` or `changes_requested`; adversarial: `refuted`, `not_refuted`, or `indeterminate` | Reviewer domain. |
+| `gate_effect` | `pass`, `fail`, or `none` | Harness, derived from role, mode, outcome, and admitted blockers. |
+
+`execution_status` and `gate_effect` are reserved: model-authored values refuse as
+`review_reserved_harness_field`. A complete investigation derives `gate_effect:none` for every valid
+adversarial outcome and closes without a product-repair attempt. A change-gate adversarial receipt
+passes only on `not_refuted`; `refuted` and `indeterminate` fail. Code/security pass only on
+`approved` with zero admitted blockers. Missing, malformed, stale, or mismatched execution is
+`failed` and routes bounded role retry; it is never converted to analytical `indeterminate`.
+
+#### Runtime-neutral context and runtime-specific dispatch
+
+At gate open the executor writes canonical JSON to
+`.cache/review-contexts/<review_context_hash>.json`. It binds plan/behavior/claim/epoch/logical-gate,
+graph-derived mode, claim root, landable candidate, inherited frontier, scope lineage, discovery or
+closure phase, prior findings, repair delta, and validation obligations. The context excludes runtime,
+model/tool, `resolved_profile_hash`, evidence transport, timestamps, and absolute paths.
+
+The dispatch envelope separately carries `plan_schema_version`, `contract_version`, behavior version
+and hash, runtime-specific `resolved_profile_hash`, context hash/path, candidate digest, mode,
+logical-gate metadata, and the frozen claim/surface/aggregation. Evidence must echo its required
+identity tokens. Before findings are parsed, close recomputes and compares every binding. Principal
+typed failures are `review_contract_version_mismatch`, `review_context_mismatch`,
+`review_behavior_mismatch`, `review_profile_mismatch`, `review_candidate_mismatch`, and
+`review_gate_mode_mismatch`.
+
+A complete member writes a canonical normalized receipt to
+`.cache/review-receipts/<review_context_hash>/<node-id>.json`. The receipt binds evidence nonce,
+context/behavior/profile/candidate identities, harness-derived axes, surface, normalized findings and
+resolutions, validation vectors, optional certifier digest, and raw-evidence SHA-256. Missing,
+duplicate, failed, or surface-mismatched group members refuse rather than vote.
+
+#### Findings, convergence, and typed re-plan handoff
+
+`finding-anchor-v1` admits exactly one primary anchor of
+`candidate_range`, `deleted_base_range`, `tree_entry_change`, `required_absence`, or
+`evidence_observation`, plus sorted secondary anchors. The harness validates Git/evidence membership,
+recomputes the structured trigger digest, and assigns
+`uid = sha256(canonical_json({scope_lineage_id, primary_anchor}))`. Model ids, prose, proof digests,
+and secondary anchors do not define identity. Conflicting immutable records for one UID refuse
+`finding_uid_collision`.
+
+The first attempt in a scope lineage is `discovery`; later attempts are `closure`. Closure must
+classify every prior UID as open or resolved, bind a new blocker to the repair delta, provide
+current-candidate resolution evidence for removed UIDs, strictly shrink the open set, and retain a
+comparable passing vector for every inherited validation obligation. A new in-scope blocker outside
+the repair delta yields `review_scope_expanded`; two distinct consecutive non-progress attempts yield
+`review_nonconvergent`. Both settle as:
+
+```json
+{
+  "result": "replan_required",
+  "reason": "review_scope_expanded|review_nonconvergent",
+  "attempt_id": "<durable schema-2 attempt>",
+  "lifecycle_settled": true
+}
+```
+
+This packet is a typed stop/handoff only. The current bundle does not select a writer, thaw the frozen
+plan, author replacement topology, or activate a child epoch; claim-preserving epoch activation is a
+separate contract.
+
+#### Reducers and G4 common-certifier wall
+
+| Aggregation | Code/security | Adversarial |
+|---|---|---|
+| `sequence` | One member; approval with no blocker passes. | One member; mode maps the domain outcome to `pass`/`fail`/`none`. |
+| `replicated_majority` | Any blocker vetoes; otherwise strict-majority approval is required. | Strict-majority `not_refuted` wins; a refuted tie is `refuted`; other no-majority mixtures are `indeterminate`. |
+| `partitioned_all` | Every distinct required surface must approve with no blocker. | Any `refuted` surface wins, else any `indeterminate`, else `not_refuted`. |
+
+G4 resolves the planner-designated `code_certifier` and conditional `security_certifier` to a real
+sequence node or exact logical group. Removing that certifier must eliminate every relevant
+producer-to-sink path; group members must be reachable and the join must require every declared
+member. Branch-local reviews alone do not satisfy G4. An `inherited_frontier_digest` with `code`
+and/or `security` classes creates virtual producers before all roots, so a zero-writer child cannot
+launder inherited unapproved work. Finalization recomputes role-specific current digests and requires
+fresh bound certifier receipts. G4 failures are structured `g4_*` / `gate_*` families carried inside
+the ordinary `plan_invalid` freeze result.
+
 ### `## Meta` field `optimize(<node-id>)` — the metric-optimizer contract (issue #634 / D-634-01)
 
 `metric-optimizer` is a closed-library role (`CANONICAL_ROLES`/`WRITE_ROLES`/`IMPLEMENT_ROLES`,
@@ -1194,7 +1375,7 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
   - **Per-node** (`--node-id ID`): tree-diff (`git diff-tree`) the current full-worktree snapshot against the node's **recorded node-start snapshot** (`--record-base`), so it attributes **exactly this node's own changes** — new / modified / deleted, tracked or untracked — without over-attributing prior nodes' still-uncommitted source or pre-existing strays, and checks them against the node's **own** declared write set. `--base` is **rejected** here (the baseline is the recorded snapshot; honoring `--base HEAD` after a commit would empty the diff and neuter the gate); fail-closed if no base was recorded.
 
   PURE core (`barrierCheck(content, actualPaths, opts)`); only the CLI shells out to git, failing closed (typed refusal) on any git error. Prints `barrier ok` or `typed refusal: <errors>`.
-- **`--verdict-check [--node-id ID]`** (issue #251) — Verify that every completed gate-role node's `.cache` evidence file carries `verdict: pass` and `findings_blocking: 0`. The gate-role set is `code-reviewer`, `security-reviewer`, `adversarial-verifier`, and (issue #334) `main-session-gate`. Exit 1 on any failure. Per-node (`--node-id ID`): checks one node; non-gate roles self-skip (exit 0, `ok: true`). Whole-plan (no `--node-id`): checks all completed gate-role nodes in the ledger. For an explicit `adversarial-verifier` fan-out, membership is the exact frozen set sharing both the fan-out label and dependency origin; every vote is read from that member's canonical `.cache/<node-id>.md` receipt. Independent groups cannot contribute votes to one another. Missing receipts, bindings naming a foreign member, duplicate member bindings, and receipts bound to a stale baseline nonce all refuse before tallying. Reopen/reset treats the explicit group collectively, deletes only its attributable member receipts, and rotates the reopened seeds so pre-reopen votes cannot be reused. Majority-refute still requires a strict majority to pass: `refutes * 2 >= verdicts.length` refuses, so an even-width tie fails. The role-prefix `.cache/adversarial-verifier-*.md` reader is **not** part of the canonical path; it remains only as a narrow read-only compatibility path when an archived cardinality>1 plan proves exactly one attributable legacy fan-out identity. Multiple legacy identities are ambiguous and refuse before any legacy receipt is read. PURE + toggle-agnostic. Wired informational per-node in `kaola-workflow-commit-node.js` and enforced as a hard merge gate in Finalization. Prints `verdict ok` or `typed refusal: verdict-check failed`.
+- **`--verdict-check [--node-id ID]`** (issue #251) — Verify every completed gate-role node under the frozen plan contract. For contract 1 it requires the legacy `.cache` evidence block `verdict: pass` and `findings_blocking: 0`; an explicit adversarial fan-out uses exact frozen membership/dependency origin and majority-refute (`refutes * 2 >= verdicts.length` refuses, so an even-width tie fails). For contract 2 it loads each member's evidence-bound normalized receipt, checks schema/context/behavior/profile/candidate identity plus current-candidate freshness, then applies the declared `sequence`, `replicated_majority`, or `partitioned_all` reducer; a complete investigation's `gate_effect:none` is accepted analytically. The gate-role set is `code-reviewer`, `security-reviewer`, `adversarial-verifier`, and (issue #334) `main-session-gate`. Exit 1 on any failure. Per-node (`--node-id ID`) checks one node and non-gate roles self-skip; whole-plan checks all completed gate-role nodes. In the legacy fan-out path, independent groups cannot contribute votes to one another; missing receipts, foreign/duplicate bindings, and stale baseline nonces refuse before tallying. Reopen/reset rotates the attributable seeds. The role-prefix `.cache/adversarial-verifier-*.md` reader remains only as a narrow read-only contract-1 compatibility path when an archived cardinality>1 plan proves one attributable fan-out identity. PURE + toggle-agnostic. Wired informational per-node in `kaola-workflow-commit-node.js` and enforced as a hard merge gate in Finalization. Prints `verdict ok` or `typed refusal: verdict-check failed`.
 - **`--selector-check --node-id ID`** (issue #263) — Check which `select` arm the `selector_source` node chose and compute which arms to mark `n/a`. Requires `--node-id`. Non-selector nodes (not a `selector_source` of any group) return `{ ok: true, isSelector: false, armsToNa: [] }` and exit 0 — never false-blocks. A `selector_source` node with a missing or foreign `selector: <arm-id>` value in its `.cache/<id>.md` evidence returns `{ ok: false, isSelector: true, errors: [...] }` and exits 1 (fail-closed, blocking the commit). Success: `{ ok: true, isSelector: true, selected: "<arm-id>", group: "<group>", armsToNa: ["<arm-id>", ...] }`. The caller (contractor) transcribes `armsToNa` into `n/a` ledger rows; `next-action.js` treats `n/a` arms as terminal so only the selected arm becomes ready. Wired BLOCKING per-node in `kaola-workflow-commit-node.js`.
 - **`--json`** — Emit the machine-readable result object (below) instead of the human line; composes with any mode.
 - **`--help` / `-h` / no args** — Print usage and exit 0.
@@ -1231,7 +1412,7 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
 
 **Grammar (out of grammar ⇒ typed refusal):** every role drawn from the runtime-closed installed library (the eleven canonical roles — including `implementer`, which is an IMPLEMENT_ROLES member requiring `code-reviewer` post-dominance (G1) like `tdd-guide`, but for changes with no natural failing-unit-test — unioned with any maintainer-added `agents/*.md`); a single unique `finalize` sink; an acyclic DAG; exactly four node shapes — `sequence`, `fanout(<group>)` (homogeneous role, width ≤ `FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`), write-role members pairwise-disjoint), `loop(<cap>)` (cap ≤ `LOOP_CAP` = 5), and `select(<group>)` (issue #263: Classify-And-Act arm — see G-SEL rules below); read-only roles declare no write set; and the computed **post-dominance** gates — **G1** `code-reviewer` post-dominates every code-producing node (implement roles, plus any write role writing a non-docs file), **G2** `security-reviewer` post-dominates every sensitive node, and (issue #334, active only when present) **G3** a non-delegable `main-session-gate` post-dominates every code-producing node. Post-dominance is computed as reachability-after-gate-removal over the unique sink. **Non-delegable main-session gate (`main-session-gate`, #334):** a *built-in role token* (like the `finalize` sink — no `agents/*.md` profile, never dispatched as a subagent; the main session itself performs the acceptance check, e.g. a GPU/visual confirmation or human sign-off, and records `verdict: pass|fail` into `.cache/{id}.md`). It is read-only (declares no write set), shape `sequence` only (never a fan-out member, loop, or select arm — refused otherwise), a `GATE_VERDICT_ROLES` member (so `--verdict-check` requires its verdict and G-SEL-2 forbids it as a select arm), and excluded from frontier fan-out membership. G3 (freeze) plus its runtime `--gate-verify` check (no legal `n/a` route) make finalization provably impossible until the gate is complete with a passing verdict. The `## Nodes` `cardinality` column is **reserved/advisory** — parsed but neither validated nor used by the grammar or the gates (fan-out width is the count of nodes sharing a `fanout(<group>)` token; the loop bound is the `loop(<cap>)` cap), yet its text still contributes to `plan_hash` as part of `## Nodes`, so it must be present and stable. **G-SEL rules (Classify-And-Act, #263):** G-SEL-1: a select group needs ≥ 2 arms; all arms must name the same `selector_source` (which must exist in the plan, be read-only, and be listed in every arm's `depends_on`); every arm in a `select(<group>)` group MUST carry a non-empty `selector_source` value — a blank arm is a typed refusal: `G-SEL-1b: arm "<id>" in select group "<group>" has no selector_source declared` (issue #268; additive — no existing gate is relaxed); additionally, group names are a **global namespace** — if a name is shared by arms whose `selector_source` nodes differ, the validator emits a typed refusal: `G-SEL-1: select group name "<name>" used by arms with different selector_source nodes; use distinct group names for independent groups` (issue #271; additive — no existing gate is relaxed). Authoring rule: independent select groups MUST use distinct group names. G-SEL-2: gate roles (`code-reviewer`, `security-reviewer`, `adversarial-verifier`) cannot be select arms. G-SEL-3: no-op by design (G1/G2 post-dominance already applies to all nodes including arms). G-SEL-4: arm write sets must be pairwise disjoint-or-identical. **Sync-group gap (#274):** if any node's `declared_write_set` contains one half of a byte-identical sync pair — a `COMMON_SCRIPTS` member's `scripts/` ↔ `plugins/kaola-workflow/scripts/` mirror, or any member of a `BYTE_IDENTICAL_GROUPS` entry — without the peer(s) appearing in *some* node's write set, the validator emits a typed refusal: `sync-group gap: node <id> declares "<path>" without its byte-identical peer "<peer path>" (#274)` (group form appends the group label). The sync sets are read from `validate-script-sync.js`'s exported `COMMON_SCRIPTS`/`BYTE_IDENTICAL_GROUPS` and are a graceful no-op when that module is absent (Codex/GitLab/Gitea copies, installed user projects). **Agent-registration gap (#340):** when the **union** of all nodes' write sets adds a new agent profile (`agents/<name>.md` or a plugin `agents/<name>.toml` that does not yet exist on disk) but omits any path in that agent's 22-path *registration surface* — the three sibling edition profiles, the three `config/agents.toml` codex-dispatch templates, `validate-vendored-agents.js`, `install.sh`/`uninstall.sh` `REQUIRED_AGENTS`, `resolve-agent-model.js` (×4), the plan-validator `CANONICAL_ROLES` (×4), the gitlab/gitea contract-validator agent counts, and the two forge `test-*-workflow-scripts.js` counts — the validator emits a typed refusal: `agent-registration gap: plan adds new agent "<name>" but no node declares "<req>" — an agent-set delta must carry its full registration surface (#340)`. These registries are exact-match (keyed on no symbol of the new file), so #306 symbol-grep cannot find them. The check is **anchor-gated** to the Kaola-Workflow repo itself (inert unless `<root>/scripts/validate-vendored-agents.js` exists), uses the **union** across nodes (the 22-path surface is normally spread across several nodes — the check is count-independent), and fires on additions only — a role *removal* is indistinguishable from an edit in a declared write set (covered by the planner prose checklist + the derived parity guards in the contract validators). **Forge-port ordering gap (#340):** a node whose write set contains a gitlab/gitea **edition-named port** of a root script (`plugins/kaola-workflow-{gitlab,gitea}/scripts/kaola-{gitlab,gitea}-workflow-<x>.js` ↦ `scripts/kaola-workflow-<x>.js`) must be a **transitive descendant** of every *other* node that writes that root script — the canonical mirror spec is the full accumulated root diff, which only exists after all root edits land. Same-node root+port co-writes (atomic mirror) and a port with no root-writing node in the plan (forge-only fix) are allowed; otherwise the validator refuses: `forge-port ordering gap: node <id> writes port "<p>" but node <other> writes its root source "<rootSrc>" and is not upstream of <id> — order forge-port mirror nodes after ALL root edits and mirror the full accumulated root diff (#340)`.
 
-**Governance (in-grammar plans only):** `decision = ask` when risky, else `auto-run` — over-approximated and fail-closed (uncertain ⇒ risky). Risk is any **sensitivity** (frozen `## Meta` labels in a Phase-5 category, or a declared write set matching the auth / payments / user-data / filesystem / external-API / secrets patterns), any **blast-radius** (write-role fan-out N ≥ 2, a `SHARED_INFRA` touch, or a bounded loop), or **uncertainty** (frozen labels absent). An `auto-run` authorization is provisional and revocable at the per-node barrier, which is now **script-enforced** (issue #231): `--gate-verify` proves the required reviewers actually executed over the `## Node Ledger`, `--verdict-check` (#251) proves those reviewers actually *approved* (a parseable `verdict: pass` / `findings_blocking: 0`, majority-refute over an `adversarial-verifier` fan-out, fail-closed and blocking at the Finalization merge gate), and `--barrier-check` re-scans the files actually written and refuses a surprise sensitive or out-of-allowlist write. The static `auto-run` verdict is no longer the entire enforceable authorization boundary.
+**Governance (in-grammar plans only):** `decision = ask` when risky, else `auto-run` — over-approximated and fail-closed (uncertain ⇒ risky). Risk is any **sensitivity** (frozen `## Meta` labels in a Phase-5 category, or a declared write set matching the auth / payments / user-data / filesystem / external-API / secrets patterns), any **blast-radius** (write-role fan-out N ≥ 2, a `SHARED_INFRA` touch, or a bounded loop), or **uncertainty** (frozen labels absent). An `auto-run` authorization is provisional and revocable at the per-node barrier, which is now **script-enforced** (issue #231): `--gate-verify` proves the required reviewers actually executed over the `## Node Ledger`, `--verdict-check` (#251) proves those reviewers actually *approved* (the legacy verdict/majority-refute contract for contract 1, or fresh bound normalized receipts plus the declared reducer for contract 2; fail-closed and blocking at the Finalization merge gate), and `--barrier-check` re-scans the files actually written and refuses a surprise sensitive or out-of-allowlist write. The static `auto-run` verdict is no longer the entire enforceable authorization boundary.
 
 **`plan_hash`:** SHA-256 over the whitespace-normalized author-immutable `## Meta` (frozen `labels:`) + `## Nodes` sections; the mutable `## Node Ledger` and the hash comment itself are excluded. Stored inside `workflow-plan.md` as `<!-- plan_hash: <64-hex> -->` and re-checked on every load — a mismatch is tampering and yields a typed refusal on `--resume-check`. The full `workflow-plan.md` artifact contract (`## Meta`, the `## Nodes` table schema, and the `## Node Ledger`) is documented in `docs/workflow-state-contract.md`. A barrier consent-halt is durable in BOTH `workflow-state.md` (`escalated_to_full: consent`) and the non-hashed `## Node Ledger` (`consent_halt: pending`, issue #234), so a lost/regenerated `workflow-state.md` cannot silently drop the halt.
 
@@ -1267,10 +1448,12 @@ node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contract
 
 These two scripts form the atomicity interface for the adaptive executor. They are wired into the per-node loop of `kaola-workflow-plan-run` and **called directly by the main session** (the #272 realignment: `kaola-workflow-adaptive-node.js` owns the per-node lifecycle as typed script transactions run main-session-direct — there is no contractor round-trip in the per-node loop): the main session runs `kaola-workflow-next-action.js` for the ready set and `kaola-workflow-commit-node.js --node-id X --start` / `--node-id X` for the per-node *advance* and *commit* brackets, dispatches the role, and owns the consent-halt decision. The aggregator's **whole-plan** mode (no `--node-id`) is exercised by unit tests only; Finalization runs its merge gate by calling the plan-validator directly (this preserves the `--resume-check`/`plan_hash` integrity check that the whole-plan barrier does not run), not via the aggregator. Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
 
-### Authoritative review journal and direct repair (D-682-01)
+### Authoritative contract-1 review journal and direct repair (D-682-01)
 
 `kaola-workflow-adaptive-node.js` persists review transactions at
-`kaola-workflow/{project}/.cache/review-attempts.json`. The top-level schema is:
+`kaola-workflow/{project}/.cache/review-attempts.json`. The schema below is the verified legacy
+contract-1 form; contract 2 uses the version-exact context/receipt/journal API documented above and
+never rewrites a contract-1 journal in place. The contract-1 top-level schema is:
 
 ```json
 {
@@ -1831,13 +2014,16 @@ The `scope` field is additive (#571): `"global"` when the global `~/.codex` scop
 
 Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, `extra_unmanaged`, the same transport, dispatch-posture, and bounds fields, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`). The transport refusal additionally carries `scope` and `config_path`.
 
-**Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for three scopes:
+**Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for four scope classes:
 
+- `repository` — the bundled source profiles beside the preflight script, schema- and reviewer-contract-checked;
 - `user` — `<home>/.codex` (`--home` overrides `os.homedir()`; a test/diagnostic hook);
 - `project` — `<project-root>/.codex`;
-- `plugin_cache` — cached source profiles under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema-checked, `read_only: true`.
+- `plugin_cache` — each cached source-profile set under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema- and exact-source-byte-checked, `read_only: true`.
 
-`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, codex_v2_transport_mode, codex_v2_direct_transport_ready, codex_v2_tool_namespace, codex_v2_role_metadata_visible, codex_v2_role_transport_ready, codex_v2_transport_warning, dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning, max_concurrent_threads_per_session, max_concurrent_threads_per_session_source, effective_subagent_width, min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; unsafe V2 transport or role schema makes its live scope stale. `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete repair. The six transport/role fields are present on every scope, including `plugin_cache`, where mode/namespace read `'n/a'`, readiness/metadata read `null`, and warning reads `null`. The four `dispatch_posture*` fields (#598, non-fatal — see above) are also present on every scope, including `plugin_cache`, where they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` (a cached source tree has no live runtime config to derive a posture from). The six `multi_agent_v2` bounds fields (#611, non-fatal — see above) are likewise present on every scope, including `plugin_cache`, where every numeric field reads `null` and `max_concurrent_threads_per_session_source` reads `'n/a'`. Without `--json`, each scope line is followed by a `  transport: <codex_v2_transport_warning>` line for unsafe V2 and a `  warn: <dispatch_posture_warning>` line whenever that scope's posture is non-`proactive`.
+`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, missing_from_block, malformed, stale_profiles, profile_byte_drift, stale_files, stale_roles_in_block, conflicting_roles_outside, extra_unmanaged, manifest, codex_v2_transport_mode, codex_v2_direct_transport_ready, codex_v2_tool_namespace, codex_v2_role_metadata_visible, codex_v2_role_transport_ready, codex_v2_transport_warning, dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning, max_concurrent_threads_per_session, max_concurrent_threads_per_session_source, effective_subagent_width, min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms, read_only, repair}, ...] }`. Exit code is 0 only when the repository source is valid, the `user` and `project` scopes are clean-or-absent, and every discovered plugin cache matches the bundled source. It is 1 when the repository source is malformed, either installed scope is stale, or any plugin-cache profile is malformed or byte-drifted. Unsafe V2 transport or role schema also makes its live scope stale. Plugin caches remain read-only, but their drift is gate-affecting; their repair is the exact `codex plugin remove <plugin>@<marketplace> && codex plugin add <plugin>@<marketplace>  # refresh plugin cache` command. Every stale scope carries a concrete repair.
+
+The six transport/role fields are present on every live or cache scope; for `plugin_cache`, mode/namespace read `'n/a'`, readiness/metadata read `null`, and warning reads `null`. The four `dispatch_posture*` fields (#598, non-fatal — see above) are also present on every live or cache scope; for `plugin_cache`, they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` because a cached source tree has no live runtime config. The six `multi_agent_v2` bounds fields (#611, non-fatal — see above) likewise use `null` numeric values and `'n/a'` as the source for `plugin_cache`. Repository output is source-contract evidence rather than a live transport/config report. Without `--json`, each scope line is followed by its exact `repair` when stale, a `transport` line for unsafe V2, and a `warn` line whenever that scope's posture is non-`proactive`.
 
 ---
 
@@ -1849,14 +2035,16 @@ Installs the Codex-native role profiles. Ships in the **3 plugin trees only** (c
 
 Default-on validate → install → prune → manifest → post-verify (no install flags):
 
-1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. On failure, prints `profile_schema_error: ...` to stderr and exits 1 **before any write**.
+1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. Generated reviewer profiles additionally require reviewer contract version 2, the embedded normalized behavior core and matching `behavior_contract_hash`, one valid self-normalized `resolved_profile_hash`, the closed top-level schema, and no runtime/model pin. On failure, prints `profile_schema_error: ...` plus `profile_source_repair: node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check`, then exits 1 **before any write**.
 2. **V2 role-transport wall** — reads the target `config.toml` before any write. Nested/ambiguous encrypted transport prints `codex_v2_encrypted_transport_unsafe: ...`; a reserved/hidden role schema prints `codex_v2_role_transport_unsafe: ...`. Both exit 1, and the installer does not silently change user-owned feature settings.
 3. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported, prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
 4. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the managed `[agents.*]` block, copies hook scripts into the global stable home, and merges the managed entries into `~/.codex/hooks.json` (#325/#447 semantics).
 5. **Prune** — removes target `.toml` files that are no longer current AND are either listed in the previous manifest (`stale-managed`) or in the retired list `docs-lookup.toml` (`retired`, works with no manifest). Unknown user TOMLs are left in place and reported as `unmanaged extra`.
-6. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, `retired_files_removed`).
-7. **Post-verify** — re-reads every installed profile and asserts the managed block carries every template role; on failure prints `post_verify_failed: ...` and exits 1.
+6. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, reviewer `profile_contracts` carrying `behavior_contract_version`, `behavior_contract_hash`, and `resolved_profile_hash`, and `retired_files_removed`).
+7. **Post-verify** — re-reads every installed profile, requires exact bundled-source bytes, revalidates reviewer profile identities, and asserts that the managed block carries every template role; on failure prints `post_verify_failed: ...` and exits 1.
 8. Prints `Kaola-Workflow Codex multi_agent_v2 transport: <mode>` plus the effective role namespace/metadata readiness with the posture/bounds report, then `status: ok` as the machine-checkable final sentinel.
+
+These checks prove repository, installed, and discovered plugin-cache **filesystem bytes and embedded identities**. They do not attest that a proprietary runtime loaded those bytes into a prompt, and deterministic profile identity does not imply identical stochastic model output.
 
 Exported helpers (require-safe; `require.main` guard means `require()` never runs the installer): `validateProfileText`, `validateSourceProfiles`, `pruneStaleProfiles`, `readManifest`, `writeManifest`, `buildManagedHooks`, `mergeHooks`, `updateHooks`, `detectCodexDispatchMode`, plus the constants `RETIRED_PROFILE_FILES`, `MANIFEST_BASENAME`, `EFFORT_VALUES`, `CODEX_V2_TRANSPORT_UNSAFE_STATUS`, `CODEX_V2_DIRECT_TRANSPORT_NOTE`, `CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS`, `CODEX_V2_ROLE_TOOL_NAMESPACE`, and `CODEX_V2_ROLE_TRANSPORT_NOTE`.
 

@@ -419,13 +419,20 @@ function routeAdaptive(root, workflowDir, project) {
   const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
   const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
   const verdict = planValidator.verifyVerdictBlock(content, { readCache, globCache });
-  if (!verdict.ok) { for (const f of verdict.failures) { pendingGates.push({ requirement: 'verdict gate ' + f.nodeId + ' (' + f.role + ')', status: 'missing-verdict', evidence: '', skipReason: f.reason }); } }
+  if (!verdict.ok) { for (const f of verdict.failures) { pendingGates.push({
+    requirement: (check.contract_version === 2 ? 'review receipt ' : 'verdict gate ') + f.nodeId + ' (' + f.role + ')',
+    status: check.contract_version === 2 ? 'missing-or-stale-review-receipt' : 'missing-verdict',
+    evidence: '', skipReason: f.reason
+  }); } }
   return {
     root, project, phase: 'adaptive', phaseName: 'Adaptive', workflowPath: 'adaptive',
     step: consentHalt ? 'consent-halt-surface' : 'router-reconstructed', task: 'N/A', consentHalt,
     nextCommand: '/kaola-workflow-plan-run ' + project,
     nextSkill: 'kaola-workflow-plan-run ' + project,
-    phaseFile: planFile, pendingGates
+    phaseFile: planFile,
+    planSchemaVersion: check.plan_schema_version,
+    reviewContractVersion: check.contract_version,
+    pendingGates
   };
 }
 

@@ -35,6 +35,39 @@ approval gate — freeze and hand off either way), and hand off to
 `/kaola-workflow-plan-run`. If the plan is out of grammar, the validator returns
 a **typed refusal** — fix the plan, never clamp around the gate.
 
+<!-- PIN: reviewer-contract-v2-authoring -->
+## Reviewer Contract V2 Authoring
+
+Every newly authored plan declares `plan_schema_version: 2`. Never freeze a new draft with a
+missing version or `plan_schema_version: 1`. A verified already-frozen plan whose hash-covered
+Meta predates the version field is the only legacy case: route it byte-preserving as
+`contract_version: 1`, and never rewrite its plan, evidence vocabulary, or journal. If execution
+later emits `replan_required`, return that typed packet to the owning orchestrator; this authoring
+surface never thaws the frozen DAG or activates a replacement plan.
+
+Schema-2 `## Meta` records the complete validation policy: the exact `validation_command`,
+normalized `validation_cwd`, `validation_repetitions` from 1 through 5,
+`validation_pass_rule: all`, `validation_timeout_minutes` from 1 through 120, and a canonical sorted
+`validation_env_allowlist`. A code-producing plan requires both the command and timeout. Also
+record `code_certifier`, `security_certifier`, `inherited_frontier_digest`, and
+`inherited_frontier_classes`. Use `none` only when that class is absent; when authoritative
+handoff state supplies an inherited digest/classes pair, copy it exactly and never synthesize,
+drop, or change it.
+
+Use this schema-2 node header exactly:
+
+`| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |`
+
+Every review gate has a nonempty single-line `gate_claim` and `gate_surface`.
+`gate_aggregation` is `sequence` for a singleton, `replicated_majority` for replicas sharing
+one surface, or `partitioned_all` for members with distinct surfaces. The graph-derived mode is
+authoritative: a change-gate `adversarial-verifier` carries a canonical sorted `certifies`
+producer list, an investigation verifier carries an empty one, and code/security certifier producer
+sets remain validator-derived. Non-gate rows leave all four gate columns empty. Design a real common
+certifier wall for every required code/security frontier; branch-local reviewers do not satisfy the
+planner-designated certifier metadata. Compact-plan and exact-file write-set rules remain binding.
+<!-- /PIN -->
+
 ## Agent Model Badge
 
 Every subagent dispatch below includes an explicit `model=` line. Always pass it

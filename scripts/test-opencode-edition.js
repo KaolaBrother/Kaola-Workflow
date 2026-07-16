@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const sync = require('./sync-opencode-edition.js');
 const schema = require('./kaola-workflow-adaptive-schema.js');
+const reviewerGenerator = require('./generate-reviewer-profiles.js');
 
 const REPO = sync.REPO;
 const read = rel => fs.readFileSync(path.join(REPO, rel), 'utf8');
@@ -157,6 +158,25 @@ for (const name of canonAgents) {
   const expected = sync.renderAgent(read('agents/' + name + '.md'), name);
   assert(read('.opencode/agent/' + name + '.md') === expected,
     'A6[' + name + ']: generated agent in parity with canonical (run --write to fix)');
+}
+
+// Reviewer contracts retain deterministic normalized behavior identity through the OpenCode
+// transform. This is a contract/profile assertion only: foundation-model findings and prose remain
+// stochastic and are never promised to match across runtimes.
+for (const role of reviewerGenerator.ROLES) {
+  const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
+  const opencodeText = read('.opencode/agent/' + role + '.md');
+  const opencode = reviewerGenerator.behaviorIdentityFromCore(opencodeText);
+  assert(opencode.role === canonical.role
+    && opencode.behavior_contract_version === canonical.behavior_contract_version
+    && opencode.behavior_contract_hash === canonical.behavior_contract_hash,
+  `A6-reviewer[${role}]: OpenCode agent retains normalized reviewer behavior identity`);
+  assert(opencode.core === canonical.core,
+    `A6-reviewer[${role}]: OpenCode transform preserves reviewer behavior-core bytes`);
+  assert(!/^resolved_profile_hash\s*:/m.test(opencodeText),
+    `A6-reviewer[${role}]: OpenCode does not reuse the Claude render hash after transforming frontmatter`);
+  assert(!/(?:identical|same|byte-identical)[^\n]{0,80}(?:model output|findings|verdict|review output)/i.test(opencodeText),
+    `A6-reviewer[${role}]: OpenCode agent makes no stochastic-output-identity claim`);
 }
 
 // A13: the workflow-planner ADOPTS adaptive effort selection — its opencode-edition body

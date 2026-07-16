@@ -252,6 +252,70 @@ sha256_file() {
   fi
 }
 
+refresh_reviewer_resolved_profile_hash() {
+  local dest="$1"
+  node - "$SCRIPT_DIR/scripts/generate-reviewer-profiles.js" "$dest" <<'NODE'
+const fs = require('fs');
+const generator = require(process.argv[2]);
+const file = process.argv[3];
+const text = fs.readFileSync(file, 'utf8');
+const normalized = generator.normalizeResolvedProfileHash(text);
+const digest = generator.sha256(normalized);
+const updated = normalized.replace(
+  /^(resolved_profile_hash:\s*)0{64}(\s*)$/m,
+  (_, prefix, suffix) => prefix + digest + suffix
+);
+if (updated === normalized) {
+  throw new Error('resolved_profile_hash_zero_slot_missing');
+}
+const tmp = `${file}.tmp-${process.pid}`;
+fs.writeFileSync(tmp, updated, { encoding: 'utf8', mode: fs.statSync(file).mode });
+fs.renameSync(tmp, file);
+NODE
+}
+
+reviewer_manifest_metadata() {
+  local role="$1"; local source="$2"; local dest="$3"
+  node - "$SCRIPT_DIR/scripts/generate-reviewer-profiles.js" "$role" "$source" "$dest" <<'NODE'
+const fs = require('fs');
+const generator = require(process.argv[2]);
+const role = process.argv[3];
+const source = fs.readFileSync(process.argv[4], 'utf8');
+const installed = fs.readFileSync(process.argv[5], 'utf8');
+
+const sourceIdentity = generator.behaviorIdentityFromCore(source);
+const installedIdentity = generator.behaviorIdentityFromCore(installed);
+if (sourceIdentity.role !== role || installedIdentity.role !== role) {
+  throw new Error(`reviewer_role_mismatch: expected ${role}`);
+}
+if (sourceIdentity.behavior_contract_version !== 2
+    || installedIdentity.behavior_contract_version !== 2) {
+  throw new Error(`reviewer_contract_version_mismatch: expected 2 for ${role}`);
+}
+if (sourceIdentity.behavior_contract_hash !== installedIdentity.behavior_contract_hash
+    || sourceIdentity.core !== installedIdentity.core) {
+  throw new Error(`reviewer_behavior_contract_mismatch: ${role}`);
+}
+
+const rewritten = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
+const normalized = generator.normalizeResolvedProfileHash(rewritten);
+const resolvedHash = generator.sha256(normalized);
+const expected = normalized.replace(
+  /^(resolved_profile_hash:\s*)0{64}(\s*)$/m,
+  (_, prefix, suffix) => prefix + resolvedHash + suffix
+);
+generator.verifyResolvedProfileHash(installed);
+if (installed !== expected) {
+  throw new Error(`reviewer_installed_bytes_mismatch: ${role}`);
+}
+process.stdout.write([
+  installedIdentity.behavior_contract_version,
+  installedIdentity.behavior_contract_hash,
+  resolvedHash,
+].join('\t'));
+NODE
+}
+
 manifest_lookup() {
   local file_name="$1"
   [[ -f "$AGENT_MANIFEST_FILE" ]] || return 0
@@ -286,6 +350,12 @@ install_managed_agent() {
 install_agent_files() {
   if [[ ! -d "$SOURCE_AGENTS_DIR" ]]; then
     echo "Agents directory not found: $SOURCE_AGENTS_DIR" >&2
+    exit 1
+  fi
+
+  if ! node "$SCRIPT_DIR/scripts/generate-reviewer-profiles.js" --check; then
+    echo "Reviewer source profile verification failed." >&2
+    echo "Repair: node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check" >&2
     exit 1
   fi
 
@@ -342,7 +412,17 @@ install_agent_files() {
       exit 1
     fi
 
-    printf '%s\t%s\n' "$file_name" "$(sha256_file "$dest")" >> "$manifest_tmp"
+    case "$agent" in
+      code-reviewer|adversarial-verifier)
+        refresh_reviewer_resolved_profile_hash "$dest"
+        local reviewer_metadata
+        reviewer_metadata="$(reviewer_manifest_metadata "$agent" "$source_file" "$dest")"
+        printf '%s\t%s\t%s\n' "$file_name" "$(sha256_file "$dest")" "$reviewer_metadata" >> "$manifest_tmp"
+        ;;
+      *)
+        printf '%s\t%s\n' "$file_name" "$(sha256_file "$dest")" >> "$manifest_tmp"
+        ;;
+    esac
     installed=$((installed + 1))
   done
 
@@ -357,6 +437,7 @@ install_agent_files() {
   fi
   if [[ "$installed" -gt 0 ]]; then
     echo "Verified managed Kaola-Workflow agents."
+    echo "Reviewer installation proof covers filesystem bytes only; runtime prompt loading is not attested."
   fi
 }
 
