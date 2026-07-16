@@ -67,7 +67,10 @@ function isSharedInfra(area) {
 const PROTECTED_BASENAMES = new Set([
   'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml',
   'Cargo.lock', 'poetry.lock', 'Gemfile.lock', 'composer.lock', 'go.sum',
-  'CHANGELOG.md', 'ROADMAP.md',
+  // #702: README.md joins CHANGELOG.md/ROADMAP.md as a SHARED AGGREGATION index — the repo-root readme
+  // is a single narrative surface, never a per-leg lane. PROTECTED makes "stays single-leg" a STRUCTURAL
+  // guarantee (NET-2): the file-granular docs co-open relaxation refuses any leg group carrying it.
+  'CHANGELOG.md', 'ROADMAP.md', 'README.md',
   'kaola-workflow-install-manifest.js', 'kaola-workflow-adaptive-schema.js',
 ]);
 const PROTECTED_PATH_MARKERS = [

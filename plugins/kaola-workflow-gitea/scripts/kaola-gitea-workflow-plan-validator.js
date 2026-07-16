@@ -305,6 +305,25 @@ function declaresAllowbandSurface(writeSet) {
   for (const p of (writeSet || [])) if (isAllowbandDocsSurface(p)) return p;
   return null;
 }
+// #702: a HARD allowband surface — an allowband path whose attribution to ONE leg is UNPROVABLE, so two
+// legs both touching it silently both-apply. It is either a SHARED AGGREGATION file (CHANGELOG.md /
+// README.md — one narrative surface every leg would append to) OR a NON-exactly-resolvable docs/ token
+// (a glob or directory shape — detected with the SAME hasUnresolvableEntry shape check the coarse
+// relaxation uses; the per-leg exact-path barrier can never match it). A HARD surface on >= 2 legs always
+// refuses (parallel_allowband_collision), unchanged. The complement — an EXACT-file docs/** token — is
+// SOFT: file-granular, per-leg-attributable, and relaxable under the retained net. Pure (no fs).
+function isHardAllowbandSurface(p) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (rel === 'CHANGELOG.md' || rel === 'README.md') return true;   // shared aggregation index
+  if (/^docs\//.test(rel) && hasUnresolvableEntry(new Set([rel]))) return true; // glob/dir docs token
+  return false;
+}
+// Return the FIRST HARD allowband surface a write set declares (for the operator-facing message), or null.
+function declaresHardAllowbandSurface(writeSet) {
+  for (const p of (writeSet || [])) if (isHardAllowbandSurface(p)) return p;
+  return null;
+}
 
 // #547 (D-547-01): the files THIS repo's four chains READ + ASSERT ON inside the #424 narrow allowband —
 // i.e. prose that is barrier-INVISIBLE for attribution (#424) yet VERDICT-AFFECTING for validation (a
@@ -1542,6 +1561,26 @@ function hasUnresolvableEntry(set) {
   return false;
 }
 
+// #702: is a WHOLE fan-out group's declared write sets co-openable under the retained net? True iff EVERY
+// pairwise overlap among `writeSets` is relaxable via writeOverlapRelaxable — i.e. coarse (exact-file-
+// disjoint, exactly-resolvable, non-PROTECTED, gate-post-dominated) or shared-infra, per the SAME ladder
+// the runtime --parallel-safe pair-loop already applies. An EXACT overlap, a glob/dir-shaped token, a
+// PROTECTED file, or a missing gate ⇒ false. Reuses classifier.disjointWriteSets (the SAME comparator) +
+// writeOverlapRelaxable (the SAME predicate) so the freeze wall admits exactly what the runtime co-opens —
+// no second comparator, no docs special-case. Lifts the coarse relaxation the freeze fan-out loop lacked
+// (the runtime had it since #593), closing the two-blocker gap for exact-file-disjoint docs siblings. Pure.
+function groupWriteOverlapRelaxable(writeSets, policy, consent, gatePresent) {
+  const sets = (writeSets || []).map(s => (s instanceof Set ? s : new Set(s || [])));
+  for (let i = 0; i < sets.length; i++) {
+    for (let j = i + 1; j < sets.length; j++) {
+      const dj = classifier.disjointWriteSets([sets[i], sets[j]]);
+      if (dj.verdict === 'green') continue;
+      if (!writeOverlapRelaxable(dj, sets[i], sets[j], policy, consent, gatePresent)) return false;
+    }
+  }
+  return true;
+}
+
 // --- sensitivity ------------------------------------------------------------
 function nodeIsSensitive(node) {
   for (const p of node.writeSet) if (SENSITIVE_PATTERNS.some(re => re.test(p))) return true;
@@ -2366,7 +2405,16 @@ function barrierCheck(content, actualPaths, opts) {
   // kaola-workflow/{project}/** are invisible. Behavioral `.md`/`.toml` (agents/*.md, commands/*.md,
   // plugins/*/skills/**/*.md, plugins/*/agents/*.toml, any nested non-root README.md) is now
   // PRODUCTION and MUST be declared — the agents/workflow-planner.md live escape is closed.
-  const isExempt = p => isWorkflowArtifact(p) || isBarrierInvisible(p, archiveProj) || isTestPath(p);
+  // #702: in LEG scope (opts.legScoped, set ONLY by the --leg-barrier CLI path) the DOCS allowband subset
+  // (isAllowbandDocsSurface: docs/**, root CHANGELOG.md/README.md) stops being exempt, so an out-of-
+  // declared-set docs write that landed in a leg refuses write_set_overflow instead of silently both-
+  // applying at the synthesis merge. Only a plan that passed the fixed freeze grammar (exact-file-disjoint
+  // docs siblings) reaches this state, so it is unconditional once leg-scoped. The kaola-workflow/{project}/**
+  // band stays exempt (isAllowbandDocsSurface excludes it) — per-leg .cache evidence legitimately differs.
+  // The GROUP/union barrier (opts.groupMembers) and the WHOLE-PLAN barrier (no legScoped) are unchanged:
+  // docs stay exempt there (they back every serial close + finalize check).
+  const legScoped = !!opts.legScoped;
+  const isExempt = p => isWorkflowArtifact(p) || (isBarrierInvisible(p, archiveProj) && !(legScoped && isAllowbandDocsSurface(p))) || isTestPath(p);
   const production = real.filter(p => !isExempt(p) && !foreignArchive(p));
   // (AC3) foreign-archive refusal: a write to another project's archive band must be blocked.
   const foreignArchiveHits = real.filter(foreignArchive);
@@ -3107,19 +3155,32 @@ function validatePlan(content, opts) {
     if (!readOnly) {
       if (members.length >= 2) writeRoleFanout = true;
       const dj = classifier.disjointWriteSets(members.map(m => m.writeSet));
-      if (dj.verdict === 'red') errors.push(`fan-out group "${g}" write sets not pairwise disjoint (${dj.reasoning})`);
+      // #702: a PURE-DOCS fan-out group — EVERY member declares ONLY exact-file docs allowband surfaces
+      // (docs/**, the coarse top-level `docs` area) — RELAXES its coarse-RED disjointness verdict under
+      // the retained net, exactly as the runtime --parallel-safe already co-opens it (#593). This is
+      // DELIBERATELY narrowed to the docs allowband: a NON-docs coarse fan-out (two api/ or crates/ legs)
+      // keeps today's freeze refusal — the freeze wall stays stricter than runtime for code (mirroring the
+      // shared-infra "must serialize" wall). gatePresent proves a code-reviewer post-dominates the group's
+      // own legs (NET-1); groupWriteOverlapRelaxable reuses the SAME writeOverlapRelaxable ladder (NET-2
+      // no-PROTECTED — so CHANGELOG.md/README.md never relax — + resolvability — so glob/dir docs never
+      // relax — + exact-never-relaxes — so same-file docs stay refused). A missing gate keeps the refusal.
+      const memberIdSet = new Set(members.map(m => m.id));
+      const gatePresent = !!sink && gateUncovered(nodes, n => memberIdSet.has(n.id), 'code-reviewer', sink).length === 0;
+      const allDocsAllowband = members.every(m => [...m.writeSet].every(p => isAllowbandDocsSurface(p)));
+      const groupRelaxable = allDocsAllowband && groupWriteOverlapRelaxable(members.map(m => m.writeSet), writePolicy, false, gatePresent);
+      if (dj.verdict === 'red' && !groupRelaxable) errors.push(`fan-out group "${g}" write sets not pairwise disjoint (${dj.reasoning})`);
       if (dj.verdict === 'yellow') errors.push(`fan-out group "${g}" touches shared infra (${dj.reasoning}) — must serialize, not fan out`);
-      // #587: the CHANGELOG.md/README.md/docs/** allowband is barrier-INVISIBLE — the per-node
-      // barrier never flags these files, so two concurrent legs both touching them are invisible to
-      // BOTH the freeze proof (different exact paths / non-shared areas can look disjoint) AND the
-      // barrier, and git-merge silently both-applies disjoint-region edits. Require the allowband be
-      // declared on exactly ONE leg of a parallel group. (Same-file overlap is already RED above; this
-      // additionally catches DIFFERENT allowband surfaces, e.g. CHANGELOG.md on one leg + README.md on
-      // another.) Serial-run barrier invisibility is unchanged — this is freeze-time, parallel-only.
-      const allowbandLegs = members.filter(m => declaresAllowbandSurface(m.writeSet));
-      if (allowbandLegs.length >= 2) {
-        const surfaces = allowbandLegs.map(m => `${m.id}:"${declaresAllowbandSurface(m.writeSet)}"`).join(', ');
-        errors.push(`fan-out group "${g}" declares a barrier-invisible allowband surface on ${allowbandLegs.length} legs (${surfaces}) (parallel_allowband_collision) — CHANGELOG.md/README.md/docs/** are never flagged by the per-node barrier; declare shared docs/changelog writes on exactly one leg of a parallel group`);
+      // #587/#702: HARD allowband surfaces stay single-leg. A HARD surface — a shared aggregation index
+      // (CHANGELOG.md/README.md) or a glob/dir-shaped docs/ token — on >= 2 legs is UNATTRIBUTABLE to one
+      // leg (the per-node barrier never flags it, and git-merge both-applies), so it always refuses. This
+      // still catches DIFFERENT hard surfaces (CHANGELOG.md on one leg + README.md on another — disjoint,
+      // so the RED arm above passes them). SOFT collisions (exact-file docs/** on multiple legs) are NO
+      // LONGER caught here — they are governed by the coarse relaxation above: disjoint + gate ⇒ co-open;
+      // same-file ⇒ the RED exact refusal; no gate ⇒ the RED coarse refusal. Freeze-time, parallel-only.
+      const hardLegs = members.filter(m => declaresHardAllowbandSurface(m.writeSet));
+      if (hardLegs.length >= 2) {
+        const surfaces = hardLegs.map(m => `${m.id}:"${declaresHardAllowbandSurface(m.writeSet)}"`).join(', ');
+        errors.push(`fan-out group "${g}" declares a hard allowband surface (aggregation index or glob/dir docs) on ${hardLegs.length} legs (${surfaces}) (parallel_allowband_collision) — CHANGELOG.md/README.md and glob/dir docs/ tokens are never attributable to one leg; declare each on exactly one leg of a parallel group`);
       }
     }
     // read-only fan-out: any width is in-grammar (empty write sets are trivially disjoint);
@@ -3227,14 +3288,42 @@ function validatePlan(content, opts) {
         const A = writeBearing[i], B = writeBearing[j];
         if (groupKeyOf.has(A.id) && groupKeyOf.get(A.id) === groupKeyOf.get(B.id)) continue; // same declared group
         if (descOf.get(A.id).has(B.id) || descOf.get(B.id).has(A.id)) continue;              // not an antichain
-        // #587: barrier-invisible allowband collision — both legs declare a CHANGELOG.md/README.md/
+        // #587/#702: barrier-invisible allowband collision — both legs declare a CHANGELOG.md/README.md/
         // docs/** surface. The per-node barrier never flags these, so even INDEPENDENT branches (no
         // shared ancestor) silently both-apply at the synthesis merge. Checked FIRST so a
         // non-shared-ancestor pair (which the coarse arm below deliberately skips) is still caught.
+        //   HARD surfaces (aggregation index CHANGELOG.md/README.md, or a glob/dir docs token) on BOTH
+        //   legs are unattributable — always refuse (unchanged).
+        //   SOFT surfaces (exact-file docs/** on both legs) are file-granular and per-leg-attributable
+        //   (#702): a PURE-DOCS pair (each leg declares ONLY docs allowband files) is admitted ONLY when
+        //   proven pairwise-disjoint-and-gate-covered — the SAME writeOverlapRelaxable net (a code-reviewer
+        //   post-dominating BOTH legs + non-PROTECTED + resolvable) the runtime uses; otherwise it refuses.
+        //   A same-file docs overlap (dj.kind==='exact') is left to the exact-clobber refusal below. A pair
+        //   that ALSO declares non-docs (code) writes stays a hard refuse — the freeze wall keeps refusing
+        //   code coarse overlaps (stricter than runtime, by design), exactly as the fan-out arm above does.
+        const aHard = declaresHardAllowbandSurface(A.writeSet);
+        const bHard = declaresHardAllowbandSurface(B.writeSet);
         const aAllow = declaresAllowbandSurface(A.writeSet);
         const bAllow = declaresAllowbandSurface(B.writeSet);
-        if (aAllow && bAllow) {
-          errors.push(`concurrent siblings ${A.id} and ${B.id} both declare a barrier-invisible allowband surface ("${aAllow}", "${bAllow}") (parallel_allowband_collision) — CHANGELOG.md/README.md/docs/** are never flagged by the per-node barrier; declare shared docs/changelog writes on exactly one leg`);
+        if (aHard && bHard) {
+          errors.push(`concurrent siblings ${A.id} and ${B.id} both declare a hard allowband surface ("${aHard}", "${bHard}") (parallel_allowband_collision) — CHANGELOG.md/README.md and glob/dir docs/ tokens are never attributable to one leg; declare each on exactly one leg`);
+        } else if (aAllow && bAllow) {
+          // Only a COARSE docs collision (both legs touch the `docs` area with distinct exact files) is an
+          // unattributable-at-freeze allowband collision. A GREEN pair (disjoint distinct areas — e.g. a
+          // single HARD index on one leg + a soft doc on another) has NO collision, and an EXACT same-file
+          // overlap is the exact-clobber refusal's job below — neither is refused here (this mirrors the
+          // fan-out arm, which refuses only on a coarse-RED or >= 2 hard legs). A pure-docs coarse pair is
+          // ADMITTED when exact-file-disjoint + gate-covered (the SAME writeOverlapRelaxable net); a mixed
+          // docs+code pair, a glob docs pair, or a gate-less one keeps the refusal.
+          const djAllow = classifier.disjointWriteSets([A.writeSet, B.writeSet]);
+          if (djAllow.kind === 'coarse') {
+            const bothPureDocs = [...A.writeSet].every(p => isAllowbandDocsSurface(p)) && [...B.writeSet].every(p => isAllowbandDocsSurface(p));
+            const pairGate = !!sink && gateUncovered(nodes, n => n.id === A.id || n.id === B.id, 'code-reviewer', sink).length === 0;
+            const relaxable = bothPureDocs && writeOverlapRelaxable(djAllow, A.writeSet, B.writeSet, writePolicy, false, pairGate);
+            if (!relaxable) {
+              errors.push(`concurrent siblings ${A.id} and ${B.id} both declare an allowband docs surface ("${aAllow}", "${bAllow}") not proven exact-file-disjoint + code-reviewer-gate-covered (parallel_allowband_collision) — add a post-dominating code-reviewer over both legs, or declare the docs writes on exactly one leg`);
+            }
+          }
         }
         // EXACT-file overlap => RED/refuse for ANY antichain pair, REGARDLESS of a common ancestor
         // (v3.20.1): two unordered nodes writing the same exact file both land in the ready-set and
@@ -4556,7 +4645,7 @@ function main() {
     const now = snapshotWorktree(legRoot, nodeId + '-leg');
     const diffOut = execFileSync('git', ['-C', legRoot, 'diff-tree', '-r', '--name-only', baseSha, now], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
-    const r = barrierCheck(content, actualPaths, { nodeId, root: legRoot, project: legSan(legProject) });
+    const r = barrierCheck(content, actualPaths, { nodeId, root: legRoot, project: legSan(legProject), legScoped: true });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'leg barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;
@@ -5010,6 +5099,13 @@ module.exports = {
   // #596: exported so next-action.js's static write-eligibility check reuses the SAME resolvability
   // predicate the --parallel-safe coarse relaxation already applies (no new logic, no new entry point).
   hasUnresolvableEntry,
+  // #702: the file-granular allowband predicates (HARD aggregation/glob vs SOFT exact-file docs) + the
+  // group co-open proof, exported for direct unit coverage.
+  isAllowbandDocsSurface,
+  declaresAllowbandSurface,
+  isHardAllowbandSurface,
+  declaresHardAllowbandSurface,
+  groupWriteOverlapRelaxable,
 };
 
 if (require.main === module) {

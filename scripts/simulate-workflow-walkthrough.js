@@ -2223,11 +2223,12 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'in-grammar',
       '#587 CONTROL: a genuinely-disjoint parallel fan-out must still freeze GREEN, got: ' + JSON.stringify(v));
 
-    // #587 (part 1): barrier-INVISIBLE allowband collision. CHANGELOG.md/README.md/docs/** are never
-    // flagged by the per-node barrier, so two parallel legs both touching them are invisible to BOTH
-    // the freeze proof (different surfaces / non-shared areas look disjoint) AND the barrier; git-merge
-    // silently both-applies. Require the allowband on exactly ONE leg. Two fan-out legs, one declaring
-    // CHANGELOG.md + the other README.md (distinct files, distinct areas), froze GREEN pre-fix.
+    // #587/#702: allowband collision is now FILE-GRANULAR. A HARD allowband surface — a shared
+    // aggregation index (CHANGELOG.md/README.md) or a glob/dir-shaped docs/ token — stays single-leg
+    // (unattributable to one leg → both-applies), so >= 2 legs touching one still refuse. A SOFT surface
+    // (an EXACT-file docs/** token) is per-leg-attributable, so exact-file-disjoint docs siblings under a
+    // post-dominating code-reviewer co-open (#702). --- REGRESSION-PIN (HARD): two fan-out legs, one
+    // declaring CHANGELOG.md + the other README.md (distinct HARD surfaces), must still refuse.
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| a | tdd-guide | explore | api/a.js, CHANGELOG.md | 1 | fanout(impl) |',
@@ -2236,9 +2237,54 @@ function testAdaptiveValidatorGovernance() {
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
     assert(v.result === 'refuse' && /parallel_allowband_collision/.test((v.errors||[]).join(';')),
-      '#587: two parallel fan-out legs both declaring a barrier-invisible allowband surface must refuse at freeze (parallel_allowband_collision), got: ' + JSON.stringify(v));
-    // and INDEPENDENT antichain branches both touching docs/** (the coarse-area arm deliberately
-    // skips no-shared-ancestor pairs, so the allowband arm must catch it regardless).
+      '#587: two parallel fan-out legs both declaring a HARD allowband surface (CHANGELOG.md/README.md) must refuse at freeze (parallel_allowband_collision), got: ' + JSON.stringify(v));
+    // REGRESSION-PIN (glob docs = HARD): a glob/dir-shaped docs token on 2 fan-out legs is unattributable
+    // (the exact-path per-leg barrier can never match it) — must still refuse.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | doc-updater | explore | docs/api/*.md | 1 | fanout(docs) |',
+      '| b | doc-updater | explore | docs/cli/*.md | 1 | fanout(docs) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /parallel_allowband_collision/.test((v.errors||[]).join(';')),
+      '#702: a glob/dir-shaped docs token on 2 parallel legs must still refuse (parallel_allowband_collision), got: ' + JSON.stringify(v));
+    // #702 RELAXED (SOFT, declared fan-out): N exact-file-disjoint docs/** writers under a post-dominating
+    // code-reviewer now freeze IN-GRAMMAR (the two-blocker fix: the coarse-RED disjointness arm now reuses
+    // the runtime coarse relaxation, and the allowband arm only catches HARD surfaces). This is the whole
+    // point of #702 — docs-heavy epics stop being forced serial.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | doc-updater | explore | docs/a.md | 1 | fanout(docs) |',
+      '| b | doc-updater | explore | docs/b.md | 1 | fanout(docs) |',
+      '| c | doc-updater | explore | docs/c.md | 1 | fanout(docs) |',
+      '| review | code-reviewer | a,b,c | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '#702: exact-file-disjoint docs fan-out under a post-dominating gate must freeze IN-GRAMMAR, got: ' + JSON.stringify(v));
+    // #702 FLOOR (no gate): the SAME exact-file-disjoint docs fan-out with NO post-dominating code-reviewer
+    // must still refuse — the retained net (NET-1) is not satisfied, so the coarse disjointness arm fires.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | doc-updater | explore | docs/a.md | 1 | fanout(docs) |',
+      '| b | doc-updater | explore | docs/b.md | 1 | fanout(docs) |',
+      '| done | finalize | a,b | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /not pairwise disjoint/.test((v.errors||[]).join(';')),
+      '#702 FLOOR: exact-file-disjoint docs fan-out with NO post-dominating gate must still refuse, got: ' + JSON.stringify(v));
+    // #702 FLOOR (same file): two docs legs declaring the SAME exact file stay an exact clobber — refuse.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | doc-updater | explore | docs/a.md | 1 | fanout(docs) |',
+      '| b | doc-updater | explore | docs/a.md | 1 | fanout(docs) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /not pairwise disjoint/.test((v.errors||[]).join(';')),
+      '#702 FLOOR: two docs legs on the SAME exact file stay an exact clobber (refuse), got: ' + JSON.stringify(v));
+    // #702 RELAXED (SOFT, inferred antichain): INDEPENDENT antichain docs branches under a post-dominating
+    // code-reviewer now freeze IN-GRAMMAR — same relaxation, per-pair. (Pre-#702 this hard-refused.)
     v = validatePlanFixture(tmp, [
       '| a | doc-updater | — | docs/a.md | 1 | sequence |',
       '| b | doc-updater | — | docs/b.md | 1 | sequence |',
@@ -2246,8 +2292,17 @@ function testAdaptiveValidatorGovernance() {
       '| review | code-reviewer | a,b,impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
+    assert(v.result === 'in-grammar',
+      '#702: exact-file-disjoint inferred-antichain docs branches under a post-dominating gate must freeze IN-GRAMMAR, got: ' + JSON.stringify(v));
+    // #702 FLOOR (inferred antichain, no gate): the SAME antichain docs branches with NO post-dominating
+    // code-reviewer must still refuse (parallel_allowband_collision — the structural NET-1 proof fails).
+    v = validatePlanFixture(tmp, [
+      '| a | doc-updater | — | docs/a.md | 1 | sequence |',
+      '| b | doc-updater | — | docs/b.md | 1 | sequence |',
+      '| done | finalize | a,b | — | 1 | sequence |',
+    ], []);
     assert(v.result === 'refuse' && /parallel_allowband_collision/.test((v.errors||[]).join(';')),
-      '#587: independent antichain branches both touching docs/** must refuse at freeze (parallel_allowband_collision), got: ' + JSON.stringify(v));
+      '#702 FLOOR: inferred-antichain docs branches with NO post-dominating gate must still refuse (parallel_allowband_collision), got: ' + JSON.stringify(v));
     // CONTROL: the allowband declared on exactly ONE leg of a parallel group is allowed (in-grammar).
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
