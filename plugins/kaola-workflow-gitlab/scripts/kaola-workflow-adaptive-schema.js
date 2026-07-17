@@ -297,6 +297,8 @@ function dispatchEffortOpencode(model, providerId, env) {
 //   codex    — "<model> (<effort> reasoning effort)" (the pair expected from the standalone profile),
 //   opencode — "<rank> effort variant" (TIER_RANK: reasoning→"top …" / standard→"second …",
 //              provider-agnostic — the Level-1 rank of the opencode mapping, always available).
+//   kimi     — same inherit display as codex (sub-agents inherit the session model; the tier is
+//              metadata only, never mapped to a variant/effort).
 // A legacy alias normalizes first (a frozen-plan `opus` cell displays identically to `reasoning`).
 // No tier / out-of-vocab → null (nothing to display natively; the raw `model: null` inherit echo stands).
 function modelDisplay(tier) {
@@ -306,6 +308,7 @@ function modelDisplay(tier) {
     claude:   TIER_MODEL_CLAUDE[t],
     codex:    'parent session (' + t + ' tier metadata)',
     opencode: TIER_RANK[t] + ' effort variant',
+    kimi:     'parent session (' + t + ' tier metadata)',
   };
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **New additive runtime edition: Kimi Code CLI (`kimi` edition) — roles as Skills, inherit-only model tier, hooks as a managed `[[hooks]]` block.** A fourth agent runtime joins Claude Code, Codex, and opencode under the D-530-02 additive-edition boundary: canonical `agents/`/`commands/`/`hooks/` are untouched, and the edition is wired into neither `npm test`, `edition-sync.js`, `install.sh`, nor the six routing surfaces — parity is enforced by its own suite (`node scripts/test-kimi-edition.js`, 552 assertions). `scripts/sync-kimi-edition.js` generates the gitignored `.kimi/` tree: the 11 commands as directory-form Skills (so `/workflow-next` works as-is) and the 16 roles as `kaola-role-*` role-contract Skills, with every canonical dispatch card rewritten to Kimi's built-in subagents (read-only roles → `explore`, writers → `coder`, each prompt binding its `kaola-role-<role>` Skill). There is no Reasoning/Standard two-tier mapping — every subagent inherits the session model (the Codex inherit precedent); the planner tier survives as ledger metadata only, rendered by a new `kimi` key in `modelDisplay()` (adaptive-schema ×4 synchronized). Hooks ship as a generated `kimi-hooks.toml` fragment merged into the global Kimi `config.toml` as an idempotent managed block (validated with `kimi doctor config`, rollback on failure), with `SessionStart"compact"` mapped to `PostCompact`; smoke testing against kimi-code 0.26.0 caught Kimi's divergent hook payload field names (`tool_input.path` for Write|Edit, `agent_name` for SubagentStart), so the generator emits payload-adapted copies of the two affected hook scripts — verified live: the #607 gate-window fence denies an in-worktree write (exit 2) under a real headless Kimi session. Install with `./install-kimi.sh --global --yes` (project-level `--target` default; `--with-fast`/`--with-full` opt-ins partition the command set exactly like opencode). See [D-703-01](docs/decisions/D-703-01.md) and [docs/kimi-edition.md](docs/kimi-edition.md).
+
 ## [6.23.0] - 2026-07-17
 
 ### Fixed

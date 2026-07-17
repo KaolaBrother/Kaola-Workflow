@@ -643,10 +643,10 @@ Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR ci
 
 ### What counts as a prompt surface
 
-The full set across all four editions (claude / codex / gitlab / gitea) plus the opencode runtime edition:
+The full set across all four editions (claude / codex / gitlab / gitea) plus the opencode and kimi runtime editions:
 
-- **Agent definitions** — `agents/*.md` (root), `plugins/*/agents/*.toml` (all three plugin editions), opencode `agents/*.md` (generated from canonical)
-- **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors
+- **Agent definitions** — `agents/*.md` (root), `plugins/*/agents/*.toml` (all three plugin editions), opencode `agents/*.md` (generated from canonical), kimi `.kimi/skills/kaola-role-*/SKILL.md` role contracts (generated from canonical by `scripts/sync-kimi-edition.js`)
+- **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`)
 - **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions
 
 The six routing surfaces from §Routing / adaptive prose (#400) are a subset of this set.

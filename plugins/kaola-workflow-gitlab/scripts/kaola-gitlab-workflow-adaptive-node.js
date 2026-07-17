@@ -784,7 +784,7 @@ function reviewMetaValue(planContent, name) {
 
 function detectReviewRuntime() {
   const explicit = String(process.env.KAOLA_WORKFLOW_RUNTIME || '').toLowerCase();
-  if (['claude', 'codex', 'opencode'].includes(explicit)) return explicit;
+  if (['claude', 'codex', 'opencode', 'kimi'].includes(explicit)) return explicit;
   return /[/\\]plugins[/\\]kaola-workflow(?:-(?:gitlab|gitea))?[/\\]scripts$/.test(__dirname)
     ? 'codex' : 'claude';
 }

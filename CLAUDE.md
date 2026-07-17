@@ -120,6 +120,7 @@ npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
 - **Cross-edition diffs require all four chains green.** A diff touching the edition trees (`plugins/kaola-workflow-{gitlab,gitea}/`, the codex/forge contract validators, or any edition-port script) MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green — run sequentially — recorded before Finalization. A green claude chain alone is **insufficient evidence**: `npm test` chains the four with `&&`, so it short-circuits on the first failure and a red codex/gitlab/gitea chain behind a green claude one is never reached. See `docs/conventions.md`.
 - **Adaptive / routing / finalize-wiring prose propagates to SIX surfaces.** The propagation surfaces are the 3 Claude commands + the 3 Codex SKILL packs, including the two forge-codex SKILL packs. A change reaching only 4 of 6 is a propagation gap; the route-reachability contract (`scripts/test-route-reachability.js` + all four `validate-*-contracts.js`) machine-enforces it. See `docs/conventions.md` § Routing / adaptive prose.
 - **opencode edition is additive.** It is a runtime edition, not a forge: it is **not** wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX routing surfaces. An opencode-only diff triggers no four-chain obligation; run its own suite (`node scripts/test-opencode-edition.js`) instead.
+- **kimi edition is additive.** It is a runtime edition, not a forge: it is **not** wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX routing surfaces. A kimi-only diff triggers no four-chain obligation; run its own suite (`node scripts/test-kimi-edition.js`) instead.
 
 ## Documentation Map
 
@@ -131,6 +132,7 @@ npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
 - `docs/conventions.md` — coding, testing, Git, review rules.
 - `docs/workflow-state-contract.md` — durable state and generated mirror contract.
 - `docs/opencode-edition.md` — additive opencode runtime edition (installed via `install-opencode.sh`; not wired into `npm test`).
+- `docs/kimi-edition.md` — additive Kimi Code runtime edition (installed via `install-kimi.sh`; not wired into `npm test`).
 - `docs/decisions/` — architecture decision records.
 - `kaola-workflow/ROADMAP.md` — active implementation roadmap mirror.
 

@@ -3,6 +3,7 @@ node_modules/
 .claude/
 .codex/
 .opencode/
+.kimi/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/

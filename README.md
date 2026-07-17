@@ -1,6 +1,6 @@
 # Kaola-Workflow
 
-**Loop engineering for coding agents.** Instead of prompting an agent and hoping, you hand Kaola-Workflow an issue and it designs the loop that prompts the agent for you: a **task-shaped DAG of role nodes** sized to the issue, each node running inside a verified act → check → close cycle, with fail-closed **exit conditions**, adversarial **verification loops**, and **durable state** that survives sessions and context resets — all inside a locked claim → worktree → *free design* → Finalization frame. Runs on three agent runtimes — **Claude Code, Codex, and [opencode](https://opencode.ai)** — across the **GitHub, GitLab, and Gitea** forges. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
+**Loop engineering for coding agents.** Instead of prompting an agent and hoping, you hand Kaola-Workflow an issue and it designs the loop that prompts the agent for you: a **task-shaped DAG of role nodes** sized to the issue, each node running inside a verified act → check → close cycle, with fail-closed **exit conditions**, adversarial **verification loops**, and **durable state** that survives sessions and context resets — all inside a locked claim → worktree → *free design* → Finalization frame. Runs on four agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), and [Kimi Code](https://www.kimi.com/code)** — across the **GitHub, GitLab, and Gitea** forges. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
 
 ## Philosophy
 
@@ -63,7 +63,7 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
 - **Durable per-step artifacts** with full resumability across sessions and context resets.
 - **Claim-preserving re-plan epochs** when a frozen DAG can no longer repair safely: the parent stays immutable and authoritative while `workflow-planner` authors a new child against the same claim, branch, worktree, and candidate.
 - A locked **claim → isolated worktree → free design → finalization** frame.
-- **Three agent runtimes** (Claude Code, Codex, opencode) across **three forges** (GitHub, GitLab, Gitea).
+- **Four agent runtimes** (Claude Code, Codex, opencode, Kimi Code) across **three forges** (GitHub, GitLab, Gitea).
 - **Goal-driven autonomy** via `/goal` — keep a session working toward one objective across many turns.
 
 ## Overview
@@ -156,7 +156,7 @@ example, "finish all remaining open issues"), which then drives one
 
 ## Workflow roles
 
-Every path is built from a small, shared set of **roles**. All three runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, and opencode generates `.opencode/agent/` definitions — so the roles, phases, and model tiers below apply across runtimes.
+Every path is built from a small, shared set of **roles**. All four runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, and Kimi Code generates `kaola-role-*` role-contract Skills — so the roles, phases, and model tiers below apply across runtimes.
 
 Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
@@ -256,7 +256,7 @@ differs from the agent's frontmatter). **After installing or re-running
 
 Kaola-Workflow installs along two independent axes:
 
-- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, or **opencode**. Each has its own installer.
+- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, **opencode**, or **Kimi Code**. Each has its own installer.
 - **Git forge** — where issues and PRs/MRs live: **GitHub** (default), **GitLab**, or **Gitea**.
 
 | Runtime | Installer | Forge selection |
@@ -264,6 +264,7 @@ Kaola-Workflow installs along two independent axes:
 | **Claude Code** | `./install.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Codex** | `codex plugin marketplace add` + the matching plugin entry | per-plugin entry (`kaola-workflow`, `-gitlab`, `-gitea`) |
 | **opencode** | `./install-opencode.sh` | — (runtime-only; no forge axis) |
+| **Kimi Code** | `./install-kimi.sh` | — (runtime-only; no forge axis) |
 
 Forge editions:
 
@@ -273,7 +274,9 @@ Forge editions:
 
 Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): it has no separate forge editions, `./install-opencode.sh` touches none of the existing edition machinery, and it is fully **standalone** — it resolves its support scripts under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts` and never touches `~/.claude/`, so it runs on a machine with no Claude Code installed. See [docs/opencode-edition.md](docs/opencode-edition.md).
 
-**Path selection is identical across all three editions.** Adaptive is the unconditional default everywhere — Claude Code, Codex, and opencode — and `fast` / `full` are install-time opt-ins (`--with-fast` / `--with-full`) on every edition, never installed by default. Each installer records the opt-ins by UNION into the shared `~/.config/kaola-workflow/config.json` `installed_paths` field (canonical order `["fast","full"]`; a re-install never removes a prior opt-in), and the runtime gate refuses a path that is not installed with a typed `path_not_installed` — never a silent fallback. See [docs/decisions/D-543-01.md](docs/decisions/D-543-01.md).
+**Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. See [docs/kimi-edition.md](docs/kimi-edition.md).
+
+**Path selection is identical across all four editions.** Adaptive is the unconditional default everywhere — Claude Code, Codex, opencode, and Kimi Code — and `fast` / `full` are install-time opt-ins (`--with-fast` / `--with-full`) on every edition, never installed by default. Each installer records the opt-ins by UNION into the shared `~/.config/kaola-workflow/config.json` `installed_paths` field (canonical order `["fast","full"]`; a re-install never removes a prior opt-in), and the runtime gate refuses a path that is not installed with a typed `path_not_installed` — never a silent fallback. See [docs/decisions/D-543-01.md](docs/decisions/D-543-01.md).
 
 ### Claude Code
 
@@ -415,6 +418,19 @@ opencode is an additive runtime — installed by its own script, not `--forge`. 
 The same `--with-fast` / `--with-full` opt-in semantics that `install.sh` exposes for Claude Code
 apply here, recorded by UNION into the same shared `~/.config/kaola-workflow/config.json`. The
 install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Adaptive is the unconditional default path on opencode. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
+
+### kimi
+
+Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the 11 commands become directory-form Skills (so `/workflow-next` works as-is) and the 16 roles ship as `kaola-role-*` contract Skills, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no two-tier effort mapping; the planner's per-node tier is recorded as ledger metadata only. From a local clone:
+
+```bash
+./install-kimi.sh --global --yes   # deploy skills into ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
+./install-kimi.sh --yes            # deploy into the current project (.kimi-code/skills/)
+./install-kimi.sh --with-fast      # opt-in: add the fast path (adaptive is the default)
+./install-kimi.sh --with-full      # opt-in: add the full six-phase path
+```
+
+The same `--with-fast` / `--with-full` opt-in semantics that `install.sh` exposes for Claude Code apply here, recorded by UNION into the same shared `~/.config/kaola-workflow/config.json`. Hooks install as a managed `[[hooks]]` block in the **global** Kimi `config.toml` — Kimi has no project-scoped hooks config, so the hooks activate machine-wide whatever the install scope. Adaptive is the unconditional default path on Kimi Code. Full detail: [docs/kimi-edition.md](docs/kimi-edition.md).
 
 ## Codex
 

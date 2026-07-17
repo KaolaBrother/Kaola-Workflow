@@ -6,6 +6,7 @@
 - [Workflow State Contract](workflow-state-contract.md) — Workflow state schema and durable state contract
 - [Agent Source](agents-source.md) — Vendored agent source documentation
 - [opencode Edition](opencode-edition.md) — Additive opencode runtime edition (`opencode.json` + `.opencode/` tree; provider-open two-tier effort mapping; installs via `install-opencode.sh`)
+- [kimi Edition](kimi-edition.md) — Additive Kimi Code runtime edition (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier; installs via `install-kimi.sh`)
 - [Decisions](decisions/)
   - [0001 — Legacy session/lock cleanup: no tooling](decisions/0001-legacy-session-lock-cleanup.md)
   - (0002–0009 and D-422-01 listed separately; see decisions/ for full catalog)
