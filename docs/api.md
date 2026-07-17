@@ -2202,7 +2202,7 @@ overlay with unsafe nested collaboration exposure refuses as
    nickname metadata and rejects missing, reordered, substituted, absolute, or extra entries. Any
    `agents` declaration outside the markers—including quoted, dotted, indented, inline, or
    `[agents]` table form—is an unsafe conflict.
-3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied.
+3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied — with one exemption (issue #716): the built-in, intentionally non-delegable roles `main-session-gate` and `finalize` (`PLAN_BUILTIN_NON_DELEGABLE_ROLES`) carry no `agents.toml` entry and no profile file BY DESIGN, so they are filtered out of the plan-role half before every availability check (the template filter, this required-role union, and `checkProfiles`). Every other (delegated) plan role stays fail-closed: an unknown delegated role refuses `role_not_in_template`, and a missing delegated profile refuses `profiles_missing`.
 4. Stale/retired Kaola `.toml` files left in the target dir (listed in the local `.kaola-managed-profiles.json` manifest, or in the retired-files list `docs-lookup.toml`) are detected; unknown user-owned TOMLs are **reported, never deleted** (the `extra_unmanaged` field).
 5. **Auto-install when safe**: if the only problem is a stale/missing/malformed managed block, profile file, or stale Kaola file, runs `install-codex-agent-profiles.js`, then re-verifies ALL checks. On success, returns exit 0 with `autofixed: true`.
 6. **Typed refusal when unsafe**: if any persisted config path is a symlink/wrong type/unreadable,
@@ -2211,7 +2211,7 @@ overlay with unsafe nested collaboration exposure refuses as
    direct transport uses the reserved `collaboration` namespace or hides Kaola role fields, an
    outside-marker `agents` declaration exists in any loaded project layer, the local manifest
    declares an unsupported future `schema_version`, the installer is unavailable/errors, or the
-   plan names a role absent from the template, exits non-zero with a typed-refusal JSON.
+   plan names a delegated role absent from the template, exits non-zero with a typed-refusal JSON.
    `--no-autofix` forces the refusal path (useful in tests).
 7. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller.
 
@@ -2289,7 +2289,7 @@ and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
 | `0` | `ok` | Fresh (or auto-fixed-then-fresh) |
 | `1` | `profiles_malformed` / `profiles_stale` / `profiles_missing` / `config_stale` / `managed_block_stale` | Stale (autofixable) — `--no-autofix` refusal |
 | `2` | `template_missing` | bundled `config/agents.toml` not found |
-| `3` | `role_not_in_template` | plan names a role absent from the template |
+| `3` | `role_not_in_template` | plan names a delegated role absent from the template (the built-in non-delegable `main-session-gate` / `finalize` roles are exempt from template/profile availability — #716) |
 | `4` | `autofix_unsafe` / `config_layer_unsafe` / `project_trust_required` | outside-marker `agents` declaration; linked/unreadable/wrong-type persisted config; or a project Kaola footprint Codex is not configured to trust |
 | `5` | `installer_failed` | installer missing / errored / still stale after re-verify |
 | `6` | `profile_schema_version_unsupported` | local manifest `schema_version` is newer than this installer supports — upgrade kaola-workflow |
