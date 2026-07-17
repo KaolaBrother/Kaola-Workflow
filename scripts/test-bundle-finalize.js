@@ -121,20 +121,23 @@ function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts
     'status: active',
     '',
     '## Current Position',
-    'phase: adaptive',
-    'phase_name: Adaptive',
-    'workflow_path: adaptive',
+    // These fixtures exercise bundle closure, sink, and archive behavior rather
+    // than adaptive-plan or full-path Phase 5 gates. Declare the only canonical
+    // plan-absent posture explicitly so Finalization does not infer gate evidence.
+    'phase: fast',
+    'phase_name: Fast',
+    'workflow_path: fast',
     'runtime: claude',
-    'step: start',
-    'next_command: /kaola-workflow-plan-run ' + project,
-    'next_skill: kaola-workflow-plan-run ' + project,
+    'step: complete',
+    'next_command: /kaola-workflow-finalize ' + project,
+    'next_skill: kaola-workflow-finalize ' + project,
     'main_session_role: orchestrator',
     'implementation_owner: N/A',
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
     '## Pending Gates',
-    '- workflow-plan',
+    '- finalization',
     '',
     '## Last Evidence',
     'phase_file: N/A',
@@ -157,7 +160,7 @@ function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts
   fs.writeFileSync(path.join(dir, 'workflow-state.md'), lines.join('\n') + '\n');
 }
 
-// Write a single-issue workflow-state.md file.
+// Write a single-issue fast-path state for closure-only Finalization fixtures.
 function writeSingleStateFile(tmpRoot, project, issueNumber) {
   const dir = path.join(tmpRoot, 'kaola-workflow', project);
   fs.mkdirSync(dir, { recursive: true });
@@ -169,20 +172,20 @@ function writeSingleStateFile(tmpRoot, project, issueNumber) {
     'status: active',
     '',
     '## Current Position',
-    'phase: 1',
-    'phase_name: Research',
-    'workflow_path: full',
+    'phase: fast',
+    'phase_name: Fast',
+    'workflow_path: fast',
     'runtime: claude',
-    'step: start',
-    'next_command: /kaola-workflow-phase1 ' + project,
-    'next_skill: kaola-workflow-research ' + project,
+    'step: complete',
+    'next_command: /kaola-workflow-finalize ' + project,
+    'next_skill: kaola-workflow-finalize ' + project,
     'main_session_role: orchestrator',
     'implementation_owner: N/A',
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
     '## Pending Gates',
-    '- phase1-research',
+    '- finalization',
     '',
     '## Last Evidence',
     'phase_file: N/A',

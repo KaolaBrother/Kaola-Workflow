@@ -75,6 +75,48 @@ function read(p) {
   try { return fs.readFileSync(path.join(root, p), 'utf8'); } catch { return null; }
 }
 
+const CODEX_ROLE_SCHEMA_FIELDS = [
+  'description', 'developer_instructions', 'name', 'nickname_candidates',
+];
+
+function codexRoleSchema(source) {
+  const instructionRe = /^developer_instructions\s*=\s*\"\"\"([\s\S]*?)\"\"\"\s*(?:\r?\n|$)/gm;
+  const instructionMatches = [...String(source).matchAll(instructionRe)];
+  let outside = '';
+  let cursor = 0;
+  for (const match of instructionMatches) {
+    outside += source.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+  }
+  outside += source.slice(cursor);
+  const fields = instructionMatches.map(() => 'developer_instructions');
+  const violations = [];
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(source)) {
+    violations.push('raw TOML control character');
+  }
+  if (source.includes('\r')) violations.push('non-LF TOML bytes');
+  if (String(source).includes('\\')) violations.push('backslash anywhere in managed TOML');
+  for (const [index, line] of outside.split(/\r?\n/).entries()) {
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const table = line.match(/^\s*(\[\[?.*?\]\]?)\s*(?:#.*)?$/);
+    if (table) {
+      violations.push(`line ${index + 1}: table ${table[1]}`);
+      continue;
+    }
+    const assignment = line.match(/^([A-Za-z0-9_-]+)\s*=/);
+    if (assignment) {
+      fields.push(assignment[1]);
+      continue;
+    }
+    violations.push(`line ${index + 1}: noncanonical top-level syntax ${JSON.stringify(line.trim())}`);
+  }
+  return {
+    fields: fields.sort(),
+    instructions: instructionMatches.length === 1 ? instructionMatches[0][1] : null,
+    violations,
+  };
+}
+
 let passed = 0, failed = 0;
 function assert(cond, msg) { if (cond) passed++; else { failed++; console.error('FAIL: ' + msg); } }
 
@@ -106,9 +148,35 @@ for (const tree of TOML_TREES) {
   assert(profiles.length === 16, `${tree} must contain exactly 16 role profiles, got ${profiles.length}`);
   for (const profile of profiles) {
     const content = read(`${tree}/${profile}`) || '';
+    const schema = codexRoleSchema(content);
+    assert(JSON.stringify(schema.fields) === JSON.stringify(CODEX_ROLE_SCHEMA_FIELDS),
+      `${tree}/${profile} must use only supported Codex custom-agent top-level fields`);
+    assert(schema.violations.length === 0,
+      `${tree}/${profile} must use the closed canonical top-level TOML grammar: ${schema.violations.join('; ')}`);
     assert(!/^model\s*=/m.test(content), `${tree}/${profile} must inherit model by omitting the key`);
     assert(!/^model_reasoning_effort\s*=/m.test(content),
       `${tree}/${profile} must inherit reasoning effort by omitting the key`);
+  }
+}
+
+// The closed-role grammar oracle must itself see TOML spellings that defeated the original
+// column-zero bare-key scan. These mutations never touch tracked files.
+{
+  const canonical = read(`${TOML_TREES[0]}/implementer.toml`) || '';
+  const mutations = [
+    canonical.replace(/^developer_instructions/m, '"behavior_contract_version" = 2\ndeveloper_instructions'),
+    canonical.replace(/^developer_instructions/m, '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
+    canonical.replace(/^developer_instructions/m, '[shadow] # valid TOML table\ndeveloper_instructions'),
+    canonical.replace(/^description/m, 'name = "implementer"\ndescription'),
+    canonical.replace('Purpose:', 'Purpose:\n- invalid TOML escape: \\q'),
+    canonical.replace('Purpose:', 'Purpose:\rX'),
+    `# raw control \u0001\n${canonical}`,
+  ];
+  for (const [index, mutation] of mutations.entries()) {
+    const schema = codexRoleSchema(mutation);
+    assert(schema.violations.length > 0
+        || JSON.stringify(schema.fields) !== JSON.stringify(CODEX_ROLE_SCHEMA_FIELDS),
+      `closed Codex role grammar mutation ${index + 1} must fail`);
   }
 }
 for (const profile of fs.readdirSync(path.join(root, TOML_TREES[0])).filter(f => f.endsWith('.toml'))) {
@@ -213,6 +281,44 @@ if (reviewerGenerator) {
   }).some(error => error.includes('generated_profile_drift')),
   'changed canonical behavior without regeneration must fail');
 
+  // A policy line can legitimately contain 64 zeroes. Finalization must replace the exact
+  // resolved_profile_hash slot, not the first equal-looking zero run in the rendered profile.
+  const zeroCollisionContracts = clone(behaviorContracts);
+  zeroCollisionContracts.roles['code-reviewer'].sections[0].lines.push(
+    `- Hash collision sentinel used by generation tests: ${'0'.repeat(64)}`);
+  const zeroCollisionProfiles = reviewerGenerator.renderProfiles(zeroCollisionContracts, runtimeAdapters);
+  for (const profile of zeroCollisionProfiles) {
+    assert(reviewerGenerator.verifyResolvedProfileHash(profile.content),
+      `${profile.path} finalizes the exact resolved hash slot when earlier zero runs exist`);
+    assert(!/^resolved_profile_hash\s*(?::|=)\s*"?0{64}"?\s*$/m.test(profile.content),
+      `${profile.path} must not leave the resolved hash slot zeroed`);
+  }
+
+  for (const token of ['\\q', '\\n']) {
+    const unsafeTomlContracts = clone(behaviorContracts);
+    unsafeTomlContracts.roles['code-reviewer'].sections[0].lines.push(`- Literal pattern token: ${token}`);
+    let unsafeTomlRejected = false;
+    try { reviewerGenerator.renderProfiles(unsafeTomlContracts, runtimeAdapters); } catch (error) {
+      unsafeTomlRejected = /toml.*(?:backslash|lexical|unsafe)/i.test(error.message);
+    }
+    assert(unsafeTomlRejected,
+      `reviewer generator must reject ${JSON.stringify(token)} so TOML decoding cannot change cross-runtime instruction bytes`);
+  }
+
+  for (const [field, value] of [
+    ['description', 'Description with \\q'],
+    ['nickname_candidates', ['Nickname with \\q']],
+  ]) {
+    const unsafeMetadataContracts = clone(behaviorContracts);
+    unsafeMetadataContracts.roles['code-reviewer'][field] = value;
+    let unsafeMetadataRejected = false;
+    try { reviewerGenerator.renderProfiles(unsafeMetadataContracts, runtimeAdapters); } catch (error) {
+      unsafeMetadataRejected = /toml.*(?:backslash|lexical|unsafe)/i.test(error.message);
+    }
+    assert(unsafeMetadataRejected,
+      `reviewer generator must reject TOML-unsafe metadata in ${field}`);
+  }
+
   for (const pinKey of ['model', 'model_reasoning_effort']) {
     const codexPath = rendered.find(profile => profile.runtime === 'codex').path;
     const codexOriginal = fs.readFileSync(path.join(tempRoot, codexPath), 'utf8');
@@ -241,6 +347,14 @@ if (reviewerGenerator) {
     assert(!reviewerGenerator.PROVENANCE_BAN.test(profile.content),
       `${profile.path} must contain no issue or decision provenance`);
     if (profile.runtime === 'codex') {
+      const schema = codexRoleSchema(profile.content);
+      assert(JSON.stringify(schema.fields) === JSON.stringify(CODEX_ROLE_SCHEMA_FIELDS),
+        `${profile.path} must use only Codex-supported custom-agent top-level fields`);
+      assert(schema.violations.length === 0,
+        `${profile.path} must use the closed canonical top-level TOML grammar`);
+      assert(schema.instructions !== null
+          && /^resolved_profile_hash:\s*[0-9a-f]{64}$/m.test(schema.instructions),
+        `${profile.path} must keep its resolved identity inside developer_instructions`);
       assert(!/^model\s*=/m.test(profile.content), `${profile.path} must omit Codex model`);
       assert(!/^model_reasoning_effort\s*=/m.test(profile.content),
         `${profile.path} must omit Codex model_reasoning_effort`);

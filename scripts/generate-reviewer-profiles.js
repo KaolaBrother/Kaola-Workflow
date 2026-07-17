@@ -467,12 +467,15 @@ function normalizeResolvedProfileHash(text) {
 
 function finalizeResolvedProfile(textWithZeroHash) {
   const normalized = normalizeResolvedProfileHash(textWithZeroHash);
+  const match = resolvedHashMatches(normalized)[0];
   const digest = sha256(normalized);
-  if (!normalized.includes(ZERO_HASH)) {
+  if (!match || match[2] !== ZERO_HASH) {
     throw new Error('resolved_profile_hash_zero_slot_missing');
   }
+  const valueOffset = match.index + match[1].length;
   return {
-    content: normalized.replace(ZERO_HASH, digest),
+    content: normalized.slice(0, valueOffset) + digest
+      + normalized.slice(valueOffset + ZERO_HASH.length),
     resolved_profile_hash: digest,
   };
 }
@@ -527,23 +530,35 @@ function tomlArray(values) {
   return `[${values.map(value => JSON.stringify(value)).join(', ')}]`;
 }
 
-function renderToml(contract, core, adapter, adapterText, behaviorHash) {
+function renderToml(contract, core, adapter, adapterText) {
   if (adapter.model_policy_ref !== 'codex-inherit-by-omission') {
     throw new Error(`codex_model_policy_unhandled: ${adapter.model_policy_ref}`);
   }
-  const instructions = `${core}\n\n${adapterText}`;
+  const identity = [
+    '<!-- reviewer-profile-identity:start -->',
+    `resolved_profile_hash: ${ZERO_HASH}`,
+    '<!-- reviewer-profile-identity:end -->',
+  ].join('\n');
+  const instructions = [core, adapterText, identity].join('\n\n');
   if (instructions.includes('"""')) throw new Error('toml_developer_instructions_delimiter_collision');
+  if (instructions.includes('\\')) {
+    throw new Error('toml_developer_instructions_backslash_forbidden: preserve literal cross-runtime instruction bytes');
+  }
+  if (instructions.includes('\r')) throw new Error('toml_developer_instructions_line_endings_forbidden: LF required');
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(instructions)) {
+    throw new Error('toml_developer_instructions_control_character_forbidden');
+  }
   const body = [
     `name = ${JSON.stringify(contract.role)}`,
     `description = ${JSON.stringify(contract.description)}`,
     `nickname_candidates = ${tomlArray(contract.nickname_candidates)}`,
-    `behavior_contract_version = ${contract.behavior_contract_version}`,
-    `behavior_contract_hash = ${JSON.stringify(behaviorHash)}`,
-    `resolved_profile_hash = ${JSON.stringify(ZERO_HASH)}`,
     'developer_instructions = """',
     instructions,
     '"""',
   ].join('\n') + '\n';
+  if (body.includes('\\')) {
+    throw new Error('toml_profile_backslash_forbidden: canonical managed TOML requires literal backslash-free bytes');
+  }
   if (/^model\s*=/m.test(body) || /^model_reasoning_effort\s*=/m.test(body)) {
     throw new Error('codex_model_pin_forbidden: inherit-by-omission required');
   }
@@ -565,7 +580,7 @@ function renderProfiles(behaviorContracts, runtimeAdapters) {
     const adapterText = renderAdapter(spec.role, adapterData);
     const rendered = spec.format === 'markdown'
       ? renderMarkdown(contract, cores[spec.role], adapterData, adapterText, hashes[spec.role])
-      : renderToml(contract, cores[spec.role], adapterData, adapterText, hashes[spec.role]);
+      : renderToml(contract, cores[spec.role], adapterData, adapterText);
     if (PROVENANCE_BAN.test(rendered.content)) {
       throw new Error(`generated_profile_provenance_forbidden: ${spec.path}`);
     }

@@ -882,14 +882,112 @@ function resolveReviewerProfileIdentity(role, opts) {
   let bytes = null;
   try { bytes = fs.readFileSync(profilePath, 'utf8'); } catch (_) { bytes = null; }
   if (bytes === null) return { ok: false, reason: 'review_profile_unavailable', role };
-  const readField = name => {
-    const re = new RegExp('^' + name + '\\s*(?::|=)\\s*"?([^"\\s]+)"?\\s*$', 'm');
-    const match = re.exec(bytes);
-    return match ? match[1] : null;
+
+  const boundedBlock = (source, startMarker, endMarker) => {
+    const starts = source.split(startMarker).length - 1;
+    const ends = source.split(endMarker).length - 1;
+    if (starts === 0 || ends === 0) return { ok: false, reason: 'missing' };
+    if (starts !== 1 || ends !== 1) return { ok: false, reason: 'ambiguous' };
+    const start = source.indexOf(startMarker);
+    const endStart = source.indexOf(endMarker, start + startMarker.length);
+    if (endStart < start) return { ok: false, reason: 'ambiguous' };
+    const end = endStart + endMarker.length;
+    return { ok: true, text: source.slice(start, end), start, end };
   };
-  const versionRaw = readField('behavior_contract_version');
-  const behaviorHash = readField('behavior_contract_hash');
-  const profileHash = readField('resolved_profile_hash');
+
+  let instructions = null;
+  if (runtime === 'codex') {
+    // One adjacent validator is the authoritative Codex profile acceptance wall. Runtime must not
+    // grow a second grammar that accepts re-signed bytes installer/preflight refuse.
+    const profileReasons = require('./kaola-workflow-codex-preflight')
+      .validateProfileText(bytes, role);
+    if (profileReasons.length > 0) {
+      const roleMismatchOnly = profileReasons.every(reason =>
+        /^top-level 'name' is ".*" but must equal the role ".*"$/.test(reason)
+          || reason === 'reviewer_behavior_core_role_mismatch');
+      return { ok: false, reason: roleMismatchOnly
+        ? 'review_profile_role_mismatch' : 'review_profile_grammar_invalid', role };
+    }
+    const instructionMatch = [...bytes.matchAll(
+      /^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*(?:\r?\n|$)/gm,
+    )][0];
+    instructions = instructionMatch[1];
+    const outside = bytes.slice(0, instructionMatch.index)
+      + bytes.slice(instructionMatch.index + instructionMatch[0].length);
+    const names = [...outside.matchAll(/^name[ \t]*=[ \t]*"([^"\r\n]*)"[ \t]*$/gm)];
+    if (names.length !== 1 || names[0][1] !== role) {
+      return { ok: false, reason: 'review_profile_role_mismatch', role };
+    }
+  } else {
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(bytes);
+    const names = frontmatter
+      ? [...frontmatter[1].matchAll(/^name:[ \t]*([^\r\n]+)[ \t]*$/gm)] : [];
+    // Name binding is runtime-shaped: opencode profiles carry NO frontmatter name (opencode
+    // resolves agents by filename, so the path already binds the role — the behavior-core
+    // role check below still binds the content); kimi role-contract skills are named
+    // kaola-role-<role>; every other markdown profile carries the bare role name.
+    if (runtime !== 'opencode') {
+      const expectedName = runtime === 'kimi' ? 'kaola-role-' + role : role;
+      if (names.length !== 1 || names[0][1].trim() !== expectedName) {
+        return { ok: false, reason: 'review_profile_role_mismatch', role };
+      }
+    }
+  }
+
+  const core = boundedBlock(runtime === 'codex' ? instructions : bytes,
+    '<!-- reviewer-behavior-core:start -->', '<!-- reviewer-behavior-core:end -->');
+  if (!core.ok) {
+    return { ok: false, reason: core.reason === 'ambiguous'
+      ? 'review_profile_identity_ambiguous' : 'review_profile_identity_unavailable', role };
+  }
+  const coreRoles = [...core.text.matchAll(/^role:[ \t]*([^\r\n]+)[ \t]*$/gm)];
+  if (coreRoles.length !== 1 || coreRoles[0][1].trim() !== role) {
+    return { ok: false, reason: 'review_profile_role_mismatch', role };
+  }
+  const coreVersions = [...core.text.matchAll(/^behavior_contract_version:[ \t]*(\d+)[ \t]*$/gm)];
+  const coreHashes = [...core.text.matchAll(/^behavior_contract_hash:[ \t]*([0-9a-f]{64})[ \t]*$/gm)];
+  if (coreVersions.length !== 1 || coreHashes.length !== 1) {
+    return { ok: false, reason: coreVersions.length > 1 || coreHashes.length > 1
+      ? 'review_profile_identity_ambiguous' : 'review_profile_identity_unavailable', role };
+  }
+  const versionRaw = coreVersions[0][1];
+  const behaviorHash = coreHashes[0][1];
+
+  let profileHash = null;
+  if (runtime === 'codex') {
+    const instructionVersions = [...instructions.matchAll(
+      /^behavior_contract_version:[ \t]*([^\r\n]*)[ \t]*$/gm,
+    )];
+    const instructionHashes = [...instructions.matchAll(
+      /^behavior_contract_hash:[ \t]*([^\r\n]*)[ \t]*$/gm,
+    )];
+    if (instructionVersions.length !== 1 || instructionHashes.length !== 1) {
+      return { ok: false, reason: 'review_profile_identity_ambiguous', role };
+    }
+    const identity = boundedBlock(instructions,
+      '<!-- reviewer-profile-identity:start -->', '<!-- reviewer-profile-identity:end -->');
+    if (!identity.ok) {
+      return { ok: false, reason: identity.reason === 'ambiguous'
+        ? 'review_profile_identity_ambiguous' : 'review_profile_identity_unavailable', role };
+    }
+    const identityHashes = [...identity.text.matchAll(
+      /^resolved_profile_hash:[ \t]*([0-9a-f]{64})[ \t]*$/gm,
+    )];
+    if (identityHashes.length !== 1) {
+      return { ok: false, reason: identityHashes.length > 1
+        ? 'review_profile_identity_ambiguous' : 'review_profile_identity_unavailable', role };
+    }
+    profileHash = identityHashes[0][1];
+  } else {
+    const profileFields = [...bytes.matchAll(
+      /^resolved_profile_hash:[ \t]*([0-9a-f]{64})[ \t]*$/gm,
+    )];
+    if (profileFields.length !== 1) {
+      return { ok: false, reason: profileFields.length > 1
+        ? 'review_profile_hash_ambiguous' : 'review_profile_identity_unavailable', role };
+    }
+    profileHash = profileFields[0][1];
+  }
   // A schema-2 gate role MUST carry an explicit runtime-neutral behavior identity generated by the
   // reviewer-profile pipeline. A profile missing the embedded version/behavior-hash/self-hash fails the
   // open BEFORE spawn with a typed refusal, rather than silently substituting a weaker v1 contract hashed

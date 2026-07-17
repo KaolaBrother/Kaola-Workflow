@@ -92,6 +92,14 @@ function statePath(root, project) {
   return path.join(root, 'kaola-workflow', project, 'workflow-state.md');
 }
 
+function markPlanAbsentFinalizeFixtureFast(root, project) {
+  const file = statePath(root, project);
+  const content = read(file);
+  fs.writeFileSync(file, /^workflow_path:.*$/m.test(content)
+    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
+    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+}
+
 function read(file) {
   return fs.readFileSync(file, 'utf8');
 }
@@ -143,6 +151,10 @@ function testClaimStatusRelease(tmp) {
 function testFinalize(tmp) {
   plantRoadmapIssue(tmp, 164, '');
   json(runNode(claimScript, ['startup', '--target-issue', '164', '--runtime', 'claude'], tmp));
+  // This fixture exercises terminal archive normalization directly rather than
+  // an adaptive run. Mark that shortcut explicitly fast so a missing adaptive
+  // workflow-plan.md is not mistaken for valid completion.
+  markPlanAbsentFinalizeFixtureFast(tmp, 'issue-164');
   const retiredBlock = '## ' + 'Lease';
   const retiredSessionField = 'sess' + 'ion_id:';
   const retiredHeartbeatField = 'last_' + 'heart' + 'beat:';
@@ -319,8 +331,8 @@ function testKeepOpenArchiveStamp() {
 }
 
 // #333: #210-class repro — a project archived MANUALLY (fs.renameSync bypassing the script)
-// keeps status: active forever. Re-running finalize over it must heal the archived state in
-// place (archive_state_stamped: repaired), and be idempotent (exactly one ## Closure block).
+// is not proof that archiveProjectDir completed its pre-rename gates. Re-running finalize must
+// refuse the active/nonterminal archive without stamping or closure side effects.
 function testManualArchiveBackstop() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-backstop-')));
   try {
@@ -343,25 +355,17 @@ function testManualArchiveBackstop() {
     fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive'), { recursive: true });
     fs.renameSync(dir, archiveDest);
 
-    const result = json(runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp));
-    assert(result.status === 'closed', '#333: backstop finalize should exit 0/report closed');
-    assert(result.archive_state_stamped === 'repaired',
-      '#333: backstop must report archive_state_stamped: repaired, got: ' + JSON.stringify(result.archive_state_stamped));
+    const before = read(path.join(archiveDest, 'workflow-state.md'));
+    const finalizeResult = runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp);
+    let result = null;
+    try { result = JSON.parse(finalizeResult.stdout); } catch (_) {}
+    assert(finalizeResult.status !== 0 && result && result.reason === 'finalize_gate_unverified'
+      && result.inner_reason === 'archive_state_not_closed',
+    '#333: manually archived active state must refuse through archive_state_not_closed, got: ' + JSON.stringify(result));
     const st1 = read(path.join(archiveDest, 'workflow-state.md'));
-    assert(st1.includes('status: closed'), '#333: backstop must stamp manual archive status: closed, got: ' + st1);
-    assert(st1.includes('step: complete'), '#333: backstop must stamp manual archive step: complete');
-    assert(!/next_command:.*kaola-workflow-plan-run/.test(st1),
-      '#333: backstop must neutralize the manual archive next_command');
-    assert(/^## Closure$/m.test(st1), '#333: backstop must append a ## Closure block');
-
-    // Idempotency: a second finalize over the now-terminal archive must not re-stamp and must
-    // leave exactly one ## Closure block.
-    const result2 = json(runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp));
-    assert(result2.archive_state_stamped === 'not_needed',
-      '#333: second backstop run must report not_needed (already terminal), got: ' + JSON.stringify(result2.archive_state_stamped));
-    const st2 = read(path.join(archiveDest, 'workflow-state.md'));
-    const closureCount = (st2.match(/^## Closure$/mg) || []).length;
-    assert(closureCount === 1, '#333: backstop must be idempotent — exactly one ## Closure block, got: ' + closureCount);
+    assert(st1 === before, '#333: manual-archive refusal must leave archived state byte-identical');
+    assert(st1.includes('status: active') && !/^## Closure$/m.test(st1),
+      '#333: manual-archive refusal must neither terminal-stamp nor append closure evidence');
     console.log('testManualArchiveBackstop: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -566,14 +570,20 @@ function testRepairFinalizationRoute() {
     assert(legacyComplete.complete !== true,
       'R2: phase6-summary.md alone must NOT be the completion signal (hard-removed), got: ' + JSON.stringify(legacyComplete));
 
-    // --- R3: phase5-review.md present (with compliance) → state must use finalization names ---
+    // --- R3: point-of-use-verified phase5-review.md → finalization names ---
+    const binding = 'evidence-binding: phase5-code-review-1 nonce-fin-route-1';
     const phase5Content = [
       '# Phase 5 - Review: fin-route',
       '',
       '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-reviewer | subagent-invoked | .cache/review.md | |',
+      '| Requirement | Status | Evidence | Binding | Skip Reason |',
+      '|-------------|--------|----------|---------|-------------|',
+      '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | ' + binding + ' |  |',
+      '| security-reviewer | n/a |  | n/a | no security-sensitive files in write set |',
+      '| review-fix executors | n/a |  | n/a | no CRITICAL/HIGH blocking findings |',
+      '',
+      '## Review Status',
+      'PASSED',
       ''
     ].join('\n');
     writeProject(tmp, 'fin-route', {
@@ -587,6 +597,19 @@ function testRepairFinalizationRoute() {
         ''
       ].join('\n')
     });
+    const finRouteCache = path.join(workflowDir, 'fin-route', '.cache');
+    fs.mkdirSync(finRouteCache, { recursive: true });
+    fs.writeFileSync(path.join(finRouteCache, 'code-reviewer.md'), [
+      binding,
+      'domain_outcome: approved',
+      'verdict: pass',
+      'findings_blocking: 0',
+      'review_summary: no_blocking_findings',
+      'review_attestation: full_review_completed',
+      'No admitted findings.',
+      'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
+      '',
+    ].join('\n'));
     runNode(repairScript, ['fin-route'], tmp);
     const finRouteState = read(statePath(tmp, 'fin-route'));
     assert(finRouteState.includes('stage: finalization'),
@@ -6557,6 +6580,7 @@ function testFinalizeReleaseCleansWorktree() {
     assert(s601.claim === 'acquired', 'startup 601 should acquire');
     const wt601 = s601.worktree_path;
     assert(fs.existsSync(wt601), 'worktree 601 should exist after startup');
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-601');
     runClaimOnline(['finalize', '--project', 'issue-601'], tmp, binDir);
     assert(!fs.existsSync(wt601), 'worktree 601 should be gone after finalize');
     const s602 = runClaimOnline(['startup', '--target-issue', '602'], tmp, binDir);
@@ -6569,6 +6593,7 @@ function testFinalizeReleaseCleansWorktree() {
     assert(s603.claim === 'acquired', 'startup 603 should acquire');
     const wt603 = s603.worktree_path;
     assert(fs.existsSync(wt603), 'worktree 603 should exist after startup');
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-603');
     runClaimOnline(['finalize', '--project', 'issue-603', '--keep-worktree'], tmp, binDir);
     assert(fs.existsSync(wt603), 'keep-worktree finalize should preserve worktree for final commit');
     assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-603')), 'keep-worktree finalize should still archive active folder');
@@ -6605,6 +6630,8 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
 
     // Plant active folder inside the linked worktree (mirrors main copy)
     plantActiveFolder(wtPath, 'issue-701', 701, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-701');
+    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-701');
 
     // Use --keep-worktree so the linked worktree directory is not removed after archiving;
     // this lets us assert that the archive exists inside the linked worktree.
@@ -6656,6 +6683,8 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
     });
     // Mirror active folder in linked worktree
     plantActiveFolder(wtPath, 'issue-701', 701, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-701');
+    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-701');
     // Plant a stray UNTRACKED foreign archive dir+file before finalize
     const foreignDir = path.join(wtPath, 'kaola-workflow', 'archive', 'issue-999');
     fs.mkdirSync(foreignDir, { recursive: true });
@@ -6712,6 +6741,7 @@ function testFinalizeFromMainRootNoSpuriousRemoval() {
     // mainRootFromCoord returns tmp, realpathSync(tmp) === realpathSync(root),
     // so the cleanup block is a no-op. Archive rename still happens normally.
     plantActiveFolder(tmp, 'issue-702', 702, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-702');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-702'], {
       cwd: tmp,
@@ -8067,6 +8097,7 @@ function testE2EGitHubMergeFullChain() {
     // Step 1: startup
     const s850 = runClaimOnline(['startup', '--target-issue', '850'], tmp, binDir);
     assert(s850.claim === 'acquired', 'startup 850 should acquire, got: ' + JSON.stringify(s850));
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-850');
     const wt850 = s850.worktree_path;
     assert(fs.existsSync(wt850), 'worktree dir must exist after startup');
 
@@ -8946,6 +8977,7 @@ function testParallelIssueIndependence() {
     // Step 1: startup both issues from main worktree
     const s870 = runClaimOnline(['startup', '--target-issue', '870'], tmp, binDir);
     assert(s870.claim === 'acquired', 'startup 870 should acquire, got: ' + JSON.stringify(s870));
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-870');
     const wt870 = s870.worktree_path;
     assert(fs.existsSync(wt870), 'wt870 must exist after startup');
 
@@ -9018,6 +9050,7 @@ function testFinalizeCleansRoadmapEntry() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-910', 910, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-910');
     plantRoadmapIssue(tmp, 910, '');
     // Generate ROADMAP.md so we can assert it lists #910 before finalize
     const genResult = runNode(roadmapScript, ['generate'], tmp);
@@ -9097,6 +9130,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
     });
     // Active folder lives only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-911', 911, null);
+    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-911');
     // Finalize from linked worktree with --keep-worktree (so archive commit is made on feature branch)
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-911', '--keep-worktree'], {
       cwd: wtPath,
@@ -9179,6 +9213,7 @@ function testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource() {
     });
     // Plant the active folder only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-921', 921, null);
+    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-921');
     // THEN create kaola-workflow/.roadmap/issue-921.md in the MAIN tree and
     // `git add` it WITHOUT committing — reproducing adaptive-handoff Step 5.
     plantRoadmapIssue(tmp, 921, '');
@@ -9228,6 +9263,7 @@ function testFinalizeRoadmapCleanupFailureReceipt() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-912', 912, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-912');
     plantRoadmapIssue(tmp, 912, '');
     // Replace .roadmap/issue-912.md with a directory of the same name
     // so fs.unlinkSync throws EISDIR/EPERM (not ENOENT = absent; it's a real failure)
@@ -9606,6 +9642,7 @@ function testFinalizeRemovesClaimLabel() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-914', 914, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-914');
     plantRoadmapIssue(tmp, 914, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -9649,6 +9686,7 @@ function testFinalizeNullFolderFallbackReadsArchive() {
     initGitRepo(tmp);
     // Plant active folder (sink: merge default) — issue-915 will appear closed to shim
     plantActiveFolder(tmp, 'issue-915', 915, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-915');
     plantRoadmapIssue(tmp, 915, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -9692,6 +9730,7 @@ function testFinalizeOfflineSkipsLabelInvariant() {
     initGitRepo(tmp);
     // No roadmap entry — avoids roadmap-source-absent and roadmap-mirror-clean violations
     plantActiveFolder(tmp, 'issue-916', 916, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-916');
     // Run spawnSync directly — runClaimOnline overrides OFFLINE to '0'
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-916'], {
       cwd: tmp,
@@ -9886,6 +9925,7 @@ function testFinalizeClaimLabelFailedTriggersInvariant() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-918', 918, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-918');
     plantRoadmapIssue(tmp, 918, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -9931,6 +9971,7 @@ function testClearAdvisoryClaimDeletesMarkerComment() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-920', 920, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-920');
     plantRoadmapIssue(tmp, 920, '');
     fs.mkdirSync(binDir, { recursive: true });
     // Shim: --method DELETE branch MUST come before the bare list branch (both contain "comments")
@@ -9979,6 +10020,7 @@ function testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-921', 921, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-921');
     plantRoadmapIssue(tmp, 921, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10026,6 +10068,7 @@ function testClearAdvisoryClaimOfflineSkipsDelete() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-922', 922, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-922');
     // No roadmap entry — offline finalize skips roadmap ops
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10257,6 +10300,7 @@ function testFinalizeOfflineClosureReceiptSkipped() {
     initGitRepo(tmp);
     // Do NOT plant a roadmap issue — avoids roadmap-source-absent violation.
     plantActiveFolder(tmp, 'issue-164f', 164, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-164f');
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-164f'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -10809,8 +10853,8 @@ function testBundleFinalizeAllOpenCloseIsPending() {
     const stateLines = [
       '# Kaola-Workflow State', '',
       '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Current Position', 'phase: fast', 'workflow_path: fast',
+      'step: complete', 'next_command: /kaola-workflow-finalize ' + project, '',
       '## Pending Gates', '- none', '',
       '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
       '## Last Updated', new Date().toISOString(), '',
@@ -15549,6 +15593,9 @@ function testPlanlessAndPlannedInitialAuthority699() {
     });
 
     exercisePlanlessCaller('finalize', 69922, (root, callerProject) => {
+      // The authority tuple remains planless; explicitly select the fast path
+      // for this direct-finalize fixture so path gating is not under test here.
+      markPlanAbsentFinalizeFixtureFast(root, callerProject);
       const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', callerProject], {
         cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
           KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -15843,6 +15890,8 @@ function testReviewerContractV2Conformance() {
   // downgrade and must refuse.
   {
     const adaptiveNode = require('./kaola-workflow-adaptive-node');
+    const codexPreflight = require('./kaola-workflow-codex-preflight');
+    const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
     const baseContext = {
       contract_version: 2, plan_schema_version: 2, plan_hash: '2'.repeat(64),
       claim_identity_digest: '3'.repeat(64), epoch_lineage_id: '4'.repeat(64), epoch: 1,
@@ -15880,6 +15929,142 @@ function testReviewerContractV2Conformance() {
           && claudeId.reason === codexId.reason && claudeId.reason === 'review_profile_identity_unavailable',
           'R5 ' + role + ' without an embedded identity fails schema-2 open identically across editions (fail-closed)');
       }
+    }
+
+    const canonicalCodexProfile = fs.readFileSync(
+      path.join(repoRoot, 'plugins', 'kaola-workflow', 'agents', 'code-reviewer.toml'), 'utf8');
+    const resign = source => {
+      const matches = [...source.matchAll(/^resolved_profile_hash:\s*([0-9a-f]{64})\s*$/gm)];
+      assert(matches.length === 1, 'R5 mutation fixture carries one resolved profile hash');
+      const current = matches[0][1];
+      const offset = matches[0].index + matches[0][0].indexOf(current);
+      const normalized = source.slice(0, offset) + '0'.repeat(64) + source.slice(offset + 64);
+      const digest = require('crypto').createHash('sha256').update(normalized).digest('hex');
+      return normalized.slice(0, offset) + digest + normalized.slice(offset + 64);
+    };
+    const canonicalCodexIdentity = adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+      reviewRuntime: 'codex',
+      reviewProfilePath: path.join(repoRoot, 'plugins', 'kaola-workflow', 'agents',
+        'code-reviewer.toml'),
+    });
+    const canonicalClaudeIdentity = adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+      reviewRuntime: 'claude',
+      reviewProfilePath: path.join(repoRoot, 'agents', 'code-reviewer.md'),
+    });
+    assert(canonicalCodexIdentity.ok === true && canonicalClaudeIdentity.ok === true,
+      `R5 canonical Codex and Claude reviewer profiles remain accepted: ${JSON.stringify({
+        codex: canonicalCodexIdentity, claude: canonicalClaudeIdentity,
+      })}`);
+    assert(codexProfileInstaller.validateProfileText(canonicalCodexProfile, 'code-reviewer').length === 0
+        && codexPreflight.validateProfileText(canonicalCodexProfile, 'code-reviewer').length === 0,
+      'R5 canonical Codex reviewer profile passes installer and preflight acceptance walls');
+
+    const grammarMutations = [
+      ['bare unknown metadata', resign(canonicalCodexProfile.replace(/^developer_instructions/m,
+        'adapter_prompt = "foreign"\ndeveloper_instructions'))],
+      ['quoted unknown metadata', resign(canonicalCodexProfile.replace(/^developer_instructions/m,
+        '"behavior_contract_version" = 2\ndeveloper_instructions'))],
+      ['dotted unknown metadata', resign(canonicalCodexProfile.replace(/^developer_instructions/m,
+        'metadata.version = 2\ndeveloper_instructions'))],
+      ['table syntax', resign(canonicalCodexProfile.replace(/^developer_instructions/m,
+        '[shadow]\ndeveloper_instructions'))],
+      ['description trailing garbage', resign(canonicalCodexProfile.replace(/^description = .*$/m,
+        'description = "Bad" garbage'))],
+      ['bare nickname', resign(canonicalCodexProfile.replace(/^nickname_candidates = .*$/m,
+        'nickname_candidates = [bare]'))],
+      ['comma inside nickname', resign(canonicalCodexProfile.replace(/^nickname_candidates = .*$/m,
+        'nickname_candidates = ["Reviewer, Senior", "Critic", "Inspector"]'))],
+      ['empty description', resign(canonicalCodexProfile.replace(/^description = .*$/m,
+        'description = ""'))],
+      ['empty nickname array', resign(canonicalCodexProfile.replace(/^nickname_candidates = .*$/m,
+        'nickname_candidates = []'))],
+      ['raw control in comment', resign(`# raw control \u0001\n${canonicalCodexProfile}`)],
+      ['description backslash', resign(canonicalCodexProfile.replace(/^description = .*$/m,
+        'description = "Bad \\q"'))],
+      ['nickname backslash', resign(canonicalCodexProfile.replace(/^nickname_candidates = .*$/m,
+        'nickname_candidates = ["Bad \\q"]'))],
+      ['instruction backslash', resign(canonicalCodexProfile.replace(
+        /^developer_instructions = """$/m, 'developer_instructions = """\n\\q'))],
+    ];
+    const grammarTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reviewer-grammar-'));
+    try {
+      for (const [index, [label, mutation]] of grammarMutations.entries()) {
+        const profilePath = path.join(grammarTmp, `mutation-${index + 1}.toml`);
+        fs.writeFileSync(profilePath, mutation);
+        const resolved = adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+          reviewRuntime: 'codex', reviewProfilePath: profilePath,
+        });
+        const installerReasons = codexProfileInstaller.validateProfileText(mutation, 'code-reviewer');
+        const preflightReasons = codexPreflight.validateProfileText(mutation, 'code-reviewer');
+        assert(installerReasons.length > 0 && preflightReasons.length > 0
+            && resolved.ok === false && resolved.reason === 'review_profile_grammar_invalid',
+          `R5 re-signed Codex reviewer with ${label} fails installer, preflight, and runtime before identity: ${JSON.stringify({
+            installerReasons, preflightReasons, resolved,
+          })}`);
+      }
+    } finally {
+      fs.rmSync(grammarTmp, { recursive: true, force: true });
+    }
+
+    const identityMutations = [
+      resign(canonicalCodexProfile.replace('<!-- reviewer-behavior-core:start -->',
+        'behavior_contract_version: 1\n<!-- reviewer-behavior-core:start -->')),
+      resign(canonicalCodexProfile.replace('<!-- reviewer-behavior-core:start -->',
+        `behavior_contract_hash: ${'f'.repeat(64)}\n<!-- reviewer-behavior-core:start -->`)),
+      resign(canonicalCodexProfile
+        .replace('<!-- reviewer-profile-identity:start -->\n', '')
+        .replace('<!-- reviewer-profile-identity:end -->\n', '')),
+      resign([
+        '<!-- reviewer-behavior-core:start -->',
+        'role: code-reviewer',
+        'behavior_contract_version: 2',
+        `behavior_contract_hash: ${'f'.repeat(64)}`,
+        '<!-- reviewer-behavior-core:end -->',
+        canonicalCodexProfile
+          .replace('<!-- reviewer-behavior-core:start -->\n', '')
+          .replace('<!-- reviewer-behavior-core:end -->\n', ''),
+      ].join('\n')),
+      resign(canonicalCodexProfile.replace('role: code-reviewer',
+        'role: code-reviewer\nrole: security-reviewer')),
+      resign(canonicalCodexProfile.replace(/^name = "code-reviewer"$/m,
+        'name = "security-reviewer"')),
+    ];
+    const identityTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reviewer-identity-'));
+    try {
+      for (const [index, mutation] of identityMutations.entries()) {
+        const profilePath = path.join(identityTmp, `mutation-${index + 1}.toml`);
+        fs.writeFileSync(profilePath, mutation);
+        const resolved = adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+          reviewRuntime: 'codex', reviewProfilePath: profilePath,
+        });
+        assert(resolved.ok === false
+            && /(?:identity_(?:ambiguous|unavailable)|profile_(?:role_mismatch|grammar_invalid))/.test(resolved.reason),
+          `R5 scoped identity mutation ${index + 1} fails closed: ${JSON.stringify(resolved)}`);
+      }
+
+      const securityProfilePath = path.join(repoRoot, 'plugins', 'kaola-workflow', 'agents',
+        'security-reviewer.toml');
+      const swappedRole = adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+        reviewRuntime: 'codex', reviewProfilePath: securityProfilePath,
+      });
+      assert(swappedRole.ok === false && swappedRole.reason === 'review_profile_role_mismatch',
+        `R5 requested role is bound to profile name/core role: ${JSON.stringify(swappedRole)}`);
+
+      const commentedPath = path.join(identityTmp, 'commented-marker.toml');
+      fs.writeFileSync(commentedPath, resign(canonicalCodexProfile.replace(/^name =/m,
+        '# <!-- reviewer-behavior-core:start -->\nname =')));
+      const commented = adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+        reviewRuntime: 'codex', reviewProfilePath: commentedPath,
+      });
+      assert(commented.ok === true && commented.behavior_contract_hash
+          === adaptiveNode.resolveReviewerProfileIdentity('code-reviewer', {
+            reviewRuntime: 'codex',
+            reviewProfilePath: path.join(repoRoot, 'plugins', 'kaola-workflow', 'agents',
+              'code-reviewer.toml'),
+          }).behavior_contract_hash,
+      `R5 TOML comments outside developer_instructions do not create runtime marker ambiguity: ${JSON.stringify(commented)}`);
+    } finally {
+      fs.rmSync(identityTmp, { recursive: true, force: true });
     }
   }
 
@@ -16494,6 +16679,9 @@ function testAttestationWarningPersistence() {
     const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653101'], tmp, binDir);
     assert(sResult.claim === 'acquired', 'attestation persistence: startup must acquire');
     const project = sResult.selected_project || 'issue-653101';
+    // This persistence fixture jumps directly from claim to finalize; it does
+    // not author an adaptive plan, so declare the intended planless path.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     // Seed dispatch-log with ONLY a contractor entry (no workflow-planner) — the inline-bypass
     // scenario the ATTESTATION WARNING exists to catch.
@@ -16548,6 +16736,7 @@ function testSelectionEvidenceDocking() {
     const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653201'], tmp, binDir);
     assert(sResult.claim === 'acquired', 'selection-evidence: startup must acquire');
     const project = sResult.selected_project || 'issue-653201';
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -16570,6 +16759,7 @@ function testSelectionEvidenceDocking() {
     const sResult2 = runClaimOnlineLastJson(['startup', '--target-issue', '653202'], tmp, binDir);
     assert(sResult2.claim === 'acquired', 'selection-evidence: second startup must acquire');
     const project2 = sResult2.selected_project || 'issue-653202';
+    markPlanAbsentFinalizeFixtureFast(tmp, project2);
 
     const finResult2 = runClaimOnlineLastJson(['finalize', '--project', project2], tmp, binDir);
     assert(finResult2.status === 'closed',
@@ -16607,6 +16797,9 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     );
     assert(sResult.claim === 'acquired', 'M1 (#280): startup must acquire');
     const project = sResult.selected_project || 'issue-280001';
+    // This fixture exercises dispatch attestation and sink receipts, not the adaptive
+    // plan/Phase-5 gate. Declare the established plan-absent fast exemption explicitly.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     // The back-fill must have written to .cache/dispatch-log.jsonl
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
@@ -16701,6 +16894,9 @@ function testPlannerAttestFlagAbsentStaysMissing() {
     );
     assert(sResult.claim === 'acquired', 'AC2 (#280): startup must acquire');
     const project = sResult.selected_project || 'issue-280002';
+    // This receipt-attestation negative does not exercise adaptive planning or
+    // Phase 5. Declare the canonical plan-absent fast exemption explicitly.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     // No dispatch-log must be written (no flag, no hook in test env)
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
@@ -16964,6 +17160,9 @@ function testContractorAttestFlagBackfills338() {
     const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '338001'], tmp, binDir);
     assert(sResult.claim === 'acquired', '#338 T4: startup must acquire');
     const project = sResult.selected_project || 'issue-338001';
+    // This attestation fixture exercises finalize directly and never authors an
+    // adaptive plan, so declare its intended planless path before finalization.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     // No dispatch-log yet (no flag at claim, no hook in test env).
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
@@ -17010,6 +17209,8 @@ function testContractorAttestAbsentWarnsNonBlocking338() {
       ['startup', '--target-issue', '338002', '--attest-planner-spawn'], tmp, binDir);
     assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
     const project = sResult.selected_project || 'issue-338002';
+    // Like T4, this attestation-only fixture never authors an adaptive plan.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
     assert(fs.existsSync(dispatchLog), '#338 T5: planner back-fill must create a dispatch-log');
 
@@ -17179,6 +17380,7 @@ function testFinalizeIncompleteWorktreeReentryFix() {
       'name: ' + project,
       'issue_number: 296',
       'status: closed',
+      'workflow_path: fast',
       'step: complete',
       ''
     ].join('\n'));
@@ -17508,6 +17710,9 @@ function testBundleFinalizeRoadmapCleanup() {
       'sink: merge', 'run_posture: in-place', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
+    // This bundle fixture isolates roadmap/receipt cleanup and intentionally
+    // omits adaptive planning, so declare the planless finalize path.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     // Plant roadmap sources for all three members
     plantRoadmapIssue(tmp, 42, '');
@@ -17929,6 +18134,7 @@ function testFinalizeClosesIssueBundleMembers() {
       'sink: merge', 'run_posture: in-place', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     plantRoadmapIssue(tmp, 42, '');
     plantRoadmapIssue(tmp, 47, '');
 
@@ -17987,6 +18193,7 @@ function testFinalizeRoadmapResidueDetection() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-428r', 428, null);
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428r');
     plantRoadmapIssue(tmp, 428, '');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428r'], {
@@ -18645,6 +18852,7 @@ function testRunProgressMirror605() {
     try {
       initGitRepo(tmp);
       plantActiveFolder(tmp, 'issue-605c', 605, null);
+      markPlanAbsentFinalizeFixtureFast(tmp, 'issue-605c');
       const mainCache = path.join(tmp, 'kaola-workflow', 'issue-605c', '.cache');
       fs.mkdirSync(mainCache, { recursive: true });
       fs.writeFileSync(path.join(mainCache, 'run-progress.json'), JSON.stringify({ plan_hash: 'x', op: 'close-node', node_ledger: [], in_progress: [], all_done: false }) + '\n');
@@ -18652,6 +18860,7 @@ function testRunProgressMirror605() {
       fs.mkdirSync(kwRoot, { recursive: true });
       spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605c', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
       plantActiveFolder(wtPath, 'issue-605c', 605, null);
+      markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-605c');
       const fin = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-605c', '--keep-worktree'], {
         cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
       assert(fin.status === 0, '#605 (c): finalize from linked worktree should exit 0\nstderr: ' + fin.stderr);

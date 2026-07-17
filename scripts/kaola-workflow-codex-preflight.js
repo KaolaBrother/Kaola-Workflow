@@ -87,9 +87,8 @@ const MANIFEST_SCHEMA_VERSION = 1;
 const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
 const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 2;
 const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
-const REVIEWER_TOP_LEVEL_FIELDS = Object.freeze([
-  'name', 'description', 'nickname_candidates', 'behavior_contract_version',
-  'behavior_contract_hash', 'resolved_profile_hash', 'developer_instructions',
+const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
+  'name', 'description', 'nickname_candidates', 'developer_instructions',
 ]);
 
 function escapeRegExp(value) {
@@ -127,89 +126,243 @@ function sha256Hex(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+// Managed role profiles intentionally use one small canonical TOML grammar: four bare,
+// column-zero assignments and one triple-quoted developer_instructions block, with no tables.
+// Reject every other spelling rather than approximating TOML acceptance. This makes quoted,
+// dotted, indented, or table-scoped keys fail closed even when Codex itself parses them.
+const TOML_KEY_SEGMENT_PATTERN = `(?:"(?:\\\\.|[^"\\\\])*"|'[^']*'|[A-Za-z0-9_-]+)`;
+const TOML_ASSIGNMENT_PATTERN = new RegExp(
+  `^(\\s*)(${TOML_KEY_SEGMENT_PATTERN}(?:\\s*\\.\\s*${TOML_KEY_SEGMENT_PATTERN})*)\\s*=`,
+);
+
+function tomlKeyLabel(raw) {
+  const key = String(raw).trim();
+  if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
+  if (/^"(?:\\.|[^"\\])*"$/.test(key)) {
+    try { return JSON.parse(key); } catch (_) { return key; }
+  }
+  if (/^'[^']*'$/.test(key)) return key.slice(1, -1);
+  return key.replace(/\s+/g, '');
+}
+
+function profileTopLevelShape(text) {
+  const source = String(text);
+  const instructionRe = /^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*(?:\r?\n|$)/gm;
+  const instructionMatches = [...source.matchAll(instructionRe)];
+  let outside = '';
+  let cursor = 0;
+  for (const match of instructionMatches) {
+    outside += source.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+  }
+  outside += source.slice(cursor);
+
+  const fields = instructionMatches.map(() => 'developer_instructions');
+  const violations = [];
+  if (source.includes('\r')) violations.push({ kind: 'line_endings', value: 'LF required' });
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(source)) {
+    violations.push({ kind: 'control', value: 'raw TOML control character' });
+  }
+  const instructionBackslash = instructionMatches.some(match => match[1].includes('\\'));
+  if (source.includes('\\')) {
+    violations.push(instructionBackslash
+      ? { kind: 'instruction_backslash', value: 'backslash in multiline basic string' }
+      : { kind: 'backslash', value: 'backslash in managed TOML' });
+  }
+  for (const [index, line] of outside.split(/\r?\n/).entries()) {
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const table = line.match(/^\s*(\[\[?.*?\]\]?)\s*(?:#.*)?$/);
+    if (table) {
+      violations.push({ kind: 'table', value: table[1], line: index + 1 });
+      continue;
+    }
+    const assignment = line.match(TOML_ASSIGNMENT_PATTERN);
+    if (!assignment) {
+      violations.push({ kind: 'syntax', value: line.trim(), line: index + 1 });
+      continue;
+    }
+    const rawKey = assignment[2];
+    const field = tomlKeyLabel(rawKey);
+    fields.push(field);
+    if (assignment[1] !== '' || !/^[A-Za-z0-9_-]+$/.test(rawKey)) {
+      violations.push({ kind: 'syntax', value: `noncanonical key ${rawKey}`, line: index + 1 });
+    }
+    if (!CODEX_ROLE_TOP_LEVEL_FIELDS.includes(field)) {
+      violations.push({ kind: 'field', value: field, line: index + 1 });
+    }
+  }
+  for (const field of CODEX_ROLE_TOP_LEVEL_FIELDS) {
+    const count = fields.filter(value => value === field).length;
+    if (count > 1) violations.push({ kind: 'duplicate', value: field, count });
+  }
+  return {
+    source,
+    outside,
+    fields,
+    violations,
+    instructionMatches,
+    instructionMatch: instructionMatches.length === 1 ? instructionMatches[0] : null,
+    instructionBody: instructionMatches.length === 1 ? instructionMatches[0][1] : null,
+  };
+}
+
+function genericShapeReasons(shape) {
+  return shape.violations.map(violation => {
+    if (violation.kind === 'line_endings') return 'codex_role_toml_line_endings_forbidden';
+    if (violation.kind === 'control') return 'codex_role_toml_control_character_forbidden';
+    if (violation.kind === 'instruction_backslash') return 'codex_role_instruction_toml_backslash_forbidden';
+    if (violation.kind === 'backslash') return 'codex_role_toml_backslash_forbidden';
+    if (violation.kind === 'field') return `codex_role_field_forbidden: ${violation.value}`;
+    if (violation.kind === 'table') return `codex_role_table_forbidden: ${violation.value}`;
+    if (violation.kind === 'duplicate') return `codex_role_top_level_field_duplicate: ${violation.value}`;
+    return `codex_role_top_level_syntax_forbidden: line=${violation.line} ${violation.value}`;
+  });
+}
+
+function reviewerShapeReasons(shape) {
+  return shape.violations.map(violation => {
+    if (violation.kind === 'line_endings') return 'reviewer_toml_line_endings_forbidden';
+    if (violation.kind === 'control') return 'reviewer_toml_control_character_forbidden';
+    if (violation.kind === 'instruction_backslash') return 'reviewer_instruction_toml_backslash_forbidden';
+    if (violation.kind === 'backslash') return 'reviewer_toml_backslash_forbidden';
+    if (violation.kind === 'field') return `reviewer_adapter_field_forbidden: ${violation.value}`;
+    if (violation.kind === 'table') return `reviewer_adapter_table_forbidden: ${violation.value}`;
+    if (violation.kind === 'duplicate') return `reviewer_top_level_field_duplicate: ${violation.value}`;
+    return `reviewer_adapter_syntax_forbidden: line=${violation.line} ${violation.value}`;
+  });
+}
+
 function reviewerProfileContract(text, role) {
   const reasons = [];
   if (!REVIEWER_ROLES.includes(role)) return { reasons, identity: null };
-  const source = String(text);
-  const instructionMatch = /^developer_instructions\s*=\s*"""[\s\S]*?"""/m.exec(source);
-  const instructionIndex = instructionMatch ? instructionMatch.index : -1;
-  const header = instructionIndex < 0 ? source : source.slice(0, instructionIndex);
-  const suffix = instructionMatch
-    ? source.slice(instructionMatch.index + instructionMatch[0].length)
-    : '';
-  const fields = [
-    ...[...header.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
-    ...(instructionMatch ? ['developer_instructions'] : []),
-    ...[...suffix.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
-  ];
-  for (const field of fields) {
-    if (!REVIEWER_TOP_LEVEL_FIELDS.includes(field)) reasons.push(`reviewer_adapter_field_forbidden: ${field}`);
-  }
-  for (const field of REVIEWER_TOP_LEVEL_FIELDS) {
-    if (fields.filter(value => value === field).length > 1) reasons.push(`reviewer_top_level_field_duplicate: ${field}`);
-  }
-  for (const table of [...header.matchAll(/^\s*\[([^\]]+)\]\s*$/gm),
-    ...suffix.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)]) {
-    reasons.push(`reviewer_adapter_table_forbidden: ${table[1]}`);
-  }
 
-  const topVersions = [...header.matchAll(/^behavior_contract_version\s*=\s*(\d+)\s*$/gm)];
-  if (topVersions.length === 0) reasons.push('reviewer_contract_version_missing');
-  const topVersion = topVersions.length === 1 ? Number(topVersions[0][1]) : null;
-  const coreStarts = source.split('<!-- reviewer-behavior-core:start -->').length - 1;
-  const coreEnds = source.split('<!-- reviewer-behavior-core:end -->').length - 1;
+  const shape = profileTopLevelShape(text);
+  const source = shape.source;
+  const instructionMatch = shape.instructionMatch;
+  const instructionText = shape.instructionBody || '';
+  reasons.push(...reviewerShapeReasons(shape));
+
+  const coreStarts = instructionText.split('<!-- reviewer-behavior-core:start -->').length - 1;
+  const coreEnds = instructionText.split('<!-- reviewer-behavior-core:end -->').length - 1;
   let core = '';
+  let coreStart = -1;
+  let coreEnd = -1;
   if (coreStarts !== 1 || coreEnds !== 1) {
     reasons.push(`reviewer_behavior_core_invalid: starts=${coreStarts} ends=${coreEnds}`);
   } else {
-    const start = source.indexOf('<!-- reviewer-behavior-core:start -->');
-    const end = source.indexOf('<!-- reviewer-behavior-core:end -->', start);
-    core = source.slice(start, end + '<!-- reviewer-behavior-core:end -->'.length);
-  }
-  const coreRoleMatch = /^role:\s*([^\n]+)$/m.exec(core);
-  if (!coreRoleMatch || coreRoleMatch[1] !== role) reasons.push('reviewer_behavior_core_role_mismatch');
-  const coreVersionMatch = /^behavior_contract_version:\s*(\d+)$/m.exec(core);
-  const coreVersion = coreVersionMatch ? Number(coreVersionMatch[1]) : null;
-  if (coreVersion === null) reasons.push('reviewer_behavior_core_version_missing');
-  if (topVersion !== null && coreVersion !== null && topVersion !== coreVersion) {
-    reasons.push(`reviewer_contract_version_mismatch: top=${topVersion} core=${coreVersion}`);
-  } else if (topVersion !== null && topVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
-    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${topVersion}`);
-  }
-
-  const topBehaviorMatches = [...header.matchAll(/^behavior_contract_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
-  const topBehaviorHash = topBehaviorMatches.length === 1 ? topBehaviorMatches[0][1] : null;
-  if (!topBehaviorHash) reasons.push('reviewer_behavior_hash_missing');
-  const coreBehaviorMatch = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(core);
-  const coreBehaviorHash = coreBehaviorMatch ? coreBehaviorMatch[1] : null;
-  if (!coreBehaviorHash) reasons.push('reviewer_behavior_core_hash_missing');
-  if (topBehaviorHash && coreBehaviorHash && topBehaviorHash !== coreBehaviorHash) {
-    reasons.push(`reviewer_behavior_hash_mismatch: top=${topBehaviorHash} core=${coreBehaviorHash}`);
-  }
-
-  const resolvedMatches = [...source.matchAll(/^resolved_profile_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
-  let resolvedProfileHash = null;
-  if (resolvedMatches.length === 0) {
-    reasons.push('reviewer_resolved_profile_hash_missing');
-  } else if (resolvedMatches.length !== 1) {
-    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedMatches.length}`);
-  } else {
-    resolvedProfileHash = resolvedMatches[0][1];
-    const match = resolvedMatches[0];
-    const valueOffset = match.index + match[0].indexOf(resolvedProfileHash);
-    const normalized = source.slice(0, valueOffset) + '0'.repeat(64)
-      + source.slice(valueOffset + resolvedProfileHash.length);
-    const expected = sha256Hex(normalized);
-    if (resolvedProfileHash !== expected) {
-      reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
+    coreStart = instructionText.indexOf('<!-- reviewer-behavior-core:start -->');
+    const endMarkerStart = instructionText.indexOf('<!-- reviewer-behavior-core:end -->', coreStart);
+    coreEnd = endMarkerStart + '<!-- reviewer-behavior-core:end -->'.length;
+    if (endMarkerStart < coreStart) {
+      reasons.push('reviewer_behavior_core_invalid: markers_out_of_order');
+      coreStart = -1;
+      coreEnd = -1;
+    } else {
+      core = instructionText.slice(coreStart, coreEnd);
     }
   }
-  const identity = topVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
+  const coreRoleMatches = [...core.matchAll(/^role:[ \t]*([^\r\n]+)[ \t]*$/gm)];
+  if (coreRoleMatches.length !== 1) {
+    reasons.push(`reviewer_behavior_core_role_not_unique: count=${coreRoleMatches.length}`);
+  } else if (coreRoleMatches[0][1].trim() !== role) {
+    reasons.push('reviewer_behavior_core_role_mismatch');
+  }
+
+  const versionFields = [...instructionText.matchAll(
+    /^behavior_contract_version[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
+  )];
+  let coreVersion = null;
+  if (versionFields.length === 0) {
+    reasons.push('reviewer_behavior_core_version_missing');
+  } else if (versionFields.length !== 1) {
+    reasons.push(`reviewer_behavior_contract_version_not_unique: count=${versionFields.length}`);
+  } else {
+    const rawVersion = versionFields[0][1].trim();
+    if (!/^\d+$/.test(rawVersion)) {
+      reasons.push('reviewer_behavior_core_version_missing');
+    } else {
+      coreVersion = Number(rawVersion);
+    }
+    if (coreStart < 0 || versionFields[0].index < coreStart
+        || versionFields[0].index + versionFields[0][0].length > coreEnd) {
+      reasons.push('reviewer_behavior_contract_version_outside_core');
+    }
+  }
+  if (coreVersion !== null && coreVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
+    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${coreVersion}`);
+  }
+
+  const behaviorFields = [...instructionText.matchAll(
+    /^behavior_contract_hash[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
+  )];
+  let coreBehaviorHash = null;
+  if (behaviorFields.length === 0) {
+    reasons.push('reviewer_behavior_core_hash_missing');
+  } else if (behaviorFields.length !== 1) {
+    reasons.push(`reviewer_behavior_contract_hash_not_unique: count=${behaviorFields.length}`);
+  } else {
+    const rawHash = behaviorFields[0][1].trim();
+    if (/^[0-9a-f]{64}$/.test(rawHash)) coreBehaviorHash = rawHash;
+    else reasons.push('reviewer_behavior_core_hash_missing');
+    if (coreStart < 0 || behaviorFields[0].index < coreStart
+        || behaviorFields[0].index + behaviorFields[0][0].length > coreEnd) {
+      reasons.push('reviewer_behavior_contract_hash_outside_core');
+    }
+  }
+
+  const identityStarts = instructionText.split('<!-- reviewer-profile-identity:start -->').length - 1;
+  const identityEnds = instructionText.split('<!-- reviewer-profile-identity:end -->').length - 1;
+  let identityStart = -1;
+  let identityEnd = -1;
+  if (identityStarts !== 1 || identityEnds !== 1) {
+    reasons.push(`reviewer_profile_identity_invalid: starts=${identityStarts} ends=${identityEnds}`);
+  } else {
+    identityStart = instructionText.indexOf('<!-- reviewer-profile-identity:start -->');
+    const endMarkerStart = instructionText.indexOf('<!-- reviewer-profile-identity:end -->', identityStart);
+    identityEnd = endMarkerStart + '<!-- reviewer-profile-identity:end -->'.length;
+    if (endMarkerStart < identityStart) {
+      reasons.push('reviewer_profile_identity_invalid: markers_out_of_order');
+      identityStart = -1;
+      identityEnd = -1;
+    }
+  }
+
+  const resolvedFields = [...instructionText.matchAll(
+    /^resolved_profile_hash[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
+  )];
+  let resolvedProfileHash = null;
+  if (resolvedFields.length === 0) {
+    reasons.push('reviewer_resolved_profile_hash_missing');
+  } else if (resolvedFields.length !== 1) {
+    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedFields.length}`);
+  } else {
+    const match = resolvedFields[0];
+    const rawHash = match[1].trim();
+    if (/^[0-9a-f]{64}$/.test(rawHash)) {
+      resolvedProfileHash = rawHash;
+      const bodyOffset = instructionMatch.index + instructionMatch[0].indexOf(instructionMatch[1]);
+      const valueOffset = bodyOffset + match.index + match[0].indexOf(rawHash);
+      const normalized = source.slice(0, valueOffset) + '0'.repeat(64)
+        + source.slice(valueOffset + rawHash.length);
+      const expected = sha256Hex(normalized);
+      if (resolvedProfileHash !== expected) {
+        reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
+      }
+    } else {
+      reasons.push('reviewer_resolved_profile_hash_missing');
+    }
+    if (identityStart < 0 || match.index < identityStart
+        || match.index + match[0].length > identityEnd) {
+      reasons.push('reviewer_resolved_profile_hash_outside_identity');
+    }
+  }
+
+  const identity = reasons.length === 0
       && coreVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
-      && topBehaviorHash && topBehaviorHash === coreBehaviorHash && resolvedProfileHash
+      && coreBehaviorHash && resolvedProfileHash
     ? {
-      behavior_contract_version: topVersion,
-      behavior_contract_hash: topBehaviorHash,
+      behavior_contract_version: coreVersion,
+      behavior_contract_hash: coreBehaviorHash,
       resolved_profile_hash: resolvedProfileHash,
     }
     : null;
@@ -247,20 +400,145 @@ function stripTomlComment(line) {
   return line;
 }
 
-function parseTomlTableName(line) {
-  const trimmed = String(line || '').trim();
-  let body = null;
-  let isArrayTable = false;
-  if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-    body = trimmed.slice(2, -2).trim();
-    isArrayTable = true;
-  } else if (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.startsWith('[[')) {
-    body = trimmed.slice(1, -1).trim();
-  } else {
-    return null;
-  }
-  if (!body) return null;
+// Return a line-for-line structural view of TOML while masking multiline string
+// bodies. Configuration prose may contain text such as `[agents.foo]` or
+// `[features.multi_agent_v2]`; those bytes are data, not declarations. Ordinary
+// quoted values stay intact because the small parsers below still need them.
+function tomlStructuralContent(content) {
+  const source = String(content || '');
+  let output = '';
+  let mode = 'normal';
+  let escaped = false;
 
+  function quoteRun(start, quote) {
+    let end = start;
+    while (end < source.length && source[end] === quote) end++;
+    return end - start;
+  }
+
+  function precedingBackslashes(start) {
+    let count = 0;
+    for (let index = start - 1; index >= 0 && source[index] === '\\'; index--) count++;
+    return count;
+  }
+
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+
+    if (mode === 'multiline-basic' || mode === 'multiline-literal') {
+      const quote = mode === 'multiline-basic' ? '"' : "'";
+      const run = ch === quote ? quoteRun(index, quote) : 0;
+      const closes = run >= 3
+        && (mode === 'multiline-literal' || precedingBackslashes(index) % 2 === 0);
+      if (closes) {
+        output += ' '.repeat(run);
+        index += run - 1;
+        mode = 'normal';
+      } else {
+        output += ch === '\n' || ch === '\r' ? ch : ' ';
+      }
+      continue;
+    }
+
+    if (mode === 'comment') {
+      output += ch;
+      if (ch === '\n') mode = 'normal';
+      continue;
+    }
+
+    if (mode === 'basic') {
+      output += ch;
+      if (ch === '\n' || ch === '\r') {
+        mode = 'normal';
+        escaped = false;
+      } else if (ch === '\\' && !escaped) {
+        escaped = true;
+      } else {
+        if (ch === '"' && !escaped) mode = 'normal';
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (mode === 'literal') {
+      output += ch;
+      if (ch === "'") mode = 'normal';
+      else if (ch === '\n' || ch === '\r') mode = 'normal';
+      continue;
+    }
+
+    if (ch === '#') {
+      output += ch;
+      mode = 'comment';
+      continue;
+    }
+    if (source.startsWith('"""', index)) {
+      output += '   ';
+      index += 2;
+      mode = 'multiline-basic';
+      continue;
+    }
+    if (source.startsWith("'''", index)) {
+      output += '   ';
+      index += 2;
+      mode = 'multiline-literal';
+      continue;
+    }
+    output += ch;
+    if (ch === '"') {
+      mode = 'basic';
+      escaped = false;
+    } else if (ch === "'") {
+      mode = 'literal';
+    }
+  }
+
+  return output;
+}
+
+function tomlStructuralLines(content) {
+  return tomlStructuralContent(content).split(/\r?\n/);
+}
+
+function decodeTomlBasicStringBody(value) {
+  const source = String(value || '');
+  let decoded = '';
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+    if (ch !== '\\') {
+      decoded += ch;
+      continue;
+    }
+    if (++index >= source.length) return null;
+    const escape = source[index];
+    const simple = {
+      b: '\b',
+      t: '\t',
+      n: '\n',
+      f: '\f',
+      r: '\r',
+      '"': '"',
+      '\\': '\\',
+    };
+    if (Object.prototype.hasOwnProperty.call(simple, escape)) {
+      decoded += simple[escape];
+      continue;
+    }
+    if (escape !== 'u' && escape !== 'U') return null;
+    const width = escape === 'u' ? 4 : 8;
+    const digits = source.slice(index + 1, index + 1 + width);
+    if (digits.length !== width || !/^[0-9A-Fa-f]+$/.test(digits)) return null;
+    const codePoint = parseInt(digits, 16);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return null;
+    decoded += String.fromCodePoint(codePoint);
+    index += width;
+  }
+  return decoded;
+}
+
+function parseTomlDottedKeySegments(bodyValue) {
+  const body = String(bodyValue || '').trim();
+  if (!body) return null;
   const segments = [];
   let i = 0;
   function skipSpace() {
@@ -294,6 +572,10 @@ function parseTomlTableName(line) {
         i++;
       }
       if (!closed) return null;
+      if (quote === '"') {
+        value = decodeTomlBasicStringBody(value);
+        if (value === null) return null;
+      }
       segments.push({ value, quoted: true });
     } else {
       const m = body.slice(i).match(/^[A-Za-z0-9_-]+/);
@@ -308,7 +590,70 @@ function parseTomlTableName(line) {
     i++;
   }
 
-  return { segments, isArrayTable };
+  return segments;
+}
+
+function parseTomlTableName(line) {
+  const trimmed = String(line || '').trim();
+  let body = null;
+  let isArrayTable = false;
+  if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
+    body = trimmed.slice(2, -2).trim();
+    isArrayTable = true;
+  } else if (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.startsWith('[[')) {
+    body = trimmed.slice(1, -1).trim();
+  } else {
+    return null;
+  }
+  const segments = parseTomlDottedKeySegments(body);
+  return segments ? { segments, isArrayTable } : null;
+}
+
+function parseTomlAssignment(line) {
+  const source = String(line || '');
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+    if (inDouble && ch === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
+    else if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '=' && !inSingle && !inDouble) {
+      const key = parseTomlDottedKeySegments(source.slice(0, index));
+      return key ? { key, value: source.slice(index + 1).trim() } : null;
+    } else if (ch === '#' && !inSingle && !inDouble) {
+      return null;
+    }
+    escaped = false;
+  }
+  return null;
+}
+
+function parseTomlAssignmentKey(line) {
+  const assignment = parseTomlAssignment(line);
+  return assignment ? assignment.key : null;
+}
+
+function tomlAssignmentPath(tableName, assignment) {
+  if (!assignment) return null;
+  let segments = [];
+  if (tableName !== null) {
+    if (!tableName || tableName.isArrayTable || !Array.isArray(tableName.segments)) return null;
+    segments = tableName.segments;
+  }
+  return [...segments, ...assignment.key].map(segment => segment.value);
+}
+
+function tomlAssignmentPathMatches(tableName, assignment, dottedPath) {
+  const actual = tomlAssignmentPath(tableName, assignment);
+  if (!actual) return false;
+  const expected = Array.isArray(dottedPath) ? dottedPath : String(dottedPath || '').split('.');
+  return actual.length === expected.length
+    && actual.every((segment, index) => segment === expected[index]);
 }
 
 function tomlTableNameMatches(tableName, dottedPath) {
@@ -334,12 +679,7 @@ function parseTomlString(value) {
     return trimmed.slice(1, -1);
   }
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      return typeof parsed === 'string' ? parsed : null;
-    } catch {
-      return null;
-    }
+    return decodeTomlBasicStringBody(trimmed.slice(1, -1));
   }
   return null;
 }
@@ -350,6 +690,8 @@ function splitInlineTomlFields(body) {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let braceDepth = 0;
+  let bracketDepth = 0;
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (inDouble && ch === '\\' && !escaped) {
@@ -358,7 +700,13 @@ function splitInlineTomlFields(body) {
     }
     if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
     if (ch === "'" && !inDouble) inSingle = !inSingle;
-    if (ch === ',' && !inSingle && !inDouble) {
+    if (!inSingle && !inDouble) {
+      if (ch === '{') braceDepth++;
+      else if (ch === '}') braceDepth--;
+      else if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth--;
+    }
+    if (ch === ',' && !inSingle && !inDouble && braceDepth === 0 && bracketDepth === 0) {
       fields.push(body.slice(start, i).trim());
       start = i + 1;
     }
@@ -366,6 +714,20 @@ function splitInlineTomlFields(body) {
   }
   fields.push(body.slice(start).trim());
   return fields.filter(Boolean);
+}
+
+function parseInlineTomlTableAssignments(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) return [];
+  const assignments = [];
+  for (const field of splitInlineTomlFields(body)) {
+    const assignment = parseTomlAssignment(field);
+    if (!assignment || assignment.key.length !== 1) return null;
+    assignments.push(assignment);
+  }
+  return assignments;
 }
 
 function parseMultiAgentV2Value(value) {
@@ -395,46 +757,45 @@ function parseMultiAgentV2Value(value) {
   let namespaceAmbiguous = false;
   let toolNamespace = null;
   for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
-    const enabledMatch = field.match(/^enabled\s*=\s*(.+)$/);
-    if (enabledMatch) {
+    const assignment = parseTomlAssignment(field);
+    if (!assignment || assignment.key.length !== 1) continue;
+    const key = assignment.key[0].value;
+    if (key === 'enabled') {
       if (enabledFound) return { valid: false, enabled: false, non_code_mode_only: null };
-      const fieldBool = parseTomlBoolean(enabledMatch[1]);
+      const fieldBool = parseTomlBoolean(assignment.value);
       if (fieldBool === null) return { valid: false, enabled: false, non_code_mode_only: null };
       enabledFound = true;
       enabled = fieldBool;
       continue;
     }
-    const transportMatch = field.match(/^non_code_mode_only\s*=\s*(.+)$/);
-    if (transportMatch) {
+    if (key === 'non_code_mode_only') {
       if (transportFound) {
         transportAmbiguous = true;
         continue;
       }
-      const fieldBool = parseTomlBoolean(transportMatch[1]);
+      const fieldBool = parseTomlBoolean(assignment.value);
       transportFound = true;
       if (fieldBool === null) transportAmbiguous = true;
       else nonCodeModeOnly = fieldBool;
       continue;
     }
-    const metadataMatch = field.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
-    if (metadataMatch) {
+    if (key === 'hide_spawn_agent_metadata') {
       if (metadataFound) {
         metadataAmbiguous = true;
         continue;
       }
-      const fieldBool = parseTomlBoolean(metadataMatch[1]);
+      const fieldBool = parseTomlBoolean(assignment.value);
       metadataFound = true;
       if (fieldBool === null) metadataAmbiguous = true;
       else hideSpawnAgentMetadata = fieldBool;
       continue;
     }
-    const namespaceMatch = field.match(/^tool_namespace\s*=\s*(.+)$/);
-    if (namespaceMatch) {
+    if (key === 'tool_namespace') {
       if (namespaceFound) {
         namespaceAmbiguous = true;
         continue;
       }
-      const fieldString = parseTomlString(namespaceMatch[1]);
+      const fieldString = parseTomlString(assignment.value);
       namespaceFound = true;
       if (fieldString === null) namespaceAmbiguous = true;
       else toolNamespace = fieldString;
@@ -456,7 +817,7 @@ function parseMultiAgentV2Value(value) {
 }
 
 function detectCodexDispatchMode(configContent) {
-  const lines = String(configContent || '').split(/\r?\n/);
+  const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
@@ -470,6 +831,14 @@ function detectCodexDispatchMode(configContent) {
   let namespaceSeen = false;
   let namespaceAmbiguous = false;
   let toolNamespace = null;
+  let forcedUnsafe = false;
+
+  function forceUnsafe() {
+    forcedUnsafe = true;
+    transportAmbiguous = true;
+    metadataAmbiguous = true;
+    namespaceAmbiguous = true;
+  }
 
   function recordTransport(value) {
     if (value === null || value === undefined) return;
@@ -530,42 +899,53 @@ function detectCodexDispatchMode(configContent) {
       continue;
     }
 
-    if (tomlTableNameMatches(table, 'features')) {
-      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
-      if (m) record(parseMultiAgentV2Value(m[1]));
-    } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-      const enabledMatch = line.match(/^enabled\s*=\s*(.+)$/);
-      if (enabledMatch) {
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) {
+        forceUnsafe();
+        continue;
+      }
+      const v2Fields = featureFields.filter(field => field.key[0].value === 'multi_agent_v2');
+      if (v2Fields.length > 1) {
+        forceUnsafe();
+        continue;
+      }
+      if (v2Fields.length === 1) {
+        const parsed = parseMultiAgentV2Value(v2Fields[0].value);
+        if (parsed.valid) record(parsed);
+        else forceUnsafe();
+      }
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      record(parseMultiAgentV2Value(assignment.value));
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'enabled'])) {
         record({
-          valid: parseTomlBoolean(enabledMatch[1]) !== null,
-          enabled: parseTomlBoolean(enabledMatch[1]) === true,
+          valid: parseTomlBoolean(assignment.value) !== null,
+          enabled: parseTomlBoolean(assignment.value) === true,
           non_code_mode_only: null,
           hide_spawn_agent_metadata: null,
           tool_namespace: null,
         });
-      }
-      const transportMatch = line.match(/^non_code_mode_only\s*=\s*(.+)$/);
-      if (transportMatch) {
-        const transportValue = parseTomlBoolean(transportMatch[1]);
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'non_code_mode_only'])) {
+        const transportValue = parseTomlBoolean(assignment.value);
         if (transportValue === null) transportAmbiguous = true;
         else recordTransport(transportValue);
-      }
-      const metadataMatch = line.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
-      if (metadataMatch) {
-        const metadataValue = parseTomlBoolean(metadataMatch[1]);
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'hide_spawn_agent_metadata'])) {
+        const metadataValue = parseTomlBoolean(assignment.value);
         if (metadataValue === null) metadataAmbiguous = true;
         else recordMetadata(metadataValue);
-      }
-      const namespaceMatch = line.match(/^tool_namespace\s*=\s*(.+)$/);
-      if (namespaceMatch) {
-        const namespaceValue = parseTomlString(namespaceMatch[1]);
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'tool_namespace'])) {
+        const namespaceValue = parseTomlString(assignment.value);
         if (namespaceValue === null) namespaceAmbiguous = true;
         else recordNamespace(namespaceValue);
-      }
     }
   }
 
-  enabled = seen && !ambiguous && enabled;
+  enabled = forcedUnsafe || (seen && !ambiguous && enabled);
   const transportMode = !enabled
     ? 'not_applicable'
     : (transportAmbiguous
@@ -632,7 +1012,7 @@ const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture
 // first-match/ambiguous-fails-closed strategy: a repeated key or malformed boolean
 // short-circuits to false rather than guessing.
 function parseFeaturesMultiAgentEnabled(configContent) {
-  const lines = String(configContent || '').split(/\r?\n/);
+  const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
@@ -648,10 +1028,13 @@ function parseFeaturesMultiAgentEnabled(configContent) {
       continue;
     }
 
-    if (tomlTableNameMatches(table, 'features')) {
-      const m = line.match(/^multi_agent\s*=\s*(.+)$/);
-      if (m) {
-        const b = parseTomlBoolean(m[1]);
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) continue;
+      for (const field of featureFields) {
+        if (field.key[0].value !== 'multi_agent') continue;
+        const b = parseTomlBoolean(field.value);
         if (b === null || seen) {
           ambiguous = true;
           enabled = false;
@@ -660,6 +1043,15 @@ function parseFeaturesMultiAgentEnabled(configContent) {
           enabled = b;
         }
       }
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent'])) {
+        const b = parseTomlBoolean(assignment.value);
+        if (b === null || seen) {
+          ambiguous = true;
+          enabled = false;
+        } else {
+          seen = true;
+          enabled = b;
+        }
     }
   }
 
@@ -672,11 +1064,25 @@ function parseFeaturesMultiAgentEnabled(configContent) {
 // table line is the correct (and only valid) place a user- or installer-owned root
 // key can live — the same `top` convention used by validateProfileText.
 function parseTopLevelModelReasoningEffort(configContent) {
-  const text = String(configContent || '');
-  const firstTableIdx = text.search(/^\[/m);
-  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
-  const m = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  return m ? m[1] : null;
+  let table = null;
+  let seen = false;
+  let effort = null;
+  for (const rawLine of tomlStructuralLines(configContent)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+    const assignment = parseTomlAssignment(line);
+    if (!tomlAssignmentPathMatches(table, assignment, ['model_reasoning_effort'])) continue;
+    const value = parseTomlString(assignment.value);
+    if (seen || value === null) return null;
+    seen = true;
+    effort = value;
+  }
+  return effort;
 }
 
 // Exact remediation text for a non-proactive posture; null when nothing to remediate. Leads with
@@ -773,12 +1179,14 @@ function parseMultiAgentV2NumericFields(configContent) {
 
   function recordFromInlineObject(body) {
     for (const field of splitInlineTomlFields(body)) {
-      const m = field.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-      if (m) recordField(m[1], m[2]);
+      const assignment = parseTomlAssignment(field);
+      if (assignment && assignment.key.length === 1) {
+        recordField(assignment.key[0].value, assignment.value);
+      }
     }
   }
 
-  const lines = String(configContent || '').split(/\r?\n/);
+  const lines = tomlStructuralLines(configContent);
   let table = null;
   for (const rawLine of lines) {
     const line = stripTomlComment(rawLine).trim();
@@ -790,15 +1198,27 @@ function parseMultiAgentV2NumericFields(configContent) {
       continue;
     }
 
-    if (tomlTableNameMatches(table, 'features')) {
-      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
-      if (m) {
-        const v = m[1].trim();
-        if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) continue;
+      for (const field of featureFields) {
+        if (field.key[0].value !== 'multi_agent_v2') continue;
+        const value = field.value.trim();
+        if (value.startsWith('{') && value.endsWith('}')) {
+          recordFromInlineObject(value.slice(1, -1));
+        }
       }
-    } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-      const m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-      if (m) recordField(m[1], m[2]);
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+        const v = assignment.value.trim();
+        if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
+    } else {
+      const prefix = ['features', 'multi_agent_v2'];
+      const fullPath = tomlAssignmentPath(table, assignment);
+      if (fullPath && fullPath.length === 3
+          && fullPath[0] === prefix[0] && fullPath[1] === prefix[1]) {
+        recordField(fullPath[2], assignment.value);
+      }
     }
   }
 
@@ -829,6 +1249,635 @@ function deriveMultiAgentV2Bounds(configContent, v2Enabled) {
     min_wait_timeout_ms: raw.min_wait_timeout_ms,
     max_wait_timeout_ms: raw.max_wait_timeout_ms,
     default_wait_timeout_ms: raw.default_wait_timeout_ms,
+  };
+}
+
+// Codex overlays config keys from ~/.codex, then project .codex directories from
+// repository root to cwd. Parse only the transport/posture fields this gate owns,
+// retain whether each field was explicitly present, and overlay high layers over
+// low layers without treating an absent project field as a reset.
+function parseRuntimeLayerOverrides(configContent) {
+  const overrides = {};
+  let table = null;
+  let v2Shape = null;
+  let v2ShapeSource = null;
+
+  function record(key, value, valid = true) {
+    if (overrides[key] && overrides[key].present) {
+      overrides[key] = { present: true, valid: false, value: null };
+      return;
+    }
+    overrides[key] = { present: true, valid, value: valid ? value : null };
+  }
+
+  function recordBoolean(key, raw) {
+    const value = parseTomlBoolean(raw);
+    record(key, value, value !== null);
+  }
+
+  function recordInteger(key, raw) {
+    const match = String(raw).trim().match(/^-?\d+$/);
+    record(key, match ? parseInt(match[0], 10) : null, !!match);
+  }
+
+  function recordV2Shape(kind, source) {
+    if (v2Shape === null) {
+      v2Shape = kind;
+      v2ShapeSource = source;
+      return;
+    }
+    const recursivelyMergeable = v2Shape === 'table' && kind === 'table'
+      && v2ShapeSource !== 'inline' && source !== 'inline';
+    if (!recursivelyMergeable) {
+      v2Shape = 'invalid';
+      v2ShapeSource = 'invalid';
+    }
+  }
+
+  function recordV2Object(body) {
+    for (const field of splitInlineTomlFields(body)) {
+      const assignment = parseTomlAssignment(field);
+      if (!assignment || assignment.key.length !== 1) continue;
+      const key = assignment.key[0].value;
+      const raw = assignment.value;
+      if (key === 'enabled') recordBoolean('v2_enabled', raw);
+      else if (key === 'non_code_mode_only') recordBoolean('v2_non_code_mode_only', raw);
+      else if (key === 'hide_spawn_agent_metadata') recordBoolean('v2_hide_spawn_agent_metadata', raw);
+      else if (key === 'tool_namespace') {
+        const value = parseTomlString(raw);
+        record('v2_tool_namespace', value, value !== null && value.length > 0);
+      } else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) {
+        recordInteger(`v2_${key}`, raw);
+      }
+    }
+  }
+
+  function recordV2Value(rawValue) {
+    const value = String(rawValue).trim();
+    const bool = parseTomlBoolean(value);
+    if (bool !== null) {
+      recordV2Shape('scalar', 'scalar');
+      record('v2_enabled', bool, true);
+    } else if (value.startsWith('{') && value.endsWith('}')) {
+      recordV2Shape('table', 'inline');
+      recordV2Object(value.slice(1, -1));
+    } else {
+      recordV2Shape('invalid', 'invalid');
+      record('v2_enabled', null, false);
+    }
+  }
+
+  function recordFeaturesValue(rawValue) {
+    const featureFields = parseInlineTomlTableAssignments(rawValue);
+    if (featureFields === null) {
+      recordV2Shape('invalid', 'invalid');
+      record('v2_enabled', null, false);
+      return;
+    }
+    for (const field of featureFields) {
+      const key = field.key[0].value;
+      if (key === 'multi_agent') recordBoolean('multi_agent', field.value);
+      else if (key === 'multi_agent_v2') recordV2Value(field.value);
+    }
+  }
+
+  for (const rawLine of tomlStructuralLines(configContent)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
+        recordV2Shape('table', 'structural');
+      }
+      continue;
+    }
+
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['model_reasoning_effort'])) {
+        const value = parseTomlString(assignment.value);
+        record('model_reasoning_effort', value, value !== null);
+    }
+
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      recordFeaturesValue(assignment.value);
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent'])) {
+      recordBoolean('multi_agent', assignment.value);
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      recordV2Value(assignment.value);
+    } else {
+      const fullPath = tomlAssignmentPath(table, assignment);
+      if (!fullPath || fullPath.length !== 3
+          || fullPath[0] !== 'features' || fullPath[1] !== 'multi_agent_v2') continue;
+      if (!tomlTableNameMatches(table, 'features.multi_agent_v2')) {
+        recordV2Shape('table', 'structural');
+      }
+      const key = fullPath[2];
+      const raw = assignment.value;
+      if (key === 'enabled') recordBoolean('v2_enabled', raw);
+      else if (key === 'non_code_mode_only') recordBoolean('v2_non_code_mode_only', raw);
+      else if (key === 'hide_spawn_agent_metadata') recordBoolean('v2_hide_spawn_agent_metadata', raw);
+      else if (key === 'tool_namespace') {
+        const value = parseTomlString(raw);
+        record('v2_tool_namespace', value, value !== null && value.length > 0);
+      } else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) {
+        recordInteger(`v2_${key}`, raw);
+      }
+    }
+  }
+  if (v2Shape !== null) {
+    overrides._v2_shape = {
+      present: true,
+      valid: v2Shape !== 'invalid',
+      value: v2Shape === 'invalid' ? null : v2Shape,
+    };
+    if (v2Shape === 'invalid') {
+      overrides.v2_enabled = { present: true, valid: false, value: null };
+    }
+  }
+  return overrides;
+}
+
+function deriveEffectiveRuntime(configLayers) {
+  const effective = {};
+  const configPaths = [];
+  for (const input of configLayers || []) {
+    const content = input && typeof input === 'object' ? input.content : input;
+    const configPath = input && typeof input === 'object' ? input.configPath || null : null;
+    if (configPath) configPaths.push(configPath);
+    const layer = parseRuntimeLayerOverrides(content);
+    const nextShape = layer._v2_shape;
+    if (nextShape && nextShape.present) {
+      const previousShape = effective._v2_shape;
+      const previousKind = previousShape && previousShape.valid ? previousShape.value : 'invalid';
+      const nextKind = nextShape.valid ? nextShape.value : 'invalid';
+      if (nextKind !== 'table' || (previousShape && previousKind !== 'table')) {
+        for (const key of Object.keys(effective)) {
+          if (key.startsWith('v2_')) delete effective[key];
+        }
+      }
+      effective._v2_shape = { ...nextShape, configPath };
+    }
+    for (const [key, field] of Object.entries(layer)) {
+      if (key === '_v2_shape') continue;
+      effective[key] = { ...field, configPath };
+    }
+  }
+
+  const lines = [];
+  const effort = effective.model_reasoning_effort;
+  if (effort && effort.present && effort.valid) {
+    lines.push(`model_reasoning_effort = ${JSON.stringify(effort.value)}`, '');
+  }
+  lines.push('[features]');
+  if (effective.multi_agent && effective.multi_agent.present) {
+    lines.push(`multi_agent = ${effective.multi_agent.valid ? effective.multi_agent.value : 'false'}`);
+  }
+
+  const v2Keys = Object.keys(effective).filter(key => key.startsWith('v2_'));
+  if (v2Keys.length > 0) {
+    lines.push('', '[features.multi_agent_v2]');
+    const enabled = effective.v2_enabled;
+    const forceUnknown = !!(enabled && enabled.present && !enabled.valid);
+    if (enabled && enabled.present) {
+      lines.push(`enabled = ${enabled.valid ? enabled.value : 'true'}`);
+    }
+    const booleans = [
+      ['v2_non_code_mode_only', 'non_code_mode_only'],
+      ['v2_hide_spawn_agent_metadata', 'hide_spawn_agent_metadata'],
+    ];
+    for (const [stateKey, outputKey] of booleans) {
+      const field = effective[stateKey];
+      if (field && field.present) {
+        lines.push(`${outputKey} = ${field.valid ? field.value : '"invalid"'}`);
+      }
+    }
+    if (forceUnknown && !effective.v2_non_code_mode_only) {
+      lines.push('non_code_mode_only = "invalid"');
+    }
+    const namespace = effective.v2_tool_namespace;
+    if (namespace && namespace.present) {
+      lines.push(`tool_namespace = ${namespace.valid ? JSON.stringify(namespace.value) : '123'}`);
+    }
+    for (const key of MULTI_AGENT_V2_NUMERIC_FIELDS) {
+      const field = effective[`v2_${key}`];
+      if (field && field.present && field.valid) lines.push(`${key} = ${field.value}`);
+    }
+  }
+
+  const effectiveContent = lines.join('\n') + '\n';
+  const dispatch = detectCodexDispatchMode(effectiveContent);
+  const posture = deriveDispatchPosture(effectiveContent);
+  const bounds = deriveMultiAgentV2Bounds(effectiveContent, dispatch.multi_agent_v2_enabled);
+  let transportConfigPath = null;
+  if (dispatch.codex_v2_direct_transport_ready === false) {
+    transportConfigPath = (effective.v2_non_code_mode_only || effective.v2_enabled || {}).configPath || null;
+  } else if (dispatch.codex_v2_role_transport_ready === false) {
+    const namespaceBad = dispatch.codex_v2_tool_namespace !== CODEX_V2_ROLE_TOOL_NAMESPACE;
+    const metadataBad = dispatch.codex_v2_role_metadata_visible !== true;
+    transportConfigPath = (namespaceBad ? effective.v2_tool_namespace : null)?.configPath
+      || (metadataBad ? effective.v2_hide_spawn_agent_metadata : null)?.configPath
+      || (effective.v2_enabled || {}).configPath
+      || null;
+  }
+  return {
+    ...dispatch,
+    ...posture,
+    ...bounds,
+    effective_config: effectiveContent,
+    effective_config_paths: [...new Set(configPaths)],
+    transport_config_path: transportConfigPath,
+  };
+}
+
+// Collect one TOML array value that begins on startIndex. The surrounding
+// structural view has already masked multiline-string prose, while this scanner
+// additionally ignores brackets in ordinary strings and line comments. Project
+// root markers intentionally accept only ordinary TOML strings, so a multiline
+// string inside this small configuration field is rejected instead of being
+// mistaken for masked whitespace.
+function collectProjectRootMarkerArray(structuralLines, rawLines, startIndex, initialValue) {
+  const fragments = [];
+  let depth = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  const first = String(initialValue || '').trim();
+  if (!first.startsWith('[')) {
+    return { valid: false, value: '', endIndex: startIndex };
+  }
+
+  for (let lineIndex = startIndex; lineIndex < structuralLines.length; lineIndex++) {
+    // tomlStructuralContent changes bytes only for multiline string bodies.
+    // Marker entries containing those bodies are outside this strict string-array
+    // contract; comments and ordinary strings remain byte-identical.
+    if (structuralLines[lineIndex] !== rawLines[lineIndex]) {
+      return { valid: false, value: '', endIndex: lineIndex };
+    }
+    const fragment = lineIndex === startIndex
+      ? first
+      : stripTomlComment(structuralLines[lineIndex]).trim();
+    fragments.push(fragment);
+
+    for (let offset = 0; offset < fragment.length; offset++) {
+      const ch = fragment[offset];
+      if (inDouble) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inDouble = false;
+        continue;
+      }
+      if (inSingle) {
+        if (ch === "'") inSingle = false;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = true;
+        continue;
+      }
+      if (ch === "'") {
+        inSingle = true;
+        continue;
+      }
+      if (ch === '[') {
+        depth += 1;
+        continue;
+      }
+      if (ch !== ']') continue;
+      depth -= 1;
+      if (depth < 0) {
+        return { valid: false, value: '', endIndex: lineIndex };
+      }
+      if (depth === 0) {
+        if (fragment.slice(offset + 1).trim()) {
+          return { valid: false, value: '', endIndex: lineIndex };
+        }
+        return {
+          valid: true,
+          value: fragments.join('\n'),
+          endIndex: lineIndex,
+        };
+      }
+    }
+
+    // Ordinary TOML strings cannot continue across a physical newline.
+    if (inSingle || inDouble || escaped) {
+      return { valid: false, value: '', endIndex: lineIndex };
+    }
+  }
+
+  return { valid: false, value: '', endIndex: structuralLines.length - 1 };
+}
+
+function parseProjectRootMarkers(globalConfigContent) {
+  let table = null;
+  let seen = false;
+  let markers = null;
+  let valid = true;
+  const structuralLines = tomlStructuralLines(globalConfigContent);
+  const rawLines = String(globalConfigContent || '').split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < structuralLines.length; lineIndex++) {
+    const rawLine = structuralLines[lineIndex];
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+    if (table !== null) continue;
+    const assignment = parseTomlAssignment(line);
+    if (!assignment || assignment.key.length !== 1
+        || assignment.key[0].value !== 'project_root_markers') continue;
+    if (seen) {
+      valid = false;
+      continue;
+    }
+    seen = true;
+    const collected = collectProjectRootMarkerArray(
+      structuralLines, rawLines, lineIndex, assignment.value,
+    );
+    lineIndex = collected.endIndex;
+    if (!collected.valid) {
+      valid = false;
+      continue;
+    }
+    const value = collected.value;
+    const body = value.slice(1, -1).trim();
+    if (!body) {
+      markers = [];
+      continue;
+    }
+    const parsed = splitInlineTomlFields(body).map(parseTomlString);
+    if (parsed.some(entry => entry === null)) {
+      valid = false;
+      continue;
+    }
+    markers = parsed;
+  }
+  return { valid, markers: seen && valid ? markers : ['.git'] };
+}
+
+function findProjectRoot(projectRoot, projectRootMarkers) {
+  const cwd = path.resolve(projectRoot);
+  if ((projectRootMarkers || []).length === 0) return cwd;
+  let cursor = cwd;
+  while (true) {
+    if ((projectRootMarkers || []).some(marker => fs.existsSync(path.join(cursor, marker)))) {
+      return cursor;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return cwd;
+}
+
+function projectCodexLayerDirs(projectRoot, projectRootMarkers = ['.git']) {
+  const cwd = path.resolve(projectRoot);
+  const detectedRoot = findProjectRoot(cwd, projectRootMarkers);
+  const relative = path.relative(detectedRoot, cwd);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return [path.join(cwd, '.codex')];
+  }
+  const directories = [detectedRoot];
+  let current = detectedRoot;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    directories.push(current);
+  }
+  return [...new Set(directories.map(directory => path.join(directory, '.codex')))];
+}
+
+function findRepoRootForTrust(projectRoot) {
+  const cwd = path.resolve(projectRoot);
+  let checkoutRoot = null;
+  for (let cursor = cwd; ; cursor = path.dirname(cursor)) {
+    if (fs.existsSync(path.join(cursor, '.git'))) {
+      checkoutRoot = cursor;
+      break;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+  }
+  if (!checkoutRoot) return null;
+  const dotGit = path.join(checkoutRoot, '.git');
+  try {
+    if (fs.statSync(dotGit).isDirectory()) return checkoutRoot;
+    const value = fs.readFileSync(dotGit, 'utf8').trim();
+    const match = value.match(/^gitdir:\s*(.+)$/);
+    if (!match) return null;
+    const gitDir = path.resolve(checkoutRoot, match[1]);
+    const worktreesDir = path.dirname(gitDir);
+    if (path.basename(worktreesDir) !== 'worktrees') return null;
+    return path.dirname(path.dirname(worktreesDir));
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizedProjectTrustKeys(projectPath) {
+  const lexical = path.resolve(projectPath);
+  let canonical = lexical;
+  try { canonical = fs.realpathSync(lexical); } catch (_) {}
+  const normalize = value => process.platform === 'win32' ? value.toLowerCase() : value;
+  return [...new Set([normalize(canonical), normalize(lexical)])];
+}
+
+function projectTrustLevel(globalConfigContent, layerDir, detectedProjectRoot, repoRoot) {
+  const records = [];
+  let currentRecord = null;
+  let inProjectsContainer = false;
+  let unparsedProjectsDeclaration = false;
+  for (const rawLine of tomlStructuralLines(globalConfigContent)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      const currentProject = !tableName.isArrayTable
+        && Array.isArray(tableName.segments)
+        && tableName.segments.length === 2
+        && tableName.segments[0].value === 'projects'
+        ? tableName.segments[1].value
+        : null;
+      currentRecord = currentProject === null
+        ? null
+        : { project: currentProject, trustAssignments: [] };
+      inProjectsContainer = !tableName.isArrayTable
+        && Array.isArray(tableName.segments)
+        && tableName.segments.length === 1
+        && tableName.segments[0].value === 'projects';
+      if (Array.isArray(tableName.segments)
+          && tableName.segments[0] && tableName.segments[0].value === 'projects'
+          && currentProject === null && !inProjectsContainer) {
+        unparsedProjectsDeclaration = true;
+      }
+      if (currentRecord) records.push(currentRecord);
+      continue;
+    }
+    if (currentRecord !== null) {
+      const assignment = parseTomlAssignment(line);
+      if (assignment && assignment.key.length === 1
+          && assignment.key[0].value === 'trust_level') {
+        const value = parseTomlString(assignment.value);
+        currentRecord.trustAssignments.push(
+          value === 'trusted' || value === 'untrusted' ? value : null,
+        );
+      }
+    } else {
+      const assignment = parseTomlAssignment(line);
+      if (assignment && (inProjectsContainer
+          || (assignment.key[0] && assignment.key[0].value === 'projects'))) {
+        unparsedProjectsDeclaration = true;
+      }
+    }
+  }
+
+  if (unparsedProjectsDeclaration) return 'ambiguous';
+
+  const normalize = value => process.platform === 'win32' ? value.toLowerCase() : value;
+  const lookupKeys = [...new Set([
+    ...normalizedProjectTrustKeys(layerDir),
+    ...normalizedProjectTrustKeys(detectedProjectRoot),
+    ...(repoRoot ? normalizedProjectTrustKeys(repoRoot) : []),
+  ])];
+  for (const lookupKey of lookupKeys) {
+    const matching = records.filter(record => normalize(record.project) === lookupKey);
+    if (matching.length > 1) return 'ambiguous';
+    if (matching.length === 0 || matching[0].trustAssignments.length === 0) continue;
+    const assignments = matching[0].trustAssignments;
+    if (assignments.length !== 1 || assignments[0] === null) return 'ambiguous';
+    return assignments[0];
+  }
+  return 'unknown';
+}
+
+function readConfigLayer(codexDir) {
+  const configPath = path.join(codexDir, 'config.toml');
+  try {
+    const codexStat = fs.lstatSync(codexDir);
+    if (codexStat.isSymbolicLink()) {
+      return { ok: false, configPath, error: 'Codex scope directory is a symlink' };
+    }
+    if (!codexStat.isDirectory()) {
+      return { ok: false, configPath, error: 'Codex scope path is not a directory' };
+    }
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') {
+      return { ok: false, configPath, error: error.message };
+    }
+  }
+  let stat;
+  try {
+    stat = fs.lstatSync(configPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { ok: true, configPath, content: '' };
+    }
+    return { ok: false, configPath, error: error.message };
+  }
+  if (stat.isSymbolicLink()) {
+    return { ok: false, configPath, error: 'config path is a symlink' };
+  }
+  if (!stat.isFile()) {
+    return { ok: false, configPath, error: 'config path is not a regular file' };
+  }
+  try {
+    return { ok: true, configPath, content: fs.readFileSync(configPath, 'utf8') };
+  } catch (error) {
+    return { ok: false, configPath, error: error.message };
+  }
+}
+
+function scopeAuthorityIssue(codexDir, templateRoles) {
+  const checks = [
+    { target: codexDir, kind: 'directory', optional: true },
+    { target: path.join(codexDir, 'agents'), kind: 'directory', optional: true },
+    { target: path.join(codexDir, 'agents', 'kaola-workflow'), kind: 'directory', optional: true },
+    { target: path.join(codexDir, 'config.toml'), kind: 'file', optional: true },
+    {
+      target: path.join(codexDir, 'agents', 'kaola-workflow', MANIFEST_BASENAME),
+      kind: 'file', optional: true,
+    },
+    ...(templateRoles || []).map(role => ({
+      target: path.join(codexDir, 'agents', 'kaola-workflow', `${role}.toml`),
+      kind: 'file',
+      optional: true,
+    })),
+  ];
+
+  let authorityReal = null;
+  try { authorityReal = fs.realpathSync(codexDir); } catch (_) {}
+  for (const check of checks) {
+    let stat;
+    try {
+      stat = fs.lstatSync(check.target);
+    } catch (error) {
+      if (check.optional && error && error.code === 'ENOENT') continue;
+      return { path: check.target, error: error.message };
+    }
+    if (stat.isSymbolicLink()) {
+      return { path: check.target, error: `${check.kind} authority is a symlink` };
+    }
+    if (check.kind === 'directory' ? !stat.isDirectory() : !stat.isFile()) {
+      return { path: check.target, error: `expected a regular ${check.kind}` };
+    }
+    if (authorityReal && check.target !== codexDir) {
+      let targetReal;
+      try { targetReal = fs.realpathSync(check.target); } catch (error) {
+        return { path: check.target, error: error.message };
+      }
+      const relative = path.relative(authorityReal, targetReal);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        return { path: check.target, error: 'resolved authority escapes the Codex scope' };
+      }
+    }
+  }
+  return null;
+}
+
+function unsafeConfigLayerResult(configRead) {
+  return {
+    exitCode: 4,
+    result: {
+      status: 'config_layer_unsafe',
+      stale: true,
+      safe_autofix: false,
+      config_path: configRead.configPath,
+      error: configRead.error,
+      repair: `Replace ${configRead.configPath} with a readable regular non-symlink config.toml, then re-run the profile preflight.`,
+    },
+  };
+}
+
+function unsafeScopeAuthorityResult(codexDir, scopeName, issue) {
+  return {
+    exitCode: 4,
+    result: {
+      status: 'scope_authority_unsafe',
+      scope: scopeName,
+      stale: true,
+      safe_autofix: false,
+      codex_dir: codexDir,
+      authority_path: issue.path,
+      error: issue.error,
+      repair: `Replace ${issue.path} with the expected regular non-symlink path inside ${codexDir}, then re-run the canonical profile installer.`,
+    },
+  };
+}
+
+function projectTrustRequiredResult(projectRoot, trustLevel) {
+  return {
+    exitCode: 4,
+    result: {
+      status: 'project_trust_required',
+      stale: true,
+      safe_autofix: false,
+      project_root: path.resolve(projectRoot),
+      project_trust: trustLevel,
+      repair: 'Codex ignores project .codex layers unless the project is trusted. Trust this project in Codex and start a fresh session, or install canonical Kaola profiles globally and remove the ignored project Kaola override.',
+    },
   };
 }
 
@@ -869,8 +1918,9 @@ function parseArgs(argv) {
 // ---------------------------------------------------------------------------
 function validateProfileText(text, role, expectedMeta = null) {
   const reasons = [];
-  const firstTableIdx = text.search(/^\[/m);
-  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
+  const shape = profileTopLevelShape(text);
+  const top = shape.outside;
+  reasons.push(...genericShapeReasons(shape));
 
   const nameMatch = top.match(/^name\s*=\s*"([^"]*)"\s*$/m);
   if (!nameMatch) {
@@ -904,15 +1954,15 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
-  const modelLines = top.match(/^model\s*=.*$/gm) || [];
-  const effortLines = top.match(/^model_reasoning_effort\s*=.*$/gm) || [];
+  const modelLines = shape.fields.filter(field => field === 'model');
+  const effortLines = shape.fields.filter(field => field === 'model_reasoning_effort');
   if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role)) {
     reasons.push(`role "${role}" has no Codex profile-tier policy`);
   }
   if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
   if (effortLines.length > 0) reasons.push("top-level 'model_reasoning_effort' must be omitted to inherit the parent session");
 
-  const instrMatch = text.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""/m);
+  const instrMatch = shape.instructionMatch;
   if (!instrMatch) {
     reasons.push("missing top-level 'developer_instructions' triple-quoted block");
   } else if (instrMatch[1].trim() === '') {
@@ -944,8 +1994,7 @@ function validateProfileText(text, role, expectedMeta = null) {
 }
 
 function classifyProfilePinPosture(text) {
-  const firstTableIdx = String(text || '').search(/^\[/m);
-  const top = firstTableIdx === -1 ? String(text || '') : String(text || '').slice(0, firstTableIdx);
+  const top = profileTopLevelShape(text).outside;
   const models = [...top.matchAll(/^model\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
   const efforts = [...top.matchAll(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
   const anyModelLine = (top.match(/^model\s*=.*$/gm) || []).length;
@@ -959,6 +2008,8 @@ function classifyProfilePinPosture(text) {
 }
 
 const LEGACY_PIN_ONLY_REASONS = new Set([
+  'codex_role_field_forbidden: model',
+  'codex_role_field_forbidden: model_reasoning_effort',
   "top-level 'model' must be omitted to inherit the parent session",
   "top-level 'model_reasoning_effort' must be omitted to inherit the parent session"
 ]);
@@ -968,13 +2019,58 @@ const LEGACY_PIN_ONLY_REASONS = new Set([
 // Each tree has its own copy of this file at <scriptDir>/../config/agents.toml.
 // Returns { roles: string[], error: string|null }
 // ---------------------------------------------------------------------------
+function bundledSourceAuthorityIssue(pluginRoot, target, expectedKind, label) {
+  const resolvedRoot = path.resolve(pluginRoot);
+  const resolvedTarget = path.resolve(target);
+  const lexicalRelative = path.relative(resolvedRoot, resolvedTarget);
+  if (lexicalRelative === '..' || lexicalRelative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(lexicalRelative)) {
+    return `${label}_unsafe: ${resolvedTarget} escapes ${resolvedRoot}`;
+  }
+  let stat;
+  try { stat = fs.lstatSync(resolvedTarget); }
+  catch (error) {
+    return error && error.code === 'ENOENT'
+      ? `${label}_missing: ${resolvedTarget}`
+      : `${label}_unsafe: cannot inspect ${resolvedTarget}: ${error.message}`;
+  }
+  const correctKind = expectedKind === 'directory' ? stat.isDirectory() : stat.isFile();
+  if (stat.isSymbolicLink() || !correctKind) {
+    return `${label}_unsafe: ${resolvedTarget} must be a regular non-symlink ${expectedKind}`;
+  }
+  try {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    const realTarget = fs.realpathSync(resolvedTarget);
+    const realRelative = path.relative(realRoot, realTarget);
+    if (realRelative === '..' || realRelative.startsWith(`..${path.sep}`)
+        || path.isAbsolute(realRelative)) {
+      return `${label}_unsafe: ${resolvedTarget} resolves outside ${resolvedRoot}`;
+    }
+  } catch (error) {
+    return `${label}_unsafe: cannot resolve ${resolvedTarget}: ${error.message}`;
+  }
+  return null;
+}
+
 function readTemplateRoles(scriptDir) {
-  const templatePath = path.join(scriptDir, '..', 'config', 'agents.toml');
+  const pluginRoot = path.resolve(scriptDir, '..');
+  const configDir = path.join(pluginRoot, 'config');
+  const templatePath = path.join(configDir, 'agents.toml');
+  const sourceAgentsDir = path.join(pluginRoot, 'agents');
+  const authorityIssues = [
+    bundledSourceAuthorityIssue(pluginRoot, pluginRoot, 'directory', 'plugin_source_root'),
+    bundledSourceAuthorityIssue(pluginRoot, configDir, 'directory', 'plugin_config_path'),
+    bundledSourceAuthorityIssue(pluginRoot, templatePath, 'file', 'plugin_config_path'),
+    bundledSourceAuthorityIssue(pluginRoot, sourceAgentsDir, 'directory', 'plugin_agents_path'),
+  ].filter(Boolean);
+  if (authorityIssues.length > 0) {
+    return { roles: [], entries: [], content: '', error: null, sourceErrors: authorityIssues };
+  }
   let content;
   try {
     content = fs.readFileSync(templatePath, 'utf8');
   } catch (e) {
-    return { roles: [], entries: [], error: `template_missing: cannot read ${templatePath}: ${e.message}` };
+    return { roles: [], entries: [], content: '', error: `template_missing: cannot read ${templatePath}: ${e.message}` };
   }
   const roles = [];
   const entries = [];
@@ -1007,21 +2103,54 @@ function readTemplateRoles(scriptDir) {
     }
   }
   if (roles.length === 0) {
-    return { roles: [], entries: [], error: `template_missing: no [agents.*] entries found in ${templatePath}` };
+    return { roles: [], entries: [], content, error: `template_missing: no [agents.*] entries found in ${templatePath}` };
   }
   const sourceErrors = [];
-  const sourceAgentsDir = path.join(scriptDir, '..', 'agents');
+  const seenRoles = new Set();
+  const seenConfigFiles = new Set();
+  const seenBasenames = new Set();
+  for (const entry of entries) {
+    if (seenRoles.has(entry.role)) {
+      sourceErrors.push(`agents.toml duplicate [agents.${entry.role}] entry`);
+    }
+    seenRoles.add(entry.role);
+    if (!entry.configFile || !entry.basename) continue;
+    if (seenConfigFiles.has(entry.configFile)) {
+      sourceErrors.push(`agents.toml duplicate config_file "${entry.configFile}" reference`);
+    }
+    seenConfigFiles.add(entry.configFile);
+    if (seenBasenames.has(entry.basename)) {
+      sourceErrors.push(`agents.toml duplicate config_file basename "${entry.basename}" reference`);
+    }
+    seenBasenames.add(entry.basename);
+    const canonicalBasename = `${entry.role}.toml`;
+    if (entry.basename !== canonicalBasename) {
+      sourceErrors.push(
+        `agents.toml [agents.${entry.role}] config_file basename must be "${canonicalBasename}" `
+        + `(got "${entry.basename}")`
+      );
+    }
+  }
+  const referenced = new Set();
   for (const entry of entries) {
     if (!entry.basename) {
       sourceErrors.push(`agents.toml [agents.${entry.role}] has no config_file line`);
       continue;
     }
+    referenced.add(entry.basename);
     const sourcePath = path.join(sourceAgentsDir, entry.basename);
-    if (!fs.existsSync(sourcePath)) {
-      sourceErrors.push(`source_profile_missing: ${sourcePath}`);
+    const sourceIssue = bundledSourceAuthorityIssue(
+      pluginRoot, sourcePath, 'file', 'plugin_source_profile');
+    if (sourceIssue) {
+      sourceErrors.push(sourceIssue);
       continue;
     }
-    const sourceText = fs.readFileSync(sourcePath, 'utf8');
+    let sourceText;
+    try { sourceText = fs.readFileSync(sourcePath, 'utf8'); }
+    catch (error) {
+      sourceErrors.push(`plugin_source_profile_unsafe: cannot read ${sourcePath}: ${error.message}`);
+      continue;
+    }
     entry.sourcePath = sourcePath;
     entry.sourceText = sourceText;
     entry.sourceSha256 = 'sha256:' + sha256Hex(Buffer.from(sourceText, 'utf8'));
@@ -1030,7 +2159,12 @@ function readTemplateRoles(scriptDir) {
       sourceErrors.push(`agents/${entry.basename}: ${reason}`);
     }
   }
-  return { roles, entries, error: null, sourceErrors };
+  for (const file of fs.readdirSync(sourceAgentsDir).filter(name => name.endsWith('.toml')).sort()) {
+    if (!referenced.has(file)) {
+      sourceErrors.push(`agents/${file}: not referenced by any [agents.*] entry in config/agents.toml`);
+    }
+  }
+  return { roles, entries, content, error: null, sourceErrors };
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,18 +2238,99 @@ function checkProfiles(agentsDir, requiredRoles) {
 //     conflictingRolesOutside: string[]  // [agents.*] entries outside the markers
 //   }
 // ---------------------------------------------------------------------------
-function checkManagedBlock(configContent) {
-  const beginIdx = configContent.indexOf(BEGIN_MARKER);
-  const endIdx = configContent.indexOf(END_MARKER);
+function canonicalManagedBlockBodies(templateContent) {
+  const template = String(templateContent || '').trim();
+  if (!template) return { full: '', agentOnly: '' };
+  const firstAgent = template.search(/^\[agents\./m);
+  const agentOnly = firstAgent >= 0 ? template.slice(firstAgent).trim() : '';
+  return {
+    full: `\n${template}\n`,
+    agentOnly: agentOnly ? `\n${agentOnly}\n` : '',
+  };
+}
+
+function managedMarkerRange(configContent) {
+  const source = String(configContent || '');
+  const structural = tomlStructuralContent(source);
+  const beginPattern = new RegExp(`^${escapeRegExp(BEGIN_MARKER)}\\r?$`, 'gm');
+  const endPattern = new RegExp(`^${escapeRegExp(END_MARKER)}\\r?$`, 'gm');
+  const begins = [...structural.matchAll(beginPattern)];
+  const ends = [...structural.matchAll(endPattern)];
+  if (begins.length === 0 && ends.length === 0) {
+    return { state: 'absent', start: -1, end: -1 };
+  }
+  if (begins.length !== 1 || ends.length !== 1 || begins[0].index >= ends[0].index) {
+    return { state: 'invalid', start: -1, end: -1 };
+  }
+  let end = ends[0].index + END_MARKER.length;
+  if (source.slice(end, end + 2) === '\r\n') end += 2;
+  else if (source[end] === '\n') end += 1;
+  return { state: 'present', start: begins[0].index, end, endMarkerStart: ends[0].index };
+}
+
+function containsExternalFeaturesTable(content) {
+  let currentTable = null;
+  for (const rawLine of tomlStructuralLines(content)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      currentTable = tableName;
+      if (tomlTableNameMatches(tableName, 'features')) return true;
+      continue;
+    }
+    if (currentTable !== null) continue;
+    const assignment = parseTomlAssignment(line);
+    if (assignment && assignment.key[0] && assignment.key[0].value === 'features') return true;
+  }
+  return false;
+}
+
+function outsideAgentDeclarations(outsideContent) {
+  const declarations = [];
+  let currentTable = null;
+  for (const rawLine of tomlStructuralLines(outsideContent)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName) {
+      currentTable = tableName;
+      if (Array.isArray(tableName.segments)
+          && tableName.segments[0] && tableName.segments[0].value === 'agents') {
+        const role = tableName.segments.slice(1).map(segment => segment.value).join('.');
+        declarations.push(role || '*');
+      }
+      continue;
+    }
+    const assignmentKey = currentTable === null ? parseTomlAssignmentKey(line) : null;
+    if (assignmentKey && assignmentKey[0] && assignmentKey[0].value === 'agents') {
+      declarations.push('*');
+    }
+  }
+  return [...new Set(declarations)];
+}
+
+function managedRoleConflicts(conflictingRolesOutside, templateRoles) {
+  return (conflictingRolesOutside || []).filter(role =>
+    role === '*' || (templateRoles || []).some(templateRole =>
+      role === templateRole || role.startsWith(templateRole + '.')));
+}
+
+function checkManagedBlock(configContent, templateContent = '') {
+  const markerRange = managedMarkerRange(configContent);
 
   let blockFound = false;
   let blockBody = '';
   let outsideContent = configContent;
 
-  if (beginIdx !== -1 && endIdx !== -1 && beginIdx < endIdx) {
+  if (markerRange.state === 'present') {
     blockFound = true;
-    blockBody = configContent.slice(beginIdx + BEGIN_MARKER.length, endIdx);
-    outsideContent = configContent.slice(0, beginIdx) + configContent.slice(endIdx + END_MARKER.length);
+    blockBody = configContent.slice(
+      markerRange.start + BEGIN_MARKER.length,
+      markerRange.endMarkerStart,
+    );
+    outsideContent = configContent.slice(0, markerRange.start)
+      + configContent.slice(markerRange.end);
   }
 
   // Parse [agents.{role}] entries inside the block
@@ -1126,15 +2341,18 @@ function checkManagedBlock(configContent) {
     rolesInBlock.push(m[1]);
   }
 
-  // Detect [agents.*] entries outside the markers (conflict)
-  const conflictingRolesOutside = [];
-  const outsideRe = /^\[agents\.([a-z0-9-]+)\]/gm;
-  let o;
-  while ((o = outsideRe.exec(outsideContent)) !== null) {
-    conflictingRolesOutside.push(o[1]);
-  }
+  // Any agents declaration outside the owned markers is a higher-precedence
+  // override, including quoted/dotted/indented tables and `[agents]` inline maps.
+  const conflictingRolesOutside = outsideAgentDeclarations(outsideContent);
 
-  return { blockFound, rolesInBlock, conflictingRolesOutside };
+  const expectedBodies = canonicalManagedBlockBodies(templateContent);
+  const expectedBody = containsExternalFeaturesTable(outsideContent)
+    ? expectedBodies.agentOnly
+    : expectedBodies.full;
+  const managedBlockDrift = markerRange.state === 'invalid'
+    || (blockFound && expectedBody ? blockBody !== expectedBody : false);
+
+  return { blockFound, managedBlockDrift, rolesInBlock, conflictingRolesOutside };
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,7 +2375,14 @@ function readManifest(agentsDir) {
 // doctor mode. Inspects a target .codex dir against the current template roles.
 // Pure read-only.
 // ---------------------------------------------------------------------------
-function inspectScope({ codexDir, templateRoles, templateEntries }) {
+function inspectScope({
+  codexDir,
+  templateRoles,
+  templateEntries,
+  templateContent = '',
+  configContentOverride,
+  inspectProfiles = true,
+}) {
   const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
   const configPath = path.join(codexDir, 'config.toml');
   const roleSet = new Set(templateRoles);
@@ -1165,19 +2390,25 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
 
   const exists = fs.existsSync(codexDir);
 
-  let configContent = '';
-  if (fs.existsSync(configPath)) {
+  let configContent = typeof configContentOverride === 'string' ? configContentOverride : '';
+  if (typeof configContentOverride !== 'string' && fs.existsSync(configPath)) {
     try { configContent = fs.readFileSync(configPath, 'utf8'); } catch { configContent = ''; }
   }
   const dispatchMode = detectCodexDispatchMode(configContent);
   const posture = deriveDispatchPosture(configContent);
   const v2Bounds = deriveMultiAgentV2Bounds(configContent, dispatchMode.multi_agent_v2_enabled);
-  const { blockFound, rolesInBlock, conflictingRolesOutside } = checkManagedBlock(configContent);
+  const { blockFound, managedBlockDrift, rolesInBlock, conflictingRolesOutside } =
+    checkManagedBlock(configContent, templateContent);
+  const managedRoleConflictsOutside = managedRoleConflicts(
+    conflictingRolesOutside, templateRoles,
+  );
 
   const missingFromBlock = templateRoles.filter(r => !rolesInBlock.includes(r));
   const staleRolesInBlock = rolesInBlock.filter(r => !roleSet.has(r));
 
-  const { missingRoles: missingProfiles } = checkProfiles(agentsDir, templateRoles);
+  const { missingRoles: missingProfiles } = inspectProfiles
+    ? checkProfiles(agentsDir, templateRoles)
+    : { missingRoles: [] };
 
   // Inspect the agents dir contents: malformed required profiles + stale/extra files.
   const malformed = [];
@@ -1185,12 +2416,13 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
   const staleProfileMap = new Map();
   const staleFiles = [];
   const extraUnmanaged = [];
-  const manifest = readManifest(agentsDir);
+  const manifest = inspectProfiles ? readManifest(agentsDir) : null;
   const manifestFiles = (manifest && manifest.files && typeof manifest.files === 'object')
     ? new Set(Object.keys(manifest.files))
     : new Set();
 
-  const manifestFileExists = fs.existsSync(path.join(agentsDir, MANIFEST_BASENAME));
+  const manifestFileExists = inspectProfiles
+    && fs.existsSync(path.join(agentsDir, MANIFEST_BASENAME));
   let manifestStatus = manifestFileExists ? 'invalid' : 'absent';
   if (manifest) {
     manifestStatus = (typeof manifest.schema_version === 'number' && manifest.schema_version > MANIFEST_SCHEMA_VERSION)
@@ -1205,7 +2437,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     if (!item.reasons.includes(reason)) item.reasons.push(reason);
   }
 
-  if (fs.existsSync(agentsDir)) {
+  if (inspectProfiles && fs.existsSync(agentsDir)) {
     let names = [];
     try { names = fs.readdirSync(agentsDir); } catch { names = []; }
     for (const name of names) {
@@ -1267,10 +2499,12 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
   return {
     exists,
     blockFound,
+    managedBlockDrift,
     rolesInBlock,
     missingFromBlock,
     staleRolesInBlock,
     conflictingRolesOutside,
+    managedRoleConflictsOutside,
     missingProfiles,
     malformed,
     legacyPinnedProfiles,
@@ -1308,17 +2542,74 @@ function findInstaller(scriptDir) {
   return fs.existsSync(installerPath) ? installerPath : null;
 }
 
+function pathIsWithin(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
+}
+
+function regularNonSymlinkFile(target) {
+  try {
+    const stat = fs.lstatSync(target);
+    return !stat.isSymbolicLink() && stat.isFile();
+  } catch (_) {
+    return false;
+  }
+}
+
+// The repository-root CLI is a documented entrypoint, while its canonical
+// profiles, manifest, and installer live in plugins/kaola-workflow. Resolve that
+// one source-tree layout explicitly. Installed/cache copies retain their direct
+// scriptDir and therefore their own exact manifest/path authority.
+function resolvePreflightSourceScriptDir(scriptDir, home) {
+  const requested = path.resolve(scriptDir);
+  const requestedRoot = path.resolve(requested, '..');
+  const directManifest = path.join(requestedRoot, '.codex-plugin', 'plugin.json');
+  try {
+    fs.lstatSync(directManifest);
+    return requested;
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') return requested;
+  }
+
+  const cacheRoot = path.resolve(home || os.homedir(), '.codex', 'plugins', 'cache');
+  if (pathIsWithin(cacheRoot, requestedRoot)) return requested;
+  if (path.basename(requested) !== 'scripts') return requested;
+
+  const packagePath = path.join(requestedRoot, 'package.json');
+  const rootPreflight = path.join(requested, 'kaola-workflow-codex-preflight.js');
+  const bundledRoot = path.join(requestedRoot, 'plugins', 'kaola-workflow');
+  const bundledScripts = path.join(bundledRoot, 'scripts');
+  const bundledPreflight = path.join(bundledScripts, 'kaola-workflow-codex-preflight.js');
+  const bundledManifest = path.join(bundledRoot, '.codex-plugin', 'plugin.json');
+  if (!regularNonSymlinkFile(packagePath)
+      || !regularNonSymlinkFile(rootPreflight)
+      || !regularNonSymlinkFile(bundledPreflight)
+      || !regularNonSymlinkFile(bundledManifest)) return requested;
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    if (!packageJson || packageJson.name !== 'kaola-workflow') return requested;
+  } catch (_) {
+    return requested;
+  }
+  return bundledScripts;
+}
+
 // ---------------------------------------------------------------------------
 // Run the installer (positional arg: projectRoot — NOT --project-root flag).
 // Returns { success: boolean, stderr: string }
 // ---------------------------------------------------------------------------
-function runInstaller(installerPath, projectRoot) {
+function runInstaller(installerPath, projectRoot, globalInstall = false, home = null) {
   try {
     const { spawnSync } = require('child_process');
     const result = spawnSync(
       process.execPath,
-      [installerPath, projectRoot],
-      { encoding: 'utf8', timeout: 30000 }
+      [installerPath, ...(globalInstall ? ['--global'] : [projectRoot])],
+      {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: home ? { ...process.env, HOME: home } : process.env,
+      }
     );
     if (result.status === 0) {
       return { success: true, stderr: result.stderr || '' };
@@ -1343,7 +2634,7 @@ function codexV2TransportEnvelope(scope) {
   };
 }
 
-function unsafeCodexV2Transport(scope, scopeName, codexDir) {
+function unsafeCodexV2Transport(scope, scopeName, codexDir, configPath = null) {
   const directUnsafe = scope.codex_v2_direct_transport_ready === false;
   return {
     exitCode: 7,
@@ -1369,7 +2660,43 @@ function unsafeCodexV2Transport(scope, scopeName, codexDir) {
       min_wait_timeout_ms: scope.min_wait_timeout_ms,
       max_wait_timeout_ms: scope.max_wait_timeout_ms,
       default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      config_path: path.join(codexDir, 'config.toml'),
+      config_path: configPath || path.join(codexDir, 'config.toml'),
+      effective_config_paths: scope.effective_config_paths || [],
+    },
+  };
+}
+
+function unsupportedManifestResult({
+  scope,
+  agentsDir,
+  scriptDir,
+  projectRoot,
+  globalInstall = false,
+  scopeName,
+}) {
+  const installTarget = globalInstall ? '--global' : projectRoot;
+  return {
+    exitCode: 6,
+    result: {
+      status: 'profile_schema_version_unsupported',
+      scope: scopeName,
+      stale: true,
+      extra_unmanaged: scope.extraUnmanaged,
+      repair: `The local profile manifest (${path.join(agentsDir, MANIFEST_BASENAME)}) declares an unsupported schema_version — upgrade kaola-workflow, then run node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${installTarget}`,
+      safe_autofix: false,
+      dispatch_mode: scope.dispatch_mode,
+      multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+      ...codexV2TransportEnvelope(scope),
+      dispatch_posture: scope.dispatch_posture,
+      model_reasoning_effort: scope.model_reasoning_effort,
+      multi_agent_enabled: scope.multi_agent_enabled,
+      dispatch_posture_warning: scope.dispatch_posture_warning,
+      max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
+      max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
+      effective_subagent_width: scope.effective_subagent_width,
+      min_wait_timeout_ms: scope.min_wait_timeout_ms,
+      max_wait_timeout_ms: scope.max_wait_timeout_ms,
+      default_wait_timeout_ms: scope.default_wait_timeout_ms,
     },
   };
 }
@@ -1386,13 +2713,16 @@ function runPreflight(opts) {
     home,
   } = opts;
   const homeDir = home || os.homedir();
+  const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, homeDir);
 
-  const codexDir = path.join(projectRoot, '.codex');
-  const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
+  let activeProjectRoot = path.resolve(projectRoot);
+  let codexDir = path.join(activeProjectRoot, '.codex');
+  let agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
 
   // --- Read template roles (may fail gracefully) ---
-  const template = readTemplateRoles(scriptDir);
-  const { roles: templateRoles, entries: templateEntries, error: templateError, sourceErrors = [] } = template;
+  const template = readTemplateRoles(sourceScriptDir);
+  const { roles: templateRoles, entries: templateEntries, content: templateContent,
+    error: templateError, sourceErrors = [] } = template;
   if (templateError) {
     return {
       exitCode: 2,
@@ -1413,7 +2743,7 @@ function runPreflight(opts) {
         malformed: sourceErrors,
         stale: true,
         safe_autofix: false,
-        repair: repositoryRepairCommand(scriptDir),
+        repair: repositoryRepairCommand(sourceScriptDir),
       },
     };
   }
@@ -1442,18 +2772,199 @@ function runPreflight(opts) {
     if (!requiredRoles.includes(r)) requiredRoles.push(r);
   }
 
-  // --- #571: global scope satisfies the gate (install once, all repos — Claude parity).
-  // Plan roles ⊆ template roles (role_not_in_template above guarantees it), so a global
-  // scope fresh for every template role is fresh for every plan role too. Check global
-  // FIRST: a fresh global scope PASSES without inspecting/installing a redundant
-  // project-local copy. A non-fresh global scope falls through to the existing
-  // project-scope inspection + autofix path UNCHANGED (back-compat + fail-closed preserved).
+  // Codex derives the project root from the persisted global
+  // `project_root_markers`, then considers every .codex layer root -> cwd. Trust
+  // is decided independently for each layer: exact layer, detected root, then
+  // root Git project. Only trusted layers enter the effective runtime overlay.
   const globalCodexDir = path.join(homeDir, '.codex');
-  const globalScope = inspectScope({ codexDir: globalCodexDir, templateRoles, templateEntries });
-  if (globalScope.codex_v2_role_transport_ready === false) {
-    return unsafeCodexV2Transport(globalScope, 'global', globalCodexDir);
+  const globalConfigRead = readConfigLayer(globalCodexDir);
+  if (!globalConfigRead.ok) return unsafeConfigLayerResult(globalConfigRead);
+  const globalConfigPath = globalConfigRead.configPath;
+  const globalConfigContent = globalConfigRead.content;
+  const markerConfig = parseProjectRootMarkers(globalConfigContent);
+  if (!markerConfig.valid) {
+    return {
+      exitCode: 4,
+      result: {
+        status: 'project_root_markers_invalid',
+        stale: true,
+        safe_autofix: false,
+        config_path: globalConfigPath,
+        repair: 'Set top-level project_root_markers to exactly one TOML array of strings, then start a fresh Codex session.',
+      },
+    };
   }
-  if (scopeIsFresh(globalScope)) {
+  const detectedProjectRoot = findProjectRoot(projectRoot, markerConfig.markers);
+  const repoRoot = findRepoRootForTrust(projectRoot);
+  const projectLayerDirs = projectCodexLayerDirs(projectRoot, markerConfig.markers);
+  const layerTrustLevels = projectLayerDirs.map(layerCodexDir => projectTrustLevel(
+    globalConfigContent,
+    path.dirname(layerCodexDir),
+    detectedProjectRoot,
+    repoRoot,
+  ));
+  const projectTrust = layerTrustLevels[layerTrustLevels.length - 1] || 'unknown';
+  const projectConfigReads = projectLayerDirs.map(readConfigLayer);
+  const globalAuthorityIssue = scopeAuthorityIssue(globalCodexDir, templateRoles);
+  if (globalAuthorityIssue) {
+    return unsafeScopeAuthorityResult(globalCodexDir, 'global', globalAuthorityIssue);
+  }
+  {
+    const unsafeProjectConfig = projectConfigReads.find((configRead, index) =>
+      layerTrustLevels[index] === 'trusted' && !configRead.ok);
+    if (unsafeProjectConfig) return unsafeConfigLayerResult(unsafeProjectConfig);
+    for (let index = 0; index < projectLayerDirs.length; index++) {
+      if (layerTrustLevels[index] !== 'trusted') continue;
+      const layerCodexDir = projectLayerDirs[index];
+      const issue = scopeAuthorityIssue(layerCodexDir, templateRoles);
+      if (issue) return unsafeScopeAuthorityResult(layerCodexDir, 'project', issue);
+    }
+  }
+
+  const projectLayers = projectLayerDirs.map((layerCodexDir, index) => {
+    const configRead = projectConfigReads[index];
+    // Codex ignores project config when trust is absent. Never follow or gate an
+    // unsafe ignored layer; a safe ignored layer is parsed only to identify a
+    // Kaola footprint that requires an explicit trust decision.
+    const configContent = configRead.ok ? configRead.content : '';
+    const layerScope = inspectScope({
+      codexDir: layerCodexDir, templateRoles, templateEntries, templateContent,
+      configContentOverride: configContent,
+      inspectProfiles: layerTrustLevels[index] === 'trusted',
+    });
+    const layerAgentsDir = path.join(layerCodexDir, 'agents', 'kaola-workflow');
+    const kaolaConflicts = layerScope.managedRoleConflictsOutside;
+    let agentsFootprint = false;
+    try {
+      fs.lstatSync(layerAgentsDir);
+      agentsFootprint = true;
+    } catch (_) {}
+    const footprint = agentsFootprint
+      || layerScope.blockFound
+      || layerScope.rolesInBlock.length > 0
+      || kaolaConflicts.length > 0;
+    return {
+      codexDir: layerCodexDir,
+      projectRoot: path.dirname(layerCodexDir),
+      agentsDir: layerAgentsDir,
+      scope: layerScope,
+      kaolaConflicts,
+      footprint,
+      configContent,
+      trust: layerTrustLevels[index],
+    };
+  });
+  const ignoredKaolaLayer = projectLayers.find(layer =>
+    layer.footprint && layer.trust !== 'trusted');
+  if (ignoredKaolaLayer) {
+    return projectTrustRequiredResult(ignoredKaolaLayer.projectRoot, ignoredKaolaLayer.trust);
+  }
+  const loadedProjectLayers = projectLayers.filter(layer => layer.trust === 'trusted');
+  const overrideLayers = loadedProjectLayers.filter(layer => layer.footprint);
+  const selectedLayer = overrideLayers.find(layer => layer.kaolaConflicts.length > 0)
+    || overrideLayers.find(layer => !scopeProfilesFresh(layer.scope))
+    || overrideLayers[overrideLayers.length - 1]
+    || loadedProjectLayers[loadedProjectLayers.length - 1]
+    || projectLayers[projectLayers.length - 1];
+  activeProjectRoot = selectedLayer.projectRoot;
+  codexDir = selectedLayer.codexDir;
+  agentsDir = selectedLayer.agentsDir;
+
+  const rawGlobalScope = inspectScope({
+    codexDir: globalCodexDir, templateRoles, templateEntries, templateContent,
+  });
+  const effectiveRuntime = deriveEffectiveRuntime([
+    { content: globalConfigContent, configPath: globalConfigPath },
+    ...loadedProjectLayers.map(layer => ({
+      content: layer.configContent,
+      configPath: path.join(layer.codexDir, 'config.toml'),
+    })),
+  ]);
+  const projectKaolaOverridePresent = overrideLayers.length > 0;
+  const activeInstallGlobal = !projectKaolaOverridePresent;
+  if (activeInstallGlobal) {
+    activeProjectRoot = null;
+    codexDir = globalCodexDir;
+    agentsDir = path.join(globalCodexDir, 'agents', 'kaola-workflow');
+  }
+  const scope = {
+    ...(activeInstallGlobal ? rawGlobalScope : selectedLayer.scope),
+    ...effectiveRuntime,
+  };
+  const globalScope = { ...rawGlobalScope, ...effectiveRuntime };
+
+  if (effectiveRuntime.codex_v2_role_transport_ready === false) {
+    return unsafeCodexV2Transport(
+      scope, 'effective', codexDir, effectiveRuntime.transport_config_path,
+    );
+  }
+
+  // Any managed-role collision in a loaded project layer is unsafe; a higher
+  // fresh layer does not authorize silently rewriting a lower user block.
+  // Unrelated project-local agent declarations remain user-owned and valid.
+  const conflictingLayer = overrideLayers.find(layer => layer.kaolaConflicts.length > 0);
+  if (conflictingLayer) {
+    const conflictScope = { ...conflictingLayer.scope, ...effectiveRuntime };
+    const conflictingRoles = conflictingLayer.kaolaConflicts;
+    return {
+      exitCode: 4,
+      result: {
+        status: 'autofix_unsafe',
+        stale: true,
+        conflicting_roles_outside_markers: conflictingRoles,
+        extra_unmanaged: conflictScope.extraUnmanaged,
+        repair: `Remove or migrate the hand-authored [agents.*] entries outside the managed block markers in ${path.join(conflictingLayer.codexDir, 'config.toml')}, then re-run install-codex-agent-profiles.js.`,
+        safe_autofix: false,
+        dispatch_mode: conflictScope.dispatch_mode,
+        multi_agent_v2_enabled: conflictScope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(conflictScope),
+        dispatch_posture: conflictScope.dispatch_posture,
+        model_reasoning_effort: conflictScope.model_reasoning_effort,
+        multi_agent_enabled: conflictScope.multi_agent_enabled,
+        dispatch_posture_warning: conflictScope.dispatch_posture_warning,
+        max_concurrent_threads_per_session: conflictScope.max_concurrent_threads_per_session,
+        max_concurrent_threads_per_session_source: conflictScope.max_concurrent_threads_per_session_source,
+        effective_subagent_width: conflictScope.effective_subagent_width,
+        min_wait_timeout_ms: conflictScope.min_wait_timeout_ms,
+        max_wait_timeout_ms: conflictScope.max_wait_timeout_ms,
+        default_wait_timeout_ms: conflictScope.default_wait_timeout_ms,
+      },
+    };
+  }
+
+  // The global layer is always loaded. A hand-authored declaration outside the
+  // managed markers can therefore override a managed Kaola role even when a
+  // project layer supplies otherwise-fresh profiles. Preserve unrelated user
+  // roles, but fail closed for wildcard, exact, and nested Kaola collisions.
+  const globalKaolaConflicts = rawGlobalScope.managedRoleConflictsOutside;
+  if (globalKaolaConflicts.length > 0) {
+    return {
+      exitCode: 4,
+      result: {
+        status: 'autofix_unsafe',
+        stale: true,
+        conflicting_roles_outside_markers: globalKaolaConflicts,
+        extra_unmanaged: globalScope.extraUnmanaged,
+        repair: `Remove or migrate the hand-authored [agents.*] entries outside the managed block markers in ${globalConfigPath}, then re-run install-codex-agent-profiles.js.`,
+        safe_autofix: false,
+        dispatch_mode: globalScope.dispatch_mode,
+        multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(globalScope),
+        dispatch_posture: globalScope.dispatch_posture,
+        model_reasoning_effort: globalScope.model_reasoning_effort,
+        multi_agent_enabled: globalScope.multi_agent_enabled,
+        dispatch_posture_warning: globalScope.dispatch_posture_warning,
+        max_concurrent_threads_per_session: globalScope.max_concurrent_threads_per_session,
+        max_concurrent_threads_per_session_source: globalScope.max_concurrent_threads_per_session_source,
+        effective_subagent_width: globalScope.effective_subagent_width,
+        min_wait_timeout_ms: globalScope.min_wait_timeout_ms,
+        max_wait_timeout_ms: globalScope.max_wait_timeout_ms,
+        default_wait_timeout_ms: globalScope.default_wait_timeout_ms,
+      },
+    };
+  }
+
+  if (!projectKaolaOverridePresent && scopeProfilesFresh(rawGlobalScope)) {
     return {
       exitCode: 0,
       result: {
@@ -1479,65 +2990,16 @@ function runPreflight(opts) {
     };
   }
 
-  // --- Inspect the project scope (template roles only; plan roles handled below) ---
-  const scope = inspectScope({ codexDir, templateRoles, templateEntries });
-  if (scope.codex_v2_role_transport_ready === false) {
-    return unsafeCodexV2Transport(scope, 'project', codexDir);
-  }
-
-  // --- Conflicting [agents.*] outside managed block is UNSAFE to autofix ---
-  if (scope.conflictingRolesOutside.length > 0) {
-    return {
-      exitCode: 4,
-      result: {
-        status: 'autofix_unsafe',
-        stale: true,
-        conflicting_roles_outside_markers: scope.conflictingRolesOutside,
-        extra_unmanaged: scope.extraUnmanaged,
-        repair: `Remove or migrate the hand-authored [agents.*] entries outside the managed block markers in ${path.join(codexDir, 'config.toml')}, then re-run install-codex-agent-profiles.js.`,
-        safe_autofix: false,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      },
-    };
-  }
-
   // --- Unsupported (future) manifest schema is NOT autofixable ---
   if (scope.manifest === 'unsupported') {
-    return {
-      exitCode: 6,
-      result: {
-        status: 'profile_schema_version_unsupported',
-        stale: true,
-        extra_unmanaged: scope.extraUnmanaged,
-        repair: `The local profile manifest (${path.join(agentsDir, MANIFEST_BASENAME)}) declares an unsupported schema_version — upgrade kaola-workflow, then run node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${projectRoot}`,
-        safe_autofix: false,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
-      },
-    };
+    return unsupportedManifestResult({
+      scope,
+      agentsDir,
+      scriptDir: sourceScriptDir,
+      projectRoot: activeProjectRoot,
+      globalInstall: activeInstallGlobal,
+      scopeName: activeInstallGlobal ? 'global' : activeProjectRoot,
+    });
   }
 
   // --- Plan roles: union members not in the template profile dir (missing-only) ---
@@ -1545,9 +3007,9 @@ function runPreflight(opts) {
   const missingProfiles = [...new Set([...scope.missingProfiles, ...missingPlanProfiles])];
   const missingFromBlock = requiredRoles.filter(r => !scope.rolesInBlock.includes(r));
 
-  const installerForRepair = findInstaller(scriptDir);
+  const installerForRepair = findInstaller(sourceScriptDir);
   const repairCmd = installerForRepair
-    ? `node ${installerForRepair} ${projectRoot}`
+    ? `node ${installerForRepair} ${activeInstallGlobal ? '--global' : activeProjectRoot}`
     : 'install-codex-agent-profiles.js not found alongside this script.';
 
   // --- Priority-ordered staleness classification ---
@@ -1560,7 +3022,7 @@ function runPreflight(opts) {
     || (scope.manifest !== 'present' && scope.missingProfiles.length === 0 && scope.blockFound);
   const staleFilesPresent = scope.staleFiles.length > 0;
   const profilesMissing = missingProfiles.length > 0;
-  const configStale = blockMissing || missingFromBlock.length > 0;
+  const configStale = blockMissing || scope.managedBlockDrift || missingFromBlock.length > 0;
   const onlyBlockRolesStale = scope.staleRolesInBlock.length > 0;
 
   const isStale = malformedFirst || legacyPinsPresent || profileDriftPresent || staleFilesPresent || profilesMissing || configStale || onlyBlockRolesStale;
@@ -1789,100 +3251,146 @@ function runPreflight(opts) {
     };
   }
 
-  const { success, stderr } = runInstaller(installerPath, projectRoot);
-  if (!success) {
+  // Every trusted project layer with a Kaola footprint participates in Codex's
+  // loaded authority. Repair every stale footprint from repository root to cwd;
+  // fixing only the first one can leave a higher stale layer active while the
+  // gate incorrectly reports success.
+  const repairTargets = activeInstallGlobal
+    ? [{
+      projectRoot: null,
+      globalInstall: true,
+      label: 'global',
+      codexDir: globalCodexDir,
+      agentsDir: path.join(globalCodexDir, 'agents', 'kaola-workflow'),
+      configContent: globalConfigContent,
+      scope: rawGlobalScope,
+    }]
+    : overrideLayers
+      .filter(layer => !scopeProfilesFresh(layer.scope))
+      .map(layer => ({
+        projectRoot: layer.projectRoot,
+        globalInstall: false,
+        label: layer.projectRoot,
+        codexDir: layer.codexDir,
+        agentsDir: layer.agentsDir,
+        configContent: layer.configContent,
+        scope: layer.scope,
+      }));
+  if (repairTargets.length === 0) {
+    const fallbackLayer = activeInstallGlobal ? null : selectedLayer;
+    repairTargets.push({
+      projectRoot: activeProjectRoot,
+      globalInstall: activeInstallGlobal,
+      label: activeInstallGlobal ? 'global' : activeProjectRoot,
+      codexDir: activeInstallGlobal ? globalCodexDir : fallbackLayer.codexDir,
+      agentsDir: activeInstallGlobal
+        ? path.join(globalCodexDir, 'agents', 'kaola-workflow')
+        : fallbackLayer.agentsDir,
+      configContent: activeInstallGlobal ? globalConfigContent : fallbackLayer.configContent,
+      scope: activeInstallGlobal ? rawGlobalScope : fallbackLayer.scope,
+    });
+  }
+
+  // Prove every target is repairable before the first installer subprocess can
+  // mutate anything. A later future manifest or ambiguous marker range is a
+  // manual/upgrade repair, not permission to partially update earlier layers.
+  const unsupportedTarget = repairTargets.find(target => target.scope.manifest === 'unsupported');
+  if (unsupportedTarget) {
+    return unsupportedManifestResult({
+      scope: { ...unsupportedTarget.scope, ...effectiveRuntime },
+      agentsDir: unsupportedTarget.agentsDir,
+      scriptDir: sourceScriptDir,
+      projectRoot: unsupportedTarget.projectRoot,
+      globalInstall: unsupportedTarget.globalInstall,
+      scopeName: unsupportedTarget.label,
+    });
+  }
+  const ambiguousTarget = repairTargets.find(target =>
+    managedMarkerRange(target.configContent).state === 'invalid');
+  if (ambiguousTarget) {
+    const targetScope = { ...ambiguousTarget.scope, ...effectiveRuntime };
+    return {
+      exitCode: 4,
+      result: {
+        status: 'autofix_unsafe',
+        scope: ambiguousTarget.label,
+        stale: true,
+        safe_autofix: false,
+        config_path: path.join(ambiguousTarget.codexDir, 'config.toml'),
+        extra_unmanaged: targetScope.extraUnmanaged,
+        repair: `Repair the ambiguous kaola-workflow managed block markers in ${path.join(ambiguousTarget.codexDir, 'config.toml')} before reinstalling any loaded layer.`,
+        dispatch_mode: targetScope.dispatch_mode,
+        multi_agent_v2_enabled: targetScope.multi_agent_v2_enabled,
+        ...codexV2TransportEnvelope(targetScope),
+        dispatch_posture: targetScope.dispatch_posture,
+        model_reasoning_effort: targetScope.model_reasoning_effort,
+        multi_agent_enabled: targetScope.multi_agent_enabled,
+        dispatch_posture_warning: targetScope.dispatch_posture_warning,
+        max_concurrent_threads_per_session: targetScope.max_concurrent_threads_per_session,
+        max_concurrent_threads_per_session_source: targetScope.max_concurrent_threads_per_session_source,
+        effective_subagent_width: targetScope.effective_subagent_width,
+        min_wait_timeout_ms: targetScope.min_wait_timeout_ms,
+        max_wait_timeout_ms: targetScope.max_wait_timeout_ms,
+        default_wait_timeout_ms: targetScope.default_wait_timeout_ms,
+      },
+    };
+  }
+  for (const target of repairTargets) {
+    const repairRun = runInstaller(
+      installerPath, target.projectRoot, target.globalInstall, homeDir,
+    );
+    if (!repairRun.success) {
+      return {
+        exitCode: 5,
+        result: {
+          status: 'installer_failed',
+          scope: target.label,
+          extra_unmanaged: scope.extraUnmanaged,
+          stale: true,
+          repair: `Installer error for ${target.label}: ${repairRun.stderr}`,
+          safe_autofix: false,
+          dispatch_mode: scope.dispatch_mode,
+          multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+          ...codexV2TransportEnvelope(scope),
+          dispatch_posture: scope.dispatch_posture,
+          model_reasoning_effort: scope.model_reasoning_effort,
+          multi_agent_enabled: scope.multi_agent_enabled,
+          dispatch_posture_warning: scope.dispatch_posture_warning,
+          max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
+          max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
+          effective_subagent_width: scope.effective_subagent_width,
+          min_wait_timeout_ms: scope.min_wait_timeout_ms,
+          max_wait_timeout_ms: scope.max_wait_timeout_ms,
+          default_wait_timeout_ms: scope.default_wait_timeout_ms,
+        },
+      };
+    }
+  }
+
+  // Re-enter the complete read-only gate so root markers, per-layer trust,
+  // authority paths, conflicts, every trusted loaded profile set, and the
+  // effective runtime overlay are all rediscovered from persisted bytes.
+  const verified = runPreflight({
+    ...opts,
+    noAutofix: true,
+  });
+  if (verified.exitCode !== 0) {
     return {
       exitCode: 5,
       result: {
         status: 'installer_failed',
-        extra_unmanaged: scope.extraUnmanaged,
         stale: true,
-        repair: `Installer error: ${stderr}`,
         safe_autofix: false,
-        dispatch_mode: scope.dispatch_mode,
-        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
-        dispatch_posture: scope.dispatch_posture,
-        model_reasoning_effort: scope.model_reasoning_effort,
-        multi_agent_enabled: scope.multi_agent_enabled,
-        dispatch_posture_warning: scope.dispatch_posture_warning,
-        max_concurrent_threads_per_session: scope.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: scope.max_concurrent_threads_per_session_source,
-        effective_subagent_width: scope.effective_subagent_width,
-        min_wait_timeout_ms: scope.min_wait_timeout_ms,
-        max_wait_timeout_ms: scope.max_wait_timeout_ms,
-        default_wait_timeout_ms: scope.default_wait_timeout_ms,
+        repair: 'Installer ran, but the complete persisted-layer re-verification still refused.',
+        postcheck: verified.result,
       },
     };
   }
-
-  // --- Re-verify after autofix: re-run ALL checks (#332). ---
-  const after = inspectScope({ codexDir, templateRoles, templateEntries });
-  if (after.codex_v2_role_transport_ready === false) {
-    return unsafeCodexV2Transport(after, 'project', codexDir);
-  }
-  const { missingRoles: afterMissingPlan } = checkProfiles(agentsDir, planRoles);
-  const afterMissingProfiles = [...new Set([...after.missingProfiles, ...afterMissingPlan])];
-  const afterMissingFromBlock = requiredRoles.filter(r => !after.rolesInBlock.includes(r));
-
-  const stillStale =
-    after.malformed.length > 0 ||
-    after.legacyPinnedProfiles.length > 0 ||
-    after.staleProfiles.length > 0 ||
-    after.manifest !== 'present' ||
-    after.staleFiles.length > 0 ||
-    afterMissingProfiles.length > 0 ||
-    !after.blockFound ||
-    afterMissingFromBlock.length > 0 ||
-    after.staleRolesInBlock.length > 0;
-
-  if (stillStale) {
-    return {
-      exitCode: 5,
-      result: {
-        status: 'installer_failed',
-        missing_roles: [...new Set([...afterMissingProfiles, ...afterMissingFromBlock])],
-        extra_unmanaged: after.extraUnmanaged,
-        stale: true,
-        repair: 'Installer ran but profiles/block are still stale after re-verify.',
-        safe_autofix: false,
-        dispatch_mode: after.dispatch_mode,
-        multi_agent_v2_enabled: after.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(after),
-        dispatch_posture: after.dispatch_posture,
-        model_reasoning_effort: after.model_reasoning_effort,
-        multi_agent_enabled: after.multi_agent_enabled,
-        dispatch_posture_warning: after.dispatch_posture_warning,
-        max_concurrent_threads_per_session: after.max_concurrent_threads_per_session,
-        max_concurrent_threads_per_session_source: after.max_concurrent_threads_per_session_source,
-        effective_subagent_width: after.effective_subagent_width,
-        min_wait_timeout_ms: after.min_wait_timeout_ms,
-        max_wait_timeout_ms: after.max_wait_timeout_ms,
-        default_wait_timeout_ms: after.default_wait_timeout_ms,
-      },
-    };
-  }
-
   return {
     exitCode: 0,
     result: {
-      status: 'ok',
-      roles_checked: requiredRoles,
-      extra_unmanaged: after.extraUnmanaged,
+      ...verified.result,
       autofixed: true,
-      dispatch_mode: after.dispatch_mode,
-      multi_agent_v2_enabled: after.multi_agent_v2_enabled,
-      ...codexV2TransportEnvelope(after),
-      dispatch_posture: after.dispatch_posture,
-      model_reasoning_effort: after.model_reasoning_effort,
-      multi_agent_enabled: after.multi_agent_enabled,
-      dispatch_posture_warning: after.dispatch_posture_warning,
-      max_concurrent_threads_per_session: after.max_concurrent_threads_per_session,
-      max_concurrent_threads_per_session_source: after.max_concurrent_threads_per_session_source,
-      effective_subagent_width: after.effective_subagent_width,
-      min_wait_timeout_ms: after.min_wait_timeout_ms,
-      max_wait_timeout_ms: after.max_wait_timeout_ms,
-      default_wait_timeout_ms: after.default_wait_timeout_ms,
     },
   };
 }
@@ -1900,12 +3408,31 @@ function scopeIsStale(s) {
     s.staleFiles.length > 0 ||
     s.missingProfiles.length > 0 ||
     !s.blockFound ||
+    s.managedBlockDrift ||
     s.missingFromBlock.length > 0 ||
     s.staleRolesInBlock.length > 0 ||
-    s.conflictingRolesOutside.length > 0 ||
+    s.managedRoleConflictsOutside.length > 0 ||
     s.manifest !== 'present' ||
     s.codex_v2_role_transport_ready === false
   );
+}
+
+// Profile/config provenance only. Runtime transport is derived from the merged
+// layer stack, so an unsafe lower transport field can be safely overridden by a
+// complete higher layer without making otherwise-canonical global profiles stale.
+function scopeProfilesFresh(s) {
+  return s.exists
+    && s.malformed.length === 0
+    && s.legacyPinnedProfiles.length === 0
+    && s.staleProfiles.length === 0
+    && s.staleFiles.length === 0
+    && s.missingProfiles.length === 0
+    && s.blockFound
+    && !s.managedBlockDrift
+    && s.missingFromBlock.length === 0
+    && s.staleRolesInBlock.length === 0
+    && s.managedRoleConflictsOutside.length === 0
+    && s.manifest === 'present';
 }
 
 // #571: a scope is "fresh" iff it exists AND inspectScope finds nothing stale.
@@ -1922,6 +3449,7 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     codex_dir: codexDir,
     exists: scope.exists,
     managed_block: scope.blockFound ? 'present' : 'absent',
+    managed_block_drift: scope.managedBlockDrift,
     profiles: scope.rolesInBlock,
     missing_roles: scope.missingProfiles,
     missing_from_block: scope.missingFromBlock,
@@ -1931,6 +3459,7 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     stale_files: scope.staleFiles,
     stale_roles_in_block: scope.staleRolesInBlock,
     conflicting_roles_outside: scope.conflictingRolesOutside,
+    managed_role_conflicts_outside: scope.managedRoleConflictsOutside,
     extra_unmanaged: scope.extraUnmanaged,
     manifest: scope.manifest,
     dispatch_mode: scope.dispatch_mode,
@@ -1946,6 +3475,8 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     min_wait_timeout_ms: scope.min_wait_timeout_ms,
     max_wait_timeout_ms: scope.max_wait_timeout_ms,
     default_wait_timeout_ms: scope.default_wait_timeout_ms,
+    effective_config_paths: scope.effective_config_paths || [],
+    transport_config_path: scope.transport_config_path || null,
     read_only: !!readOnly,
     repair: scope.codex_v2_role_transport_ready === false
       ? (scope.codex_v2_direct_transport_ready === false
@@ -1955,37 +3486,301 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
   };
 }
 
-// Find cached plugin source-agent dirs under <home>/.codex/plugins/cache.
-// Returns [{ dir, plugin, marketplace, version }].
-function findPluginCacheAgentDirs(home) {
+function readPluginIdentity(scriptDir, home) {
+  const pluginRoot = path.resolve(scriptDir, '..');
+  const manifestDir = path.join(pluginRoot, '.codex-plugin');
+  const manifestPath = path.join(manifestDir, 'plugin.json');
+  const cacheRoot = path.resolve(home, '.codex', 'plugins', 'cache');
+  const relativeRoot = path.relative(cacheRoot, pluginRoot);
+  const insideCache = relativeRoot !== '' && relativeRoot !== '..'
+    && !relativeRoot.startsWith('..' + path.sep) && !path.isAbsolute(relativeRoot);
+  const cacheParts = insideCache ? relativeRoot.split(path.sep) : null;
+  if (insideCache) {
+    if (cacheParts.length !== 3) {
+      return {
+        identity: null,
+        error: `plugin_cache_path_unsafe: ${pluginRoot} is not a marketplace/name/version cache root`,
+        manifestPath,
+      };
+    }
+    for (const component of [...pluginCacheRootComponents(home), path.join(cacheRoot, cacheParts[0]),
+      path.join(cacheRoot, cacheParts[0], cacheParts[1]), pluginRoot]) {
+      const issue = cachePathIssue(component, 'plugin_cache_path');
+      if (issue) return { identity: null, error: issue, manifestPath };
+    }
+    const configDir = path.join(pluginRoot, 'config');
+    const configPath = path.join(configDir, 'agents.toml');
+    const configDirIssue = cachePathIssue(configDir, 'plugin_config_path');
+    if (configDirIssue) return { identity: null, error: configDirIssue, manifestPath };
+    const configFileIssue = cacheFileIssue(configPath, 'plugin_config_path');
+    if (configFileIssue) return { identity: null, error: configFileIssue, manifestPath };
+  }
+  const manifestDirIssue = cachePathIssue(manifestDir, 'plugin_manifest_path');
+  if (manifestDirIssue) return { identity: null, error: manifestDirIssue, manifestPath };
+  let stat;
+  try {
+    stat = fs.lstatSync(manifestPath);
+  } catch (error) {
+    return {
+      identity: null,
+      error: `plugin_manifest_unsafe: cannot inspect ${manifestPath}: ${error.message}`,
+      manifestPath,
+    };
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    return {
+      identity: null,
+      error: `plugin_manifest_unsafe: ${manifestPath} must be a regular non-symlink file`,
+      manifestPath,
+    };
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    return {
+      identity: null,
+      error: `plugin_manifest_invalid: cannot parse ${manifestPath}: ${error.message}`,
+      manifestPath,
+    };
+  }
+  const name = manifest && typeof manifest.name === 'string' ? manifest.name : '';
+  const version = manifest && typeof manifest.version === 'string' ? manifest.version : '';
+  if (!name || !version || name === '.' || name === '..' || version === '.' || version === '..'
+      || name.includes('/') || name.includes('\\') || version.includes('/') || version.includes('\\')) {
+    return {
+      identity: null,
+      error: `plugin_manifest_invalid: ${manifestPath} must declare safe non-empty name and version strings`,
+      manifestPath,
+    };
+  }
+  if (insideCache) {
+    if (cacheParts[1] !== name) {
+      return {
+        identity: null,
+        error: `plugin_manifest_name_mismatch: expected=${cacheParts[1]} got=${name}`,
+        manifestPath,
+      };
+    }
+    if (cacheParts[2] !== version) {
+      return {
+        identity: null,
+        error: `plugin_manifest_version_mismatch: expected=${cacheParts[2]} got=${version}`,
+        manifestPath,
+      };
+    }
+  }
+  return { identity: { name, version }, error: null, manifestPath };
+}
+
+function cachePathIssue(target, label) {
+  let stat;
+  try {
+    stat = fs.lstatSync(target);
+  } catch (error) {
+    return error && error.code === 'ENOENT'
+      ? `${label}_missing: ${target}`
+      : `${label}_unsafe: cannot inspect ${target}: ${error.message}`;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    return `${label}_unsafe: ${target} must be a regular non-symlink directory`;
+  }
+  return null;
+}
+
+function cacheFileIssue(target, label) {
+  let stat;
+  try {
+    stat = fs.lstatSync(target);
+  } catch (error) {
+    return error && error.code === 'ENOENT'
+      ? `${label}_missing: ${target}`
+      : `${label}_unsafe: cannot inspect ${target}: ${error.message}`;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    return `${label}_unsafe: ${target} must be a regular non-symlink file`;
+  }
+  return null;
+}
+
+function pathEntryInspection(target, label) {
+  try {
+    fs.lstatSync(target);
+    return { exists: true, issue: null };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { exists: false, issue: null };
+    return {
+      exists: false,
+      issue: `${label}_unsafe: cannot inspect ${target}: ${error.message}`,
+    };
+  }
+}
+
+function pluginCacheRootComponents(home) {
+  const codexRoot = path.join(home, '.codex');
+  const pluginsRoot = path.join(codexRoot, 'plugins');
+  return [codexRoot, pluginsRoot, path.join(pluginsRoot, 'cache')];
+}
+
+// Find only this installed plugin's exact name/version cache under
+// <home>/.codex/plugins/cache. Other plugins and old versions are not part of
+// this preflight's authority and must not affect its result.
+function findPluginCacheAgentDirs(home, identity) {
   const cacheRoot = path.join(home, '.codex', 'plugins', 'cache');
   const out = [];
-  if (!fs.existsSync(cacheRoot)) return out;
+  const cacheEntry = pathEntryInspection(cacheRoot, 'plugin_cache_path');
+  if (cacheEntry.issue) {
+    return [{
+      dir: cacheRoot,
+      plugin: identity.name,
+      marketplace: null,
+      version: identity.version,
+      manifestPath: null,
+      reasons: [cacheEntry.issue],
+    }];
+  }
+  if (!cacheEntry.exists) return out;
+  const rootIssue = pluginCacheRootComponents(home)
+    .map(component => cachePathIssue(component, 'plugin_cache_path'))
+    .find(Boolean) || null;
+  if (rootIssue) {
+    return [{
+      dir: cacheRoot,
+      plugin: identity.name,
+      marketplace: null,
+      version: identity.version,
+      manifestPath: null,
+      reasons: [rootIssue],
+    }];
+  }
   let marketplaces = [];
-  try { marketplaces = fs.readdirSync(cacheRoot); } catch { return out; }
+  try {
+    marketplaces = fs.readdirSync(cacheRoot);
+  } catch (error) {
+    return [{
+      dir: cacheRoot,
+      plugin: identity.name,
+      marketplace: null,
+      version: identity.version,
+      manifestPath: null,
+      reasons: [`plugin_cache_path_unsafe: cannot list ${cacheRoot}: ${error.message}`],
+    }];
+  }
   for (const mk of marketplaces) {
     const mkDir = path.join(cacheRoot, mk);
-    let plugins = [];
-    try { plugins = fs.readdirSync(mkDir); } catch { continue; }
-    for (const pl of plugins) {
-      const plDir = path.join(mkDir, pl);
-      let versions = [];
-      try { versions = fs.readdirSync(plDir); } catch { continue; }
-      for (const ver of versions) {
-        const agentsDir = path.join(plDir, ver, 'agents');
-        if (fs.existsSync(agentsDir)) {
-          out.push({ dir: agentsDir, plugin: pl, marketplace: mk, version: ver });
+    const mkIssue = cachePathIssue(mkDir, 'plugin_cache_path');
+    if (mkIssue) {
+      out.push({
+        dir: mkDir,
+        plugin: identity.name,
+        marketplace: mk,
+        version: identity.version,
+        manifestPath: null,
+        reasons: [mkIssue],
+      });
+      continue;
+    }
+    const pluginDir = path.join(mkDir, identity.name);
+    const pluginEntry = pathEntryInspection(pluginDir, 'plugin_cache_path');
+    if (pluginEntry.issue) {
+      out.push({
+        dir: pluginDir,
+        plugin: identity.name,
+        marketplace: mk,
+        version: identity.version,
+        manifestPath: null,
+        reasons: [pluginEntry.issue],
+      });
+      continue;
+    }
+    if (!pluginEntry.exists) continue;
+    const reasons = [];
+    const pluginIssue = cachePathIssue(pluginDir, 'plugin_cache_path');
+    if (pluginIssue) reasons.push(pluginIssue);
+    const versionDir = path.join(pluginDir, identity.version);
+    const versionEntry = pluginIssue
+      ? { exists: false, issue: null }
+      : pathEntryInspection(versionDir, 'plugin_cache_path');
+    if (versionEntry.issue) {
+      reasons.push(versionEntry.issue);
+    } else if (!pluginIssue && !versionEntry.exists) {
+      continue;
+    }
+    const versionIssue = (pluginIssue || versionEntry.issue)
+      ? null
+      : cachePathIssue(versionDir, 'plugin_cache_path');
+    if (versionIssue) reasons.push(versionIssue);
+    const agentsDir = path.join(versionDir, 'agents');
+    const configDir = path.join(versionDir, 'config');
+    const configPath = path.join(configDir, 'agents.toml');
+    const manifestDir = path.join(versionDir, '.codex-plugin');
+    const manifestPath = path.join(manifestDir, 'plugin.json');
+    if (reasons.length === 0) {
+      const agentsIssue = cachePathIssue(agentsDir, 'plugin_cache_agents_path');
+      if (agentsIssue) reasons.push(agentsIssue);
+      const configDirIssue = cachePathIssue(configDir, 'plugin_config_path');
+      if (configDirIssue) reasons.push(configDirIssue);
+      if (!configDirIssue) {
+        const configFileIssue = cacheFileIssue(configPath, 'plugin_config_path');
+        if (configFileIssue) reasons.push(configFileIssue);
+      }
+      const manifestDirIssue = cachePathIssue(manifestDir, 'plugin_manifest_path');
+      if (manifestDirIssue) reasons.push(manifestDirIssue);
+      if (!manifestDirIssue) {
+        let manifestStat;
+        try { manifestStat = fs.lstatSync(manifestPath); } catch (error) {
+          reasons.push(`plugin_manifest_unsafe: cannot inspect ${manifestPath}: ${error.message}`);
+        }
+        if (manifestStat && (manifestStat.isSymbolicLink() || !manifestStat.isFile())) {
+          reasons.push(`plugin_manifest_unsafe: ${manifestPath} must be a regular non-symlink file`);
         }
       }
     }
+    if (reasons.length === 0) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        if (manifest.name !== identity.name) {
+          reasons.push(`plugin_manifest_name_mismatch: expected=${identity.name} got=${String(manifest.name)}`);
+        }
+        if (manifest.version !== identity.version) {
+          reasons.push(`plugin_manifest_version_mismatch: expected=${identity.version} got=${String(manifest.version)}`);
+        }
+      } catch (error) {
+        reasons.push(`plugin_manifest_invalid: cannot parse ${manifestPath}: ${error.message}`);
+      }
+    }
+    out.push({
+      dir: agentsDir,
+      plugin: identity.name,
+      marketplace: mk,
+      version: identity.version,
+      configPath,
+      manifestPath,
+      reasons,
+    });
   }
   return out;
 }
 
 function runDoctor(opts) {
   const { projectRoot, home, scriptDir } = opts;
-  const template = readTemplateRoles(scriptDir);
-  const { roles: templateRoles, entries: templateEntries, error: templateError, sourceErrors = [] } = template;
+  const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, home);
+  const pluginIdentityRead = readPluginIdentity(sourceScriptDir, home);
+  if (pluginIdentityRead.error) {
+    return {
+      exitCode: 2,
+      result: {
+        status: 'plugin_identity_invalid',
+        error: pluginIdentityRead.error,
+        plugin_manifest: pluginIdentityRead.manifestPath,
+        scopes: [],
+      },
+    };
+  }
+  const pluginIdentity = pluginIdentityRead.identity;
+  const template = readTemplateRoles(sourceScriptDir);
+  const { roles: templateRoles, entries: templateEntries, content: templateContent,
+    error: templateError, sourceErrors = [] } = template;
 
   if (templateError) {
     return {
@@ -1998,9 +3793,10 @@ function runDoctor(opts) {
 
   scopes.push({
     scope: 'repository',
-    codex_dir: path.join(scriptDir, '..', 'agents'),
+    codex_dir: path.join(sourceScriptDir, '..', 'agents'),
     exists: true,
     managed_block: 'n/a',
+    managed_block_drift: false,
     profiles: templateRoles,
     missing_roles: [],
     missing_from_block: [],
@@ -2013,65 +3809,268 @@ function runDoctor(opts) {
     extra_unmanaged: [],
     manifest: 'n/a',
     read_only: true,
-    repair: repositoryRepairCommand(scriptDir),
+    repair: repositoryRepairCommand(sourceScriptDir),
   });
 
-  // user scope
+  // User + every project layer share the same persisted-config overlay as the
+  // normal gate. Refuse unsafe config paths without following them.
   const userCodex = path.join(home, '.codex');
-  const userScope = inspectScope({ codexDir: userCodex, templateRoles, templateEntries });
-  scopes.push(scopeReport(
-    userScope, 'user', userCodex,
-    `node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${home}`,
-    false,
-  ));
+  const userConfig = readConfigLayer(userCodex);
+  const markerConfig = userConfig.ok
+    ? parseProjectRootMarkers(userConfig.content)
+    : { valid: true, markers: ['.git'] };
+  if (!markerConfig.valid) {
+    scopes.push({
+      scope: 'user', codex_dir: userCodex, config_path: userConfig.configPath,
+      exists: true, project_root_markers_invalid: true,
+      managed_block: 'n/a', managed_block_drift: false,
+      profiles: [], missing_roles: [], missing_from_block: [], malformed: [],
+      stale_profiles: [], profile_byte_drift: [], stale_files: [],
+      stale_roles_in_block: [], conflicting_roles_outside: [], extra_unmanaged: [],
+      manifest: 'n/a', read_only: true,
+      repair: 'Set top-level project_root_markers to exactly one TOML array of strings.',
+    });
+    return { exitCode: 1, result: { status: 'stale', scopes } };
+  }
+  const detectedProjectRoot = findProjectRoot(projectRoot, markerConfig.markers);
+  const repoRoot = findRepoRootForTrust(projectRoot);
+  const projectDirs = projectCodexLayerDirs(projectRoot, markerConfig.markers);
+  const projectConfigs = projectDirs.map(readConfigLayer);
+  const layerTrustLevels = projectDirs.map(projectCodex => userConfig.ok
+    ? projectTrustLevel(
+      userConfig.content,
+      path.dirname(projectCodex),
+      detectedProjectRoot,
+      repoRoot,
+    )
+    : 'unknown');
+  const projectTrust = layerTrustLevels[layerTrustLevels.length - 1] || 'unknown';
+  // Project config is not part of Codex's runtime authority until the project is
+  // trusted. Unsafe ignored paths are reported as ignored, not followed or gated.
+  const unsafeConfigs = [userConfig,
+    ...projectConfigs.filter((configRead, index) => layerTrustLevels[index] === 'trusted')]
+    .filter(configRead => !configRead.ok);
+  for (const unsafe of unsafeConfigs) {
+    scopes.push({
+      scope: unsafe === userConfig ? 'user' : 'project_layer',
+      codex_dir: path.dirname(unsafe.configPath),
+      config_path: unsafe.configPath,
+      exists: true,
+      config_layer_unsafe: true,
+      error: unsafe.error,
+      managed_block: 'n/a',
+      managed_block_drift: false,
+      profiles: [], missing_roles: [], missing_from_block: [], malformed: [],
+      stale_profiles: [], profile_byte_drift: [], stale_files: [],
+      stale_roles_in_block: [], conflicting_roles_outside: [], extra_unmanaged: [],
+      manifest: 'n/a', read_only: true,
+      repair: unsafeConfigLayerResult(unsafe).result.repair,
+    });
+  }
+  if (unsafeConfigs.length > 0) {
+    return { exitCode: 1, result: { status: 'stale', scopes } };
+  }
 
-  // project scope
-  const projectCodex = path.join(projectRoot, '.codex');
-  const projectScope = inspectScope({ codexDir: projectCodex, templateRoles, templateEntries });
-  scopes.push(scopeReport(
-    projectScope, 'project', projectCodex,
-    `node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${projectRoot}`,
+  const authorityChecks = [
+    { codexDir: userCodex, scope: 'user' },
+    ...projectDirs.filter((_, index) => layerTrustLevels[index] === 'trusted')
+      .map(codexDir => ({ codexDir, scope: 'project_layer' })),
+  ];
+  const authorityIssues = authorityChecks.map(check => ({
+    ...check,
+    issue: scopeAuthorityIssue(check.codexDir, templateRoles),
+  })).filter(check => check.issue);
+  for (const authority of authorityIssues) {
+    scopes.push({
+      scope: authority.scope,
+      codex_dir: authority.codexDir,
+      exists: true,
+      scope_authority_unsafe: true,
+      authority_path: authority.issue.path,
+      error: authority.issue.error,
+      managed_block: 'n/a', managed_block_drift: false,
+      profiles: [], missing_roles: [], missing_from_block: [], malformed: [],
+      stale_profiles: [], profile_byte_drift: [], stale_files: [],
+      stale_roles_in_block: [], conflicting_roles_outside: [], extra_unmanaged: [],
+      manifest: 'n/a', read_only: true,
+      repair: unsafeScopeAuthorityResult(
+        authority.codexDir, authority.scope, authority.issue,
+      ).result.repair,
+    });
+  }
+  if (authorityIssues.length > 0) {
+    return {
+      exitCode: 1,
+      result: {
+        status: 'stale',
+        scope_authority_unsafe: true,
+        project_trust: projectTrust,
+        scopes,
+      },
+    };
+  }
+
+  const effectiveRuntime = deriveEffectiveRuntime([
+    ...(userConfig.ok ? [{ content: userConfig.content, configPath: userConfig.configPath }] : []),
+    ...projectConfigs
+      .filter((configRead, index) => configRead.ok && layerTrustLevels[index] === 'trusted')
+      .map(configRead => ({
+      content: configRead.content, configPath: configRead.configPath,
+      })),
+  ]);
+
+  const userScopeRaw = inspectScope({
+    codexDir: userCodex, templateRoles, templateEntries, templateContent,
+    configContentOverride: userConfig.content,
+  });
+  const userScope = { ...userScopeRaw, ...effectiveRuntime };
+  const userReport = scopeReport(
+    userScope, 'user', userCodex,
+    `node ${path.join(sourceScriptDir, 'install-codex-agent-profiles.js')} ${home}`,
     false,
-  ));
+  );
+  const userKaolaConflicts = userScopeRaw.managedRoleConflictsOutside;
+  userReport.kaola_footprint = fs.existsSync(path.join(userCodex, 'agents', 'kaola-workflow'))
+    || userScope.blockFound || userScope.rolesInBlock.length > 0
+    || userKaolaConflicts.length > 0;
+  userReport.kaola_state = userReport.kaola_footprint ? 'configured' : 'not_installed';
+  scopes.push(userReport);
+
+  const projectScopes = [];
+  for (let index = 0; index < projectDirs.length; index += 1) {
+    const projectCodex = projectDirs[index];
+    const raw = inspectScope({
+      codexDir: projectCodex, templateRoles, templateEntries, templateContent,
+      configContentOverride: projectConfigs[index].ok ? projectConfigs[index].content : '',
+      inspectProfiles: layerTrustLevels[index] === 'trusted',
+    });
+    const scope = { ...raw, ...effectiveRuntime };
+    const kaolaConflicts = raw.managedRoleConflictsOutside;
+    let agentsFootprint = false;
+    try {
+      fs.lstatSync(path.join(projectCodex, 'agents', 'kaola-workflow'));
+      agentsFootprint = true;
+    } catch (_) {}
+    const footprint = agentsFootprint
+      || raw.blockFound || raw.rolesInBlock.length > 0 || kaolaConflicts.length > 0;
+    const name = index === projectDirs.length - 1 ? 'project' : 'project_layer';
+    const report = scopeReport(
+      scope, name, projectCodex,
+      `node ${path.join(sourceScriptDir, 'install-codex-agent-profiles.js')} ${path.dirname(projectCodex)}`,
+      false,
+    );
+    report.kaola_footprint = footprint;
+    report.kaola_state = footprint ? 'configured' : 'not_installed';
+    report.project_trust = layerTrustLevels[index];
+    report.config_layer_ignored = layerTrustLevels[index] !== 'trusted';
+    if (!projectConfigs[index].ok && layerTrustLevels[index] !== 'trusted') {
+      report.ignored_config_error = projectConfigs[index].error;
+    }
+    scopes.push(report);
+    projectScopes.push({ scope, footprint, trust: layerTrustLevels[index] });
+  }
 
   // plugin_cache scope(s) — exact-byte + schema proof, read-only but gate-affecting.
-  for (const c of findPluginCacheAgentDirs(home)) {
-    const malformed = [];
+  for (const c of findPluginCacheAgentDirs(home, pluginIdentity)) {
+    const malformed = c.reasons.length > 0
+      ? [{ role: 'plugin-cache', file: c.manifestPath || c.dir, reasons: [...c.reasons] }]
+      : [];
     const staleProfiles = [];
+    const staleFiles = [];
+    const missingRoles = [];
     let names = [];
-    try { names = fs.readdirSync(c.dir); } catch { names = []; }
-    for (const name of names) {
-      if (!name.endsWith('.toml')) continue;
-      const role = name.replace(/\.toml$/, '');
-      let txt = '';
-      try { txt = fs.readFileSync(path.join(c.dir, name), 'utf8'); } catch { txt = ''; }
-      const expected = (templateEntries || []).find(e => e.role === role) || null;
-      const reasons = validateProfileText(txt, role, expected);
-      const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
-      if (sourceDrift) {
-        staleProfiles.push({ role, file: name, reasons: [
-          'profile_bytes_mismatch: cached profile differs from bundled source', ...reasons,
-        ] });
-      } else if (reasons.length > 0) malformed.push({ role, file: name, reasons });
+    if (c.reasons.length === 0) {
+      try {
+        names = fs.readdirSync(c.dir);
+      } catch (error) {
+        malformed.push({
+          role: 'plugin-cache',
+          file: c.dir,
+          reasons: [`plugin_cache_agents_path_unsafe: cannot list ${c.dir}: ${error.message}`],
+        });
+      }
+      const expectedByFile = new Map((templateEntries || []).map(entry => [entry.basename, entry]));
+      for (const entry of (templateEntries || [])) {
+        if (entry.basename && !names.includes(entry.basename)) missingRoles.push(entry.role);
+      }
+      let cachedConfig = null;
+      try { cachedConfig = fs.readFileSync(c.configPath); } catch (error) {
+        malformed.push({
+          role: 'plugin-config',
+          file: c.configPath,
+          reasons: [`plugin_config_path_unsafe: cannot read ${c.configPath}: ${error.message}`],
+        });
+      }
+      if (cachedConfig && !cachedConfig.equals(Buffer.from(templateContent, 'utf8'))) {
+        malformed.push({
+          role: 'plugin-config',
+          file: c.configPath,
+          reasons: ['plugin_config_bytes_mismatch: cached config/agents.toml differs from bundled source'],
+        });
+      }
+      for (const name of names) {
+        if (!name.endsWith('.toml')) continue;
+        const expected = expectedByFile.get(name) || null;
+        if (!expected) {
+          staleFiles.push(name);
+          continue;
+        }
+        const role = expected.role;
+        const profilePath = path.join(c.dir, name);
+        let profileStat;
+        try { profileStat = fs.lstatSync(profilePath); } catch (error) {
+          malformed.push({
+            role,
+            file: name,
+            reasons: [`plugin_cache_profile_unsafe: cannot inspect ${profilePath}: ${error.message}`],
+          });
+          continue;
+        }
+        if (profileStat.isSymbolicLink() || !profileStat.isFile()) {
+          malformed.push({
+            role,
+            file: name,
+            reasons: [`plugin_cache_profile_unsafe: ${profilePath} must be a regular non-symlink file`],
+          });
+          continue;
+        }
+        let txt = '';
+        try { txt = fs.readFileSync(profilePath, 'utf8'); } catch { txt = ''; }
+        const reasons = validateProfileText(txt, role, expected);
+        const sourceDrift = typeof expected.sourceText === 'string' && txt !== expected.sourceText;
+        if (sourceDrift) {
+          staleProfiles.push({ role, file: name, reasons: [
+            'profile_bytes_mismatch: cached profile differs from bundled source', ...reasons,
+          ] });
+        } else if (reasons.length > 0) malformed.push({ role, file: name, reasons });
+      }
     }
     malformed.sort((a, b) => a.role.localeCompare(b.role));
     staleProfiles.sort((a, b) => a.role.localeCompare(b.role));
+    staleFiles.sort();
+    missingRoles.sort();
     scopes.push({
       scope: 'plugin_cache',
       codex_dir: c.dir,
+      marketplace: c.marketplace,
+      plugin_name: c.plugin,
+      plugin_version: c.version,
+      config_path: c.configPath || null,
+      plugin_manifest: c.manifestPath,
       exists: true,
       managed_block: 'n/a',
+      managed_block_drift: false,
       profiles: [],
-      missing_roles: [],
+      missing_roles: missingRoles,
       missing_from_block: [],
       malformed,
       stale_profiles: staleProfiles,
       profile_byte_drift: staleProfiles,
-      stale_files: [],
+      stale_files: staleFiles,
       stale_roles_in_block: [],
       conflicting_roles_outside: [],
       extra_unmanaged: [],
-      manifest: 'n/a',
+      manifest: c.reasons.length === 0 ? 'present' : 'invalid',
       dispatch_mode: 'n/a',
       multi_agent_v2_enabled: false,
       codex_v2_transport_mode: 'n/a',
@@ -2091,16 +4090,35 @@ function runDoctor(opts) {
       max_wait_timeout_ms: null,
       default_wait_timeout_ms: null,
       read_only: true,
-      repair: `codex plugin remove ${c.plugin}@${c.marketplace} && codex plugin add ${c.plugin}@${c.marketplace}  # refresh plugin cache`,
+      repair: c.marketplace
+        ? `codex plugin remove ${c.plugin}@${c.marketplace} && codex plugin add ${c.plugin}@${c.marketplace}  # refresh plugin cache`
+        : `Replace ${c.dir} with a regular non-symlink plugin cache directory, then refresh ${c.plugin}.`,
     });
   }
 
   const pluginCacheStale = scopes.some(scope => scope.scope === 'plugin_cache'
-    && (scope.malformed.length > 0 || scope.stale_profiles.length > 0));
-  const gating = sourceErrors.length > 0 || scopeIsStale(userScope) || scopeIsStale(projectScope) || pluginCacheStale;
+    && (scope.malformed.length > 0 || scope.stale_profiles.length > 0
+      || scope.missing_roles.length > 0 || scope.stale_files.length > 0));
+  const effectiveTransportUnsafe = effectiveRuntime.codex_v2_role_transport_ready === false;
+  const projectStale = projectScopes.some(item =>
+    item.trust === 'trusted' && item.footprint && scopeIsStale(item.scope));
+  const projectTrustRequired = projectScopes.some(item =>
+    item.trust !== 'trusted' && item.footprint);
+  const gating = sourceErrors.length > 0
+    || unsafeConfigs.length > 0
+    || (userReport.kaola_footprint && scopeIsStale(userScope))
+    || projectStale
+    || projectTrustRequired
+    || effectiveTransportUnsafe
+    || pluginCacheStale;
   return {
     exitCode: gating ? 1 : 0,
-    result: { status: gating ? 'stale' : 'ok', scopes },
+    result: {
+      status: gating ? 'stale' : 'ok',
+      project_trust: projectTrust,
+      project_trust_required: projectTrustRequired,
+      scopes,
+    },
   };
 }
 
@@ -2124,12 +4142,17 @@ if (require.main === module) {
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     } else {
       for (const s of (result.scopes || [])) {
-        const stale = s.scope === 'repository'
+        const stale = s.kaola_footprint === false
+          ? false
+          : s.scope === 'repository'
           ? s.malformed.length > 0
           : (s.scope === 'plugin_cache'
-            ? (s.malformed.length > 0 || s.stale_profiles.length > 0)
-            : (s.exists && (s.malformed.length || s.profile_byte_drift.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.missing_from_block.length || s.stale_roles_in_block.length || s.conflicting_roles_outside.length || s.manifest !== 'present' || s.codex_v2_role_transport_ready === false)));
-        const state = !s.exists ? 'absent' : (stale ? 'stale' : 'ok');
+            ? (s.malformed.length > 0 || s.stale_profiles.length > 0
+              || s.missing_roles.length > 0 || s.stale_files.length > 0)
+            : (s.exists && (s.malformed.length || s.profile_byte_drift.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.managed_block_drift || s.missing_from_block.length || s.stale_roles_in_block.length || (s.managed_role_conflicts_outside || []).length || s.manifest !== 'present' || s.codex_v2_role_transport_ready === false)));
+        const state = s.kaola_footprint === false
+          ? 'not-installed'
+          : (!s.exists ? 'absent' : (stale ? 'stale' : 'ok'));
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
         if (stale) process.stdout.write(`  repair: ${s.repair}\n`);
         if (s.codex_v2_transport_warning) process.stdout.write(`  transport: ${s.codex_v2_transport_warning}\n`);
@@ -2223,6 +4246,8 @@ module.exports = {
   // #611: MultiAgentV2 concurrency + wait-timeout bounds derivation (pure; exported for unit tests).
   parseMultiAgentV2NumericFields,
   deriveMultiAgentV2Bounds,
+  parseRuntimeLayerOverrides,
+  deriveEffectiveRuntime,
   OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION,
   MULTI_AGENT_V2_BOUNDS_NOTE,
 };

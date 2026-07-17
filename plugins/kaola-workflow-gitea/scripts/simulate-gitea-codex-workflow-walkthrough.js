@@ -17,6 +17,14 @@ function tail30(str) {
   return lines.slice(Math.max(0, lines.length - 30)).join('\n');
 }
 
+function markPlanAbsentFinalizeFixtureFast(rootDir, project) {
+  const stateFile = path.join(rootDir, 'kaola-workflow', project, 'workflow-state.md');
+  const content = fs.readFileSync(stateFile, 'utf8');
+  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
+    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
+    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+}
+
 function run(script) {
   try {
     execFileSync(process.execPath, [path.join(root, 'plugins/kaola-workflow-gitea/scripts', script)], {
@@ -183,6 +191,7 @@ const gtOs = require('os');
       'issue_number: 42', 'issue_numbers: 42,47', 'bundle_id: ' + project,
       'closure_policy: all_or_nothing', 'sink: pr', 'run_posture: in-place', ''
     ].join('\n'));
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     for (const n of [42, 47]) {
       const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
       fs.mkdirSync(rd, { recursive: true });
@@ -224,6 +233,7 @@ const gtOs = require('os');
       '# Kaola-Workflow State', '', '## Project', 'name: issue-428gtcx', 'status: active', '',
       '## Sink', 'branch: workflow/issue-428gtcx', 'issue_number: 428', 'sink: pr', ''
     ].join('\n'));
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428gtcx');
     const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(rd, { recursive: true });
     fs.writeFileSync(path.join(rd, 'issue-428.md'),

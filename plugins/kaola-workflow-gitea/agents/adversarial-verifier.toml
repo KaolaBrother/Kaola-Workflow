@@ -1,9 +1,6 @@
 name = "adversarial-verifier"
 description = "Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim."
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
-behavior_contract_version = 2
-behavior_contract_hash = "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b"
-resolved_profile_hash = "7345474b3844e5ee7abc8e292a3e669ecb918eeeaaf9229420cb97300e4ba996"
 developer_instructions = """
 <!-- reviewer-behavior-core:start -->
 role: adversarial-verifier
@@ -75,4 +72,8 @@ description: Adversarial verifier for one recorded claim and surface, using stro
 - Evidence transport: write the FULL structured result directly to the exact dispatch.evidence_file and preserve its evidence-binding header byte-for-byte, writing only below that header.
 - After the evidence is complete, return only a compact orchestrator summary: <node-id> adversarial-verifier: <outcome>; evidence=<dispatch.evidence_file>.
 <!-- reviewer-runtime-adapter:end -->
+
+<!-- reviewer-profile-identity:start -->
+resolved_profile_hash: 4fe2f3ca426286a26ae525bf722599e8f06ba591fe4303216eeb789d9aaad9f7
+<!-- reviewer-profile-identity:end -->
 """

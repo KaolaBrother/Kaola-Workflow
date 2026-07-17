@@ -3,6 +3,87 @@ name: kaola-workflow-next
 description: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and phase artifacts.
 ---
 
+<!-- PIN: codex-profile-preflight -->
+## Codex Profile Freshness Gate
+
+On every entry or resume into this skill, before any role probe, retry, re-plan,
+or real dispatch, run the normal preflight gate, not `--doctor`. Resolve exactly
+one enabled installed Kaola edition from `codex plugin list --json`, then execute
+the bundled `kaola-workflow-codex-preflight.js` from that edition's exact
+marketplace/name/version cache tuple.
+Never search `$PWD/plugins` or select the lexically first cache entry:
+
+```bash
+if ! KAOLA_CODEX_PLUGIN_LIST_OUT="$(codex plugin list --json 2>&1)"; then
+  printf 'profile_preflight_refused: plugin metadata unavailable: %s\n' "$KAOLA_CODEX_PLUGIN_LIST_OUT" >&2
+  exit 1
+fi
+if ! KAOLA_CODEX_PLUGIN_META="$(node -e '
+const value=JSON.parse(process.argv[1]);
+const allowed=new Set(["kaola-workflow","kaola-workflow-gitlab","kaola-workflow-gitea"]);
+const rows=(Array.isArray(value.installed)?value.installed:[]).filter(row => row && row.installed === true && row.enabled === true && allowed.has(row.name));
+if(rows.length!==1)throw new Error(`expected exactly one enabled installed Kaola edition; got ${rows.length}`);
+const row=rows[0];
+for(const [label,item] of [["marketplace",row.marketplaceName],["name",row.name],["version",row.version]])if(typeof item!=="string"||item==="."||item===".."||!/^[A-Za-z0-9._-]+$/.test(item))throw new Error(`unsafe ${label}`);
+if(row.pluginId!==`${row.name}@${row.marketplaceName}`)throw new Error("plugin identity mismatch");
+process.stdout.write([row.marketplaceName,row.name,row.version].join("\t"));
+' "$KAOLA_CODEX_PLUGIN_LIST_OUT" 2>&1)"; then
+  printf 'profile_preflight_refused: invalid plugin metadata: %s\n' "$KAOLA_CODEX_PLUGIN_META" >&2
+  exit 1
+fi
+IFS=$'\t' read -r KAOLA_CODEX_MARKETPLACE KAOLA_CODEX_PLUGIN_NAME KAOLA_CODEX_PLUGIN_VERSION <<< "$KAOLA_CODEX_PLUGIN_META"
+KAOLA_CODEX_CACHE_ROOT="$HOME/.codex/plugins/cache"
+if ! KAOLA_CODEX_PREFLIGHT="$(node -e '
+const fs=require("fs"),path=require("path");
+const [home,base,marketplace,name,version]=process.argv.slice(1);
+const resolvedHome=path.resolve(home),resolvedBase=path.resolve(base);
+if(resolvedBase!==path.join(resolvedHome,".codex","plugins","cache"))throw new Error("plugin cache root escapes HOME");
+let cursor=resolvedHome;
+const homeStat=fs.lstatSync(cursor);
+if(homeStat.isSymbolicLink()||!homeStat.isDirectory())throw new Error("HOME is unsafe");
+const parts=[".codex","plugins","cache",marketplace,name,version,"scripts","kaola-workflow-codex-preflight.js"];
+for(let index=0;index<parts.length;index+=1){
+  cursor=path.join(cursor,parts[index]);
+  const stat=fs.lstatSync(cursor);
+  if(stat.isSymbolicLink())throw new Error(`symlink cache component: ${cursor}`);
+  if(index<parts.length-1&&!stat.isDirectory())throw new Error(`non-directory cache component: ${cursor}`);
+  if(index===parts.length-1&&!stat.isFile())throw new Error(`preflight is not a regular file: ${cursor}`);
+}
+process.stdout.write(cursor);
+' "$HOME" "$KAOLA_CODEX_CACHE_ROOT" "$KAOLA_CODEX_MARKETPLACE" "$KAOLA_CODEX_PLUGIN_NAME" "$KAOLA_CODEX_PLUGIN_VERSION" 2>&1)"; then
+  printf 'profile_preflight_refused: exact active preflight unavailable: %s\n' "$KAOLA_CODEX_PREFLIGHT" >&2
+  exit 1
+fi
+KAOLA_CODEX_PREFLIGHT_ARGS=(--project-root "$PWD" --no-autofix --json)
+if [ -n "${KAOLA_CODEX_PREFLIGHT_PLAN:-}" ]; then
+  KAOLA_CODEX_PREFLIGHT_ARGS+=(--plan "$KAOLA_CODEX_PREFLIGHT_PLAN")
+fi
+if ! KAOLA_CODEX_PREFLIGHT_OUT="$(node "$KAOLA_CODEX_PREFLIGHT" "${KAOLA_CODEX_PREFLIGHT_ARGS[@]}" 2>&1)"; then
+  printf 'profile_preflight_refused: %s\n' "$KAOLA_CODEX_PREFLIGHT_OUT" >&2
+  exit 1
+fi
+if ! KAOLA_CODEX_PREFLIGHT_STATUS="$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v.status!=="string")throw new Error("missing status");process.stdout.write(v.status)' "$KAOLA_CODEX_PREFLIGHT_OUT" 2>&1)"; then
+  printf 'profile_preflight_refused: malformed preflight result: %s\n' "$KAOLA_CODEX_PREFLIGHT_STATUS" >&2
+  exit 1
+fi
+if [ "$KAOLA_CODEX_PREFLIGHT_STATUS" != ok ]; then
+  printf 'profile_preflight_refused: %s\n' "$KAOLA_CODEX_PREFLIGHT_OUT" >&2
+  exit 1
+fi
+```
+
+The exact active cache root is
+`$HOME/.codex/plugins/cache/$KAOLA_CODEX_MARKETPLACE/$KAOLA_CODEX_PLUGIN_NAME/$KAOLA_CODEX_PLUGIN_VERSION`.
+The base invocation is `--project-root "$PWD" --no-autofix --json`; the gate
+merges persisted config from HOME through the repository root to `"$PWD"`. When this
+skill owns a frozen adaptive plan, set `KAOLA_CODEX_PREFLIGHT_PLAN` to that
+exact plan before running the block so `--plan` is also enforced. Continue only
+after exit 0 and parsed `status: "ok"`. Exact-byte drift such as
+`profile_bytes_mismatch` is `profile_preflight_refused`: STOP before any
+`agents.spawn_agent` call, never record `subagent-invoked`, and do not relabel
+profile/config drift as tool unavailability or local fallback. Re-run the gate if the installed profile set changes.
+<!-- /PIN -->
+
 # Kaola-Workflow Next
 
 **First Principles.** When no shipped rule, gate, or refusal already settles a
@@ -94,7 +175,11 @@ Codex subagent delegation is the default. The session delegation policy defaults
 
 The default `delegation_policy` is `delegate`: invoke the Codex subagent roles (code-explorer, planner, code-architect, tdd-guide, code-reviewer, security-reviewer, doc-updater) for delegated work and record `subagent-invoked` in each compliance ledger. Do not ask the user to choose a delegation policy.
 
-Tool availability is auto-detected, not a user choice. Before phase work, check whether the Codex role profiles are installed at EITHER the project-local `.codex/agents/kaola-workflow/` path OR the global `~/.codex/agents/kaola-workflow/` path (the `--global` install target) — a global install satisfies delegation exactly as a project-local one does; probe local first, then global. If NEITHER directory has `*.toml` role profiles the subagent tooling is unavailable: keep `delegation_policy: delegate` and, for each Codex role row, record `local-fallback-tool-unavailable` with a non-empty Evidence value naming the absent path(s) (for example `.codex/agents/kaola-workflow/ absent`, or `~/.codex/agents/kaola-workflow/ absent` when only the global path was probed). An empty Evidence cell fails the repair-state cross-check, so always write the evidence. Never present tool-unavailability as a question.
+Tool availability is auto-detected, not a user choice. The Codex Profile Freshness Gate above is authoritative for profile/config availability: it validates a higher-precedence project Kaola override before accepting a fresh global install. Missing, stale, malformed, or shadowed profiles are `profile_preflight_refused`: STOP before phase work and never record them as a local fallback. Only after a successful gate may a genuinely unavailable runtime agent tool or a model-refused spawn count as tool unavailability. In that case keep `delegation_policy: delegate` and, for each affected Codex role row, record `local-fallback-tool-unavailable` with non-empty runtime evidence. An empty Evidence cell fails the repair-state cross-check, so always write the evidence. Never present tool-unavailability as a question.
+
+For every affected row, record `local-fallback-tool-unavailable` with a non-empty Evidence value.
+
+The profile detection paths are the project override at `.codex/agents/kaola-workflow/` and the global default at `~/.codex/agents/kaola-workflow/`; only the precedence/trust-aware freshness gate decides which one is active.
 
 Set `delegation_policy: local-authorized` (recording `local-fallback-explicit` in each Codex role row) only when the user explicitly asks to disable delegation or authorizes an inline local fallback. Do not select `local-authorized` on your own initiative.
 

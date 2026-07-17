@@ -30,10 +30,12 @@ overwrites a user's model choices — those live only in the user-owned
 
 ## Reviewer behavior derivation
 
-`code-reviewer` and `adversarial-verifier` are first rendered into their canonical Claude roots by
-`scripts/generate-reviewer-profiles.js` from `templates/reviewers/behavior-contracts.json` and the
-closed runtime adapters. `sync-opencode-edition.js` then transforms those generated roots into
-OpenCode frontmatter/permissions; it does not maintain a second reviewer prompt.
+`code-reviewer`, `adversarial-verifier`, and `security-reviewer` are first rendered into their
+canonical Claude roots by `scripts/generate-reviewer-profiles.js` from
+`templates/reviewers/behavior-contracts.json` and the closed runtime adapters. The generator owns
+five Claude Markdown outputs and nine Codex TOML outputs across GitHub, GitLab, and Gitea.
+`sync-opencode-edition.js` then transforms those generated roots into OpenCode
+frontmatter/permissions; it does not maintain a second reviewer prompt.
 
 `scripts/test-opencode-edition.js` extracts the delimited reviewer core and proves that role,
 `behavior_contract_version`, `behavior_contract_hash`, and every normalized core byte match the
@@ -41,6 +43,15 @@ canonical generated source. This is deterministic contract equivalence only. Ope
 runtime may produce different natural-language findings, explanations, or domain outcomes because
 the underlying model execution is stochastic. The transform also makes no claim about private
 runtime prompt-loader bytes; it proves the tracked/generated filesystem surface.
+
+The optional full path preserves the same Phase 5 loop as Claude Code and Codex: a strict completed
+Phase 4 task ledger, named code review, an explicit invoked-or-N/A security file-risk decision,
+delegated fixes with narrow validation, and reviewer re-entry after the newest fix. The shared
+full-advance transaction requires canonical nonce-bound substantive reviewer/fix evidence and
+rechecks freshness at Finalization; a new `.cache/review-fix-{n}.md` makes older reviewer receipts
+stale. The main session, not the script, judges CRITICAL/HIGH severity, and three non-converging
+fix-and-re-review cycles stop for operator direction. Runtime transport differs, but these review
+decisions and evidence gates do not.
 
 ### Schema-2 reviewer identity (#708)
 

@@ -547,9 +547,12 @@ assertPolicyBlocked('delegate', [
   ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
   ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
 ], 'mixed local fallback under delegate policy');
-assertPolicyBlocked('tool-unavailable', [
+assertPolicyAllowed('tool-unavailable', [
   ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
-], 'subagent row under tool-unavailable policy');
+], 'mandatory named reviewer invocation under legacy tool-unavailable policy');
+assertPolicyBlocked('tool-unavailable', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', '']
+], 'ordinary subagent row under tool-unavailable policy');
 // Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
 assertPolicyAllowed('delegate', [
   ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
@@ -1105,7 +1108,7 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   const sourceCheck = installer.validateSourceProfiles(path.join(root, pluginRoot));
   assert(sourceCheck.ok,
     pluginRoot + ' profile source contract failed: ' + sourceCheck.errors.join('; '));
-  for (const role of ['code-reviewer', 'adversarial-verifier']) {
+  for (const role of generator.ROLES) {
     const entry = sourceCheck.entries.find(candidate => candidate.role === role);
     assert(entry && entry.profileContract && entry.profileContract.behavior_contract_version === 2,
       pluginRoot + ' must expose reviewer contract version 2 for ' + role);

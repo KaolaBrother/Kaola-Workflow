@@ -169,7 +169,11 @@ assert(
   initSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
 );
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-execute/SKILL.md`, 'Required Agent Compliance');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'codex review');
+const reviewSkill = `${pluginRoot}/skills/kaola-workflow-review/SKILL.md`;
+assertIncludes(reviewSkill, '`code-reviewer` is always required');
+assertIncludes(reviewSkill, '<!-- PIN: full-review-fix-loop-parity -->');
+assert(!read(reviewSkill).includes('or `codex review`'),
+  reviewSkill + ' must not bypass the named generated reviewer profile');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
 // #475: pin the consumer (non-npm) finalize gate prose so the dual-mode concept cannot drift out of the SKILL.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final-validation.md');
@@ -296,9 +300,12 @@ assertPolicyBlocked('delegate', [
   ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
   ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
 ], 'mixed local fallback under delegate policy');
-assertPolicyBlocked('tool-unavailable', [
+assertPolicyAllowed('tool-unavailable', [
   ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
-], 'subagent row under tool-unavailable policy');
+], 'mandatory named reviewer invocation under legacy tool-unavailable policy');
+assertPolicyBlocked('tool-unavailable', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', '']
+], 'ordinary subagent row under tool-unavailable policy');
 // Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
 assertPolicyAllowed('delegate', [
   ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
@@ -1152,7 +1159,7 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
     const sourceCheck = installer.validateSourceProfiles(path.join(root, edition));
     assert(sourceCheck.ok, edition + ' reviewer/profile source contract failed: ' + sourceCheck.errors.join('; '));
     assert(sourceCheck.repair === null, edition + ' current source must not carry a repair command');
-    for (const role of ['code-reviewer', 'adversarial-verifier']) {
+    for (const role of generator.ROLES) {
       const entry = sourceCheck.entries.find(candidate => candidate.role === role);
       assert(entry && entry.profileContract,
         edition + ' must expose generated reviewer identity for ' + role);

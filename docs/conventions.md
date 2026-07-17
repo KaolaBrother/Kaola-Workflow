@@ -29,7 +29,69 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 - `local-fallback-tool-unavailable` — only valid when subagent tooling is genuinely unavailable (runtime detection, not a silent config-drift shortcut).
 - `local-fallback-explicit` — only valid when the user explicitly set `delegation_policy: local-authorized`.
 
+All ten dispatch-capable Codex skills (`adapt`, `execute`, `fast`, `finalize`, `ideation`, `next`,
+`plan`, `plan-run`, `research`, and `review`) carry one byte-identical
+`<!-- PIN: codex-profile-preflight -->` entry/resume gate. The gate runs normal preflight with
+`--no-autofix --json` before any probe, retry, re-plan, or spawn and accepts only exit 0 plus parsed
+`status:"ok"`; a frozen plan is supplied through `KAOLA_CODEX_PREFLIGHT_PLAN`. The gate parses
+`codex plugin list --json`, requires exactly one enabled installed Kaola edition, validates the
+registry marketplace/name/version components, and executes only that tuple's exact cached
+preflight. Never resolve it with `find`, `head`, lexical cache ordering, or a checkout-local
+`$PWD/plugins` candidate. A missing/ambiguous registry row, unsafe cache component, failed
+preflight, or malformed JSON result is the typed `profile_preflight_refused` stop and may never be
+relabeled as tool unavailability.
+
+Preflight merges the persisted transport/posture fields it owns from HOME through every trusted
+repository-root-to-cwd `.codex/config.toml`, with explicitly present higher fields winning and the
+winning unsafe path retained for diagnosis. Profile provenance is separate: a global profile set is
+eligible only when no project layer has a Kaola footprint; otherwise the project authority and exact
+managed role block must pass. A project Kaola footprint is loadable only when the most-specific
+matching absolute `[projects."..."]` entry in global config says `trust_level = "trusted"`;
+unknown/untrusted footprints stop as `project_trust_required` because Codex ignores those project
+layers. Any outside-marker `agents` declaration in any loaded project layer is unsafe. This gate
+cannot see ephemeral Codex `--profile` or `-c` launch overrides, so its persisted filesystem result
+must not be described as proof of those per-process settings.
+
 See `docs/api.md` § Codex Harness Scripts for the preflight CLI and typed-refusal shapes.
+
+## Full-Path Review/Fix/Re-Review Contract
+
+Claude commands, Codex skills, and the generated opencode command use the same bounded Phase 5
+semantics:
+
+1. Treat `phase4-progress.md` as a strict ledger. Its `## Tasks` table must be structurally valid,
+   nonempty, and exactly complete row-by-row; a truncated or malformed row is not ignored.
+2. Run the named `code-reviewer`. Run `security-reviewer` when the file-risk scan calls for it, or
+   record exactly one N/A security decision with the reason.
+3. Route admitted CRITICAL/HIGH fixes to the appropriate fix role, write each full result to the
+   seeded `.cache/review-fix-{n}.md`, and run the narrow validation that proves the fix.
+4. Re-run every affected reviewer after the newest fix. Reviewer receipts must preserve their
+   seeded binding, contain the exact approval receipt plus `review_summary: no_blocking_findings`
+   and `review_attestation: full_review_completed`, and end with exactly one column-zero
+   `review_conclusion: <substantive prose>` as the final nonempty line. Emit the attestation and
+   conclusion only after completing the full review; conclusion text after the prefix must contain
+   at least 24 Unicode letter/number characters and four word tokens. The entire durable body
+   rejects control, format, Unicode line/paragraph separator, and default-ignorable code points.
+   Reserved labels and finding gate keys reject recognized compatibility/confusable and
+   single-Damerau-edit near-spoofs, while ordinary Unicode prose remains non-authoritative.
+   Canonical finding tokens require a lowercase ASCII key, ASCII `=`, and a non-whitespace value;
+   any noncanonical line carrying all three assignment-shaped gate keys, or a finding-like label
+   followed by all three alternating key/value pairs, refuses. Receipt rows
+   remain the only mechanical outcome
+   authority, and canonical structured `finding:` rows remain the only mechanical finding
+   authority. Conclusion presence, position, and minimum shape are mechanical, while its prose
+   content is retained only for orchestration context. Reviewer evidence must be at least as new as
+   Phase 4 progress and all review-fix evidence. A new fix invalidates the prior receipt mechanically.
+5. The main session judges severity and may finalize only after no CRITICAL/HIGH finding remains.
+   Stop for operator direction after three non-converging fix-and-re-review cycles.
+
+`phase5-finalize` and Finalization's `phase5-verify` require exactly one point-of-use decision for
+`code-reviewer`, `security-reviewer`, and `review-fix executors`. Their canonical evidence files and
+the project/cache/state/progress/review paths must be regular non-symlink paths inside
+`kaola-workflow/<project>`; fix N/A is valid only when no `.cache/review-fix-*.md` artifact exists.
+Unsafe authority is `project_path_unsafe`. The transaction proves local
+file shape, binding, containment, and freshness. It does not cryptographically prove which model
+process authored those bytes, and the script never grades finding severity.
 
 ## Codex Join Protocol — wait budgets, escalation, and writer kill-safety (issue #611)
 
@@ -255,15 +317,15 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) span
 
 ## Generated Reviewer Profiles and Proof Boundaries (#696 / D-696-01)
 
-`code-reviewer` and `adversarial-verifier` are generated-profile exceptions to the ordinary
-hand-mirrored agent workflow:
+`code-reviewer`, `adversarial-verifier`, and `security-reviewer` are generated-profile exceptions to
+the ordinary hand-mirrored agent workflow:
 
 1. Edit `templates/reviewers/behavior-contracts.json` for runtime-neutral behavior or
    `templates/reviewers/runtime-adapters.json` for closed tools/model-policy/evidence-transport data.
    Adapter data must never grow arbitrary prompt, prefix, suffix, or instruction fields.
 2. Edit `scripts/generate-reviewer-profiles.js` only when rendering or validation rules change.
 3. Run `node scripts/generate-reviewer-profiles.js --write`, then `--check`. Never hand-edit any of
-   its three Claude or six Codex outputs.
+   its five Claude Markdown outputs or nine Codex TOML outputs across GitHub, GitLab, and Gitea.
 4. Run `node scripts/test-agent-profile-parity.js` and `node scripts/test-opencode-edition.js`.
    OpenCode must preserve normalized behavior-core bytes and identity after its runtime transform.
 
@@ -273,7 +335,10 @@ that stochastic models must emit identical findings, explanations, or outcomes. 
 checks may claim exact selected-source, installed-file, manifest, and plugin-cache bytes only; they
 must not claim proprietary prompt-load attestation without a public runtime introspection contract.
 Codex reviewer profiles preserve inherit-by-omission and may not emit top-level `model` or
-`model_reasoning_effort`.
+`model_reasoning_effort`. Their top-level schema is closed to `name`, `description`,
+`nickname_candidates`, and `developer_instructions`; behavior and resolved-profile identity lines
+live inside `developer_instructions` so they remain runtime-verifiable without becoming unsupported
+Codex role fields.
 
 ## Reviewer Contract V2 Authoring and Local Validation (#693 / #697 / #698)
 
@@ -319,8 +384,8 @@ Three-part machine-enforced contract:
    every chain.
 
 **Workflow:** For a non-generated role, mirror a new feature paragraph/token into all three `.toml`
-twins first, then pin it in `FEATURE_TOKENS`. For the two generated reviewers, use the canonical
-JSON + generator workflow above instead.
+twins first, then pin it in `FEATURE_TOKENS`. For the three generated reviewer roles, use the
+canonical JSON + generator workflow above instead.
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
 (`plugins/kaola-workflow/`, `plugins/kaola-workflow-gitlab/`, `plugins/kaola-workflow-gitea/`)

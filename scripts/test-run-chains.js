@@ -998,6 +998,204 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T30: every dispatched chain owns a private temp root. This is an end-to-end probe through
+// main() so it covers the actual spawn env on BOTH dispatch paths, including a concurrent retry.
+// The child records whether TMPDIR existed while it ran; after main() returns the runner must have
+// removed only that owned root. TMP/TEMP travel with TMPDIR for cross-platform child libraries, and
+// the runner must never implement isolation by mutating its own process.env.
+// ---------------------------------------------------------------------------
+{
+  const repo30 = makeGitRepo();
+  const originalCwd = process.cwd();
+  const envKeys = ['TMPDIR', 'TMP', 'TEMP'];
+  const originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+  const originalConcurrency = process.env.KAOLA_RUN_CHAINS_CONCURRENCY;
+  try {
+    const outerTmp = path.join(repo30, 'parent-tmp');
+    fs.mkdirSync(outerTmp, { recursive: true });
+    process.env.TMPDIR = outerTmp;
+    process.env.TMP = path.join(repo30, 'parent-TMP-sentinel');
+    process.env.TEMP = path.join(repo30, 'parent-TEMP-sentinel');
+    const parentEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+
+    function makeTempProbe(name, marker, transientFirst) {
+      const script = path.join(repo30, name + '.js');
+      const counter = script + '.count';
+      fs.writeFileSync(script, [
+        '#!/usr/bin/env node',
+        "'use strict';",
+        "const fs = require('fs');",
+        'const marker = ' + JSON.stringify(marker) + ';',
+        'const counter = ' + JSON.stringify(counter) + ';',
+        "let attempt = 0; try { attempt = parseInt(fs.readFileSync(counter, 'utf8'), 10) || 0; } catch (_) {}",
+        "attempt += 1; fs.writeFileSync(counter, String(attempt));",
+        'const row = { attempt, TMPDIR: process.env.TMPDIR || null, TMP: process.env.TMP || null,',
+        "  TEMP: process.env.TEMP || null, existed: !!process.env.TMPDIR && fs.existsSync(process.env.TMPDIR) };",
+        "fs.appendFileSync(marker, JSON.stringify(row) + '\\n');",
+        transientFirst
+          ? "if (attempt === 1) { process.stderr.write('ECONNRESET from isolation probe\\n'); process.exit(1); }"
+          : '',
+        'process.exit(0);',
+        '',
+      ].join('\n'), { mode: 0o755 });
+      return script;
+    }
+
+    function rows(marker) {
+      return fs.readFileSync(marker, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    }
+
+    const concurrentClaudeMarker = path.join(repo30, 'concurrent-claude.jsonl');
+    const concurrentCodexMarker = path.join(repo30, 'concurrent-codex.jsonl');
+    const concurrentClaude = makeTempProbe('concurrent-claude', concurrentClaudeMarker, false);
+    const concurrentCodex = makeTempProbe('concurrent-codex', concurrentCodexMarker, true);
+    const { main } = require('./kaola-workflow-run-chains.js');
+    process.chdir(repo30);
+    process.env.KAOLA_RUN_CHAINS_CONCURRENCY = '2';
+    const concurrentExit = await main([
+      'node', 'kaola-workflow-run-chains.js',
+      '--chains', 'claude,codex',
+      '--mock-chain', 'claude:' + concurrentClaude,
+      '--mock-chain', 'codex:' + concurrentCodex,
+      '--output', '.cache/t30-concurrent.json',
+    ]);
+    const concurrentClaudeRows = rows(concurrentClaudeMarker);
+    const concurrentCodexRows = rows(concurrentCodexMarker);
+    const concurrentRoots = [concurrentClaudeRows[0].TMPDIR, concurrentCodexRows[0].TMPDIR];
+    assert(concurrentExit === 0, 'T30: concurrent run including a transient retry exits green');
+    assert(concurrentRoots.every(Boolean) && concurrentRoots[0] !== concurrentRoots[1],
+      'T30: concurrent chains receive distinct non-empty TMPDIR roots; got ' + JSON.stringify(concurrentRoots));
+    assert(concurrentClaudeRows.concat(concurrentCodexRows).every(row => row.existed),
+      'T30: every concurrent/retry child observes an existing TMPDIR while it runs');
+    assert(concurrentClaudeRows.concat(concurrentCodexRows).every(row => row.TMP === row.TMPDIR && row.TEMP === row.TMPDIR),
+      'T30: concurrent/retry child TMP and TEMP match its private TMPDIR');
+    assert(concurrentCodexRows.length === 2 && concurrentCodexRows[0].TMPDIR === concurrentCodexRows[1].TMPDIR,
+      'T30: retries stay inside the same chain-owned TMPDIR');
+    assert(concurrentRoots.every(root => !fs.existsSync(root)),
+      'T30: concurrent chain TMPDIR roots are cleaned after each chain settles');
+    assert(envKeys.every(key => process.env[key] === parentEnv[key]),
+      'T30: concurrent isolation does not mutate the runner parent environment');
+
+    const serialGitlabMarker = path.join(repo30, 'serial-gitlab.jsonl');
+    const serialGiteaMarker = path.join(repo30, 'serial-gitea.jsonl');
+    const serialGitlab = makeTempProbe('serial-gitlab', serialGitlabMarker, false);
+    const serialGitea = makeTempProbe('serial-gitea', serialGiteaMarker, false);
+    process.env.KAOLA_RUN_CHAINS_CONCURRENCY = 'serial';
+    const serialExit = await main([
+      'node', 'kaola-workflow-run-chains.js',
+      '--chains', 'gitlab,gitea',
+      '--mock-chain', 'gitlab:' + serialGitlab,
+      '--mock-chain', 'gitea:' + serialGitea,
+      '--output', '.cache/t30-serial.json',
+    ]);
+    const serialRows = [rows(serialGitlabMarker)[0], rows(serialGiteaMarker)[0]];
+    const serialRoots = serialRows.map(row => row.TMPDIR);
+    assert(serialExit === 0, 'T30: forced-serial run exits green');
+    assert(serialRoots.every(Boolean) && serialRoots[0] !== serialRoots[1],
+      'T30: serial chains also receive distinct non-empty TMPDIR roots; got ' + JSON.stringify(serialRoots));
+    assert(serialRows.every(row => row.existed && row.TMP === row.TMPDIR && row.TEMP === row.TMPDIR),
+      'T30: every serial child observes one existing private TMPDIR/TMP/TEMP root');
+    assert(serialRoots.every(root => !fs.existsSync(root)),
+      'T30: serial chain TMPDIR roots are cleaned after each chain settles');
+    assert(envKeys.every(key => process.env[key] === parentEnv[key]),
+      'T30: serial isolation does not mutate the runner parent environment');
+  } finally {
+    if (originalConcurrency === undefined) delete process.env.KAOLA_RUN_CHAINS_CONCURRENCY;
+    else process.env.KAOLA_RUN_CHAINS_CONCURRENCY = originalConcurrency;
+    process.chdir(originalCwd);
+    for (const key of envKeys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    try { fs.rmSync(repo30, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T31: cleanup preserves a foreign replacement at the owned TMPDIR path. The child removes its
+// private directory, replaces that exact pathname with a symlink to a separate fixture directory,
+// and writes sentinel bytes there. Identity-aware cleanup must leave the replacement link and its
+// target byte-intact; the test finally unlinks only the known in-fixture link before removing the
+// mkdtemp-owned fixture root.
+// ---------------------------------------------------------------------------
+{
+  const repo31 = makeGitRepo();
+  const originalCwd = process.cwd();
+  const envKeys = ['TMPDIR', 'TMP', 'TEMP'];
+  const originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+  const originalConcurrency = process.env.KAOLA_RUN_CHAINS_CONCURRENCY;
+  let replacementPath = null;
+  try {
+    const chainTempBase = path.join(repo31, 'chain-temp-base');
+    const foreignTarget = path.join(repo31, 'foreign-target');
+    const marker = path.join(repo31, 'foreign-replacement.json');
+    const sentinel = Buffer.from('kaola foreign TMPDIR replacement\n\u0000\u00ff', 'utf8');
+    fs.mkdirSync(chainTempBase, { recursive: true });
+
+    const mock = path.join(repo31, 'replace-tmpdir.js');
+    fs.writeFileSync(mock, [
+      '#!/usr/bin/env node',
+      "'use strict';",
+      "const fs = require('fs');",
+      'const tmpdir = process.env.TMPDIR;',
+      'const target = ' + JSON.stringify(foreignTarget) + ';',
+      'const marker = ' + JSON.stringify(marker) + ';',
+      'const sentinel = Buffer.from(' + JSON.stringify(sentinel.toString('base64')) + ", 'base64');",
+      "fs.rmSync(tmpdir, { recursive: true, force: true });",
+      "fs.mkdirSync(target, { recursive: true });",
+      "fs.writeFileSync(require('path').join(target, 'sentinel.bin'), sentinel);",
+      "fs.symlinkSync(target, tmpdir, 'dir');",
+      "fs.writeFileSync(marker, JSON.stringify({ tmpdir, target, link: fs.readlinkSync(tmpdir) }) + '\\n');",
+      'process.exit(0);',
+      '',
+    ].join('\n'), { mode: 0o755 });
+
+    process.env.TMPDIR = chainTempBase;
+    process.env.TMP = chainTempBase;
+    process.env.TEMP = chainTempBase;
+    process.env.KAOLA_RUN_CHAINS_CONCURRENCY = 'serial';
+    const parentEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+    const { main } = require('./kaola-workflow-run-chains.js');
+    process.chdir(repo31);
+    const exitCode = await main([
+      'node', 'kaola-workflow-run-chains.js',
+      '--chains', 'claude',
+      '--mock-chain', 'claude:' + mock,
+      '--output', '.cache/t31.json',
+    ]);
+    const observed = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    replacementPath = observed.tmpdir;
+    assert(exitCode === 0, 'T31: foreign-replacement probe chain exits green');
+    assert(fs.lstatSync(replacementPath).isSymbolicLink(),
+      'T31: cleanup preserves the symlink that replaced the owned TMPDIR');
+    assert(fs.readlinkSync(replacementPath) === foreignTarget && observed.link === foreignTarget,
+      'T31: preserved replacement still points to the exact foreign fixture directory');
+    assert(fs.readFileSync(path.join(foreignTarget, 'sentinel.bin')).equals(sentinel),
+      'T31: foreign replacement sentinel remains byte-intact after runner cleanup');
+    assert(envKeys.every(key => process.env[key] === parentEnv[key]),
+      'T31: adversarial replacement does not mutate the runner parent environment');
+  } finally {
+    if (originalConcurrency === undefined) delete process.env.KAOLA_RUN_CHAINS_CONCURRENCY;
+    else process.env.KAOLA_RUN_CHAINS_CONCURRENCY = originalConcurrency;
+    process.chdir(originalCwd);
+    for (const key of envKeys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    if (replacementPath) {
+      const relative = path.relative(repo31, replacementPath);
+      if (relative && relative !== '..' && !relative.startsWith('..' + path.sep)
+          && !path.isAbsolute(relative)) {
+        try {
+          if (fs.lstatSync(replacementPath).isSymbolicLink()) fs.unlinkSync(replacementPath);
+        } catch (_) {}
+      }
+    }
+    try { fs.rmSync(repo31, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

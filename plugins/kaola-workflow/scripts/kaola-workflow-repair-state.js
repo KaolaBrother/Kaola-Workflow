@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 // issue #227 (adaptive path): resume traversal of a frozen workflow-plan.md + Node
 // Ledger replaces the phaseN ladder for adaptive projects. This module is
 // TOGGLE-AGNOSTIC — it never reads the adaptive install switch (or its env mirror):
@@ -211,7 +212,8 @@ function complianceRows(content) {
       requirement: columns[0],
       status: columns[1] || '',
       evidence: columns[2] || '',
-      skipReason: columns[3] || ''
+      binding: columns.length >= 5 ? (columns[3] || '') : '',
+      skipReason: columns.length >= 5 ? (columns[4] || '') : (columns[3] || '')
     }));
 }
 
@@ -246,6 +248,15 @@ function delegationPolicyCompliance(phaseContent, stateContent = '') {
           reason: `${row.requirement} is ${row.status} without evidence or skip reason`
         };
       }
+      continue;
+    }
+    const requirement = row.requirement.trim().toLowerCase();
+    if ((requirement === 'code-reviewer' || requirement === 'security-reviewer')
+        && (status === 'invoked' || status === 'subagent-invoked')
+        && Boolean((row.evidence || '').trim())) {
+      // Full-path reviewers may never fall back locally. Their mandatory named
+      // invocation is stronger than the workflow-wide fallback posture, so a
+      // truthful invocation remains compliant under every delegation policy.
       continue;
     }
     if (!DELEGATION_STATUSES.has(status)) {
@@ -342,34 +353,80 @@ function unresolvedCompliance(content, stateContent = '') {
   return unresolved;
 }
 
-function taskRows(content) {
-  const start = content.search(/^## Tasks\s*$/m);
-  if (start === -1) return [];
-
-  const rest = content.slice(start).split(/\r?\n/).slice(1);
-  const section = [];
-  for (const line of rest) {
+function phase4TaskRows(content) {
+  const source = String(content || '');
+  if ((source.match(/^## Tasks\s*$/gm) || []).length !== 1) return { valid: false, rows: [] };
+  const start = source.search(/^## Tasks\s*$/m);
+  if (start === -1) return { valid: false, rows: [] };
+  const sectionLines = [];
+  for (const line of source.slice(start).split(/\r?\n/).slice(1)) {
     if (/^##\s+/.test(line)) break;
-    section.push(line);
+    sectionLines.push(line);
   }
-
-  return section
-    .filter(line => /^\|.+\|$/.test(line.trim()))
-    .map(line => line.trim().split('|').slice(1, -1).map(cell => cell.trim()))
-    .filter(columns => columns.length >= 3)
-    .filter(columns => !/^[-\s]+$/.test(columns[0]))
-    .filter(columns => !/^#$/i.test(columns[0]))
-    .map(columns => ({ id: columns[0], status: columns[2].toLowerCase() }));
+  while (sectionLines.length > 0 && sectionLines[0].trim() === '') sectionLines.shift();
+  const parseRow = line => {
+    const trimmed = line.trim();
+    if (!/^\|.*\|$/.test(trimmed)) return null;
+    return trimmed.split('|').slice(1, -1).map(cell => cell.trim());
+  };
+  const header = sectionLines.length > 0 ? parseRow(sectionLines[0]) : null;
+  if (!header || header.length === 0) return { valid: false, rows: [] };
+  const statusColumns = header
+    .map((cell, index) => (/^status$/i.test(cell) ? index : -1))
+    .filter(index => index !== -1);
+  if (statusColumns.length !== 1) return { valid: false, rows: [] };
+  const statusColumn = statusColumns[0];
+  const separator = sectionLines.length > 1 ? parseRow(sectionLines[1]) : null;
+  if (!separator || separator.length !== header.length
+      || separator.some(cell => !/^:?-{3,}:?$/.test(cell))) {
+    return { valid: false, rows: [] };
+  }
+  const rows = [];
+  let tableEnded = false;
+  for (const line of sectionLines.slice(2)) {
+    if (line.trim() === '') {
+      tableEnded = true;
+      continue;
+    }
+    if (tableEnded) return { valid: false, rows: [] };
+    const columns = parseRow(line);
+    if (!columns || columns.length !== header.length || !columns[0] || !columns[statusColumn]) {
+      return { valid: false, rows: [] };
+    }
+    rows.push({ id: columns[0], status: columns[statusColumn].toLowerCase() });
+  }
+  return { valid: true, rows };
 }
 
 function allPhase4TasksComplete(content) {
-  const tasks = taskRows(content);
-  return tasks.length > 0 && tasks.every(task => task.status === 'complete');
+  const parsed = phase4TaskRows(content);
+  return parsed.valid && parsed.rows.length > 0
+    && parsed.rows.every(task => task.status === 'complete');
 }
 
 function firstOpenPhase4Task(content) {
-  const task = taskRows(content).find(row => row.status !== 'complete');
+  const parsed = phase4TaskRows(content);
+  const task = parsed.valid ? parsed.rows.find(row => row.status !== 'complete') : null;
   return task ? task.id : 'N/A';
+}
+
+function verifyPhase5AtPointOfUse(root, project) {
+  const verifier = path.join(__dirname,
+    path.basename(__filename).replace(/repair-state\.js$/, 'full-advance.js'));
+  if (!exists(verifier)) return { ok: false, reason: 'full-path verifier unavailable' };
+  const result = spawnSync(process.execPath, [
+    verifier, 'phase5-verify', '--root', root, '--project', project, '--json',
+  ], { cwd: root, encoding: 'utf8' });
+  let packet = null;
+  try {
+    packet = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop());
+  } catch (_) {}
+  if (result.status === 0 && packet && packet.result === 'ok') return { ok: true, packet };
+  return {
+    ok: false,
+    reason: packet && packet.reason ? packet.reason : 'phase5 verification failed',
+    detail: packet && packet.detail ? packet.detail : String(result.stderr || '').trim(),
+  };
 }
 
 function artifact(projectDir, file) {
@@ -393,9 +450,11 @@ function reconstruct(root, workflowDir, project) {
   }
 
   if (artifact(projectDir, 'phase5-review.md')) {
-    if (phase4 && !allPhase4TasksComplete(readFile(phase4))) {
-      return { reason: 'phase5-review.md exists but phase4-progress.md still has open tasks' };
-    }
+    const verification = verifyPhase5AtPointOfUse(root, project);
+    if (!verification.ok) return {
+      reason: 'phase5-review.md failed point-of-use verification: ' + verification.reason
+        + (verification.detail ? ' (' + verification.detail + ')' : '')
+    };
     return routeFinalization(root, workflowDir, project, 'phase5-review.md');
   }
 
@@ -800,6 +859,11 @@ function main() {
         return;
       }
 
+      if (!routeResult.nextCommand) {
+        process.stdout.write(`Workflow state repair: skipped - ${routeResult.reason}\n`);
+        return;
+      }
+
       if (routeResult.nextCommand && routeResult.nextCommand !== field(content, 'next_command')) {
         routeResult.root = root;
         adaptiveSchema.writeFileAtomicReplace(stateFile, stateContent(routeResult, content));
@@ -847,6 +911,9 @@ if (require.main === module) {
 module.exports = {
   complianceRows,
   delegationPolicyCompliance,
+  phase4TaskRows,
+  allPhase4TasksComplete,
+  verifyPhase5AtPointOfUse,
   reconstruct,
   repairStateContent: stateContent,
   stateContent,

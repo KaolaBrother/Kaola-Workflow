@@ -1077,7 +1077,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 //
 // Scenario A (RED): self-host repo, adaptive plan, --keep-worktree, NO chain-receipt → must refuse.
 // Scenario B (GREEN-gate): self-host repo, valid chain-receipt seeded → must pass (exit 0).
-// Scenario C (N/A gate): no workflow-plan.md → gate skipped, finalize succeeds.
+// Scenario C (N/A gate): explicit fast + no workflow-plan.md → gate skipped, finalize succeeds.
 {
   const { execFileSync: execFS522, spawnSync: spawnS522 } = require('child_process');
   const CLAIM522 = path.join(__dirname, 'kaola-workflow-claim.js');
@@ -1378,7 +1378,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     }
   }
 
-  // --- #522 Scenario C: no workflow-plan.md → gate is N/A, finalize succeeds ---
+  // --- #522 Scenario C: explicit fast + no workflow-plan.md → gate is N/A, finalize succeeds ---
   {
     const tmpC = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522c-')));
     const project = 'issue-522c';
@@ -1409,6 +1409,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         '# Kaola-Workflow State',
         '## Project', 'name: ' + project, 'status: active',
         '## Current Position', 'phase: 2', 'phase_name: Implementation',
+        'workflow_path: fast',
         '## Sink', 'branch: workflow/' + project, 'issue_number: 522', 'sink: merge', 'run_posture: in-place'
       ].join('\n') + '\n');
 
@@ -1424,7 +1425,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
         });
 
       assert(r.status === 0,
-        '#522(C): finalize with NO workflow-plan.md must succeed (gate N/A), got ' + r.status + '\nstderr: ' + (r.stderr || '').slice(0, 200));
+        '#522(C): explicit fast finalize with NO workflow-plan.md must succeed (gate N/A), got ' + r.status + '\nstderr: ' + (r.stderr || '').slice(0, 200));
 
     } finally {
       try { fs.rmSync(tmpC, { recursive: true, force: true }); } catch (_) {}
@@ -3162,6 +3163,399 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
     fs.rmSync(root699, { recursive: true, force: true });
     fs.rmSync(noHistoryRoot699, { recursive: true, force: true });
     fs.rmSync(noGitRoot699, { recursive: true, force: true });
+  }
+}
+
+// A full-path run has no adaptive workflow-plan.md, so Finalization must not treat
+// plan absence as a universal gate exemption. Invoke cmdFinalize directly (the
+// bypass seam) with malformed and stale Phase 5 reviewer evidence and prove that
+// neither the live folder nor its roadmap closure source is mutated.
+{
+  const { spawnSync } = require('child_process');
+  const { reviewComplianceTable } = require('./kaola-workflow-full-advance.js');
+  const claimScripts = [
+    { edition: 'claude', file: path.join(__dirname, 'kaola-workflow-claim.js') },
+    { edition: 'codex', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js') },
+    { edition: 'gitlab', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-claim.js') },
+    { edition: 'gitea', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js') },
+  ];
+  const binding = 'evidence-binding: phase5-code-review-1 nonce-code-review-1';
+  const progress = [
+    '# Phase 4 - Progress: issue-1',
+    '',
+    '## Tasks',
+    '| # | Task | Status | Files | Notes |',
+    '|---|------|--------|-------|-------|',
+    '| 1 | implement the change | complete | a.js | done |',
+    '',
+  ].join('\n');
+
+  function runPlanAbsentFinalize(edition, claimScript, caseName, reviewContent, evidenceContent, options) {
+    const opts = options || {};
+    const workflowPath = opts.workflowPath || 'full';
+    const stateMode = opts.stateMode || 'file';
+    const expectBlocked = opts.expectBlocked !== false;
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-finalize-gate-')));
+    const project = 'issue-720-' + caseName;
+    const projectPath = path.join(root, 'kaola-workflow', project);
+    const roadmapSource = path.join(root, 'kaola-workflow', '.roadmap', 'issue-720.md');
+    const evidencePath = path.join(projectPath, '.cache', 'code-reviewer.md');
+    fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+    fs.mkdirSync(path.dirname(roadmapSource), { recursive: true });
+    const statePath = path.join(projectPath, 'workflow-state.md');
+    const stateContent = [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: ' + project,
+      'status: active',
+      '## Current Position',
+      'phase: 5',
+      'phase_name: Review',
+      'step: complete',
+      ...(opts.omitWorkflowPath ? [] : ['workflow_path: ' + workflowPath]),
+      'next_command: /kaola-workflow-finalize ' + project,
+      '## Sink',
+      'branch: workflow/' + project,
+      'issue_number: 720',
+      'sink: merge',
+      'run_posture: in-place',
+      '',
+    ].join('\n');
+    if (stateMode === 'file') fs.writeFileSync(statePath, stateContent);
+    else if (stateMode === 'directory') fs.mkdirSync(statePath);
+    fs.writeFileSync(path.join(projectPath, 'phase4-progress.md'), progress.replace(/issue-1/g, project));
+    fs.writeFileSync(path.join(projectPath, 'phase5-review.md'), reviewContent);
+    fs.writeFileSync(evidencePath, evidenceContent);
+    fs.writeFileSync(roadmapSource, '# Issue 720\n');
+
+    // Keep the stale case deterministic: reviewer evidence must be strictly
+    // newer than Phase 4 progress at the point-of-use verifier.
+    const staleTime = new Date(opts.freshEvidence
+      ? '2026-01-03T00:00:00.000Z' : '2026-01-01T00:00:00.000Z');
+    const progressTime = new Date('2026-01-02T00:00:00.000Z');
+    fs.utimesSync(evidencePath, staleTime, staleTime);
+    fs.utimesSync(path.join(projectPath, 'phase4-progress.md'), progressTime, progressTime);
+
+    const result = spawnSync(process.execPath,
+      [claimScript, 'finalize', '--project', project], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKTREE_NATIVE: '0',
+        }),
+      });
+    let json = null;
+    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+    const activeSurvived = fs.existsSync(projectPath);
+    const archiveExists = fs.existsSync(path.join(root, 'kaola-workflow', 'archive'));
+    if (expectBlocked) {
+      assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
+          && (!opts.expectedInnerReason || json.inner_reason === opts.expectedInnerReason),
+        edition + ' full finalize bypass (' + caseName + ') must refuse through finalize_gate_unverified; got status='
+          + result.status + ' output=' + JSON.stringify(json));
+      assert(activeSurvived,
+        edition + ' full finalize bypass (' + caseName + ') must leave the active project folder in place');
+      assert(!archiveExists,
+        edition + ' full finalize bypass (' + caseName + ') must create no archive');
+      assert(fs.existsSync(roadmapSource),
+        edition + ' full finalize bypass (' + caseName + ') must retain the roadmap closure source');
+      if (stateMode === 'file') {
+        const stateAfter = activeSurvived ? fs.readFileSync(statePath, 'utf8') : '';
+        assert(activeSurvived && /^status: active$/m.test(stateAfter) && !/^status: closed$/m.test(stateAfter),
+          edition + ' full finalize bypass (' + caseName + ') must leave closure state active');
+      } else if (stateMode === 'missing') {
+        assert(activeSurvived && !fs.existsSync(statePath),
+          edition + ' full finalize bypass (' + caseName + ') must not fabricate missing workflow state');
+      } else {
+        let stateIsDirectory = false;
+        try { stateIsDirectory = fs.lstatSync(statePath).isDirectory(); } catch (_) {}
+        assert(activeSurvived && stateIsDirectory,
+          edition + ' full finalize bypass (' + caseName + ') must preserve wrong-type workflow state');
+      }
+    } else {
+      assert(result.status === 0 && json && json.status === 'closed',
+        edition + ' plan-absent finalize (' + caseName + ') must preserve the allowed path; got status='
+          + result.status + ' output=' + JSON.stringify(json));
+      assert(!activeSurvived && archiveExists,
+        edition + ' plan-absent finalize (' + caseName + ') must archive the completed live project');
+      assert(!fs.existsSync(roadmapSource),
+        edition + ' plan-absent finalize (' + caseName + ') must retain existing closure semantics');
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  const canonicalReview = [
+    '# Phase 5 - Review: issue-720-stale',
+    '',
+    '## Required Agent Compliance',
+    reviewComplianceTable([
+      { requirement: 'code-reviewer', status: 'subagent-invoked', evidence: '.cache/code-reviewer.md', binding, skip_reason: '' },
+      { requirement: 'security-reviewer', status: 'n/a', evidence: '', binding: 'n/a', skip_reason: 'no security-sensitive files in write set' },
+      { requirement: 'review-fix executors', status: 'n/a', evidence: '', binding: 'n/a', skip_reason: 'no blocking findings' },
+    ]),
+    '',
+    '## Review Status',
+    'PASSED',
+    '',
+  ].join('\n');
+  const staleEvidence = [
+    binding,
+    'domain_outcome: approved',
+    'verdict: pass',
+    'findings_blocking: 0',
+    'review_summary: no_blocking_findings',
+    'review_attestation: full_review_completed',
+    'No admitted findings.',
+    'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
+    '',
+  ].join('\n');
+
+  const malformedReview = [
+    '# Phase 5 - Review: issue-720-malformed',
+    '## Required Agent Compliance',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | |',
+    '## Review Status',
+    'PASSED',
+    '',
+  ].join('\n');
+  for (const editionClaim of claimScripts) {
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale', canonicalReview, staleEvidence);
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'malformed', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n');
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'absent-default', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n', { omitWorkflowPath: true });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'adaptive-plan-missing', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n',
+      { workflowPath: 'adaptive', expectedInnerReason: 'adaptive_plan_missing' });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'unknown-path', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n',
+      { workflowPath: 'typo', expectedInnerReason: 'invalid_workflow_path' });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'state-missing', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n',
+      { stateMode: 'missing', expectedInnerReason: 'state_missing' });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'state-wrong-type', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n',
+      { stateMode: 'directory', expectedInnerReason: 'state_invalid_type' });
+  }
+  runPlanAbsentFinalize('claude', claimScripts[0].file, 'valid-full', canonicalReview, staleEvidence,
+    { freshEvidence: true, expectBlocked: false });
+  runPlanAbsentFinalize('claude', claimScripts[0].file, 'fast-unchanged', malformedReview,
+    binding + '\ndomain_outcome: approved\nverdict: pass\n',
+    { workflowPath: 'fast', expectBlocked: false });
+
+  // A manual move is not a crash receipt. Source-missing Finalization may trust an
+  // archive only after archiveProjectDir has already terminal-stamped it closed;
+  // an active/nonterminal archive must refuse before closure or roadmap mutation.
+  for (const editionClaim of claimScripts) {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-finalize-manual-archive-')));
+    const project = 'issue-720-manual-' + editionClaim.edition;
+    const archivePath = path.join(root, 'kaola-workflow', 'archive', project);
+    const roadmapSource = path.join(root, 'kaola-workflow', '.roadmap', 'issue-720.md');
+    fs.mkdirSync(archivePath, { recursive: true });
+    fs.mkdirSync(path.dirname(roadmapSource), { recursive: true });
+    const activeState = [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: ' + project,
+      'status: active',
+      '## Current Position',
+      'phase: 5',
+      'workflow_path: full',
+      'next_command: /kaola-workflow-finalize ' + project,
+      '## Sink',
+      'issue_number: 720',
+      'sink: merge',
+      '',
+    ].join('\n');
+    const archivedStatePath = path.join(archivePath, 'workflow-state.md');
+    fs.writeFileSync(archivedStatePath, activeState);
+    fs.writeFileSync(roadmapSource, '# Issue 720\n');
+    const result = spawnSync(process.execPath,
+      [editionClaim.file, 'finalize', '--project', project], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKTREE_NATIVE: '0',
+        }),
+      });
+    let json = null;
+    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
+        && json.inner_reason === 'archive_state_not_closed',
+      editionClaim.edition + ' manually moved active archive must refuse before Finalization side effects; got status='
+        + result.status + ' output=' + JSON.stringify(json));
+    assert(fs.readFileSync(archivedStatePath, 'utf8') === activeState,
+      editionClaim.edition + ' manual-archive refusal must not terminal-stamp or append closure evidence');
+    assert(fs.existsSync(roadmapSource),
+      editionClaim.edition + ' manual-archive refusal must retain the roadmap closure source');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // A dangling live symlink is still a live filesystem entry. It must never be
+  // reclassified as source-missing merely because existsSync follows the link
+  // and returns false, even when one terminal archive would otherwise satisfy
+  // the narrow crash-resume exemption.
+  for (const editionClaim of claimScripts) {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-dangling-live-')));
+    const project = 'issue-720-dangling-' + editionClaim.edition;
+    const workflowRoot = path.join(root, 'kaola-workflow');
+    const livePath = path.join(workflowRoot, project);
+    const archivePath = path.join(workflowRoot, 'archive', project);
+    const roadmapSource = path.join(workflowRoot, '.roadmap', 'issue-720.md');
+    fs.mkdirSync(archivePath, { recursive: true });
+    fs.mkdirSync(path.dirname(roadmapSource), { recursive: true });
+    const terminalState = [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: ' + project,
+      'status: closed',
+      '## Current Position',
+      'phase: 6',
+      'workflow_path: fast',
+      'step: complete',
+      'next_command: none (archived)',
+      '## Sink',
+      'issue_number: 720',
+      'sink: merge',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(archivePath, 'workflow-state.md'), terminalState);
+    fs.writeFileSync(roadmapSource, '# Issue 720\n');
+    fs.symlinkSync(path.join(root, 'missing-live-target'), livePath);
+    const result = spawnSync(process.execPath,
+      [editionClaim.file, 'finalize', '--project', project], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKTREE_NATIVE: '0',
+        }),
+      });
+    let json = null;
+    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
+        && json.inner_reason === 'archive_authority_invalid_type',
+    editionClaim.edition + ' dangling live source must refuse as invalid live authority; got status='
+        + result.status + ' output=' + JSON.stringify(json));
+    assert(fs.lstatSync(livePath).isSymbolicLink(),
+      editionClaim.edition + ' dangling live-source refusal must preserve the malformed entry');
+    assert(fs.readFileSync(path.join(archivePath, 'workflow-state.md'), 'utf8') === terminalState,
+      editionClaim.edition + ' dangling live-source refusal must not mutate archive authority');
+    assert(fs.existsSync(roadmapSource),
+      editionClaim.edition + ' dangling live-source refusal must retain roadmap closure source');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // Reusing a project name can leave a committed exact archive while the current finalize
+  // transaction renames to <project>.archived-<timestamp>. After that rename, source is absent;
+  // selecting the stale exact archive would bind closure to the wrong run. Refuse ambiguity.
+  for (const editionClaim of claimScripts) {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-archive-ambiguity-')));
+    const project = 'issue-720-reused-' + editionClaim.edition;
+    const archiveBase = path.join(root, 'kaola-workflow', 'archive');
+    const oldExact = path.join(archiveBase, project);
+    const currentSuffixed = path.join(archiveBase, project + '.archived-2026-07-17T00-00-00-000Z');
+    fs.mkdirSync(oldExact, { recursive: true });
+    fs.mkdirSync(currentSuffixed, { recursive: true });
+    const terminalState = (name, workflowPath) => [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: ' + name,
+      'status: closed',
+      '## Current Position',
+      'phase: 6',
+      'workflow_path: ' + workflowPath,
+      'step: complete',
+      'next_command: none (archived)',
+      '## Sink',
+      'issue_number: 720',
+      'sink: merge',
+      '',
+    ].join('\n');
+    const oldState = terminalState(project, 'fast');
+    const currentState = terminalState(project, 'full');
+    fs.writeFileSync(path.join(oldExact, 'workflow-state.md'), oldState);
+    fs.writeFileSync(path.join(currentSuffixed, 'workflow-state.md'), currentState);
+    const result = spawnSync(process.execPath,
+      [editionClaim.file, 'finalize', '--project', project], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKTREE_NATIVE: '0',
+        }),
+      });
+    let json = null;
+    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
+        && json.inner_reason === 'archive_authority_ambiguous',
+      editionClaim.edition + ' source-missing finalize with exact+suffixed archives must refuse ambiguity; got status='
+        + result.status + ' output=' + JSON.stringify(json));
+    assert(fs.readFileSync(path.join(oldExact, 'workflow-state.md'), 'utf8') === oldState
+        && fs.readFileSync(path.join(currentSuffixed, 'workflow-state.md'), 'utf8') === currentState,
+      editionClaim.edition + ' ambiguous archive refusal must mutate neither stale nor current authority');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // A genuine archive crash-resume has no live state, but archiveProjectDir already
+  // stamped it terminal closed and preserved canonical Phase 5 evidence. Reverify
+  // that archived evidence, then allow the remaining idempotent closure work.
+  {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-finalize-resume-')));
+    const project = 'issue-720-resume';
+    const archivePath = path.join(root, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archivePath, { recursive: true });
+    fs.writeFileSync(path.join(archivePath, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: ' + project,
+      'status: closed',
+      '## Current Position',
+      'phase: 6',
+      'workflow_path: full',
+      'step: complete',
+      'next_command: none (archived)',
+      '## Sink',
+      'issue_number: 720',
+      'sink: merge',
+      '',
+    ].join('\n'));
+    const archivedEvidencePath = path.join(archivePath, '.cache', 'code-reviewer.md');
+    fs.mkdirSync(path.dirname(archivedEvidencePath), { recursive: true });
+    fs.writeFileSync(path.join(archivePath, 'phase4-progress.md'), progress.replace(/issue-1/g, project));
+    fs.writeFileSync(path.join(archivePath, 'phase5-review.md'), canonicalReview.replace(/issue-720-stale/g, project));
+    fs.writeFileSync(archivedEvidencePath, staleEvidence);
+    const progressTime = new Date('2026-01-02T00:00:00.000Z');
+    const evidenceTime = new Date('2026-01-03T00:00:00.000Z');
+    fs.utimesSync(path.join(archivePath, 'phase4-progress.md'), progressTime, progressTime);
+    fs.utimesSync(archivedEvidencePath, evidenceTime, evidenceTime);
+    const result = spawnSync(process.execPath,
+      [claimScripts[0].file, 'finalize', '--project', project], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKTREE_NATIVE: '0',
+        }),
+      });
+    let json = null;
+    try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+    assert(result.status === 0 && json && json.status === 'closed',
+      'full finalize archive crash-resume must remain idempotent; got status=' + result.status
+        + ' output=' + JSON.stringify(json));
+    const archivedState = fs.readFileSync(path.join(archivePath, 'workflow-state.md'), 'utf8');
+    assert(/^status: closed$/m.test(archivedState),
+      'full finalize archive crash-resume must preserve its terminal state');
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
