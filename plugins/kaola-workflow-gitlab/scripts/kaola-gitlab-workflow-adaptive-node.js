@@ -786,6 +786,14 @@ function detectReviewRuntime() {
   const explicit = String(process.env.KAOLA_WORKFLOW_RUNTIME || '').toLowerCase();
   if (['claude', 'codex', 'opencode', 'kimi'].includes(explicit)) return explicit;
   if (/[/\\]plugins[/\\]kaola-workflow(?:-(?:gitlab|gitea))?[/\\]scripts$/.test(__dirname)) return 'codex';
+  // #717: the INSTALLED Codex plugin cache inserts <marketplace> and <version> segments between
+  // the plugin name and scripts/:
+  //   .../plugins/cache/<marketplace>/kaola-workflow[-gitlab|-gitea]/<version>/scripts
+  // The source-tree pattern above does not match that layout, so detection used to fall through
+  // to claude and probe a non-existent agents/<role>.md (review_profile_unavailable on every
+  // schema-2 gate open). Match the exact versioned cache tuple for all three forge editions —
+  // single path segments only, anchored at the tail, so no looser layout binds a codex identity.
+  if (/[/\\]plugins[/\\]cache[/\\][^/\\]+[/\\]kaola-workflow(?:-(?:gitlab|gitea))?[/\\][^/\\]+[/\\]scripts$/.test(__dirname)) return 'codex';
   // kimi installs support scripts at <kimi-home>/kaola-workflow/scripts/ (kimi home =
   // $KIMI_CODE_HOME, default ~/.kimi-code). Detect that layout BEFORE the opencode pattern
   // below, which would otherwise swallow the kimi install and probe opencode profile paths —
@@ -799,6 +807,12 @@ function detectReviewRuntime() {
     || /[/\\]\.kimi-code[/\\]kaola-workflow[/\\]scripts$/.test(__dirname)) {
     return 'kimi';
   }
+  // #712: a claude install lands support scripts at ~/.claude/kaola-workflow/scripts/ (install.sh
+  // SUPPORT_DIR). Detect that layout BEFORE the opencode pattern below, which otherwise swallows
+  // the plain-claude install (a #708 side effect) and routes it down the opencode profile
+  // candidates. The -gitlab/-gitea claude-forge dirs (~/.claude/kaola-workflow-gitlab/scripts/)
+  // never matched the opencode pattern and keep falling through to the claude default below.
+  if (/[/\\]\.claude[/\\]kaola-workflow[/\\]scripts$/.test(__dirname)) return 'claude';
   // #708: opencode installs support scripts at <opencode-config>/kaola-workflow/scripts/ (no
   // plugins/ segment — opencode is a runtime, not a forge). Detect that layout so reviewer
   // profile resolution and review-receipt binding use opencode-native paths instead of falling
@@ -853,6 +867,28 @@ function reviewerProfilePath(role, runtime) {
     // Default to the global candidate so a missing profile yields review_profile_unavailable
     // (not a silent fallthrough to the Claude path, which would bind the wrong identity).
     return path.join(__dirname, '..', '..', 'skills', skillRel);
+  }
+  if (runtime === 'claude') {
+    // #712: claude installs reviewer profiles into Claude Code's native agent dir
+    // (<agents>/<role>.md — $KAOLA_AGENT_DIR when set, else ~/.claude/agents; the same
+    // convention install.sh AGENTS_DIR and kaola-workflow-resolve-agent-model.js use).
+    // Probe order keeps every previously-resolving layout green: the currently-probed
+    // <support>/agents/<role>.md first (the self-dev canonical agents/ next to a source
+    // checkout's scripts/, AND the documented symlink workaround at
+    // ~/.claude/kaola-workflow/agents/ — an already-linked install must keep resolving), then
+    // the native installed location. A total miss defaults to the native candidate so an
+    // absent profile yields review_profile_unavailable — never a silent wrong-runtime binding.
+    const fs = require('fs');
+    const nativeAgentsDir = process.env.KAOLA_AGENT_DIR
+      || path.join(process.env.HOME || require('os').homedir(), '.claude', 'agents');
+    const candidates = [
+      path.join(__dirname, '..', 'agents', role + '.md'),   // self-dev canonical / legacy probed dir
+      path.join(nativeAgentsDir, role + '.md'),             // native installed location
+    ];
+    for (const c of candidates) {
+      try { fs.accessSync(c); return c; } catch (_) {}
+    }
+    return path.join(nativeAgentsDir, role + '.md');
   }
   return path.join(__dirname, '..', 'agents', role + '.md');
 }

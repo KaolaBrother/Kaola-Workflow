@@ -18115,6 +18115,221 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// #717 + #712: reviewer runtime detection + profile path resolution across install layouts.
+// Every fixture is synthesized under $TMPDIR (never in the repo): the canonical support script
+// and its two self-contained siblings are copied into each synthesized layout, and every probe
+// runs in a subprocess so the copy's __dirname / env match a real consumer invocation (the K9
+// pattern from test-kimi-edition.js). HOME always points at a hermetic temp dir so the real
+// ~/.claude/agents can never leak into a probe.
+{
+  const { spawnSync } = require('child_process');
+  const LAYOUT_SIBLINGS = ['kaola-workflow-adaptive-node.js', 'kaola-workflow-adaptive-schema.js',
+    'kaola-workflow-codex-preflight.js'];
+  const GATE_ROLES = ['code-reviewer', 'security-reviewer', 'adversarial-verifier'];
+  const layoutTmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reviewer-layout-')));
+  const seedScripts = scriptsDir => {
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    for (const name of LAYOUT_SIBLINGS) {
+      fs.copyFileSync(path.join(__dirname, name), path.join(scriptsDir, name));
+    }
+  };
+  const probeReviewer = (scriptsDir, role, extraEnv) => {
+    const script = 'const m=require(' + JSON.stringify(path.join(scriptsDir, 'kaola-workflow-adaptive-node.js')) + ');'
+      + 'const r=m.resolveReviewerProfileIdentity(' + JSON.stringify(role) + ',{});'
+      + 'console.log(JSON.stringify({ok:r.ok,reason:r.reason||null,runtime:r.runtime||null,'
+      + 'hash:r.resolved_profile_hash||null,path:r.profile_path||null}));';
+    const env = Object.assign({}, process.env);
+    delete env.KAOLA_WORKFLOW_RUNTIME;
+    delete env.KIMI_CODE_HOME;
+    delete env.KAOLA_AGENT_DIR;
+    env.HOME = path.join(layoutTmp, 'hermetic-home');
+    Object.assign(env, extraEnv || {});
+    const r = spawnSync(process.execPath, ['-e', script], { cwd: layoutTmp, env, encoding: 'utf8' });
+    try { return JSON.parse(String(r.stdout).trim()); }
+    catch (_) { return { ok: false, reason: 'probe_crash: ' + String(r.stderr || r.stdout).split('\n')[0] }; }
+  };
+  // Re-stamp a markdown profile's resolved_profile_hash after a content mutation (same zeroed-self
+  // scheme the runtime verifies), so synthesized fixture profiles stay self-consistently signed.
+  const resignProfile = source => {
+    const matches = [...source.matchAll(/^resolved_profile_hash:\s*([0-9a-f]{64})\s*$/gm)];
+    assert(matches.length === 1, '#712/#717 fixture profile carries exactly one resolved_profile_hash');
+    const current = matches[0][1];
+    const offset = matches[0].index + matches[0][0].indexOf(current);
+    const normalized = source.slice(0, offset) + '0'.repeat(64) + source.slice(offset + 64);
+    const digest = require('crypto').createHash('sha256').update(normalized).digest('hex');
+    return normalized.slice(0, offset) + digest + normalized.slice(offset + 64);
+  };
+  try {
+    fs.mkdirSync(path.join(layoutTmp, 'hermetic-home'), { recursive: true });
+
+    // #717 — exact installed Codex plugin cache tuples for all three forge editions:
+    //   plugins/cache/<marketplace>/<edition>/<version>/scripts (+ agents/<role>.toml siblings).
+    for (const [marketplace, editionDir, pluginTree] of [
+      ['kaolabrother-kaola-workflow', 'kaola-workflow', 'kaola-workflow'],
+      ['kaolabrother-kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitlab'],
+      ['kaolabrother-kaola-workflow', 'kaola-workflow-gitea', 'kaola-workflow-gitea'],
+    ]) {
+      const versionRoot = path.join(layoutTmp, 'codex-cache-' + editionDir,
+        'plugins', 'cache', marketplace, editionDir, '4.23.1');
+      const scriptsDir = path.join(versionRoot, 'scripts');
+      seedScripts(scriptsDir);
+      const agentsDir = path.join(versionRoot, 'agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      for (const role of GATE_ROLES) {
+        fs.copyFileSync(path.join(__dirname, '..', 'plugins', pluginTree, 'agents', role + '.toml'),
+          path.join(agentsDir, role + '.toml'));
+        const p = probeReviewer(scriptsDir, role);
+        assert(p.ok === true && p.runtime === 'codex'
+            && p.path === path.join(agentsDir, role + '.toml'),
+          '#717[' + editionDir + ']: installed Codex cache tuple resolves ' + role
+            + ' to runtime codex bound to the exact active edition TOML — got ' + JSON.stringify(p));
+      }
+    }
+
+    // #717 — the source-tree codex layout keeps current behavior (regression guard).
+    {
+      const versionRoot = path.join(layoutTmp, 'codex-source-tree', 'plugins', 'kaola-workflow');
+      const scriptsDir = path.join(versionRoot, 'scripts');
+      seedScripts(scriptsDir);
+      const agentsDir = path.join(versionRoot, 'agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', 'plugins', 'kaola-workflow', 'agents', 'code-reviewer.toml'),
+        path.join(agentsDir, 'code-reviewer.toml'));
+      const p = probeReviewer(scriptsDir, 'code-reviewer');
+      assert(p.ok === true && p.runtime === 'codex' && p.path === path.join(agentsDir, 'code-reviewer.toml'),
+        '#717[source-tree]: source-tree codex layout detection is unchanged — got ' + JSON.stringify(p));
+    }
+
+    // #717 — the explicit KAOLA_WORKFLOW_RUNTIME override stays authoritative with NO path hints
+    // (an unrecognizable layout resolves codex purely from the override).
+    {
+      const strayRoot = path.join(layoutTmp, 'override-wins');
+      const scriptsDir = path.join(strayRoot, 'scripts');
+      seedScripts(scriptsDir);
+      const agentsDir = path.join(strayRoot, 'agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', 'plugins', 'kaola-workflow', 'agents', 'code-reviewer.toml'),
+        path.join(agentsDir, 'code-reviewer.toml'));
+      const p = probeReviewer(scriptsDir, 'code-reviewer', { KAOLA_WORKFLOW_RUNTIME: 'codex' });
+      assert(p.ok === true && p.runtime === 'codex' && p.path === path.join(agentsDir, 'code-reviewer.toml'),
+        '#717[override]: KAOLA_WORKFLOW_RUNTIME=codex wins without any path hints — got ' + JSON.stringify(p));
+      // …and over the strongest path hint (a versioned cache layout still obeys an explicit claude).
+      const cacheScripts = path.join(layoutTmp, 'override-beats-cache',
+        'plugins', 'cache', 'kaolabrother-kaola-workflow', 'kaola-workflow', '4.23.1', 'scripts');
+      seedScripts(cacheScripts);
+      const p2 = probeReviewer(cacheScripts, 'code-reviewer', { KAOLA_WORKFLOW_RUNTIME: 'claude' });
+      assert(p2.ok === false && p2.reason === 'review_profile_unavailable',
+        '#717[override-beats-cache]: explicit claude override wins over a codex cache layout — got ' + JSON.stringify(p2));
+    }
+
+    // #717 — an unrecognized layout with no profiles anywhere keeps falling through and fails
+    // closed as review_profile_unavailable (never a loose-match wrong-runtime binding).
+    {
+      const scriptsDir = path.join(layoutTmp, 'mystery-layout', 'scripts');
+      seedScripts(scriptsDir);
+      const p = probeReviewer(scriptsDir, 'code-reviewer',
+        { KAOLA_AGENT_DIR: path.join(layoutTmp, 'empty-agents') });
+      assert(p.ok === false && p.reason === 'review_profile_unavailable',
+        '#717[fail-closed]: unknown layout with a genuinely absent profile refuses fail-closed — got ' + JSON.stringify(p));
+    }
+
+    // #712 — claude native install: profiles at $KAOLA_AGENT_DIR/<role>.md resolve for all three
+    // gate roles through the claude runtime.
+    {
+      const claudeHome = path.join(layoutTmp, 'claude-home');
+      const scriptsDir = path.join(claudeHome, '.claude', 'kaola-workflow', 'scripts');
+      seedScripts(scriptsDir);
+      const nativeAgents = path.join(layoutTmp, 'claude-native-agents');
+      fs.mkdirSync(nativeAgents, { recursive: true });
+      for (const role of GATE_ROLES) {
+        fs.copyFileSync(path.join(__dirname, '..', 'agents', role + '.md'),
+          path.join(nativeAgents, role + '.md'));
+        const p = probeReviewer(scriptsDir, role, { HOME: claudeHome, KAOLA_AGENT_DIR: nativeAgents });
+        assert(p.ok === true && p.runtime === 'claude' && p.path === path.join(nativeAgents, role + '.md'),
+          '#712[native]: claude install resolves ' + role
+            + ' from the native agent dir — got ' + JSON.stringify(p));
+      }
+    }
+
+    // #712 — claude native default: without KAOLA_AGENT_DIR the native location is
+    // ~/.claude/agents/<role>.md (the install.sh default AGENTS_DIR).
+    {
+      const claudeHome = path.join(layoutTmp, 'claude-home-default');
+      const scriptsDir = path.join(claudeHome, '.claude', 'kaola-workflow', 'scripts');
+      seedScripts(scriptsDir);
+      const nativeAgents = path.join(claudeHome, '.claude', 'agents');
+      fs.mkdirSync(nativeAgents, { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'),
+        path.join(nativeAgents, 'code-reviewer.md'));
+      const p = probeReviewer(scriptsDir, 'code-reviewer', { HOME: claudeHome });
+      assert(p.ok === true && p.runtime === 'claude' && p.path === path.join(nativeAgents, 'code-reviewer.md'),
+        '#712[native-default]: claude install resolves from ~/.claude/agents without an env override — got ' + JSON.stringify(p));
+    }
+
+    // #712 — the legacy probed dir (the documented symlink workaround, and any already-linked
+    // install) keeps resolving, now under the claude runtime.
+    {
+      const claudeHome = path.join(layoutTmp, 'claude-home-legacy');
+      const scriptsDir = path.join(claudeHome, '.claude', 'kaola-workflow', 'scripts');
+      seedScripts(scriptsDir);
+      const legacyAgents = path.join(claudeHome, '.claude', 'kaola-workflow', 'agents');
+      fs.mkdirSync(legacyAgents, { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'),
+        path.join(legacyAgents, 'code-reviewer.md'));
+      const p = probeReviewer(scriptsDir, 'code-reviewer', { HOME: claudeHome });
+      assert(p.ok === true && p.runtime === 'claude' && p.path === path.join(legacyAgents, 'code-reviewer.md'),
+        '#712[legacy]: an already-linked install keeps resolving via the legacy probed dir — got ' + JSON.stringify(p));
+    }
+
+    // #712 — self-dev keeps current behavior: the canonical <repo>/agents/<role>.md next to the
+    // source checkout's scripts/ wins over a stray native-decoy profile (probe order guard).
+    {
+      const decoyHome = path.join(layoutTmp, 'selfdev-decoy-home');
+      const decoyAgents = path.join(decoyHome, '.claude', 'agents');
+      fs.mkdirSync(decoyAgents, { recursive: true });
+      fs.writeFileSync(path.join(decoyAgents, 'code-reviewer.md'),
+        resignProfile(fs.readFileSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'), 'utf8')
+          + '\n<!-- native-decoy: must not win in self-dev -->\n'));
+      const canonicalProfile = fs.realpathSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'));
+      const p = probeReviewer(__dirname, 'code-reviewer', { HOME: decoyHome });
+      assert(p.ok === true && p.runtime === 'claude' && p.path === canonicalProfile,
+        '#712[self-dev]: self-dev binds the canonical repo profile, not the native decoy — got ' + JSON.stringify(p));
+    }
+
+    // Detection unchanged for the kimi install layout (kimi branch still fires before opencode).
+    {
+      const kimiHome = path.join(layoutTmp, 'kimi-home');
+      const scriptsDir = path.join(kimiHome, 'kaola-workflow', 'scripts');
+      seedScripts(scriptsDir);
+      const skillPath = path.join(kimiHome, 'skills', 'kaola-role-code-reviewer', 'SKILL.md');
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(skillPath, resignProfile(
+        fs.readFileSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'), 'utf8')
+          .replace(/^name: code-reviewer$/m, 'name: kaola-role-code-reviewer')));
+      const p = probeReviewer(scriptsDir, 'code-reviewer', { KIMI_CODE_HOME: kimiHome });
+      assert(p.ok === true && p.runtime === 'kimi' && p.path === skillPath,
+        '#712/#717[kimi-unchanged]: kimi layout detection + resolution is unchanged — got ' + JSON.stringify(p));
+    }
+
+    // Detection unchanged for a real opencode install layout (<config>/kaola-workflow/scripts
+    // with no .claude segment — the .claude carve-out must not swallow opencode).
+    {
+      const ocConfig = path.join(layoutTmp, 'opencode-config');
+      const scriptsDir = path.join(ocConfig, 'kaola-workflow', 'scripts');
+      seedScripts(scriptsDir);
+      const ocAgents = path.join(ocConfig, 'agent');
+      fs.mkdirSync(ocAgents, { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'),
+        path.join(ocAgents, 'code-reviewer.md'));
+      const p = probeReviewer(scriptsDir, 'code-reviewer');
+      assert(p.ok === true && p.runtime === 'opencode' && p.path === path.join(ocAgents, 'code-reviewer.md'),
+        '#712/#717[opencode-unchanged]: opencode layout detection + resolution is unchanged — got ' + JSON.stringify(p));
+    }
+  } finally {
+    fs.rmSync(layoutTmp, { recursive: true, force: true });
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

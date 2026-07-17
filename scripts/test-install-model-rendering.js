@@ -2307,6 +2307,107 @@ function trustCodexProject(homeRoot, projectRoot, trustLevel = 'trusted') {
   }
 }
 
+// #716: a frozen schema-2 plan's ## Nodes table mixes DELEGATED roles with the
+// built-in, intentionally non-delegable roles (`main-session-gate`, `finalize`).
+// The built-ins run in the main session and carry no Codex profile and no
+// config/agents.toml entry BY DESIGN, so exact-plan preflight must exempt them
+// from the template/profile availability check — while staying fail-closed for
+// any unknown or genuinely missing DELEGATED role. The downstream reproduction
+// entry is the repository-root command with `--plan` appended.
+{
+  const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
+  const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
+  const rootPreflightPath = path.join(root, 'scripts', 'kaola-workflow-codex-preflight.js');
+  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-home-'));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-project-'));
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-plan-builtin-fixture-'));
+  try {
+    const install = spawnSync(process.execPath, [installerPath, '--global'], {
+      cwd: pluginRoot,
+      env: { ...process.env, HOME: homeRoot },
+      encoding: 'utf8',
+    });
+    assert.strictEqual(install.status, 0, '#716 fixture global install: ' + install.stderr);
+
+    function writePlan(basename, roles) {
+      const planPath = path.join(fixtureRoot, basename);
+      const rows = roles.map((role, index) =>
+        `| n${index + 1} | ${role} | ${index === 0 ? '—' : 'n1'} | — | 1 | sequence | — | — | — | — | — | — | — | — |`);
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — #716 fixture',
+        '',
+        '## Meta',
+        'plan_schema_version: 2',
+        '',
+        '## Nodes',
+        '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        ...rows,
+        '',
+        '## Node Briefs',
+        '',
+      ].join('\n'));
+      return planPath;
+    }
+
+    function runPlanPreflight(planPath) {
+      return spawnSync(process.execPath,
+        [rootPreflightPath, '--project-root', projectRoot, '--home', homeRoot,
+          '--no-autofix', '--json', '--plan', planPath],
+        { cwd: root, encoding: 'utf8' });
+    }
+
+    // (a) delegated roles + both built-in non-delegable roles pass exact-plan
+    // preflight on a fresh install, with NO fabricated built-in profiles.
+    const mixedPlan = writePlan('workflow-plan-mixed.md',
+      ['implementer', 'code-reviewer', 'main-session-gate', 'finalize']);
+    const mixed = runPlanPreflight(mixedPlan);
+    assert.strictEqual(mixed.status, 0,
+      '#716(a): mixed delegated + built-in plan must pass exact-plan preflight: '
+      + mixed.stderr + mixed.stdout);
+    const mixedJson = JSON.parse(mixed.stdout);
+    assert.strictEqual(mixedJson.status, 'ok',
+      '#716(a): a fresh install keeps the ok status under --plan');
+    assert(!mixedJson.roles_checked.includes('main-session-gate')
+        && !mixedJson.roles_checked.includes('finalize'),
+      '#716(a): built-in non-delegable roles are exempt from the profile availability check');
+    assert(mixedJson.roles_checked.includes('implementer')
+        && mixedJson.roles_checked.includes('code-reviewer'),
+      '#716(a): delegated plan roles keep the required-role union behavior');
+    const globalAgentsDir = path.join(homeRoot, '.codex', 'agents', 'kaola-workflow');
+    assert(!fs.existsSync(path.join(globalAgentsDir, 'main-session-gate.toml'))
+        && !fs.existsSync(path.join(globalAgentsDir, 'finalize.toml')),
+      '#716(a): no fake profiles exist for the non-delegable roles');
+
+    // (b) an unknown DELEGATED role still refuses, naming that role.
+    const unknownPlan = writePlan('workflow-plan-unknown.md', ['implementer', 'not-a-real-role']);
+    const unknown = runPlanPreflight(unknownPlan);
+    assert.notStrictEqual(unknown.status, 0,
+      '#716(b): an unknown delegated role must still refuse exact-plan preflight');
+    const unknownJson = JSON.parse(unknown.stdout);
+    assert.strictEqual(unknownJson.status, 'role_not_in_template',
+      '#716(b): an unknown delegated role keeps the role_not_in_template refusal');
+    assert((unknownJson.missing_roles || []).includes('not-a-real-role'),
+      '#716(b): the refusal names the unknown delegated role');
+
+    // (c) a genuinely missing DELEGATED profile still refuses under --plan.
+    fs.rmSync(path.join(globalAgentsDir, 'implementer.toml'));
+    const missingProfile = runPlanPreflight(mixedPlan);
+    assert.notStrictEqual(missingProfile.status, 0,
+      '#716(c): a truly missing delegated profile must still refuse under --plan');
+    const missingJson = JSON.parse(missingProfile.stdout);
+    assert.strictEqual(missingJson.status, 'profiles_missing',
+      '#716(c): the missing delegated profile keeps the profiles_missing refusal');
+    assert((missingJson.missing_roles || []).includes('implementer'),
+      '#716(c): the refusal names the missing delegated profile');
+  } finally {
+    fs.rmSync(homeRoot, { recursive: true, force: true });
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 // Codex rust-v0.144.4 accepts a top-level project_root_markers array in normal
 // multiline TOML form. The preflight boundary parser must consume the complete
 // value while still refusing malformed or duplicate top-level declarations.

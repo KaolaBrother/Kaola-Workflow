@@ -18,7 +18,9 @@
 // REQUIRED role set = UNION of:
 //   (a) template roles from ../config/agents.toml (relative to this script, present
 //       in the 3 plugin trees; absent in the claude scripts/ tree — graceful degrade)
-//   (b) plan roles from --plan <path> (## Nodes role column), when supplied
+//   (b) DELEGATED plan roles from --plan <path> (## Nodes role column), when supplied.
+//       The built-in, intentionally non-delegable roles (main-session-gate,
+//       finalize) carry no profile or template entry by design and are exempt (#716).
 //
 // Auto-installs (re-runs install-codex-agent-profiles.js) when the ONLY problem
 // is a stale/missing/malformed managed block, profile file, or stale Kaola file
@@ -2212,6 +2214,16 @@ function readPlanRoles(planPath) {
 }
 
 // ---------------------------------------------------------------------------
+// #716: built-in, intentionally non-delegable workflow roles. A frozen plan's
+// ## Nodes table may list them (the gates and the finalize sink run in the main
+// session, never as delegated subagents), so they have no Codex profile and no
+// config/agents.toml entry BY DESIGN. They are exempt from the template/profile
+// availability checks in runPreflight; every other (delegated) plan role stays
+// fail-closed (role_not_in_template / profiles_missing).
+// ---------------------------------------------------------------------------
+const PLAN_BUILTIN_NON_DELEGABLE_ROLES = Object.freeze(['main-session-gate', 'finalize']);
+
+// ---------------------------------------------------------------------------
 // Profile check: assert .codex/agents/kaola-workflow/<role>.toml exists for all roles.
 // Returns { missingRoles: string[] }
 // ---------------------------------------------------------------------------
@@ -2750,9 +2762,12 @@ function runPreflight(opts) {
 
   // --- Read plan roles ---
   const planRoles = readPlanRoles(planPath);
+  // #716: built-in non-delegable roles are exempt from the template/profile
+  // availability checks; delegated plan roles stay fail-closed.
+  const delegatedPlanRoles = planRoles.filter(r => !PLAN_BUILTIN_NON_DELEGABLE_ROLES.includes(r));
 
-  // --- Check plan roles against template ---
-  const rolesNotInTemplate = planRoles.filter(r => !templateRoles.includes(r));
+  // --- Check delegated plan roles against template ---
+  const rolesNotInTemplate = delegatedPlanRoles.filter(r => !templateRoles.includes(r));
   if (rolesNotInTemplate.length > 0) {
     return {
       exitCode: 3,
@@ -2766,9 +2781,9 @@ function runPreflight(opts) {
     };
   }
 
-  // --- Build REQUIRED role set: union of template + plan roles ---
+  // --- Build REQUIRED role set: union of template + delegated plan roles ---
   const requiredRoles = [...templateRoles];
-  for (const r of planRoles) {
+  for (const r of delegatedPlanRoles) {
     if (!requiredRoles.includes(r)) requiredRoles.push(r);
   }
 
@@ -3002,8 +3017,8 @@ function runPreflight(opts) {
     });
   }
 
-  // --- Plan roles: union members not in the template profile dir (missing-only) ---
-  const { missingRoles: missingPlanProfiles } = checkProfiles(agentsDir, planRoles);
+  // --- Delegated plan roles: union members not in the template profile dir (missing-only) ---
+  const { missingRoles: missingPlanProfiles } = checkProfiles(agentsDir, delegatedPlanRoles);
   const missingProfiles = [...new Set([...scope.missingProfiles, ...missingPlanProfiles])];
   const missingFromBlock = requiredRoles.filter(r => !scope.rolesInBlock.includes(r));
 
