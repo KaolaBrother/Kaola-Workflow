@@ -306,8 +306,24 @@ for (const role of reviewerGenerator.ROLES) {
   `K6-reviewer[${role}]: kimi role skill retains normalized reviewer behavior identity`);
   assert(kimi.core === canonical.core,
     `K6-reviewer[${role}]: kimi render preserves reviewer behavior-core bytes`);
-  assert(!/^resolved_profile_hash\s*:/m.test(kimiText),
-    `K6-reviewer[${role}]: kimi skill does not reuse the Claude render hash after transforming frontmatter`);
+  // The kimi render carries the schema-2 identity fields (a body HTML comment block) with
+  // a FRESH resolved_profile_hash re-stamped over the kimi bytes — never the reused Claude hash.
+  const kimiHash = (kimiText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
+  assert(kimiHash && /^[0-9a-f]{64}$/.test(kimiHash),
+    `K6-reviewer[${role}]: kimi skill carries a resolved_profile_hash`);
+  assert((kimiText.match(/^resolved_profile_hash\s*:\s*[0-9a-f]{64}\s*$/gm) || []).length === 1,
+    `K6-reviewer[${role}]: kimi skill carries EXACTLY ONE resolved_profile_hash line`);
+  let kimiHashVerifies = true;
+  try { reviewerGenerator.verifyResolvedProfileHash(kimiText); } catch (_) { kimiHashVerifies = false; }
+  assert(kimiHashVerifies,
+    `K6-reviewer[${role}]: resolved_profile_hash verifies over the kimi bytes (zeroed-self sha256)`);
+  const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
+  assert(kimiHash !== clHash,
+    `K6-reviewer[${role}]: kimi hash is re-stamped over kimi bytes (not the reused Claude render hash)`);
+  assert(new RegExp('^behavior_contract_version:\\s*' + canonical.behavior_contract_version + '\\s*$', 'm').test(kimiText),
+    `K6-reviewer[${role}]: kimi skill preserves the canonical behavior_contract_version line`);
+  assert(new RegExp('^behavior_contract_hash:\\s*' + canonical.behavior_contract_hash + '\\s*$', 'm').test(kimiText),
+    `K6-reviewer[${role}]: kimi skill preserves the canonical behavior_contract_hash line`);
   assert(!/(?:identical|same|byte-identical)[^\n]{0,80}(?:model output|findings|verdict|review output)/i.test(kimiText),
     `K6-reviewer[${role}]: kimi skill makes no stochastic-output-identity claim`);
 }
@@ -681,6 +697,78 @@ for (const script of sync.HOOK_SCRIPTS) {
       'A1: ZERO Claude path leaks (CLAUDE_PLUGIN_ROOT / .claude/kaola-workflow) across the deployed kimi tree — found ' +
       leaks + ' match(es) in: ' + leakFiles.slice(0, 6).join(', ') + (leakFiles.length > 6 ? ', …' : ''));
     clean(r);
+  }
+
+  // K9 — kimi reviewer profile resolution end-to-end: a review-gated plan on a REAL kimi
+  // install resolves the kimi-native reviewer SKILL.md. detectReviewRuntime recognizes the
+  // <kimi-home>/kaola-workflow/scripts layout (and is NOT swallowed by the opencode
+  // <config>/kaola-workflow/scripts pattern — a project carrying .opencode/agent/ must not
+  // hijack the kimi identity), reviewerProfilePath probes project → global → self-dev, and
+  // the generated SKILL.md's re-stamped resolved_profile_hash passes the runtime's
+  // zeroed-self sha256 verification. Each probe runs the deployed support script in a
+  // subprocess so __dirname/process.cwd() match a real consumer invocation.
+  {
+    const probe = (scriptsHome, cwd, home, kimiHome) => {
+      const script = 'const m=require(' + JSON.stringify(path.join(scriptsHome, 'kaola-workflow-adaptive-node.js')) + ');'
+        + "const r=m.resolveReviewerProfileIdentity('code-reviewer',{});"
+        + 'console.log(JSON.stringify({ok:r.ok,reason:r.reason||null,runtime:r.runtime||null,'
+        + 'hash:r.resolved_profile_hash||null,path:r.profile_path||null}));';
+      const r = spawnSync(process.execPath, ['-e', script],
+        { cwd, env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }), encoding: 'utf8' });
+      try { return JSON.parse(String(r.stdout).trim()); }
+      catch (_) { return { ok: false, reason: 'probe_crash: ' + String(r.stderr || r.stdout).split('\n')[0] }; }
+    };
+
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'K9: seed install (project scope) exits 0');
+    const scriptsHome = path.join(r1.kimiHome, 'kaola-workflow', 'scripts');
+    const projectSkill = path.join(skillsDir(r1), 'kaola-role-code-reviewer', 'SKILL.md');
+    const deployedHash = p => (readFileSync(p, 'utf8')
+      .match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1] || null;
+
+    // case 1 — project-scope candidate resolves (ok:true, runtime 'kimi', verified hash).
+    const p1 = probe(scriptsHome, r1.dest, r1.home, r1.kimiHome);
+    assert(p1.ok === true && p1.runtime === 'kimi',
+      'K9[project]: reviewer identity resolves on a real kimi install — got ' + JSON.stringify(p1));
+    assert(p1.path === fs.realpathSync(projectSkill),
+      'K9[project]: resolved profile is the project-scope SKILL.md — got ' + p1.path);
+    assert(p1.hash && p1.hash === deployedHash(projectSkill),
+      'K9[project]: resolved_profile_hash verifies against the deployed SKILL.md bytes');
+
+    // case 2 — a global install into the SAME kimi home does not override the project win.
+    const rg = spawnSync('bash', [INSTALLER, '--global', '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home, KIMI_CODE_HOME: r1.kimiHome }), encoding: 'utf8' });
+    assert(rg.status === 0,
+      'K9[global-seed]: --global install exits 0 (got ' + rg.status + (rg.stderr ? ' — ' + String(rg.stderr).split('\n')[0] : '') + ')');
+    const globalSkill = path.join(r1.kimiHome, 'skills', 'kaola-role-code-reviewer', 'SKILL.md');
+    assert(existsSync(globalSkill), 'K9[global-seed]: global skill deployed at <kimi-home>/skills/');
+    const p2 = probe(scriptsHome, r1.dest, r1.home, r1.kimiHome);
+    assert(p2.ok === true && p2.path === fs.realpathSync(projectSkill),
+      'K9[priority]: project candidate wins over the global one — got ' + JSON.stringify(p2));
+
+    // case 3 — without a project candidate (empty cwd), the global candidate is used.
+    const emptyCwd = mkdtempSync(path.join(os.tmpdir(), 'kimi-i-empty-'));
+    const p3 = probe(scriptsHome, emptyCwd, r1.home, r1.kimiHome);
+    assert(p3.ok === true && p3.path === fs.realpathSync(globalSkill),
+      'K9[global]: falls back to the global <kimi-home>/skills candidate — got ' + JSON.stringify(p3));
+
+    // case 4 — a stray .opencode/agent profile in the project does NOT hijack the kimi
+    // identity (the detectReviewRuntime kimi branch fires before the opencode pattern).
+    fs.mkdirSync(path.join(r1.dest, '.opencode', 'agent'), { recursive: true });
+    fs.writeFileSync(path.join(r1.dest, '.opencode', 'agent', 'code-reviewer.md'),
+      '---\nname: code-reviewer\ndescription: stray opencode profile (must be ignored on kimi)\n---\n');
+    const p4 = probe(scriptsHome, r1.dest, r1.home, r1.kimiHome);
+    assert(p4.ok === true && p4.runtime === 'kimi' && p4.path === fs.realpathSync(projectSkill),
+      'K9[no-swallow]: a stray .opencode/agent profile does not hijack the kimi identity — got ' + JSON.stringify(p4));
+
+    // case 5 — no kimi reviewer profile anywhere → typed refusal (never a silent fallthrough).
+    rmSync(path.join(r1.dest, '.kimi-code'), { recursive: true, force: true });
+    rmSync(path.join(r1.kimiHome, 'skills'), { recursive: true, force: true });
+    const p5 = probe(scriptsHome, emptyCwd, r1.home, r1.kimiHome);
+    assert(p5.ok === false && p5.reason === 'review_profile_unavailable',
+      'K9[negative]: missing kimi reviewer profile refuses review_profile_unavailable — got ' + JSON.stringify(p5));
+    try { rmSync(emptyCwd, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    clean(r1);
   }
 }
 

@@ -785,12 +785,75 @@ function reviewMetaValue(planContent, name) {
 function detectReviewRuntime() {
   const explicit = String(process.env.KAOLA_WORKFLOW_RUNTIME || '').toLowerCase();
   if (['claude', 'codex', 'opencode', 'kimi'].includes(explicit)) return explicit;
-  return /[/\\]plugins[/\\]kaola-workflow(?:-(?:gitlab|gitea))?[/\\]scripts$/.test(__dirname)
-    ? 'codex' : 'claude';
+  if (/[/\\]plugins[/\\]kaola-workflow(?:-(?:gitlab|gitea))?[/\\]scripts$/.test(__dirname)) return 'codex';
+  // kimi installs support scripts at <kimi-home>/kaola-workflow/scripts/ (kimi home =
+  // $KIMI_CODE_HOME, default ~/.kimi-code). Detect that layout BEFORE the opencode pattern
+  // below, which would otherwise swallow the kimi install and probe opencode profile paths —
+  // binding a wrong-runtime reviewer identity when the project also carries .opencode/agent/.
+  // Compare REALPATHS: require() resolves __dirname through symlinks while the env var stays
+  // verbatim (macOS /var→/private/var), so a naive string equality misses the match.
+  const fs = require('fs');
+  const kimiHome = process.env.KIMI_CODE_HOME || path.join(require('os').homedir(), '.kimi-code');
+  const realpathOrSelf = p => { try { return fs.realpathSync(p); } catch (_) { return p; } };
+  if (realpathOrSelf(__dirname) === realpathOrSelf(path.join(kimiHome, 'kaola-workflow', 'scripts'))
+    || /[/\\]\.kimi-code[/\\]kaola-workflow[/\\]scripts$/.test(__dirname)) {
+    return 'kimi';
+  }
+  // #708: opencode installs support scripts at <opencode-config>/kaola-workflow/scripts/ (no
+  // plugins/ segment — opencode is a runtime, not a forge). Detect that layout so reviewer
+  // profile resolution and review-receipt binding use opencode-native paths instead of falling
+  // back to the Claude default (which points at a non-existent agents/ dir and hard-blocks
+  // every review-gated plan with review_profile_unavailable).
+  if (/[/\\]kaola-workflow[/\\]scripts$/.test(__dirname) && !/[/\\]plugins[/\\]/.test(__dirname)) {
+    return 'opencode';
+  }
+  return 'claude';
 }
 
 function reviewerProfilePath(role, runtime) {
   if (runtime === 'codex') return path.join(__dirname, '..', 'agents', role + '.toml');
+  if (runtime === 'opencode') {
+    // #708: opencode installs reviewer profiles at <config>/agent/{role}.md (global install) or
+    // <project>/.opencode/agent/{role}.md (project install). The support script lives at
+    // <config>/kaola-workflow/scripts/, so <config> = path.join(__dirname, '..', '..'). opencode
+    // resolves config global→project (project wins), so probe the project location first, then
+    // the global location, then the canonical Claude path (self-dev parity — this repo's
+    // agents/*.md carry the Claude-frontmatter identity fields the opencode transform preserves).
+    const fs = require('fs');
+    const candidates = [
+      path.join(process.cwd(), '.opencode', 'agent', role + '.md'),     // project install
+      path.join(__dirname, '..', '..', 'agent', role + '.md'),           // global install (<config>/agent/)
+      path.join(__dirname, '..', 'agents', role + '.md'),                // self-dev canonical Claude path
+    ];
+    for (const c of candidates) {
+      try { fs.accessSync(c); return c; } catch (_) {}
+    }
+    // Default to the global candidate so a missing profile yields review_profile_unavailable
+    // (not a silent fallthrough to the Claude path, which would bind the wrong identity).
+    return path.join(__dirname, '..', '..', 'agent', role + '.md');
+  }
+  if (runtime === 'kimi') {
+    // kimi installs reviewer role-contract skills at <project>/.kimi-code/skills/kaola-role-{role}/
+    // SKILL.md (project install) or <kimi-home>/skills/kaola-role-{role}/SKILL.md (global
+    // install). The support script lives at <kimi-home>/kaola-workflow/scripts/, so <kimi-home> =
+    // path.join(__dirname, '..', '..') — robust to a custom $KIMI_CODE_HOME. Kimi resolves
+    // global→project (project wins), so probe the project location first, then the global
+    // location, then the canonical Claude path (self-dev parity — same fallback shape as the
+    // opencode branch above).
+    const fs = require('fs');
+    const skillRel = path.join('kaola-role-' + role, 'SKILL.md');
+    const candidates = [
+      path.join(process.cwd(), '.kimi-code', 'skills', skillRel),      // project install
+      path.join(__dirname, '..', '..', 'skills', skillRel),            // global install (<kimi-home>/skills/)
+      path.join(__dirname, '..', 'agents', role + '.md'),              // self-dev canonical Claude path
+    ];
+    for (const c of candidates) {
+      try { fs.accessSync(c); return c; } catch (_) {}
+    }
+    // Default to the global candidate so a missing profile yields review_profile_unavailable
+    // (not a silent fallthrough to the Claude path, which would bind the wrong identity).
+    return path.join(__dirname, '..', '..', 'skills', skillRel);
+  }
   return path.join(__dirname, '..', 'agents', role + '.md');
 }
 

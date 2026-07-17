@@ -32,6 +32,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const reviewerGen = require('./generate-reviewer-profiles');
 
 const REPO = path.resolve(__dirname, '..');
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
@@ -39,6 +40,15 @@ const CANON_COMMANDS_DIR = path.join(REPO, 'commands');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 const OUT_SKILLS_DIR = path.join(REPO, '.kimi', 'skills');
 const OUT_HOOKS_DIR = path.join(REPO, '.kimi', 'hooks');
+
+// Reviewer gate roles (code-reviewer, adversarial-verifier, security-reviewer) carry their
+// schema-2 identity through the kimi render: behavior_contract_version / behavior_contract_hash
+// are preserved from canonical, and a fresh resolved_profile_hash is re-stamped over the final
+// kimi bytes (the canonical Claude hash never binds post-transform bytes — the same discipline
+// as the opencode renderAgent). The fields ship in a body HTML comment block at column zero so
+// the Skill frontmatter stays name+description only.
+const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const ZERO_HASH = '0'.repeat(64);
 
 // Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the kimi
 // edition). hooks.json is Claude-shaped and is NOT copied — its four entries are
@@ -114,6 +124,7 @@ function readOnlyRoles() {
 
 function renderAgent(canonContent, agentName) {
   const { fm, body } = parseFrontmatter(canonContent);
+  const isReviewer = REVIEWER_ROLES.has(agentName);
   const lines = ['---'];
   lines.push('name: kaola-role-' + agentName);
   lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
@@ -121,6 +132,19 @@ function renderAgent(canonContent, agentName) {
   // agent definition, and every subagent inherits the session model (no tiers).
   lines.push('---');
   lines.push('');
+  if (isReviewer) {
+    // Schema-2 reviewer identity as a body HTML comment at column zero (the runtime's
+    // field regexes are line-anchored), keeping the frontmatter name+description only.
+    // behavior_contract_version/hash are preserved from canonical; resolved_profile_hash
+    // is re-stamped over the final kimi bytes below (the canonical Claude hash never
+    // binds post-transform bytes — the opencode renderAgent discipline).
+    lines.push('<!-- kimi-reviewer-identity:start -->');
+    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
+    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
+    lines.push('resolved_profile_hash: ' + ZERO_HASH);
+    lines.push('<!-- kimi-reviewer-identity:end -->');
+    lines.push('');
+  }
   // Same additive-generation-only discipline as the opencode renderAgent (#544/#609):
   // the Claude→kimi script-path rewrite and the Claude model-noun rewrite apply to
   // the RENDERED body so canonical agents/*.md are never touched (D-530-02).
@@ -133,7 +157,12 @@ function renderAgent(canonContent, agentName) {
     .replace(/--runtime claude\b/g, '--runtime kimi')
     .trim().replace(/\s+$/, '');
   lines.push(bodyText);
-  return lines.join('\n') + '\n';
+  let content = lines.join('\n') + '\n';
+  if (isReviewer) {
+    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
+    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
+  }
+  return content;
 }
 
 // kimi-native `kaola_script()` shell resolver (the kimi twin of #544's opencode

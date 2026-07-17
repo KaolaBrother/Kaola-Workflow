@@ -173,10 +173,45 @@ for (const role of reviewerGenerator.ROLES) {
   `A6-reviewer[${role}]: OpenCode agent retains normalized reviewer behavior identity`);
   assert(opencode.core === canonical.core,
     `A6-reviewer[${role}]: OpenCode transform preserves reviewer behavior-core bytes`);
-  assert(!/^resolved_profile_hash\s*:/m.test(opencodeText),
-    `A6-reviewer[${role}]: OpenCode does not reuse the Claude render hash after transforming frontmatter`);
+  // #708: the opencode reviewer profile carries its OWN re-stamped resolved_profile_hash (over the
+  // transformed opencode bytes), so resolveReviewerProfileIdentity can bind schema-2 review receipts
+  // to the exact profile bytes that produced them. The hash must be present, valid (verifyResolved
+  // ProfileHash throws on mismatch), and DIFFERENT from the Claude hash (the bytes differ). Without
+  // it, every review-gated adaptive plan on opencode hard-refuses at open-next with
+  // review_profile_identity_unavailable.
+  const ocHash = (opencodeText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
+  assert(ocHash && /^[0-9a-f]{64}$/.test(ocHash),
+    `A6-reviewer[${role}]: OpenCode reviewer carries a valid resolved_profile_hash`);
+  reviewerGenerator.verifyResolvedProfileHash(opencodeText);
+  const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
+  assert(ocHash !== clHash,
+    `A6-reviewer[${role}]: OpenCode resolved_profile_hash is re-stamped over opencode bytes (differs from Claude)`);
+  // The behavior_contract_version/hash in the opencode frontmatter must match the canonical source
+  // (runtime-neutral identity, not bytes — so it survives the frontmatter transform).
+  assert(new RegExp('^behavior_contract_version:\\s*' + canonical.behavior_contract_version + '\\s*$', 'm').test(opencodeText),
+    `A6-reviewer[${role}]: OpenCode frontmatter carries behavior_contract_version`);
+  assert(new RegExp('^behavior_contract_hash:\\s*' + canonical.behavior_contract_hash + '\\s*$', 'm').test(opencodeText),
+    `A6-reviewer[${role}]: OpenCode frontmatter carries behavior_contract_hash`);
   assert(!/(?:identical|same|byte-identical)[^\n]{0,80}(?:model output|findings|verdict|review output)/i.test(opencodeText),
     `A6-reviewer[${role}]: OpenCode agent makes no stochastic-output-identity claim`);
+}
+
+// #708: end-to-end — resolveReviewerProfileIdentity(role, { reviewRuntime: 'opencode' }) must return
+// ok against the installed .opencode/agent/ profile, with a resolved_profile_hash matching the file.
+// This is the exact call that hard-blocked every review-gated plan on opencode (review_profile_
+// unavailable / review_profile_identity_unavailable). CWD is the repo root, so the project candidate
+// (.opencode/agent/<role>.md) is the first probe path and must resolve.
+const adaptiveNode = require('./kaola-workflow-adaptive-node');
+for (const role of reviewerGenerator.ROLES) {
+  const identity = adaptiveNode.resolveReviewerProfileIdentity(role, { reviewRuntime: 'opencode' });
+  assert(identity.ok === true,
+    `#708[${role}]: resolveReviewerProfileIdentity(opencode) must succeed (got ${identity.reason})`);
+  const fileHash = (read('.opencode/agent/' + role + '.md')
+    .match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
+  assert(identity.resolved_profile_hash === fileHash,
+    `#708[${role}]: resolved_profile_hash must match the installed profile file`);
+  assert(identity.runtime === 'opencode',
+    `#708[${role}]: identity runtime is opencode`);
 }
 
 // A13: the workflow-planner ADOPTS adaptive effort selection — its opencode-edition body

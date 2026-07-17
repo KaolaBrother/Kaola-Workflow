@@ -728,12 +728,129 @@ function buildWorktreeEvidenceFixture(project, issue, opts) {
   }
 })();
 
+// --------------------------------------------------------------------------- #711 branchless
+
+// A branchless / in-place fixture: the commit is on main (no feature branch, no worktree). The
+// project folder has branch: TBD + claimed_at: N/A in its workflow-state ## Sink block, mirroring a
+// prior research session that pre-created the folder without a claim. The sink must complete the
+// branchless path: push main, close the issue, archive the project, record branch_mode:'branchless'.
+function buildBranchlessFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  // main: roadmap source + mirror.
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  // in-place run: project folder + deliverable committed STRAIGHT TO MAIN (no feature branch).
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  // workflow-state ## Sink carries branch: TBD + claimed_at: N/A (the branchless signature).
+  const stateLines = [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'runtime: opencode', 'step: start', '',
+    '## Last Updated', new Date().toISOString(), '',
+    '## Sink',
+    'branch: TBD',
+    'issue_number: ' + issue,
+    'sink: merge',
+    'run_posture: in-place',
+    'main_root: (test)',
+    'session_marker: test-session',
+    'claim_ts: ' + new Date().toISOString(),
+    'claimed_at: N/A',
+  ];
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), stateLines.join('\n') + '\n');
+  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  // ledger with one complete node + its evidence (the #707 requireNodeEvidence gate).
+  fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), planWithLedger([{ id: 'n1', status: 'complete' }]));
+  fs.writeFileSync(path.join(liveDir, '.cache', 'n1.md'), '# n1 evidence\n\nverdict: pass\n');
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'branchless deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: in-place deliverable (branchless)']);
+  // NOTE: deliberately NOT pushed yet — the sink's push_main step must publish main.
+  return { tmpRoot, remotePath, binDir, logFile, branch: 'TBD', projectName: project };
+}
+
+(function testBranchlessInPlaceSink() {
+  console.log('Test (#711): branchless / in-place sink — --branch TBD with --sink completes without a feature branch (push main + close + archive)');
+  const project = 'issue-71101';
+  const issue = 71101;
+  const fx = buildBranchlessFixture(project, issue);
+  try {
+    // (1) --branch TBD WITHOUT --sink must refuse (branch_tbd_requires_sink).
+    const noSink = spawnSync(process.execPath,
+      [sinkMergeScript, '--branch', 'TBD', '--project', project, '--issue', String(issue), '--json'],
+      { cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1', KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js') }) });
+    const noSinkOut = lastJson(noSink);
+    assert(noSink.status !== 0 && noSinkOut && noSinkOut.reason === 'branch_tbd_requires_sink',
+      '#711: --branch TBD without --sink must refuse branch_tbd_requires_sink; got status=' + noSink.status + ' reason=' + JSON.stringify(noSinkOut && noSinkOut.reason));
+
+    // Capture pre-sink main HEAD (the in-place commit, not yet on remote).
+    const preMainHead = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    const remoteMainBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+    assert(preMainHead !== remoteMainBefore,
+      '#711: pre-sink main must be AHEAD of origin/main (the in-place commit is local-only)');
+
+    // (2) --branch TBD WITH --sink completes the branchless sink.
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#711: branchless sink exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#711: status must be sinked; got ' + JSON.stringify(out && out.status));
+
+    // branch_mode recorded in the receipt.
+    const receipt = out && out.receipt;
+    assert(receipt && receipt.branch_mode === 'branchless',
+      '#711: receipt.branch_mode must be "branchless"; got ' + JSON.stringify(receipt && receipt.branch_mode));
+
+    // main was PUSHED (the in-place commit reached the remote). The archive_commit step adds a
+    // further commit, so check the pre-sink commit is an ANCESTOR of origin/main (not equality).
+    const remoteMainAfter = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+    const ancestry = git(fx.tmpRoot, ['merge-base', '--is-ancestor', preMainHead, 'origin/main']);
+    assert(ancestry.status === 0 && remoteMainAfter !== remoteMainBefore,
+      '#711: push_main must publish the in-place commit to origin/main (pre-sink HEAD must be an ancestor of the new origin/main)');
+
+    // the issue was CLOSED.
+    const log = readLog(fx.logFile);
+    assert(log.some(l => l === 'close:' + issue),
+      '#711: the issue must be closed by the branchless sink; log=' + JSON.stringify(log));
+
+    // the project folder was archived (no longer live).
+    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project)),
+      '#711: the live project folder must be archived (moved to archive/)');
+    const archRel = (receipt && receipt.archive_dest) || ('kaola-workflow/archive/' + project);
+    assert(catFileType(fx.tmpRoot, 'HEAD:' + archRel) === 'tree',
+      '#711: the archive must be committed at HEAD');
+
+    // main checkout is CLEAN post-sink (no residual untracked/staged state).
+    const status = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
+    assert(status === '',
+      '#711: main checkout must be clean post-sink; got ' + JSON.stringify(status));
+
+    // roadmap source removed + mirror regenerated (issue closed).
+    assert(catFileType(fx.tmpRoot, 'HEAD:kaola-workflow/.roadmap/issue-' + issue + '.md') === null,
+      '#711: the closed issue roadmap source must be removed at HEAD');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#711) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#711) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

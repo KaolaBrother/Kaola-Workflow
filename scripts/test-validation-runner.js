@@ -160,13 +160,22 @@ async function main() {
 
   // Real landable-tree identity ignores active workflow state and inert docs, but retains source,
   // tests, and the D-547 test-consumed prose band. The helper is exported for the review engine.
+  // #709: the self-host consumed band (README/CHANGELOG/docs.api) applies ONLY to self-host repos
+  // (package.json declares a test:kaola-workflow:* script). Seed a package.json so this repo reads
+  // as self-host and the README-change assertion below holds (a consumer repo's README is invisible).
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-tree-'));
   try {
     git(repo, ['init', '-q']);
+    write(repo, 'package.json', JSON.stringify({
+      name: 'self-host-fixture', scripts: { 'test:kaola-workflow:claude': 'node scripts/simulate-workflow-walkthrough.js' },
+    }) + '\n');
+    git(repo, ['add', '-A']); git(repo, ['commit', '-q', '-m', 'init']);
     write(repo, 'src/index.js', 'module.exports = 1;\n');
     write(repo, 'docs/inert.md', 'inert one\n');
     write(repo, 'README.md', 'consumed one\n');
     write(repo, 'kaola-workflow/active/.cache/evidence.md', 'state one\n');
+    // warm the detectSelfHostNpm cache (self-host: package.json has the chain script)
+    assert.strictEqual(runner.detectSelfHostNpm(repo), true, '#709: fixture repo with test:kaola-workflow:* is self-host');
     const treeA = runner.computeLandableTreeDigest(repo);
     assert.match(treeA, HEX);
     write(repo, 'docs/inert.md', 'inert two\n');
@@ -183,6 +192,47 @@ async function main() {
     assert.notStrictEqual(runner.computeLandableTreeDigest(repo, { test_consumed_paths: ['docs/inert.md'] }), widenedA);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
+  }
+
+  // #709: in a CONSUMER repo (no package.json / no test:kaola-workflow:* chain), CHANGELOG/README/
+  // docs are validation-invisible (matching isBarrierInvisible). A finalize-sink CHANGELOG edit
+  // must NOT change computeLandableTreeDigest — the self-host assumption stops leaking into consumer
+  // repos. The two validators (validation-runner + plan-validator) agree on visibility.
+  const pv = require('./kaola-workflow-plan-validator');
+  const consumerRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-consumer-'));
+  try {
+    git(consumerRepo, ['init', '-q']);
+    write(consumerRepo, 'src/app.swift', 'let x = 1\n');
+    write(consumerRepo, 'CHANGELOG.md', '# v1.0\n- init\n');
+    write(consumerRepo, 'README.md', '# consumer app\n');
+    write(consumerRepo, 'docs/design.md', 'design notes\n');
+    git(consumerRepo, ['add', '-A']); git(consumerRepo, ['commit', '-q', '-m', 'init']);
+    assert.strictEqual(runner.detectSelfHostNpm(consumerRepo), false,
+      '#709: a consumer repo (no package.json) is NOT self-host');
+    // visibility agreement: both validators treat CHANGELOG/README/docs as invisible in a consumer repo
+    assert.strictEqual(runner.isValidationInvisible('CHANGELOG.md', [], { self_host: false }), true,
+      '#709: validation-runner treats CHANGELOG as invisible in a consumer repo');
+    assert.strictEqual(pv.isValidationInvisible('CHANGELOG.md', null, [], { self_host: false }), true,
+      '#709: plan-validator treats CHANGELOG as invisible in a consumer repo');
+    assert.strictEqual(pv.isValidationInvisible('CHANGELOG.md', null, [], { self_host: false }),
+      runner.isValidationInvisible('CHANGELOG.md', [], { self_host: false }),
+      '#709: both validators AGREE on CHANGELOG visibility in a consumer repo');
+    const digestBefore = runner.computeLandableTreeDigest(consumerRepo);
+    assert.match(digestBefore, HEX, '#709: consumer digest computes');
+    // A finalize-sink CHANGELOG edit + README edit + docs edit — all validation-invisible in consumer
+    write(consumerRepo, 'CHANGELOG.md', '# v1.1\n- finalize-sink edit\n');
+    write(consumerRepo, 'README.md', '# consumer app (updated)\n');
+    write(consumerRepo, 'docs/design.md', 'design notes (updated)\n');
+    const digestAfter = runner.computeLandableTreeDigest(consumerRepo);
+    assert.strictEqual(digestAfter, digestBefore,
+      '#709: a finalize-sink CHANGELOG/README/docs edit does NOT change computeLandableTreeDigest in a consumer repo');
+    // A code edit DOES change the digest (the band still catches real code)
+    write(consumerRepo, 'src/app.swift', 'let x = 2\n');
+    const digestAfterCode = runner.computeLandableTreeDigest(consumerRepo);
+    assert.notStrictEqual(digestAfterCode, digestAfter,
+      '#709: a code edit DOES change the digest in a consumer repo (the band still catches real code)');
+  } finally {
+    fs.rmSync(consumerRepo, { recursive: true, force: true });
   }
 
   // End-to-end execution is adapter-driven for deterministic tests. The runner takes candidate

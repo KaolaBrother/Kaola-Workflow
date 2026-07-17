@@ -42,6 +42,21 @@ runtime may produce different natural-language findings, explanations, or domain
 the underlying model execution is stochastic. The transform also makes no claim about private
 runtime prompt-loader bytes; it proves the tracked/generated filesystem surface.
 
+### Schema-2 reviewer identity (#708)
+
+The opencode reviewer profiles carry the schema-2 identity fields
+(`behavior_contract_version`, `behavior_contract_hash`, `resolved_profile_hash`) in their
+frontmatter so `resolveReviewerProfileIdentity` can bind review-gate receipts to the exact profile
+bytes. The `resolved_profile_hash` is **re-stamped over the transformed opencode bytes** (not the
+Claude hash — the frontmatter differs post-transform, so the Claude hash no longer binds these
+bytes). Without these fields, every review-gated adaptive plan on opencode hard-refused at
+`open-next` with `review_profile_unavailable` / `review_profile_identity_unavailable`.
+
+Runtime resolution is opencode-aware: `detectReviewRuntime` recognizes the opencode install layout
+(`<config>/kaola-workflow/scripts/`), and `reviewerProfilePath` probes the project
+(`<cwd>/.opencode/agent/`), global (`<config>/agent/`), and self-dev (`agents/`) candidate locations
+in that order (opencode resolves config global→project, so project wins).
+
 ## Model effort — two tiers as reasoning-effort variants
 
 Claude Code uses a closed model vocabulary (`opus` / `sonnet`). opencode is

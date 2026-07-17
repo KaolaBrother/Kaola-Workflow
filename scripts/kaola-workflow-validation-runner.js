@@ -20,6 +20,37 @@ const TEST_CONSUMED_PATHS = Object.freeze([
   'docs/workflow-state-contract.md',
   'docs/agents-source.md',
 ]);
+
+// #709: the TEST_CONSUMED_PATHS list is a SELF-HOST assumption — the four kaola-workflow test chains
+// read + assert on these prose files. A CONSUMER repo (non-npm product repo — iOS/Xcode, Makefile,
+// etc.) has no such chains, so a finalize-sink CHANGELOG/README/docs edit is validation-invisible
+// there (matching isBarrierInvisible). Scoping the list to self-host repos (package.json declares a
+// `test:kaola-workflow:<edition>` script — the exact predicate run-chains.js resolveChains uses)
+// stops the self-host assumption from staling every certifier receipt in a consumer repo. Memoized
+// per repoRoot (package.json does not change mid-run). Fail-closed: an indeterminate repo (present-
+// but-unreadable / unparseable package.json) reads as self-host (the stricter band), so an uncertain
+// probe never silently de-tiers to the consumer visibility. ENOENT (no package.json at all) is a
+// genuine consumer — no npm scripts can exist.
+const _selfHostCache = new Map();
+function detectSelfHostNpm(repoRoot) {
+  const key = String(repoRoot || '');
+  if (_selfHostCache.has(key)) return _selfHostCache.get(key);
+  let result;
+  // #709: probe package.json at the root the CALLER resolved (computeLandableTreeDigest /
+  // computeCodeTreeHash receive the git top-level from their callers, so no redundant git probe
+  // here). ENOENT (no package.json) → genuine consumer. Unreadable/unparseable → fail-closed
+  // (self-host, the stricter band). Memoized per root.
+  try {
+    const pkgRaw = fs.readFileSync(path.join(key || '.', 'package.json'), 'utf8');
+    const pkg = JSON.parse(pkgRaw);
+    const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+    result = ['claude', 'codex', 'gitlab', 'gitea'].some(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+  } catch (e) {
+    result = (e && e.code === 'ENOENT') ? false : true;
+  }
+  _selfHostCache.set(key, result);
+  return result;
+}
 const TOOLCHAIN_FILES = Object.freeze([
   '.node-version',
   '.nvmrc',
@@ -450,9 +481,14 @@ function collectExecutionIdentity(options) {
   };
 }
 
-function isValidationInvisible(relativePath, extraConsumed) {
+function isValidationInvisible(relativePath, extraConsumed, opts) {
   const relative = String(relativePath || '').replace(/^\.\//, '');
-  const consumed = new Set([...TEST_CONSUMED_PATHS, ...(Array.isArray(extraConsumed) ? extraConsumed.map(item => normalizeRepoRelative(item, 'test_consumed_path')) : [])]);
+  // #709: the self-host TEST_CONSUMED_PATHS list applies ONLY to self-host repos. A consumer repo
+  // (no test:kaola-workflow:* chains) has no prose the chains read, so CHANGELOG/README/docs.api are
+  // validation-invisible there (matching isBarrierInvisible). Default self_host=true is fail-closed.
+  const selfHost = !(opts && opts.self_host === false);
+  const baseConsumed = selfHost ? TEST_CONSUMED_PATHS : [];
+  const consumed = new Set([...baseConsumed, ...(Array.isArray(extraConsumed) ? extraConsumed.map(item => normalizeRepoRelative(item, 'test_consumed_path')) : [])]);
   if (consumed.has(relative)) return false;
   if (relative === 'README.md' || relative === 'CHANGELOG.md' || relative.startsWith('docs/')) return true;
   if (relative.startsWith('kaola-workflow/')) return true;
@@ -470,6 +506,9 @@ function runGit(root, args, environment, encoding) {
 
 function computeLandableTreeDigest(repoRoot, options) {
   const opts = options && typeof options === 'object' ? options : {};
+  // #709: auto-detect self_host (consumer repos exclude CHANGELOG/README/docs from the candidate
+  // digest). An explicit opts.self_host overrides the probe (test seam + deterministic calls).
+  const selfHost = opts.self_host !== undefined ? opts.self_host : detectSelfHostNpm(repoRoot);
   let root;
   try { root = fs.realpathSync(repoRoot); } catch (_) { return null; }
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-index-'));
@@ -497,7 +536,7 @@ function computeLandableTreeDigest(repoRoot, options) {
         const tab = record.indexOf(9);
         if (tab < 0) return null;
         const relative = record.subarray(tab + 1).toString('utf8');
-        if (!isValidationInvisible(relative, opts.test_consumed_paths)) records.push(Buffer.from(record));
+        if (!isValidationInvisible(relative, opts.test_consumed_paths, { self_host: selfHost })) records.push(Buffer.from(record));
       }
       start = index + 1;
     }
@@ -1002,6 +1041,7 @@ if (require.main === module) {
 module.exports = {
   RECEIPT_SCHEMA_VERSION,
   TEST_CONSUMED_PATHS,
+  detectSelfHostNpm,
   TOOLCHAIN_FILES,
   sha256,
   canonicalJson,

@@ -17,7 +17,7 @@ Everything under `.kimi/` is **generated from canonical** by
 | Canonical source | kimi edition output | Notes |
 | ---------------- | ------------------- | ----- |
 | `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (11 commands). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
-| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity. `agents/profiles/higher/` is skipped (meaningless under inherit). |
+| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. `agents/profiles/higher/` is skipped (meaningless under inherit). |
 | `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 3 runtime-neutral hook scripts — byte-copied where the Kimi payload is field-compatible (pre-commit), payload-adapted at generation time where it is not (write-lane, dispatch-log; see [Hooks](#hooks)). |
 | `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The four canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
 
@@ -78,6 +78,17 @@ Consequences, all enforced by the test:
 roots by `scripts/generate-reviewer-profiles.js` from `templates/reviewers/behavior-contracts.json`
 and the closed runtime adapters. `sync-kimi-edition.js` then transforms those generated
 roots into role-contract Skills; it does not maintain a second reviewer prompt.
+
+For the reviewer gate roles the transform also emits a `<!-- kimi-reviewer-identity:start|end -->`
+comment block (body, column zero) holding `behavior_contract_version` /
+`behavior_contract_hash` from the canonical frontmatter plus a fresh `resolved_profile_hash`
+re-stamped over the final kimi bytes (the canonical Claude hash never binds post-transform
+bytes — the opencode renderAgent discipline). At runtime `reviewerProfilePath` resolves the
+kimi-native skill — project `<project>/.kimi-code/skills/kaola-role-<role>/SKILL.md` first,
+then global `<kimi-home>/skills/kaola-role-<role>/SKILL.md`, then the self-dev canonical
+path — while `detectReviewRuntime` recognizes the `<kimi-home>/kaola-workflow/scripts/`
+install layout (realpath-compared, before the opencode pattern), so a review-gated plan
+binds the kimi profile identity instead of hard-refusing `review_profile_unavailable`.
 
 `scripts/test-kimi-edition.js` extracts the delimited reviewer core and proves that role,
 `behavior_contract_version`, `behavior_contract_hash`, and every normalized core byte match
@@ -310,7 +321,7 @@ opencode precedent).
 
 ## Verification
 
-The edition is covered by `scripts/test-kimi-edition.js` (**545 assertions**), which
+The edition is covered by `scripts/test-kimi-edition.js` (**577 assertions**), which
 regenerates the tree itself (`--write`) before asserting:
 
 - **K1 — count/structure parity:** exactly 11 command skills + 16 `kaola-role-*` skills;
@@ -331,7 +342,8 @@ regenerates the tree itself (`--write`) before asserting:
 - **K6 — reviewer behavior identity:** `code-reviewer` / `adversarial-verifier` /
   `security-reviewer` keep their deterministic normalized behavior identity (role,
   `behavior_contract_version`, `behavior_contract_hash`, core bytes) through the kimi
-  render.
+  render. Each reviewer skill's re-stamped `resolved_profile_hash` verifies against its
+  own bytes (exactly one hash line; never the reused Claude hash).
 - **K7 — hooks:** the generated fragment carries the four `[[hooks]]` entries with legal
   event names; pre-commit is byte-identical to canonical, while write-lane/dispatch-log
   equal canonical with exactly the pinned payload-field adaptation applied (see
@@ -340,6 +352,11 @@ regenerates the tree itself (`--write`) before asserting:
   (deny = exit 2).
 - **K8 — route reachability:** every receipt-emitted command target resolves under
   `.kimi/skills/`.
+- **K9 — reviewer profile resolution end-to-end:** hermetic installs (real `install-kimi.sh`
+  with temp `HOME` + `KIMI_CODE_HOME` + `--target`) prove a review-gated plan resolves the
+  kimi-native reviewer SKILL.md — project candidate wins over global, global fallback when
+  no project candidate exists, a stray `.opencode/agent/` profile never hijacks the kimi
+  identity, and a typed `review_profile_unavailable` refusal when no kimi profile exists.
 - **P0–P4 / U1 / A1 — installer contract:** partition exhaustiveness (canonical commands ==
   adaptive-core ∪ fast ∪ full, fail-closed on a new command); default/`--with-fast`/
   `--with-full` deploy sets; re-install idempotency (exactly one managed hooks block);

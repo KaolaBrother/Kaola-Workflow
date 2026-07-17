@@ -47,6 +47,14 @@
 const fs = require('fs');
 const path = require('path');
 const schema = require('./kaola-workflow-adaptive-schema');
+// #708: the reviewer-profile generator owns the deterministic resolved_profile_hash stamping
+// (sha256 of the file with the hash field zeroed). The opencode transform rewrites the
+// frontmatter, so the Claude hash no longer binds these bytes; we re-stamp a fresh hash over
+// the opencode bytes so resolveReviewerProfileIdentity can bind schema-2 review receipts to
+// the exact profile bytes that produced them.
+const reviewerGen = require('./generate-reviewer-profiles');
+const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const ZERO_HASH = '0'.repeat(64);
 
 const REPO = path.resolve(__dirname, '..');
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
@@ -151,6 +159,7 @@ function renderAgent(canonContent, agentName) {
   const toolSet = lowerSet(tools);
   const readOnly = !toolSet.has('write') && !toolSet.has('edit');
   const hasBash = toolSet.has('bash');
+  const isReviewer = REVIEWER_ROLES.has(agentName);
 
   const lines = ['---'];
   lines.push('description: ' + rewriteClaudeModelNouns(fm.description || ''));
@@ -162,6 +171,18 @@ function renderAgent(canonContent, agentName) {
     lines.push('permission:');
     lines.push('  edit: deny');
     if (!hasBash) lines.push('  bash: deny');
+  }
+  // #708: schema-2 reviewer identity. The opencode reviewer profile carries the runtime-neutral
+  // behavior contract (version + hash) from the canonical Claude source, plus a freshly-stamped
+  // resolved_profile_hash over the transformed opencode bytes (NOT the Claude hash — the
+  // frontmatter differs, so the Claude hash no longer binds these bytes). Without these fields
+  // resolveReviewerProfileIdentity refuses with review_profile_identity_unavailable, hard-blocking
+  // every review-gated adaptive plan on opencode. The hash is re-stamped AFTER the full content
+  // is assembled (below) so it binds every rendered byte.
+  if (isReviewer) {
+    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
+    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
+    lines.push('resolved_profile_hash: ' + ZERO_HASH);
   }
   lines.push('---');
   lines.push('');
@@ -175,7 +196,15 @@ function renderAgent(canonContent, agentName) {
   const bodyText = rewriteClaudeModelNouns(rewriteClaudeScriptPaths(body)).trim().replace(/\s+$/, '');
   const suffix = opencodeAgentSuffix(agentName);
   lines.push(suffix ? bodyText + '\n' + suffix.replace(/\s+$/, '') : bodyText);
-  return lines.join('\n') + '\n';
+  let content = lines.join('\n') + '\n';
+  if (isReviewer) {
+    // Re-stamp resolved_profile_hash over the final opencode bytes (the transform above changed
+    // the frontmatter, so the Claude hash is invalid here). normalizeResolvedProfileHash asserts
+    // exactly one hash field exists and zeroes it; sha256 + replace yields the binding hash.
+    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
+    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
+  }
+  return content;
 }
 
 // Rewrite Claude-specific model prose for opencode. Effort is centralized in opencode.json

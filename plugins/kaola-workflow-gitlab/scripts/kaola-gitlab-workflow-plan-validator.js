@@ -345,10 +345,35 @@ const SELF_HOST_TEST_CONSUMED = [
   'docs/workflow-state-contract.md',
   'docs/agents-source.md',
 ];
-function testConsumes(p, extra) {
+// #709: SELF_HOST_TEST_CONSUMED is a self-host assumption (the four kaola-workflow test chains read
+// these prose files). A consumer repo has no such chains, so CHANGELOG/README/docs stay validation-
+// invisible there (matching isBarrierInvisible). detectSelfHostNpm probes package.json for a
+// `test:kaola-workflow:<edition>` script — the exact predicate run-chains.js resolveChains uses.
+// Memoized per repoRoot. Fail-closed: an indeterminate repo reads as self-host (stricter band).
+// ENOENT (no package.json) → genuine consumer. Mirrors validation-runner.detectSelfHostNpm so both
+// validators agree on CHANGELOG/README/docs visibility in every repo kind.
+const _selfHostCache = new Map();
+function detectSelfHostNpm(repoRoot) {
+  const key = String(repoRoot || '');
+  if (_selfHostCache.has(key)) return _selfHostCache.get(key);
+  let result;
+  try {
+    const pkgRaw = fs.readFileSync(path.join(key || '.', 'package.json'), 'utf8');
+    const pkg = JSON.parse(pkgRaw);
+    const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+    result = ['claude', 'codex', 'gitlab', 'gitea'].some(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+  } catch (e) {
+    result = (e && e.code === 'ENOENT') ? false : true;
+  }
+  _selfHostCache.set(key, result);
+  return result;
+}
+function testConsumes(p, extra, opts) {
   const rel = String(p || '').trim().replace(/^\.\//, '');
   if (!rel) return false;
-  if (SELF_HOST_TEST_CONSUMED.indexOf(rel) !== -1) return true;
+  // #709: the self-host list applies ONLY to self-host repos. Default self_host=true is fail-closed.
+  const selfHost = !(opts && opts.self_host === false);
+  if (selfHost && SELF_HOST_TEST_CONSUMED.indexOf(rel) !== -1) return true;
   return Array.isArray(extra) && extra.indexOf(rel) !== -1;
 }
 // #547 (D-547-01): a path is VALIDATION-INVISIBLE (excluded from the code-tree hash; a fresh receipt may
@@ -357,10 +382,10 @@ function testConsumes(p, extra) {
 // (never code-under-test; folded in PROJECT-INDEPENDENTLY so the producer and gate agree even if `--project`
 // differs), MINUS any test-consumed prose (which stays CODE). testConsumes is checked FIRST so a
 // verdict-affecting doc is never excluded. Pure. `testConsumedExtra` is the plan's optional widening.
-function isValidationInvisible(p, project, testConsumedExtra) {
+function isValidationInvisible(p, project, testConsumedExtra, opts) {
   const rel = String(p || '').trim().replace(/^\.\//, '');
   if (!rel) return false;
-  if (testConsumes(rel, testConsumedExtra)) return false;   // verdict-affecting prose stays CODE
+  if (testConsumes(rel, testConsumedExtra, opts)) return false;   // verdict-affecting prose stays CODE
   if (isBarrierInvisible(rel, project)) return true;        // #424 narrow allowband
   if (/^kaola-workflow\//.test(rel)) return true;           // whole workflow-state tree (project-independent)
   return false;
@@ -3753,7 +3778,14 @@ function snapshotWorktree(root, tag) {
 // the hash) are sha256'd in sorted order. Returns null on ANY git failure so the caller fails CLOSED
 // (treat as stale → re-run). `testConsumedExtra` is the plan's optional band widening (replayed from the
 // receipt at the gate so producer and gate compute the IDENTICAL band).
-function computeCodeTreeHash(root, project, testConsumedExtra) {
+function computeCodeTreeHash(root, project, testConsumedExtra, opts) {
+  // #709: auto-detect self_host (consumer repos exclude CHANGELOG/README/docs from the candidate
+  // hash). An explicit opts.self_host overrides the probe (test seam + deterministic calls). Both
+  // this function and validation-runner.computeLandableTreeDigest share the SAME probe, so the
+  // producer (review-gate candidate digest) and the consumer (verdict-check / finalize-check) never
+  // disagree about the repo kind — resolving the #710 candidate-band mismatch from the root.
+  const selfHost = (opts && opts.self_host !== undefined) ? opts.self_host : detectSelfHostNpm(root);
+  const visibilityOpts = { self_host: selfHost };
   let treeSha;
   try { treeSha = snapshotWorktree(root, 'validation'); } catch (_) { return null; }
   if (!treeSha) return null;
@@ -3762,7 +3794,7 @@ function computeCodeTreeHash(root, project, testConsumedExtra) {
   const lines = listing.split('\n').map(s => s.replace(/\r$/, '')).filter(Boolean).filter(line => {
     const tab = line.indexOf('\t');
     const rel = tab >= 0 ? line.slice(tab + 1) : line;
-    return !isValidationInvisible(rel, project, testConsumedExtra);
+    return !isValidationInvisible(rel, project, testConsumedExtra, visibilityOpts);
   });
   lines.sort();
   return crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
@@ -5030,7 +5062,7 @@ function main() {
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
     const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
     const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
-    const r = verifyVerdictBlock(content, { nodeId: nodeId || undefined, readCache, globCache });
+    const r = verifyVerdictBlock(content, { nodeId: nodeId || undefined, readCache, globCache, root });
     process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'verdict ok' : 'typed refusal: verdict-check failed')) + '\n');
     if (!r.ok) process.exitCode = 1;
     return;
@@ -5078,6 +5110,7 @@ module.exports = {
   parseValidationPolicy,
   parseValidationTestConsumes,
   testConsumes,
+  detectSelfHostNpm,
   isValidationInvisible,
   // #641 (D-641-01): the R2 legless-co-open band predicates — the per-path scratch-observable surface test
   // + the whole-write-set legality predicate adaptive-node consumes for the observes:scratch co-open.
