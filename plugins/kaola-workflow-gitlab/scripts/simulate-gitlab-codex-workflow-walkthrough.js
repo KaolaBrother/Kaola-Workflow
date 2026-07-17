@@ -158,7 +158,7 @@ const glOs = require('os');
     const result = glClaim.archiveProjectDir(wtPath, 'issue-426glcx', 'closed', undefined, {});
     if (!fs.existsSync(projDir)) throw new Error('gitlab-codex #426: source dir must NOT be deleted when archive incomplete');
     if (result.archive_incomplete !== true) throw new Error('gitlab-codex #426: archive_incomplete must be true, got: ' + JSON.stringify(result));
-    if (!Array.isArray(result.missing) || !result.missing.includes('workflow-state.md')) throw new Error('gitlab-codex #426: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing));
+    if (result.snapshot_error !== 'state_missing') throw new Error('gitlab-codex #426: malformed source must fail the authority preflight (same contract as the canonical twin), got: ' + JSON.stringify(result));
   } finally {
     try { glSpawn('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });

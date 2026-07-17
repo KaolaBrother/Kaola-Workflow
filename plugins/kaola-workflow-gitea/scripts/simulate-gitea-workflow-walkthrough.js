@@ -1124,13 +1124,23 @@ function testGiteaAdaptive() {
 function testGiteaAdaptiveFreezeChecked() {
   const valScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
   const PLAN = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
-    '| id | role | depends_on | declared_write_set | cardinality | shape |',
-    '|---|---|---|---|---|---|',
-    '| e | code-explorer | — | — | 1 | sequence |',
-    '| i | tdd-guide | e | lib/x.js | 1 | sequence |',
-    '| r | code-reviewer | i | — | 1 | sequence |',
-    '| d | finalize | r | — | 1 | sequence |', ''
+    '# Workflow Plan', '', '## Meta',
+    'plan_schema_version: 2', 'labels: enhancement',
+    'code_certifier: r', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+    'validation_command: node --check index.js',
+    'validation_timeout_minutes: 5', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    '| e | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+    '| i | tdd-guide | e | lib/x.js | 1 | sequence | — | — | — | — |',
+    '| r | code-reviewer | i | — | 1 | sequence | review-change | code-tree | sequence | — |',
+    '| d | finalize | r | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| e | pending |', '| i | pending |', '| r | pending |', '| d | pending |', '',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| code-explorer (e) | pending | | |', '| tdd-guide (i) | pending | | |',
+    '| code-reviewer (r) | pending | | |', '| finalize (d) | pending | | |', ''
   ].join('\n');
   function spawnNode(script, args, cwd, env) {
     return spawnSync(process.execPath, [script, ...args], {
@@ -1536,6 +1546,7 @@ function testGiteaBundleOrientSurfacesBundleIdentity() {
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| done | finalize | explore | — | 1 | sequence |', ''
     ].join('\n'));
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
       { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     assert.strictEqual(fr.status, 0, 'gitea #342 S4: plan freeze must exit 0, stderr: ' + fr.stderr);
@@ -1960,6 +1971,7 @@ function testGiteaBundleStateIncoherent() {
       });
       const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
       fs.writeFileSync(planPath, ['# Workflow Plan — ' + project, ''].concat(minimalPlan).join('\n'));
+      fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
       const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
         { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
       assert.strictEqual(fr.status, 0, 'gitea #430 (a): freeze exit 0, stderr: ' + fr.stderr);
@@ -1997,6 +2009,7 @@ function testGiteaBundleStateIncoherent() {
       });
       const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
       fs.writeFileSync(planPath, ['# Workflow Plan — ' + project, ''].concat(minimalPlan).join('\n'));
+      fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
       const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
         { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
       assert.strictEqual(fr.status, 0, 'gitea #430 (b): freeze exit 0, stderr: ' + fr.stderr);
@@ -2067,6 +2080,7 @@ function testGiteaBundle424432433NodeSeeding() {
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, SEED_PLAN);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + pv.computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fz = spawnSync(process.execPath, [pvScript, planPath, '--freeze'],
       { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
     assert.strictEqual(fz.status, 0, 'gitea #433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
