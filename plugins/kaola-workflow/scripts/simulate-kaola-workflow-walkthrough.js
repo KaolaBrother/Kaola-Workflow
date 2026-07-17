@@ -1563,7 +1563,7 @@ function testInstallSchemaPruneManifest332() {
     assert(manifest.files && Object.keys(manifest.files).length === 16
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
       '#463 AC: manifest.files must carry 16 sha256 entries (14 base + synthesizer + metric-optimizer)');
-    for (const role of ['code-reviewer', 'adversarial-verifier']) {
+    for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(pluginRoot, 'agents', file));
       const installedBytes = fs.readFileSync(path.join(agentsDir, file));
@@ -1571,9 +1571,9 @@ function testInstallSchemaPruneManifest332() {
         'reviewer contract: installed ' + file + ' must byte-match the selected source');
       const text = installedBytes.toString('utf8');
       const expectedIdentity = {
-        behavior_contract_version: Number(text.match(/^behavior_contract_version = (\d+)$/m)[1]),
-        behavior_contract_hash: text.match(/^behavior_contract_hash = "([0-9a-f]{64})"$/m)[1],
-        resolved_profile_hash: text.match(/^resolved_profile_hash = "([0-9a-f]{64})"$/m)[1],
+        behavior_contract_version: Number(text.match(/^behavior_contract_version: (\d+)$/m)[1]),
+        behavior_contract_hash: text.match(/^behavior_contract_hash: ([0-9a-f]{64})$/m)[1],
+        resolved_profile_hash: text.match(/^resolved_profile_hash: ([0-9a-f]{64})$/m)[1],
       };
       assert(JSON.stringify(manifest.profile_contracts[file]) === JSON.stringify(expectedIdentity),
         'reviewer contract: manifest must bind behavior/profile identity for ' + file);

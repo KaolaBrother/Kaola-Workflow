@@ -511,8 +511,8 @@ There is **no config key, trust file, or CLI flag that persists trust
 non-interactively** — the only non-interactive option is
 `codex exec --dangerously-bypass-hook-trust`, which skips the check for that single run
 **without** persisting trust (use it only for automation that already vets the hook
-sources). Until the hooks are trusted, compaction-resume, the commit-lane guard, and
-subagent dispatch logging do not fire.
+sources). Until the hooks are trusted, compaction-resume, the commit-lane guard,
+write-lane containment, and subagent dispatch logging do not fire.
 
 Update an existing Codex install (durable, stale-proof flow):
 
@@ -521,7 +521,7 @@ cd ~/kaola-workflow
 git pull
 # Refresh the cached plugin bundle Codex actually loads. Prefer the marketplace
 # upgrade; fall back to remove+add when upgrade is unavailable or the cache is stale:
-codex plugin marketplace upgrade kaola-workflow
+codex plugin marketplace upgrade <marketplace>
 #   or: codex plugin remove kaola-workflow@<marketplace> && codex plugin add kaola-workflow@<marketplace>
 # Re-run the agent-profile installer globally (validates each profile schema, prunes
 # retired Kaola files like docs-lookup.toml, writes the managed manifest
@@ -539,13 +539,67 @@ replaces the cached source profiles, and the profile installer copies all 16 rol
 active global/project scope. A plugin-only upgrade leaves stale generated profiles in place; the
 doctor reports the mismatch instead of treating the install as current.
 
-`code-reviewer` and `adversarial-verifier` carry a shared normalized
-`behavior_contract_hash` across runtimes and a per-render `resolved_profile_hash`. The generator and
-installers prove deterministic repository and installed filesystem bytes; the doctor also checks
-user, project, and plugin-cache drift and prints a scope-specific repair. These checks deliberately
-do not claim that a proprietary runtime loaded particular prompt bytes—the runtimes expose no public
-prompt-loader attestation surface here. Likewise, identical behavior contracts do not imply identical
-natural-language findings or verdict prose from stochastic models.
+`code-reviewer`, `adversarial-verifier`, and `security-reviewer` are owned by the canonical reviewer
+generator, which writes five Claude Markdown outputs and nine Codex TOML outputs across GitHub,
+GitLab, and Gitea. Each role carries a normalized `behavior_contract_hash` shared across runtimes
+and a per-render `resolved_profile_hash`. The generator and installers prove deterministic repository
+and installed filesystem bytes; the doctor also checks user, project, and plugin-cache drift and
+prints a scope-specific repair. These checks deliberately do not claim that a proprietary runtime
+loaded particular prompt bytes—the runtimes expose no public prompt-loader attestation surface here.
+Likewise, identical behavior contracts do not imply identical natural-language findings or verdict
+prose from stochastic models.
+
+Codex custom-agent TOMLs keep only `name`, `description`, `nickname_candidates`, and
+`developer_instructions` at top level. Reviewer behavior identity and the complete-profile self-hash
+are embedded in `developer_instructions`, where the adaptive runtime can verify them without adding
+unsupported role-schema fields that Codex would reject at startup.
+
+Every dispatch-capable Codex workflow skill runs the same fail-closed profile preflight on entry and
+resume. The skill resolves exactly one enabled installed Kaola edition from
+`codex plugin list --json` and runs the preflight bundled at that registry entry's exact
+marketplace/name/version cache path. It never searches a checkout's `plugins/` directory or chooses
+the lexically first cached version. Missing, ambiguous, malformed, symlinked, or non-regular cache
+components stop as `profile_preflight_refused` before any spawn.
+
+The preflight validates persisted Codex configuration in effective precedence order: `~/.codex`,
+then every trusted `.codex/config.toml` from the Git repository root through the current working
+directory. Higher layers override only the transport/posture fields they actually declare. Profile authority
+remains explicit: a fresh global role install is accepted only when no project layer has a Kaola
+profile/config footprint. When a project Kaola footprint exists, the most-specific matching
+`[projects."<absolute-path>"] trust_level = "trusted"` entry in global config must authorize it;
+unknown or untrusted projects stop as `project_trust_required` because Codex would ignore their
+`.codex` layer. A trusted project authority must itself be current. The managed block
+must exactly match the bundled role registry, including each role's `config_file`, description, and
+nickname metadata, and any `agents` declaration outside the owned markers is an unsafe conflict.
+The gate reports the persisted config path that supplied an unsafe winning field. It cannot observe
+ephemeral command-line configuration supplied when Codex was launched, including `--profile` or
+`-c`; do not treat a filesystem-only pass as attestation of those per-process overrides.
+
+Re-run the profile installer (and restart Codex) rather than treating profile or config drift as a
+local-tool fallback. The installer and full-path transaction also refuse symlinked, escaping, or
+wrong-type managed destinations instead of following them outside their declared project/HOME
+authority.
+
+The full review path uses the same loop semantics on Claude Code, Codex, and opencode: finish every
+strictly parsed Phase 4 task, run `code-reviewer`, make an explicit file-risk decision for
+`security-reviewer`, route admitted CRITICAL/HIGH fixes, run narrow validation, and re-run the
+affected reviewer after the newest fix. Finalization requires fresh, nonce-bound, substantive
+review/fix evidence at the canonical `.cache/` paths. Reviewer approval is a bounded structured
+contract: exact column-zero `domain_outcome: approved`, `verdict: pass`, `findings_blocking: 0`,
+`review_summary: no_blocking_findings`, and `review_attestation: full_review_completed` rows, plus
+exactly one final column-zero `review_conclusion: <substantive prose>`. Emit the attestation and
+conclusion only after completing the full review. The conclusion must be the final nonempty line,
+and its text after the prefix must contain at least 24 Unicode letter/number characters and four
+word tokens. The entire durable body rejects control, format, Unicode line/paragraph separator,
+and default-ignorable code points. Reserved labels and finding gate keys reject recognized
+compatibility/confusable and single-Damerau-edit near-spoofs, while ordinary Unicode prose remains
+non-authoritative. Canonical finding tokens require a lowercase ASCII key, ASCII `=`, and a
+non-whitespace value. Any noncanonical line carrying all three assignment-shaped gate keys, or a
+finding-like label followed by all three alternating key/value pairs, refuses. Receipt
+rows remain the only mechanical outcome authority, and canonical `finding:` rows remain the only
+mechanical finding authority. The conclusion's presence, position, and minimum shape are enforced
+mechanically, while its prose content remains orchestrator context rather than regex-classified
+authority. After three non-converging fix-and-re-review cycles, stop for operator direction.
 
 #### Config audit for effort-safe subagents
 
@@ -673,7 +727,8 @@ the global hook home `~/.codex/hooks.json` plus `~/.codex/kaola-workflow/{hooks,
 exist — then trust the hooks via `/hooks` (see *Trust the hooks* above).
 
 The read-only `--doctor` report grades four scope classes: bundled `repository` source, `user`,
-`project`, and every discovered `plugin_cache`. Repository schema failures and plugin-cache
+`project`, and the invoking plugin's exact name/version `plugin_cache` across marketplaces. Unrelated
+plugins and old versions are ignored. Repository schema failures and selected-cache manifest/path
 malformation or exact-byte drift are gate-affecting even though doctor remains read-only; each stale
 scope reports its own repair. Agent **profiles** install globally by default, so the `user` scope
 (`~/.codex`) is the authoritative one for profiles and must read green (managed block
@@ -1176,11 +1231,12 @@ evidence path.
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint (active project, current phase, current step, next command, fallback authorization) read from the most recent `workflow-state.md` | `scripts/kaola-workflow-compact-context.js` |
 | `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder (archive, `.roadmap/`, and `ROADMAP.md` are exempt) | `hooks/kaola-workflow-pre-commit.sh` |
+| `kaola-workflow:write-lane` | `PreToolUse` (`Write\|Edit`) | Denies an out-of-lane write while adaptive write-lane containment is enabled and a running-set manifest is active | `hooks/kaola-workflow-write-lane.sh` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` for WARN-FIRST closure attestation (#277 M1). Fail-open | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 ### Codex lifecycle hooks
 
-Codex wires the same three hooks via `install-codex-agent-profiles.js` (run by the
+Codex wires the same four hooks via `install-codex-agent-profiles.js` (run by the
 Codex `kaola-workflow-init` skill and re-run on every upgrade). Since #447, hooks
 install **globally** into `~/.codex/hooks.json`; their scripts land in the stable,
 version-less home `~/.codex/kaola-workflow/{hooks,scripts}`. The hooks are NOT in the
@@ -1195,6 +1251,7 @@ those paths.
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, next skill, in-progress node, pending gates, consent markers, task summary) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
 | `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder | `hooks/kaola-workflow-pre-commit.sh` |
+| `kaola-workflow:write-lane` | `PreToolUse` (`Write\|Edit`) | Denies an out-of-lane write while adaptive write-lane containment is enabled and a running-set manifest is active | `hooks/kaola-workflow-write-lane.sh` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl`, making `checkDispatchAttestations` (closure attestation) live on Codex when `multi_agent` is enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 **Caveats and preconditions:**
@@ -1516,6 +1573,31 @@ cd Kaola-Workflow
 git pull
 ./install.sh
 ```
+
+To converge all three runtimes from one synchronized checkout, reinstall each runtime explicitly
+(replace the Codex marketplace selector with the installed row reported by
+`codex plugin list --json`):
+
+```bash
+git pull --ff-only
+
+# Claude Code — choose the forge actually used on this machine.
+./install.sh --yes --forge=github --profile=higher
+
+# Codex — refresh the marketplace, replace the selected cached plugin, then copy
+# its validated role profiles/hooks into the global runtime authority.
+codex plugin marketplace upgrade <marketplace>
+codex plugin remove kaola-workflow@<marketplace>
+codex plugin add kaola-workflow@<marketplace>
+node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
+
+# opencode — additive runtime, global install.
+./install-opencode.sh --global --yes
+```
+
+Restart Claude Code and Codex after reinstalling. Run the Codex doctor shown above before the
+restart; after startup, the generated reviewer roles should load without malformed-agent warnings.
+If hook content changed, open `/hooks` and renew trust for the changed entries.
 
 ## License
 

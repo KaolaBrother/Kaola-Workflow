@@ -3,6 +3,7 @@ description: Workflow Next. Thin router for Kaola-Workflow. Detects active work,
 argument-hint: (optional project name or task description)
 ---
 
+
 # Workflow Next - thin router
 
 **First Principles.** When no shipped rule, gate, or refusal already settles a

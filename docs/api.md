@@ -1900,7 +1900,59 @@ On resume, the `## Node Ledger` n/a rows are already written (durable). `next-ac
 The fast path and the full path's per-phase mechanical transitions are owned by typed transaction scripts the main session runs directly (ADR 0004), not by the `contractor`. Each requires `--json`, emits a single JSON object on stdout, and mutates durable files in crash-safe order; refusals are typed (`{ "result": "refuse", "reason": "...", "operator_hint": "..." }`, exit 1) with zero mutation. The main session owns ALL judgment and hands the script the verbatim content; the script never dispatches a role, judges, routes, or asks. Each is idempotent/resume-safe and preserves an existing `## Sink` block byte-for-byte.
 
 - **`kaola-workflow-fast-advance.js` (#456)** — `orient` (read-only), `plan-setup`, `plan-capture --stdin`, `execute-setup`, `acceptance-run`, `acceptance-consequence --decision proceed|escalate`, `summary-write --verdict PASSED|ESCALATED --stdin`. Owns `fast-summary.md` + its `## Status` lifecycle.
-- **`kaola-workflow-full-advance.js` (#457)** — `orient` (read-only), `phase1-complete` (checkpoint; refuses if `phase1-research.md` is absent — never authors it), `phase2-finalize` / `phase3-finalize` / `phase5-finalize` (each `--stdin`: author the phase file from the orchestrator's packet + advance the pointer). Authors `phase{2,3,5}-*.md` with a RESOLVED `## Required Agent Compliance` table and **self-validates each rendered phase file against the real `repair-state.unresolvedCompliance(content, stateContent)` boundary gate before writing** (fails closed with `unresolved_compliance`); the default compliance status is `delegation_policy`-aware (`delegate`→`subagent-invoked`, `local-authorized`→`local-fallback-explicit`, `tool-unavailable`→`local-fallback-tool-unavailable`, else `invoked`).
+- **`kaola-workflow-full-advance.js` (#457)** — `orient` (read-only), `phase1-complete`
+  (checkpoint; refuses if `phase1-research.md` is absent — never authors it),
+  `phase2-finalize` / `phase3-finalize` / `phase5-finalize` (each `--stdin`: author the phase
+  file from the orchestrator's packet + advance the pointer), and `phase5-verify` (read-only
+  point-of-use recheck before Finalization). Authors `phase{2,3,5}-*.md` with a RESOLVED
+  `## Required Agent Compliance` table and **self-validates each rendered phase file against the
+  real `repair-state.unresolvedCompliance(content, stateContent)` boundary gate before writing**
+  (fails closed with `unresolved_compliance`). Phase 5 has stricter prerequisites:
+
+  - `phase4-progress.md` must contain one structurally valid, nonempty `## Tasks` table with an
+    exact Status column and every data row equal to `complete`; missing pipes, columns, separators,
+    statuses, or closing delimiters are `progress_incomplete`, never filtered into a vacuous pass.
+  - The packet and persisted review must have exactly one `code-reviewer` row, exactly one
+    `security-reviewer` invoked-or-file-risk-N/A row, and exactly one `review-fix executors`
+    invoked-or-no-blocking-findings-N/A row (N/A requires that no review-fix artifact exists).
+    Invoked evidence uses only canonical
+    `.cache/code-reviewer.md`, `.cache/security-reviewer.md`, or
+    `.cache/review-fix-{n}.md` regular files and must reproduce the exact seeded
+    `evidence-binding:` line above a structured approval body with exactly one column-zero
+    `domain_outcome: approved`, `verdict: pass`, `findings_blocking: 0`, and
+    `review_summary: no_blocking_findings`, plus exactly one column-zero
+    `review_attestation: full_review_completed`. Approval evidence must end with exactly one
+    column-zero `review_conclusion: <substantive prose>` as its final nonempty line. The attestation
+    and conclusion may be emitted only after the full review, and conclusion text after the prefix
+    must have at least 24 Unicode letter/number characters and four word tokens. The entire durable
+    body rejects control, format, Unicode line/paragraph separator, and default-ignorable code
+    points. Reserved labels and finding gate keys reject recognized compatibility/confusable and
+    single-Damerau-edit near-spoofs, while ordinary Unicode prose remains non-authoritative.
+    Canonical finding tokens require a lowercase ASCII key, ASCII `=`, and a non-whitespace value;
+    any noncanonical line carrying all three assignment-shaped gate keys, or a finding-like label
+    followed by all three alternating key/value pairs, refuses. Receipt rows
+    are the only mechanical
+    outcome authority; canonical `finding:` rows are the only mechanical finding authority.
+    Malformed, Unicode-obfuscated, duplicate, unknown-vocabulary, or canonical in-scope/open/fix rows refuse.
+    Conclusion presence, position, and minimum shape are mechanical, but its prose content is
+    retained only as orchestrator context and is not mechanically classified. Seed-only,
+    compact-summary-only, empty, traversal, absolute, wrong-name, directory, and symlink evidence
+    refuses as `reviewer_prerequisite` or `project_path_unsafe`.
+  - Reviewer evidence must be at least as new as `phase4-progress.md` and every regular
+    `.cache/review-fix-*.md`; invoked fix evidence must itself be current to Phase 4. A new fix
+    therefore makes the prior quality/security receipts stale and forces re-review.
+  - The transaction never grades findings: the main session decides whether CRITICAL/HIGH items
+    remain and supplies only `PASSED` or `PASSED WITH FOLLOW-UPS`. It escapes packet-supplied copies
+    of the reserved compliance heading and round-trips the one canonical five-column table before
+    writing.
+
+  Every subcommand also validates the real project authority. `kaola-workflow/<project>`, `.cache`,
+  state/progress/review files, named reviewer receipts, and review-fix artifacts must remain regular
+  non-symlink paths under the direct root/project boundary. The check runs before reads and again
+  immediately before transaction writes; violations are `project_path_unsafe` with no intentional
+  outside mutation. Other phases retain the `delegation_policy`-aware default compliance status
+  (`delegate`→`subagent-invoked`, `local-authorized`→`local-fallback-explicit`,
+  `tool-unavailable`→`local-fallback-tool-unavailable`, else `invoked`).
 - **`kaola-workflow-phase4-advance.js` (#458)** — `orient` (read-only), `init-progress` (stamp `phase4-progress.md` from `phase3-plan.md` `### Task N:` blocks; create-only), `open-task --task N`, `record-failure --task N --stdin` (append a Failure Routing Ledger row; deduped), `close-task --task N --stdin` (mark the task complete + flip its `tdd-guide executor task N` compliance row to a policy-aware resolved status + advance; on the last close it self-validates the whole table at the phase-4→5 boundary gate). Every table-cell value is sanitized (`|`→fullwidth `｜`) so an orchestrator-supplied name/path cannot shift columns and corrupt the table.
 
 Editions: each is rename-normalized per edition (the lone `require` of `repair-state` carries the forge prefix; command/skill route names stay edition-neutral via the KW-split). Registered in `kaola-workflow-install-manifest.js` `SUPPORT_SCRIPTS` + `validate-script-sync.js` (`COMMON_SCRIPTS` + `RENAME_NORMALIZED_FAMILIES`); the #459 contract validators pin both the registration and the absence of a contractor dispatch on every migrated command/SKILL surface.
@@ -2104,14 +2156,63 @@ node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [
 
 **Behavior (normal gate):**
 
-**Global-first short-circuit (#571):** Before project inspection, checks `~/.codex` (`os.homedir()/.codex`). If that scope is fresh (exists and all role/block checks pass), returns immediately with exit 0 and `scope: 'global'` — no project-local copy is inspected or written, and autofix is not triggered. Falls through to steps 1–6 only when the global scope is absent or stale. An enabled V2 scope with unsafe nested collaboration exposure refuses as `codex_v2_encrypted_transport_unsafe`; a reserved or hidden role schema refuses as `codex_v2_role_transport_unsafe`. Neither is an autofixable profile-staleness case. Fail-closed: the short-circuit adds only a PASS case; every existing typed refusal still fires when the global scope is not fresh.
+**Skill-side resolver:** Before this CLI is called, each of the ten dispatch-capable Codex skills
+parses `codex plugin list --json` and requires exactly one enabled installed row whose name is one of
+`kaola-workflow`, `kaola-workflow-gitlab`, or `kaola-workflow-gitea`. It validates the row's
+`pluginId`, marketplace/name/version path segments, then walks the exact
+`~/.codex/plugins/cache/<marketplace>/<name>/<version>/scripts/kaola-workflow-codex-preflight.js`
+path without following symlinks and requires a regular file. It never searches `$PWD/plugins`,
+never uses `find | head`, and never chooses among cached versions lexically. Registry ambiguity,
+unsafe/missing cache components, a nonzero CLI result, malformed JSON, or a status other than `ok`
+is surfaced to the skill as `profile_preflight_refused`.
 
-1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files, **schema-validating** each required profile (a non-empty top-level `name` matching the role, both top-level runtime keys omitted so the role inherits the parent session, and non-blank `developer_instructions` containing the role-appropriate durable-full-result plus compact-summary contract). An exact legacy Sol/medium or Sol/xhigh managed pair is stale and migratable; a partial pair or any other explicit runtime pin is malformed.
-2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, asserts every required role has an `[agents.{role}]` entry inside it, and flags any retired/foreign `[agents.*]` *inside* the markers.
+**Persisted precedence and profile authority:** Reads `~/.codex/config.toml` and inspects every
+`.codex/config.toml` path from the detected Git repository root through `--project-root` (or
+`process.cwd()`). When global project trust says those layers are loadable, the transport/posture
+fields owned by this gate overlay key-by-key in that order; an absent higher field does not erase a
+lower value. Unsafe
+transport output identifies the persisted config path that supplied the winning bad field through
+`config_path`/`transport_config_path`, and doctor output lists `effective_config_paths`. This proof
+does not include ephemeral Codex launch overrides such as `--profile` or `-c`; callers must not
+present a persisted-filesystem pass as attestation of per-process CLI configuration.
+
+A fresh global profile authority returns exit 0 with `scope: 'global'` only when no loaded project
+layer has a Kaola agent directory, managed block, or conflicting `agents` declaration. Otherwise
+the most-specific absolute `[projects."..."]` entry covering `--project-root` in global config must
+declare `trust_level = "trusted"`; unknown/untrusted project footprints refuse as
+`project_trust_required` because Codex ignores their `.codex` layers. Every trusted
+repository-root-to-cwd project layer is then inspected and the active project authority must be
+fresh; a lower stale/conflicting layer cannot be hidden by a higher clean layer. An enabled V2
+overlay with unsafe nested collaboration exposure refuses as
+`codex_v2_encrypted_transport_unsafe`; a reserved or hidden effective role schema refuses as
+`codex_v2_role_transport_unsafe`. Neither is an autofixable profile-staleness case.
+
+1. Checks the selected `.codex/agents/kaola-workflow/` authority for per-role `.toml` files,
+   **schema-validating** each required profile. The canonical grammar has exactly four top-level
+   fields (`name`, `description`, `nickname_candidates`, `developer_instructions`), no tables,
+   LF-only bytes, no raw TOML controls, and no backslashes. `name` must match the requested role;
+   description/nicknames must match the bundled registry; model/effort pins remain omitted; and the
+   instructions must carry the role-appropriate durable full-result contract. An exact legacy
+   Sol/medium or Sol/xhigh managed pair is stale and migratable; a partial pair or any other explicit
+   runtime pin is malformed.
+2. Reads the selected `.codex/config.toml`, locates the block between
+   `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, and compares its body exactly
+   with bundled `config/agents.toml` (or its agent-only suffix when a user-owned external
+   `[features]` table already exists). This binds every role's `config_file`, description, and
+   nickname metadata and rejects missing, reordered, substituted, absolute, or extra entries. Any
+   `agents` declaration outside the markers—including quoted, dotted, indented, inline, or
+   `[agents]` table form—is an unsafe conflict.
 3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied.
 4. Stale/retired Kaola `.toml` files left in the target dir (listed in the local `.kaola-managed-profiles.json` manifest, or in the retired-files list `docs-lookup.toml`) are detected; unknown user-owned TOMLs are **reported, never deleted** (the `extra_unmanaged` field).
 5. **Auto-install when safe**: if the only problem is a stale/missing/malformed managed block, profile file, or stale Kaola file, runs `install-codex-agent-profiles.js`, then re-verifies ALL checks. On success, returns exit 0 with `autofixed: true`.
-6. **Typed refusal when unsafe**: if an enabled MultiAgentV2 config permits nested Code Mode collaboration, uses the reserved `collaboration` namespace with visible role fields, hides Kaola's role fields, a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the local manifest declares an unsupported (future) `schema_version`, the installer is unavailable/errors, or the plan names a role absent from the template, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
+6. **Typed refusal when unsafe**: if any persisted config path is a symlink/wrong type/unreadable,
+   a project Kaola footprint is not covered by a trusted global project entry,
+   an enabled effective MultiAgentV2 overlay permits nested Code Mode collaboration, the effective
+   direct transport uses the reserved `collaboration` namespace or hides Kaola role fields, an
+   outside-marker `agents` declaration exists in any loaded project layer, the local manifest
+   declares an unsupported future `schema_version`, the installer is unavailable/errors, or the
+   plan names a role absent from the template, exits non-zero with a typed-refusal JSON.
+   `--no-autofix` forces the refusal path (useful in tests).
 7. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller.
 
 **MultiAgentV2 role-transport gate (correctness-fatal; Codex 0.144.1):** every live-scope result
@@ -2130,8 +2231,9 @@ role-aware posture is `tool_namespace = "agents"`, `hide_spawn_agent_metadata = 
 a fresh session after repair. The `plugin_cache` doctor scope has no live config and reports
 namespace/mode `"n/a"`, readiness `null`, and warning `null`.
 
-**Dispatch-posture report (additive, non-fatal — issue #598):** every result envelope,
-success AND every typed refusal, additionally carries `dispatch_posture`
+**Dispatch-posture report (additive, non-fatal — issue #598):** every live-scope result after the
+persisted config paths are readable, success or profile/transport refusal, additionally carries
+`dispatch_posture`
 (`"none"|"explicitRequestOnly"|"proactive"`), `model_reasoning_effort` (the raw root-level
 TOML value, or `null` when unset), `multi_agent_enabled` (the base `[features] multi_agent`
 boolean), and `dispatch_posture_warning` (the exact remediation string, or `null` when the
@@ -2149,8 +2251,8 @@ effort→mode coupling is Codex CLI runtime behavior verified on codex-tui 0.142
 change in a future release; the installer prints this caveat verbatim as its final
 dispatch-posture line.
 
-**MultiAgentV2 bounds report (additive, non-fatal — issue #611, D-611-01):** every result envelope
-(the same success/refusal branches the `dispatch_posture*` fields ride on) additionally carries six
+**MultiAgentV2 bounds report (additive, non-fatal — issue #611, D-611-01):** the same readable
+live-scope success/refusal branches that carry `dispatch_posture*` additionally carry six
 fields reporting the effective v2 concurrency slot budget and wait-timeout bounds:
 
 ```
@@ -2188,10 +2290,10 @@ and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
 | `1` | `profiles_malformed` / `profiles_stale` / `profiles_missing` / `config_stale` / `managed_block_stale` | Stale (autofixable) — `--no-autofix` refusal |
 | `2` | `template_missing` | bundled `config/agents.toml` not found |
 | `3` | `role_not_in_template` | plan names a role absent from the template |
-| `4` | `autofix_unsafe` | hand-authored `[agents.*]` outside the managed markers |
+| `4` | `autofix_unsafe` / `config_layer_unsafe` / `project_trust_required` | outside-marker `agents` declaration; linked/unreadable/wrong-type persisted config; or a project Kaola footprint Codex is not configured to trust |
 | `5` | `installer_failed` | installer missing / errored / still stale after re-verify |
 | `6` | `profile_schema_version_unsupported` | local manifest `schema_version` is newer than this installer supports — upgrade kaola-workflow |
-| `7` | `codex_v2_encrypted_transport_unsafe` | enabled V2 exposes collaboration through nested Code Mode instead of the direct encrypted transport |
+| `7` | `codex_v2_encrypted_transport_unsafe` / `codex_v2_role_transport_unsafe` | effective V2 exposes nested Code Mode, uses the reserved namespace, hides role metadata, or is ambiguous |
 
 **JSON output (`--json`):**
 
@@ -2200,18 +2302,52 @@ Success:
 { "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "codex_v2_transport_mode": "direct-only", "codex_v2_direct_transport_ready": true, "codex_v2_tool_namespace": "agents", "codex_v2_role_metadata_visible": true, "codex_v2_role_transport_ready": true, "codex_v2_transport_warning": null, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": true, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.", "max_concurrent_threads_per_session": 4, "max_concurrent_threads_per_session_source": "observed_default", "effective_subagent_width": 3, "min_wait_timeout_ms": null, "max_wait_timeout_ms": null, "default_wait_timeout_ms": null }
 ```
 
-The `scope` field is additive (#571): `"global"` when the global `~/.codex` scope satisfied the gate; `"project"` when the project scope satisfied it (with or without autofix). Existing callers that assert only `status` and `autofixed` are unaffected. The three `codex_v2_transport*` fields, four `dispatch_posture*` fields (#598), and six `multi_agent_v2` bounds fields (#611) are present on every live-scope result.
+The `scope` field is `"global"` when global profiles satisfy the gate without a project Kaola
+footprint and `"project"` when a project authority satisfies it (with or without autofix). Transport
+refusals use `scope: "effective"` because their result comes from the merged persisted layer stack,
+not from whichever scope supplied profiles. `effective_config_paths` lists the evaluated persisted
+config files and `transport_config_path`/`config_path` identifies the winning unsafe field where one
+can be isolated. The three `codex_v2_transport*` fields, four `dispatch_posture*` fields (#598), and
+six `multi_agent_v2` bounds fields (#611) are present on live-scope results.
 
-Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, `extra_unmanaged`, the same transport, dispatch-posture, and bounds fields, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`). The transport refusal additionally carries `scope` and `config_path`.
+Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`,
+`extra_unmanaged` where applicable, plus a status-specific payload: `malformed: [{role, file,
+reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`),
+`stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]`
+(`profiles_missing`/`config_stale`), `conflicting_roles_outside_markers: [...]`
+(`autofix_unsafe`), `config_path` + `error` (`config_layer_unsafe`), or `project_root` +
+`project_trust` (`project_trust_required`). Transport refusals carry the effective transport,
+dispatch-posture, bounds, and winning persisted path.
 
-**Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for four scope classes:
+Outside-marker role reporting distinguishes all discovered declarations from the gate-affecting
+subset: `conflicting_roles_outside` reports every outside role, while
+`managed_role_conflicts_outside` contains only wildcard, exact, or nested collisions with a
+managed Kaola role. Unrelated user roles remain valid.
+
+**Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for these scope classes:
 
 - `repository` — the bundled source profiles beside the preflight script, schema- and reviewer-contract-checked;
 - `user` — `<home>/.codex` (`--home` overrides `os.homedir()`; a test/diagnostic hook);
-- `project` — `<project-root>/.codex`;
-- `plugin_cache` — each cached source-profile set under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema- and exact-source-byte-checked, `read_only: true`.
+- `project_layer` — each repository-root-to-parent `.codex` layer;
+- `project` — the requested cwd's `.codex` layer;
+- `plugin_cache` — the invoking plugin's exact name/version cache under each `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/` match. Its marketplace/name/version path, plugin manifest, `config/agents.toml`, and complete role-profile set are non-symlink authority- and exact-source-byte-checked; unrelated plugins and old versions are ignored. These scopes are `read_only: true`.
 
-`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, missing_from_block, malformed, stale_profiles, profile_byte_drift, stale_files, stale_roles_in_block, conflicting_roles_outside, extra_unmanaged, manifest, codex_v2_transport_mode, codex_v2_direct_transport_ready, codex_v2_tool_namespace, codex_v2_role_metadata_visible, codex_v2_role_transport_ready, codex_v2_transport_warning, dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning, max_concurrent_threads_per_session, max_concurrent_threads_per_session_source, effective_subagent_width, min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms, read_only, repair}, ...] }`. Exit code is 0 only when the repository source is valid, the `user` and `project` scopes are clean-or-absent, and every discovered plugin cache matches the bundled source. It is 1 when the repository source is malformed, either installed scope is stale, or any plugin-cache profile is malformed or byte-drifted. Unsafe V2 transport or role schema also makes its live scope stale. Plugin caches remain read-only, but their drift is gate-affecting; their repair is the exact `codex plugin remove <plugin>@<marketplace> && codex plugin add <plugin>@<marketplace>  # refresh plugin cache` command. Every stale scope carries a concrete repair.
+`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists,
+managed_block, managed_block_drift, profiles, missing_roles, missing_from_block, malformed,
+stale_profiles, profile_byte_drift, stale_files, stale_roles_in_block,
+conflicting_roles_outside, managed_role_conflicts_outside, extra_unmanaged, manifest,
+kaola_footprint, kaola_state,
+codex_v2_transport_mode, codex_v2_direct_transport_ready, codex_v2_tool_namespace,
+codex_v2_role_metadata_visible, codex_v2_role_transport_ready, codex_v2_transport_warning,
+dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning,
+max_concurrent_threads_per_session, max_concurrent_threads_per_session_source,
+effective_subagent_width, min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms,
+effective_config_paths, transport_config_path, project_trust, read_only, repair}, ...] }`. Exit code is 0 only
+when repository source, every installed persisted layer, and every selected exact-name/version plugin cache are
+clean-or-absent. It is 1 for malformed source, linked/unreadable config, an untrusted project Kaola
+footprint, stale managed blocks or profiles, unsafe effective V2 transport, or plugin-cache drift. Plugin caches remain read-only; their
+repair is the exact `codex plugin remove <plugin>@<marketplace> && codex plugin add
+<plugin>@<marketplace>` refresh. Every stale scope carries a concrete repair.
 
 The six transport/role fields are present on every live or cache scope; for `plugin_cache`, mode/namespace read `'n/a'`, readiness/metadata read `null`, and warning reads `null`. The four `dispatch_posture*` fields (#598, non-fatal — see above) are also present on every live or cache scope; for `plugin_cache`, they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` because a cached source tree has no live runtime config. The six `multi_agent_v2` bounds fields (#611, non-fatal — see above) likewise use `null` numeric values and `'n/a'` as the source for `plugin_cache`. Repository output is source-contract evidence rather than a live transport/config report. Without `--json`, each scope line is followed by its exact `repair` when stale, a `transport` line for unsafe V2, and a `warn` line whenever that scope's posture is non-`proactive`.
 
@@ -2223,18 +2359,31 @@ Installs the Codex-native role profiles. Ships in the **3 plugin trees only** (c
 
 **`--global` flag (#571):** sets `projectRoot = os.homedir()` regardless of `cwd` or argument order (position-robust, like `--with-fast`/`--with-full`). Installs profiles into `~/.codex/agents/kaola-workflow/`, writes the managed block into `~/.codex/config.toml`, and refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. The positional `projectRoot` form (`"$PWD"` / `"$HOME"`) remains a supported project-local override. `--global` composes with `--with-fast`/`--with-full` (independent flags). Use `--global` for the documented default install and upgrade flow.
 
-Default-on validate → install → prune → manifest → post-verify (no install flags):
+Default-on validate → authority check → install → prune → manifest → post-verify (no install flags):
 
-1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. Generated reviewer profiles additionally require reviewer contract version 2, the embedded normalized behavior core and matching `behavior_contract_hash`, one valid self-normalized `resolved_profile_hash`, the closed top-level schema, and no runtime/model pin. On failure, prints `profile_schema_error: ...` plus `profile_source_repair: node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check`, then exits 1 **before any write**.
-2. **V2 role-transport wall** — reads the target `config.toml` before any write. Nested/ambiguous encrypted transport prints `codex_v2_encrypted_transport_unsafe: ...`; a reserved/hidden role schema prints `codex_v2_role_transport_unsafe: ...`. Both exit 1, and the installer does not silently change user-owned feature settings.
-3. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported, prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
-4. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the managed `[agents.*]` block, copies hook scripts into the global stable home, and merges the managed entries into `~/.codex/hooks.json` (#325/#447 semantics).
-5. **Prune** — removes target `.toml` files that are no longer current AND are either listed in the previous manifest (`stale-managed`) or in the retired list `docs-lookup.toml` (`retired`, works with no manifest). Unknown user TOMLs are left in place and reported as `unmanaged extra`.
-6. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, reviewer `profile_contracts` carrying `behavior_contract_version`, `behavior_contract_hash`, and `resolved_profile_hash`, and `retired_files_removed`).
-7. **Post-verify** — re-reads every installed profile, requires exact bundled-source bytes, revalidates reviewer profile identities, and asserts that the managed block carries every template role; on failure prints `post_verify_failed: ...` and exits 1.
-8. Prints `Kaola-Workflow Codex multi_agent_v2 transport: <mode>` plus the effective role namespace/metadata readiness with the posture/bounds report, then `status: ok` as the machine-checkable final sentinel.
+1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. Generated reviewer profiles additionally require reviewer contract version 2, the embedded normalized behavior core and matching `behavior_contract_hash`, one valid self-normalized `resolved_profile_hash`, exactly the supported top-level fields (`name`, `description`, `nickname_candidates`, and `developer_instructions`), and no runtime/model pin. The managed grammar is LF-only, rejects raw TOML control characters, and forbids backslashes anywhere in a managed role TOML so an invalid basic-string escape in a description, nickname, or multiline instruction cannot make Codex discard the role. All three identity values live inside `developer_instructions`; none is emitted as a Codex configuration key. On failure, prints `profile_schema_error: ...` plus `profile_source_repair: node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check`, then exits 1 **before any write**.
+2. **Install-target authority wall** — before reading or writing any destination, walks every
+   existing component below the explicit project/HOME authority for `.codex`, profile files,
+   `config.toml`, hooks, stable hook/script homes, shared path-selection config, and the managed
+   manifest. A symlink, escaping path, or wrong-type component prints `install_target_unsafe: ...`
+   and exits 1 without following it. Parent path components above the explicit authority are not
+   reclassified, so a legitimate mounted workspace remains supported.
+3. **V2 role-transport wall** — reads the target `config.toml` before any write.
+   Nested/ambiguous encrypted transport prints `codex_v2_encrypted_transport_unsafe: ...`; a
+   reserved/hidden role schema prints `codex_v2_role_transport_unsafe: ...`. Both exit 1, and the
+   installer does not silently change user-owned feature settings.
+4. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported,
+   prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
+5. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the
+   exact bundled `[agents.*]` block (all `config_file`/description/nickname metadata, no extras),
+   copies hook scripts into the global stable home, and merges the managed entries into
+   `~/.codex/hooks.json` (#325/#447 semantics).
+6. **Prune** — removes a no-longer-current target `.toml` only when its current regular-file bytes still match the valid `sha256:` recorded by the previous manifest (`stale-managed`), or when the unchanged retired-name rule applies to `docs-lookup.toml` with no conflicting manifest ownership. A modified, unreadable, wrong-type, or unverifiable prior entry is retained and reported as `unmanaged extra`; a forged/stale manifest cannot delete custom bytes. Unknown user TOMLs are likewise retained.
+7. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, reviewer `profile_contracts` carrying `behavior_contract_version`, `behavior_contract_hash`, and `resolved_profile_hash`, and `retired_files_removed`).
+8. **Post-verify** — re-reads every installed profile, requires exact bundled-source bytes, revalidates reviewer profile identities, and requires the exact canonical managed block; on failure prints `post_verify_failed: ...` and exits 1.
+9. Prints `Kaola-Workflow Codex multi_agent_v2 transport: <mode>` plus the effective role namespace/metadata readiness with the posture/bounds report, then `status: ok` as the machine-checkable final sentinel.
 
-These checks prove repository, installed, and discovered plugin-cache **filesystem bytes and embedded identities**. They do not attest that a proprietary runtime loaded those bytes into a prompt, and deterministic profile identity does not imply identical stochastic model output.
+These checks prove repository, installed, and selected exact-name/version plugin-cache **filesystem bytes and embedded identities**. They do not attest that a proprietary runtime loaded those bytes into a prompt, and deterministic profile identity does not imply identical stochastic model output.
 
 Exported helpers (require-safe; `require.main` guard means `require()` never runs the installer): `validateProfileText`, `validateSourceProfiles`, `pruneStaleProfiles`, `readManifest`, `writeManifest`, `buildManagedHooks`, `mergeHooks`, `updateHooks`, `detectCodexDispatchMode`, plus the constants `RETIRED_PROFILE_FILES`, `MANIFEST_BASENAME`, `EFFORT_VALUES`, `CODEX_V2_TRANSPORT_UNSAFE_STATUS`, `CODEX_V2_DIRECT_TRANSPORT_NOTE`, `CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS`, `CODEX_V2_ROLE_TOOL_NAMESPACE`, and `CODEX_V2_ROLE_TRANSPORT_NOTE`.
 
@@ -2336,7 +2485,7 @@ When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generate
 ## Codex `~/.codex/hooks.json` managed-entry contract
 
 `install-codex-agent-profiles.js` (invoked by the Codex `kaola-workflow-init` skill)
-writes the global `~/.codex/hooks.json` containing the three managed
+writes the global `~/.codex/hooks.json` containing the four managed
 Kaola-Workflow hook entries. Agent profiles and the managed `[agents.*]` config block
 install **globally** into `~/.codex` by default (#571 — one install, all repos); hook
 entries and hook scripts are also machine-global. Project-local is a supported override:
@@ -2351,9 +2500,13 @@ identifies managed entries by that prefix and uses an idempotent merge-by-id str
 - For each event in the managed template, existing entries whose `id` starts with
   `kaola-workflow:` are dropped and the managed entries are appended.
 - User entries (no `id`, or a non-`kaola-workflow:` id) are preserved untouched.
-- Events not present in the managed template are left entirely unchanged.
-- If the existing `~/.codex/hooks.json` is missing or malformed JSON, it is treated as
-  empty with a warning printed to stderr (WARN-first; the install proceeds).
+- Events not present in the managed template keep their user entries, while stale
+  `kaola-workflow:` entries are removed from every event before the current managed
+  set is appended.
+- A missing `~/.codex/hooks.json` is initialized as empty. Malformed JSON or a malformed
+  supported hook shape is refused before mutation; the existing hook file and stable
+  hook-script tree remain byte-identical and the install does not report success.
+- Codex's optional top-level `description` metadata is preserved across the merge.
 
 ### Template token substitution
 
@@ -2365,18 +2518,19 @@ that stable home, not the versioned plugin-cache path. Written command paths in
 `~/.codex/hooks.json` are therefore absolute and survive plugin-cache garbage
 collection, throwaway install trees, and project worktree changes.
 
-### The three managed entries
+### The four managed entries
 
 | Event | Matcher | id | Command script |
 |-------|---------|-----|----------------|
 | `SessionStart` | `compact` | `kaola-workflow:compact-context` | `scripts/kaola-workflow-codex-compact-resume.js` |
 | `PreToolUse` | `Bash` | `kaola-workflow:pre-commit-guard` | `hooks/kaola-workflow-pre-commit.sh` |
+| `PreToolUse` | `Write\|Edit` | `kaola-workflow:write-lane` | `hooks/kaola-workflow-write-lane.sh` |
 | `SubagentStart` | `*` | `kaola-workflow:subagent-dispatch-log` | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 (The `PostToolUse` `kaola-workflow:phantom-advisor` entry was retired in #372 with the
 advisor gates; an upgrade install de-registers any stale copy from existing settings.)
 
-All three entries carry a `timeout` field (5 seconds) and
+All four entries carry a `timeout` field (5 seconds) and
 a `description` field. These values come directly from the template; the installer
 does not add or modify them beyond the token substitution above.
 

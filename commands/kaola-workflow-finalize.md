@@ -133,9 +133,15 @@ If `workflow_path: adaptive`:
   Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
   ```
 If `workflow_path: full` (or absent):
-- `phase5-review.md` must exist with status `PASSED` or `PASSED WITH FOLLOW-UPS`. If missing, stop:
-  ```text
-  Phase 5 is not complete. Run /kaola-workflow-phase5 first.
+- Run the read-only point-of-use verifier before any Finalization side effect.
+  It revalidates strict Phase 4 completion, the canonical five-column review
+  compliance table, exact seeded evidence bindings and substantive bodies,
+  evidence freshness, fix decisions, and project-path authority:
+  ```bash
+  kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+  FULL_ADVANCE="$(kaola_script kaola-workflow-full-advance.js)" || { echo "BLOCKED: full-path verifier unavailable" >&2; exit 1; }
+  node "$FULL_ADVANCE" phase5-verify --root "$PWD" --project {project} --json \
+    || { echo "BLOCKED: phase5_point_of_use_failed — run /kaola-workflow-phase5 first" >&2; exit 1; }
   ```
 
 ### Validation Gate (dual-mode by repo kind)

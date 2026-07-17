@@ -3,6 +3,7 @@ description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.m
 argument-hint: <project name>
 ---
 
+
 # Kaola-Workflow Plan Run
 
 Executes a frozen `workflow-plan.md` for an adaptive project (`workflow_path: adaptive`).
@@ -131,12 +132,11 @@ source described by the metric-optimizer card.
 
 ## Gate-Role Degradation Notice
 
-Determine dispatch availability BEFORE opening the first node, and re-check if it changes mid-run:
-subagent role profiles are absent at BOTH the project-local `.codex/agents/kaola-workflow/` path
-and the global `~/.codex/agents/kaola-workflow/` path, OR the runtime dispatch mode model-refuses
-spawns. When dispatch is unavailable, post a PROMINENT run-start notice — before dispatching any
-node — naming every gate role the plan will run inline as self-review: `adversarial-verifier`,
-`code-reviewer`, `security-reviewer`.
+Determine runtime Agent/teammate availability before opening the first node and re-check if it
+changes mid-run. Only a genuinely unavailable agent tool or a runtime mode-refused spawn qualifies.
+When that dispatch capability is unavailable, post a PROMINENT run-start notice — before
+dispatching any node — naming every gate role the plan would otherwise have dispatched:
+`adversarial-verifier`, `code-reviewer`, `security-reviewer`.
 
 For `adversarial-verifier` and `code-reviewer`, an inline gate reviewing its own writer-context is
 no gate: do NOT dispatch the gate node inline and silently record a self-issued `verdict: pass`.

@@ -12,8 +12,9 @@ but delegates expensive/noisy validation and does not own implementation edits.
 
 ## Prerequisite
 
-`phase4-progress.md` must exist with all tasks complete. If missing or tasks are
-pending, stop:
+`phase4-progress.md` must exist and its strict `## Tasks` table must contain at
+least one task row; every task status must be `complete`. A malformed, empty,
+missing, or incomplete table refuses Phase 5. If refused, stop:
 
 ```text
 Phase 4 is not complete. Run /kaola-workflow-phase4 first.
@@ -173,6 +174,16 @@ Provide modified files from `phase4-progress.md` and instruct:
 Review only; do not edit files.
 Check naming, error handling, immutability, function size under 50 lines, file
 size under 800 lines, test coverage, no debug statements, and scope compliance.
+Compatibility context: for approval, the durable body MUST contain the approval
+receipt with exactly one column-zero domain_outcome: approved, exactly one
+column-zero verdict: pass, exactly one column-zero findings_blocking: 0, exactly
+one column-zero review_summary: no_blocking_findings, exactly one column-zero
+review_attestation: full_review_completed, and exactly one final column-zero
+review_conclusion: <substantive prose>. Emit the attestation and conclusion only
+after completing the full review; the conclusion text after the prefix must
+contain at least 24 Unicode letter/number characters and four word tokens. The entire durable body must not contain control, format, Unicode line/paragraph separator, or default-ignorable code points, and every machine label and finding gate key must use exact ASCII spelling and delimiters. Every finding token must use a lowercase ASCII key and ASCII = delimiter with a non-whitespace value. Emit every finding as a
+canonical column-zero finding: row; use the corresponding failing receipt values
+plus review_summary: blocking_findings_present when changes are requested.
 ```
 
 Write raw output to:
@@ -180,6 +191,12 @@ Write raw output to:
 ```text
 kaola-workflow/{project}/.cache/code-reviewer.md
 ```
+
+Before every reviewer or fix dispatch, create its canonical evidence file with
+only line 1: `evidence-binding: <node-id> <fresh-nonce>`. Pass that exact
+binding in the dispatch prompt. After the role returns, preserve line 1
+byte-for-byte and append the role's FULL returned reviewer/fix result below it;
+never replace the file with a compact summary or parent-authored synthesis.
 
 ## Step 2 - Security Review
 
@@ -201,6 +218,16 @@ Agent(
 Review only; do not edit files.
 Check hardcoded secrets, injection, unvalidated input, unsafe operations, OWASP
 Top 10, auth, payments, user data, filesystem access, and external API calls.
+Compatibility context: for approval, the durable body MUST contain the approval
+receipt with exactly one column-zero domain_outcome: approved, exactly one
+column-zero verdict: pass, exactly one column-zero findings_blocking: 0, exactly
+one column-zero review_summary: no_blocking_findings, exactly one column-zero
+review_attestation: full_review_completed, and exactly one final column-zero
+review_conclusion: <substantive prose>. Emit the attestation and conclusion only
+after completing the full review; the conclusion text after the prefix must
+contain at least 24 Unicode letter/number characters and four word tokens. The entire durable body must not contain control, format, Unicode line/paragraph separator, or default-ignorable code points, and every machine label and finding gate key must use exact ASCII spelling and delimiters. Every finding token must use a lowercase ASCII key and ASCII = delimiter with a non-whitespace value. Emit every finding as a
+canonical column-zero finding: row; use the corresponding failing receipt values
+plus review_summary: blocking_findings_present when changes are requested.
 ```
 
 Write raw output to:
@@ -246,10 +273,42 @@ The **Review Status** verdict (`PASSED` / `PASSED WITH FOLLOW-UPS`) and the
 CRITICAL/HIGH triage are the main session's **judgment**: the main session reads
 `.cache/code-reviewer.md`, `.cache/security-reviewer.md`, and every
 `.cache/review-fix-*.md`, decides whether any CRITICAL or HIGH finding remains
-unresolved, and DECIDES the verdict. This script never judges severity, never
-grades the review, and never gates Finalization — it only transcribes the verdict
-the main session hands it, verbatim. It refuses a `review_status` that is not
-`PASSED` or `PASSED WITH FOLLOW-UPS` (typed refusal, zero mutation).
+unresolved, and DECIDES the verdict. This script never judges severity or grades
+the review. It mechanically gates Finalization on the strict Phase 4 task
+prerequisite and an explicit `compliance` array containing exactly one
+`code-reviewer` row with canonical `.cache/code-reviewer.md` evidence, exactly
+one `security-reviewer` row with canonical invoked evidence or a documented N/A
+file-risk decision, and exactly one `review-fix executors` row with canonical
+numeric evidence or N/A. When fixes ran, that single row must comma-enumerate
+every `.cache/review-fix-1.md`, `.cache/review-fix-2.md`, and so on in strictly
+ascending numeric order, with every corresponding exact binding comma-separated
+in the same order. Any coexisting noncanonical `review-fix-*` name, including a
+leading-zero, empty, or nonnumeric suffix, refuses. When no fix ran, the N/A reason must
+be exactly `no blocking findings`, `no CRITICAL/HIGH findings`, or
+`no CRITICAL/HIGH blocking findings`. Invoked reviewer evidence must be
+nonempty, regular, non-symlink, and have an mtime strictly greater than both
+`phase4-progress.md` and every `.cache/review-fix-*.md`; equal time is stale
+and forces a fresh reviewer pass after every fix. Terminal reviewer evidence
+must contain exactly one column-zero `domain_outcome: approved`, exactly one
+`verdict: pass`, exactly one `findings_blocking: 0`, and exactly one
+`review_summary: no_blocking_findings`, and exactly one
+`review_attestation: full_review_completed`, plus exactly one column-zero
+`review_conclusion: <substantive prose>` as the final nonempty line. The attestation
+and conclusion may be emitted only after the full review; conclusion text after the
+prefix must contain at least 24 Unicode letter/number characters and four word tokens. The entire reviewer body must not contain control, format, Unicode line/paragraph separator, or default-ignorable code points. Reserved machine labels and finding gate keys reject unsafe/invisible, recognized compatibility/confusable, and single-Damerau-edit near-spoof variants; ordinary Unicode prose remains non-authoritative. Every canonical finding token must use a lowercase ASCII key and ASCII = delimiter with a non-whitespace value, and any noncanonical line carrying all three assignment-shaped gate keys, or a finding-like label followed by all three alternating key/value pairs, refuses. Reserved receipt
+rows are the only mechanical outcome authority, and canonical `finding:` rows are
+the only mechanical finding authority; malformed, indented, case-shifted, Unicode-obfuscated, duplicate,
+or unknown-vocabulary rows refuse, and any canonical in-scope open fix finding
+cannot Finalize. Conclusion presence, position, and minimum shape are mechanical,
+but its prose content is retained only as orchestrator context and is not
+mechanically classified. Named reviewer invocation remains required when local fix
+fallback is authorized or agent tooling is unavailable. The
+matching invoked compliance row must pass the exact seeded line as `binding`;
+an N/A security or fix row must pass `binding: n/a`. The script rejects a
+missing/changed binding, seed-only body, or compact-summary-only body. The
+script also refuses a `review_status` that is not `PASSED` or
+`PASSED WITH FOLLOW-UPS` (typed refusal, zero mutation), then transcribes the
+main session's accepted verdict verbatim.
 
 The mechanical bookkeeping — authoring `phase5-review.md` from the orchestrator's
 verbatim content and advancing the `workflow-state.md` pointer — is owned by the
@@ -275,9 +334,9 @@ node "$KAOLA_SCRIPTS/kaola-workflow-full-advance.js" phase5-finalize \
   "validation_evidence": "<commands run/delegated/cited, result, evidence path>",
   "followups": "<MEDIUM/LOW deferred or none>",
   "compliance": [
-    { "requirement": "code-reviewer", "status": "invoked", "evidence": ".cache/code-reviewer.md" },
-    { "requirement": "security-reviewer", "status": "n/a", "skip_reason": "no security-sensitive files in write set" },
-    { "requirement": "review-fix executors", "status": "n/a", "skip_reason": "no CRITICAL/HIGH findings" }
+    { "requirement": "code-reviewer", "status": "invoked", "evidence": ".cache/code-reviewer.md", "binding": "evidence-binding: phase5-code-review-1 <fresh-nonce>" },
+    { "requirement": "security-reviewer", "status": "n/a", "binding": "n/a", "skip_reason": "no security-sensitive files in write set" },
+    { "requirement": "review-fix executors", "status": "n/a", "binding": "n/a", "skip_reason": "no CRITICAL/HIGH findings" }
   ]
 }
 PACKET
@@ -305,11 +364,11 @@ The script writes `kaola-workflow/{project}/phase5-review.md` in this shape
 [list or none]
 
 ## Required Agent Compliance
-| Requirement | Status | Evidence | Skip Reason |
-|-------------|--------|----------|-------------|
-| code-reviewer | invoked | .cache/code-reviewer.md | |
-| security-reviewer | invoked/N/A | .cache/security-reviewer.md or file-risk scan | [reason if N/A] |
-| review-fix executors | invoked/N/A | .cache/review-fix-*.md | [reason if N/A] |
+| Requirement | Status | Evidence | Binding | Skip Reason |
+|-------------|--------|----------|---------|-------------|
+| code-reviewer | invoked | .cache/code-reviewer.md | evidence-binding: phase5-code-review-1 nonce | |
+| security-reviewer | invoked/N/A | .cache/security-reviewer.md or file-risk scan | exact seeded binding or n/a | [reason if N/A] |
+| review-fix executors | invoked/N/A | .cache/review-fix-1.md, .cache/review-fix-2.md, ... | exact binding 1, exact binding 2, ... or n/a | exact allowed reason if N/A |
 
 ## Fixes Applied
 [list]

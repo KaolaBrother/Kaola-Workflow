@@ -92,9 +92,8 @@ const MANIFEST_SCHEMA_VERSION = 1;
 const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
 const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 2;
 const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
-const REVIEWER_TOP_LEVEL_FIELDS = Object.freeze([
-  'name', 'description', 'nickname_candidates', 'behavior_contract_version',
-  'behavior_contract_hash', 'resolved_profile_hash', 'developer_instructions',
+const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
+  'name', 'description', 'nickname_candidates', 'developer_instructions',
 ]);
 
 // issue #543: --with-fast / --with-full opt-in partition. Adaptive is the unconditional default
@@ -121,6 +120,81 @@ function assert(condition, message) {
 
 function read(file) {
   return fs.readFileSync(file, 'utf8');
+}
+
+function lstatIfPresent(file) {
+  try {
+    return fs.lstatSync(file);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+// Every installer destination is a local authority boundary. Walk only below the
+// explicit project/HOME roots (never their parents), reject a symlink at any existing
+// component, and reject wrong-kind leaves before the first target read or write.
+function installTargetPathProblem(authorityRoot, target, expectedKind) {
+  const authority = path.resolve(authorityRoot);
+  const destination = path.resolve(target);
+  const relative = path.relative(authority, destination);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return `${destination} escapes authority root ${authority}`;
+  }
+
+  const authorityStat = lstatIfPresent(authority);
+  if (!authorityStat || authorityStat.isSymbolicLink() || !authorityStat.isDirectory()) {
+    return `${authority} must be an existing non-symlink directory`;
+  }
+
+  const segments = relative === '' ? [] : relative.split(path.sep);
+  let current = authority;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]);
+    const stat = lstatIfPresent(current);
+    if (!stat) continue;
+    if (stat.isSymbolicLink()) return `${current} is a symlink`;
+    const isLeaf = index === segments.length - 1;
+    if (!isLeaf && !stat.isDirectory()) return `${current} is not a directory`;
+    if (isLeaf && expectedKind === 'directory' && !stat.isDirectory()) {
+      return `${current} is not a directory`;
+    }
+    if (isLeaf && expectedKind === 'file' && !stat.isFile()) {
+      return `${current} is not a regular file`;
+    }
+  }
+  return null;
+}
+
+function validateInstallTargets(templateEntries) {
+  const homeDir = os.homedir();
+  const sharedConfigDir = path.join(homeDir, '.config');
+  const sharedKaolaConfigDir = path.join(sharedConfigDir, 'kaola-workflow');
+  const checks = [
+    [projectRoot, targetCodexDir, 'directory'],
+    [projectRoot, path.join(targetCodexDir, 'agents'), 'directory'],
+    [projectRoot, targetAgentsDir, 'directory'],
+    [projectRoot, targetConfig, 'file'],
+    [projectRoot, manifestPath(targetAgentsDir), 'file'],
+    [homeDir, globalCodexDir, 'directory'],
+    [homeDir, targetHooks, 'file'],
+    [homeDir, targetStableDir, 'directory'],
+    [homeDir, targetStableHooksDir, 'directory'],
+    [homeDir, targetStableScriptsDir, 'directory'],
+    [homeDir, sharedConfigDir, 'directory'],
+    [homeDir, sharedKaolaConfigDir, 'directory'],
+    [homeDir, path.join(sharedKaolaConfigDir, 'config.json'), 'file'],
+  ];
+  for (const entry of templateEntries || []) {
+    if (entry && entry.basename) {
+      checks.push([projectRoot, path.join(targetAgentsDir, entry.basename), 'file']);
+    }
+  }
+  for (const [authority, target, kind] of checks) {
+    const problem = installTargetPathProblem(authority, target, kind);
+    if (problem) return problem;
+  }
+  return null;
 }
 
 function escapeRegExp(value) {
@@ -158,6 +232,112 @@ function sha256Hex(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+// Managed role profiles intentionally use one small canonical TOML grammar: four bare,
+// column-zero assignments and one triple-quoted developer_instructions block, with no tables.
+// Reject every other spelling rather than approximating TOML acceptance. This makes quoted,
+// dotted, indented, or table-scoped keys fail closed even when Codex itself parses them.
+const TOML_KEY_SEGMENT_PATTERN = `(?:"(?:\\\\.|[^"\\\\])*"|'[^']*'|[A-Za-z0-9_-]+)`;
+const TOML_ASSIGNMENT_PATTERN = new RegExp(
+  `^(\\s*)(${TOML_KEY_SEGMENT_PATTERN}(?:\\s*\\.\\s*${TOML_KEY_SEGMENT_PATTERN})*)\\s*=`,
+);
+
+function tomlKeyLabel(raw) {
+  const key = String(raw).trim();
+  if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
+  if (/^"(?:\\.|[^"\\])*"$/.test(key)) {
+    try { return JSON.parse(key); } catch (_) { return key; }
+  }
+  if (/^'[^']*'$/.test(key)) return key.slice(1, -1);
+  return key.replace(/\s+/g, '');
+}
+
+function profileTopLevelShape(text) {
+  const source = String(text);
+  const instructionRe = /^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*(?:\r?\n|$)/gm;
+  const instructionMatches = [...source.matchAll(instructionRe)];
+  let outside = '';
+  let cursor = 0;
+  for (const match of instructionMatches) {
+    outside += source.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+  }
+  outside += source.slice(cursor);
+
+  const fields = instructionMatches.map(() => 'developer_instructions');
+  const violations = [];
+  if (source.includes('\r')) violations.push({ kind: 'line_endings', value: 'LF required' });
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(source)) {
+    violations.push({ kind: 'control', value: 'raw TOML control character' });
+  }
+  const instructionBackslash = instructionMatches.some(match => match[1].includes('\\'));
+  if (source.includes('\\')) {
+    violations.push(instructionBackslash
+      ? { kind: 'instruction_backslash', value: 'backslash in multiline basic string' }
+      : { kind: 'backslash', value: 'backslash in managed TOML' });
+  }
+  for (const [index, line] of outside.split(/\r?\n/).entries()) {
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const table = line.match(/^\s*(\[\[?.*?\]\]?)\s*(?:#.*)?$/);
+    if (table) {
+      violations.push({ kind: 'table', value: table[1], line: index + 1 });
+      continue;
+    }
+    const assignment = line.match(TOML_ASSIGNMENT_PATTERN);
+    if (!assignment) {
+      violations.push({ kind: 'syntax', value: line.trim(), line: index + 1 });
+      continue;
+    }
+    const rawKey = assignment[2];
+    const field = tomlKeyLabel(rawKey);
+    fields.push(field);
+    if (assignment[1] !== '' || !/^[A-Za-z0-9_-]+$/.test(rawKey)) {
+      violations.push({ kind: 'syntax', value: `noncanonical key ${rawKey}`, line: index + 1 });
+    }
+    if (!CODEX_ROLE_TOP_LEVEL_FIELDS.includes(field)) {
+      violations.push({ kind: 'field', value: field, line: index + 1 });
+    }
+  }
+  for (const field of CODEX_ROLE_TOP_LEVEL_FIELDS) {
+    const count = fields.filter(value => value === field).length;
+    if (count > 1) violations.push({ kind: 'duplicate', value: field, count });
+  }
+  return {
+    source,
+    outside,
+    fields,
+    violations,
+    instructionMatches,
+    instructionMatch: instructionMatches.length === 1 ? instructionMatches[0] : null,
+    instructionBody: instructionMatches.length === 1 ? instructionMatches[0][1] : null,
+  };
+}
+
+function genericShapeReasons(shape) {
+  return shape.violations.map(violation => {
+    if (violation.kind === 'line_endings') return 'codex_role_toml_line_endings_forbidden';
+    if (violation.kind === 'control') return 'codex_role_toml_control_character_forbidden';
+    if (violation.kind === 'instruction_backslash') return 'codex_role_instruction_toml_backslash_forbidden';
+    if (violation.kind === 'backslash') return 'codex_role_toml_backslash_forbidden';
+    if (violation.kind === 'field') return `codex_role_field_forbidden: ${violation.value}`;
+    if (violation.kind === 'table') return `codex_role_table_forbidden: ${violation.value}`;
+    if (violation.kind === 'duplicate') return `codex_role_top_level_field_duplicate: ${violation.value}`;
+    return `codex_role_top_level_syntax_forbidden: line=${violation.line} ${violation.value}`;
+  });
+}
+
+function reviewerShapeReasons(shape) {
+  return shape.violations.map(violation => {
+    if (violation.kind === 'line_endings') return 'reviewer_toml_line_endings_forbidden';
+    if (violation.kind === 'control') return 'reviewer_toml_control_character_forbidden';
+    if (violation.kind === 'instruction_backslash') return 'reviewer_instruction_toml_backslash_forbidden';
+    if (violation.kind === 'backslash') return 'reviewer_toml_backslash_forbidden';
+    if (violation.kind === 'field') return `reviewer_adapter_field_forbidden: ${violation.value}`;
+    if (violation.kind === 'table') return `reviewer_adapter_table_forbidden: ${violation.value}`;
+    if (violation.kind === 'duplicate') return `reviewer_top_level_field_duplicate: ${violation.value}`;
+    return `reviewer_adapter_syntax_forbidden: line=${violation.line} ${violation.value}`;
+  });
+}
+
 // Generated reviewer profiles carry two identities: the runtime-neutral behavior contract and
 // the complete resolved profile. The latter is a self-hash over all rendered bytes with its one
 // value slot normalized to 64 zeroes. This verifier is intentionally local to the installer so a
@@ -166,125 +346,218 @@ function reviewerProfileContract(text, role) {
   const reasons = [];
   if (!REVIEWER_ROLES.includes(role)) return { reasons, identity: null };
 
-  const source = String(text);
-  const instructionMatch = /^developer_instructions\s*=\s*"""[\s\S]*?"""/m.exec(source);
-  const instructionIndex = instructionMatch ? instructionMatch.index : -1;
-  const header = instructionIndex < 0 ? source : source.slice(0, instructionIndex);
-  const suffix = instructionMatch
-    ? source.slice(instructionMatch.index + instructionMatch[0].length)
-    : '';
-  const fields = [
-    ...[...header.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
-    ...(instructionMatch ? ['developer_instructions'] : []),
-    ...[...suffix.matchAll(/^([A-Za-z0-9_.-]+)\s*=/gm)].map(match => match[1]),
-  ];
-  for (const field of fields) {
-    if (!REVIEWER_TOP_LEVEL_FIELDS.includes(field)) {
-      reasons.push(`reviewer_adapter_field_forbidden: ${field}`);
-    }
-  }
-  for (const field of REVIEWER_TOP_LEVEL_FIELDS) {
-    if (fields.filter(value => value === field).length > 1) {
-      reasons.push(`reviewer_top_level_field_duplicate: ${field}`);
-    }
-  }
-  for (const table of [...header.matchAll(/^\s*\[([^\]]+)\]\s*$/gm),
-    ...suffix.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)]) {
-    reasons.push(`reviewer_adapter_table_forbidden: ${table[1]}`);
-  }
+  const shape = profileTopLevelShape(text);
+  const source = shape.source;
+  const instructionMatch = shape.instructionMatch;
+  const instructionText = shape.instructionBody || '';
+  reasons.push(...reviewerShapeReasons(shape));
 
-  const topVersions = [...header.matchAll(/^behavior_contract_version\s*=\s*(\d+)\s*$/gm)];
-  if (topVersions.length === 0) reasons.push('reviewer_contract_version_missing');
-  const topVersion = topVersions.length === 1 ? Number(topVersions[0][1]) : null;
-
-  const coreStarts = String(text).split('<!-- reviewer-behavior-core:start -->').length - 1;
-  const coreEnds = String(text).split('<!-- reviewer-behavior-core:end -->').length - 1;
+  const coreStarts = instructionText.split('<!-- reviewer-behavior-core:start -->').length - 1;
+  const coreEnds = instructionText.split('<!-- reviewer-behavior-core:end -->').length - 1;
   let core = '';
+  let coreStart = -1;
+  let coreEnd = -1;
   if (coreStarts !== 1 || coreEnds !== 1) {
     reasons.push(`reviewer_behavior_core_invalid: starts=${coreStarts} ends=${coreEnds}`);
   } else {
-    const start = String(text).indexOf('<!-- reviewer-behavior-core:start -->');
-    const end = String(text).indexOf('<!-- reviewer-behavior-core:end -->', start);
-    core = String(text).slice(start, end + '<!-- reviewer-behavior-core:end -->'.length);
+    coreStart = instructionText.indexOf('<!-- reviewer-behavior-core:start -->');
+    const endMarkerStart = instructionText.indexOf('<!-- reviewer-behavior-core:end -->', coreStart);
+    coreEnd = endMarkerStart + '<!-- reviewer-behavior-core:end -->'.length;
+    if (endMarkerStart < coreStart) {
+      reasons.push('reviewer_behavior_core_invalid: markers_out_of_order');
+      coreStart = -1;
+      coreEnd = -1;
+    } else {
+      core = instructionText.slice(coreStart, coreEnd);
+    }
   }
-  const coreRoleMatch = /^role:\s*([^\n]+)$/m.exec(core);
-  if (!coreRoleMatch || coreRoleMatch[1] !== role) reasons.push('reviewer_behavior_core_role_mismatch');
-  const coreVersionMatch = /^behavior_contract_version:\s*(\d+)$/m.exec(core);
-  const coreVersion = coreVersionMatch ? Number(coreVersionMatch[1]) : null;
-  if (coreVersion === null) reasons.push('reviewer_behavior_core_version_missing');
-  if (topVersion !== null && coreVersion !== null && topVersion !== coreVersion) {
-    reasons.push(`reviewer_contract_version_mismatch: top=${topVersion} core=${coreVersion}`);
-  } else if (topVersion !== null && topVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
-    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${topVersion}`);
-  }
-
-  const topBehaviorMatches = [...header.matchAll(/^behavior_contract_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
-  const topBehaviorHash = topBehaviorMatches.length === 1 ? topBehaviorMatches[0][1] : null;
-  if (!topBehaviorHash) reasons.push('reviewer_behavior_hash_missing');
-  const coreBehaviorMatch = /^behavior_contract_hash:\s*([0-9a-f]{64})$/m.exec(core);
-  const coreBehaviorHash = coreBehaviorMatch ? coreBehaviorMatch[1] : null;
-  if (!coreBehaviorHash) reasons.push('reviewer_behavior_core_hash_missing');
-  if (topBehaviorHash && coreBehaviorHash && topBehaviorHash !== coreBehaviorHash) {
-    reasons.push(`reviewer_behavior_hash_mismatch: top=${topBehaviorHash} core=${coreBehaviorHash}`);
+  const coreRoleMatches = [...core.matchAll(/^role:[ \t]*([^\r\n]+)[ \t]*$/gm)];
+  if (coreRoleMatches.length !== 1) {
+    reasons.push(`reviewer_behavior_core_role_not_unique: count=${coreRoleMatches.length}`);
+  } else if (coreRoleMatches[0][1].trim() !== role) {
+    reasons.push('reviewer_behavior_core_role_mismatch');
   }
 
-  const resolvedMatches = [...String(text).matchAll(/^resolved_profile_hash\s*=\s*"([0-9a-f]{64})"\s*$/gm)];
-  let resolvedProfileHash = null;
-  if (resolvedMatches.length === 0) {
-    reasons.push('reviewer_resolved_profile_hash_missing');
-  } else if (resolvedMatches.length !== 1) {
-    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedMatches.length}`);
+  const versionFields = [...instructionText.matchAll(
+    /^behavior_contract_version[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
+  )];
+  let coreVersion = null;
+  if (versionFields.length === 0) {
+    reasons.push('reviewer_behavior_core_version_missing');
+  } else if (versionFields.length !== 1) {
+    reasons.push(`reviewer_behavior_contract_version_not_unique: count=${versionFields.length}`);
   } else {
-    resolvedProfileHash = resolvedMatches[0][1];
-    const match = resolvedMatches[0];
-    const valueOffset = match.index + match[0].indexOf(resolvedProfileHash);
-    const normalized = String(text).slice(0, valueOffset) + '0'.repeat(64)
-      + String(text).slice(valueOffset + resolvedProfileHash.length);
-    const expected = sha256Hex(normalized);
-    if (resolvedProfileHash !== expected) {
-      reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
+    const rawVersion = versionFields[0][1].trim();
+    if (!/^\d+$/.test(rawVersion)) {
+      reasons.push('reviewer_behavior_core_version_missing');
+    } else {
+      coreVersion = Number(rawVersion);
+    }
+    if (coreStart < 0 || versionFields[0].index < coreStart
+        || versionFields[0].index + versionFields[0][0].length > coreEnd) {
+      reasons.push('reviewer_behavior_contract_version_outside_core');
+    }
+  }
+  if (coreVersion !== null && coreVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
+    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${coreVersion}`);
+  }
+
+  const behaviorFields = [...instructionText.matchAll(
+    /^behavior_contract_hash[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
+  )];
+  let coreBehaviorHash = null;
+  if (behaviorFields.length === 0) {
+    reasons.push('reviewer_behavior_core_hash_missing');
+  } else if (behaviorFields.length !== 1) {
+    reasons.push(`reviewer_behavior_contract_hash_not_unique: count=${behaviorFields.length}`);
+  } else {
+    const rawHash = behaviorFields[0][1].trim();
+    if (/^[0-9a-f]{64}$/.test(rawHash)) coreBehaviorHash = rawHash;
+    else reasons.push('reviewer_behavior_core_hash_missing');
+    if (coreStart < 0 || behaviorFields[0].index < coreStart
+        || behaviorFields[0].index + behaviorFields[0][0].length > coreEnd) {
+      reasons.push('reviewer_behavior_contract_hash_outside_core');
     }
   }
 
-  const identity = topVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
+  const identityStarts = instructionText.split('<!-- reviewer-profile-identity:start -->').length - 1;
+  const identityEnds = instructionText.split('<!-- reviewer-profile-identity:end -->').length - 1;
+  let identityStart = -1;
+  let identityEnd = -1;
+  if (identityStarts !== 1 || identityEnds !== 1) {
+    reasons.push(`reviewer_profile_identity_invalid: starts=${identityStarts} ends=${identityEnds}`);
+  } else {
+    identityStart = instructionText.indexOf('<!-- reviewer-profile-identity:start -->');
+    const endMarkerStart = instructionText.indexOf('<!-- reviewer-profile-identity:end -->', identityStart);
+    identityEnd = endMarkerStart + '<!-- reviewer-profile-identity:end -->'.length;
+    if (endMarkerStart < identityStart) {
+      reasons.push('reviewer_profile_identity_invalid: markers_out_of_order');
+      identityStart = -1;
+      identityEnd = -1;
+    }
+  }
+
+  const resolvedFields = [...instructionText.matchAll(
+    /^resolved_profile_hash[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
+  )];
+  let resolvedProfileHash = null;
+  if (resolvedFields.length === 0) {
+    reasons.push('reviewer_resolved_profile_hash_missing');
+  } else if (resolvedFields.length !== 1) {
+    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedFields.length}`);
+  } else {
+    const match = resolvedFields[0];
+    const rawHash = match[1].trim();
+    if (/^[0-9a-f]{64}$/.test(rawHash)) {
+      resolvedProfileHash = rawHash;
+      const bodyOffset = instructionMatch.index + instructionMatch[0].indexOf(instructionMatch[1]);
+      const valueOffset = bodyOffset + match.index + match[0].indexOf(rawHash);
+      const normalized = source.slice(0, valueOffset) + '0'.repeat(64)
+        + source.slice(valueOffset + rawHash.length);
+      const expected = sha256Hex(normalized);
+      if (resolvedProfileHash !== expected) {
+        reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
+      }
+    } else {
+      reasons.push('reviewer_resolved_profile_hash_missing');
+    }
+    if (identityStart < 0 || match.index < identityStart
+        || match.index + match[0].length > identityEnd) {
+      reasons.push('reviewer_resolved_profile_hash_outside_identity');
+    }
+  }
+
+  const identity = reasons.length === 0
       && coreVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
-      && topBehaviorHash && topBehaviorHash === coreBehaviorHash && resolvedProfileHash
+      && coreBehaviorHash && resolvedProfileHash
     ? {
-      behavior_contract_version: topVersion,
-      behavior_contract_hash: topBehaviorHash,
+      behavior_contract_version: coreVersion,
+      behavior_contract_hash: coreBehaviorHash,
       resolved_profile_hash: resolvedProfileHash,
     }
     : null;
   return { reasons: [...new Set(reasons)], identity };
 }
 
-function managedBlockPattern(flags = 'm') {
-  return new RegExp(`${escapeRegExp(beginMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}\\n?`, flags);
+function managedMarkerRange(content) {
+  const source = String(content || '');
+  const structural = tomlStructuralContent(source);
+  const markers = [];
+  let variantFound = false;
+  for (const match of structural.matchAll(/[^\n]*(?:\n|$)/g)) {
+    if (match[0] === '') continue;
+    const line = match[0].replace(/\n$/, '').replace(/\r$/, '');
+    const markerLike = line.match(
+      /^[ \t]*#[ \t]*(begin|end)[ \t]+kaola(?:[-_ \t]+)workflow[ \t]+agents\b.*$/i,
+    );
+    if (!markerLike) continue;
+    const kind = markerLike[1].toLowerCase();
+    const canonical = line === (kind === 'begin' ? beginMarker : endMarker);
+    if (!canonical) variantFound = true;
+    markers.push({ kind, index: match.index, canonical });
+  }
+  if (markers.length === 0) {
+    return { state: 'absent', start: -1, end: -1 };
+  }
+  const begins = markers.filter(marker => marker.kind === 'begin' && marker.canonical);
+  const ends = markers.filter(marker => marker.kind === 'end' && marker.canonical);
+  if (variantFound || begins.length !== 1 || ends.length !== 1
+      || begins[0].index >= ends[0].index) {
+    return { state: 'invalid', start: -1, end: -1 };
+  }
+  let end = ends[0].index + endMarker.length;
+  if (source.slice(end, end + 2) === '\r\n') end += 2;
+  else if (source[end] === '\n') end += 1;
+  return {
+    state: 'present',
+    start: begins[0].index,
+    end,
+    endMarkerStart: ends[0].index,
+  };
 }
 
 function stripManagedBlocks(existing) {
-  return existing.replace(managedBlockPattern('gm'), '');
+  const range = managedMarkerRange(existing);
+  return range.state === 'present'
+    ? existing.slice(0, range.start) + existing.slice(range.end)
+    : existing;
 }
 
 function isTopLevelTable(line, table) {
-  return new RegExp(`^\\s*\\[${escapeRegExp(table)}\\]\\s*(?:#.*)?$`).test(line);
+  const tableName = parseTomlTableName(stripTomlComment(line).trim());
+  return tomlTableNameMatches(tableName, table);
 }
 
 function isAnyTopLevelTable(line) {
-  return /^\s*\[[^\]\n]+\]\s*(?:#.*)?$/.test(line);
+  return parseTomlTableName(stripTomlComment(line).trim()) !== null;
 }
 
 function hasTopLevelTable(content, table) {
-  return content.split(/\r?\n/).some(line => isTopLevelTable(line, table));
+  let currentTable = null;
+  for (const rawLine of tomlStructuralLines(content)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      currentTable = tableName;
+      if (tomlTableNameMatches(tableName, table)) return true;
+      continue;
+    }
+    if (currentTable !== null) continue;
+    const assignment = parseTomlAssignment(line);
+    if (assignment && assignment.key[0] && assignment.key[0].value === table) return true;
+  }
+  return false;
 }
 
 function removeTopLevelTable(content, table) {
   const lines = content.split(/\r?\n/);
-  const start = lines.findIndex(line => isTopLevelTable(line, table));
+  const structuralLines = tomlStructuralLines(content);
+  const start = structuralLines.findIndex(line => isTopLevelTable(line, table));
   if (start === -1) return content;
 
   let end = start + 1;
-  while (end < lines.length && !isAnyTopLevelTable(lines[end])) end++;
+  while (end < lines.length && !isAnyTopLevelTable(structuralLines[end])) end++;
 
   return [...lines.slice(0, start), ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
@@ -297,10 +570,102 @@ function managedBlock(existing) {
   return `${beginMarker}\n${template}\n${endMarker}`;
 }
 
+function managedRolesInInlineTable(value, managedRoleSet) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return [];
+  const roles = [];
+  for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
+    const assignment = parseTomlAssignment(field);
+    const role = assignment && assignment.key[0] && assignment.key[0].value;
+    if (role && managedRoleSet.has(role)) roles.push(role);
+  }
+  return roles;
+}
+
+// Parse only declarations rooted at the TOML `agents` namespace. Exact, nested,
+// quoted, dotted, and inline spellings of a managed role all alias the managed
+// catalog and are unsafe outside our markers; unrelated user roles are preserved.
+function managedRoleDeclarationsOutside(content, managedRoles) {
+  const managedRoleSet = new Set(managedRoles || []);
+  const conflicts = [];
+  let currentTable = null;
+
+  function record(role) {
+    if (managedRoleSet.has(role)) conflicts.push(role);
+  }
+
+  for (const rawLine of tomlStructuralLines(content)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      currentTable = tableName;
+      const segments = Array.isArray(tableName.segments) ? tableName.segments : [];
+      if (segments[0] && segments[0].value === 'agents' && segments[1]) {
+        record(segments[1].value);
+      }
+      continue;
+    }
+
+    const assignment = parseTomlAssignment(line);
+    if (!assignment) continue;
+    const tableSegments = currentTable && Array.isArray(currentTable.segments)
+      ? currentTable.segments : [];
+
+    if (tableSegments.length === 1 && tableSegments[0].value === 'agents') {
+      const role = assignment.key[0] && assignment.key[0].value;
+      record(role);
+      continue;
+    }
+    if (currentTable !== null) continue;
+
+    const root = assignment.key[0] && assignment.key[0].value;
+    if (root !== 'agents') continue;
+    if (assignment.key[1]) {
+      record(assignment.key[1].value);
+    } else {
+      conflicts.push(...managedRolesInInlineTable(assignment.value, managedRoleSet));
+    }
+  }
+
+  return [...new Set(conflicts)].sort();
+}
+
+// One proof primitive owns marker identity, canonical managed bytes, and the
+// absence of managed-role declarations outside the owned range. Pre-install
+// callers allow an absent/canonically replaceable body; postVerify requires the
+// exact current body selected for the surrounding external features posture.
+function managedConfigProof(content, managedRoles, options = {}) {
+  const source = String(content || '');
+  const range = managedMarkerRange(source);
+  let outside = source;
+  let actualBlock = '';
+  if (range.state === 'present') {
+    const blockEnd = range.endMarkerStart + endMarker.length;
+    actualBlock = source.slice(range.start, blockEnd);
+    outside = source.slice(0, range.start) + source.slice(range.end);
+  }
+  const conflictingRolesOutside = managedRoleDeclarationsOutside(outside, managedRoles);
+  const expectedBlock = options.requireCanonicalBody ? managedBlock(outside) : null;
+  const bodyCanonical = !options.requireCanonicalBody
+    || (range.state === 'present' && actualBlock === expectedBlock);
+  return {
+    range,
+    outside,
+    actualBlock,
+    expectedBlock,
+    bodyCanonical,
+    conflictingRolesOutside,
+  };
+}
+
 function upsertBlock(existing, block) {
-  const expression = managedBlockPattern();
-  if (expression.test(existing)) {
-    return existing.replace(expression, `${block}\n`);
+  const range = managedMarkerRange(existing);
+  if (range.state === 'invalid') {
+    throw new Error('managed_block_ambiguous: expected zero or one ordered top-level marker pair');
+  }
+  if (range.state === 'present') {
+    return existing.slice(0, range.start) + `${block}\n` + existing.slice(range.end);
   }
 
   if (existing.trim() === '') {
@@ -319,8 +684,9 @@ function upsertBlock(existing, block) {
 // ---------------------------------------------------------------------------
 function validateProfileText(text, role, expectedMeta = null) {
   const reasons = [];
-  const firstTableIdx = text.search(/^\[/m);
-  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
+  const shape = profileTopLevelShape(text);
+  const top = shape.outside;
+  reasons.push(...genericShapeReasons(shape));
 
   const nameMatch = top.match(/^name\s*=\s*"([^"]*)"\s*$/m);
   if (!nameMatch) {
@@ -354,15 +720,15 @@ function validateProfileText(text, role, expectedMeta = null) {
     }
   }
 
-  const modelLines = top.match(/^model\s*=.*$/gm) || [];
-  const effortLines = top.match(/^model_reasoning_effort\s*=.*$/gm) || [];
+  const modelLines = shape.fields.filter(field => field === 'model');
+  const effortLines = shape.fields.filter(field => field === 'model_reasoning_effort');
   if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role)) {
     reasons.push(`role "${role}" has no Codex profile-tier policy`);
   }
   if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
   if (effortLines.length > 0) reasons.push("top-level 'model_reasoning_effort' must be omitted to inherit the parent session");
 
-  const instrMatch = text.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""/m);
+  const instrMatch = shape.instructionMatch;
   if (!instrMatch) {
     reasons.push("missing top-level 'developer_instructions' triple-quoted block");
   } else if (instrMatch[1].trim() === '') {
@@ -394,8 +760,7 @@ function validateProfileText(text, role, expectedMeta = null) {
 }
 
 function classifyProfilePinPosture(text) {
-  const firstTableIdx = String(text || '').search(/^\[/m);
-  const top = firstTableIdx === -1 ? String(text || '') : String(text || '').slice(0, firstTableIdx);
+  const top = profileTopLevelShape(text).outside;
   const models = [...top.matchAll(/^model\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
   const efforts = [...top.matchAll(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
   const anyModelLine = (top.match(/^model\s*=.*$/gm) || []).length;
@@ -465,6 +830,32 @@ function validateSourceProfiles(rootDir) {
     .filter(f => f.endsWith('.toml'))
     .sort();
 
+  const seenRoles = new Set();
+  const seenConfigFiles = new Set();
+  const seenBasenames = new Set();
+  for (const entry of entries) {
+    if (seenRoles.has(entry.role)) {
+      errors.push(`agents.toml duplicate [agents.${entry.role}] entry`);
+    }
+    seenRoles.add(entry.role);
+    if (!entry.configFile || !entry.basename) continue;
+    if (seenConfigFiles.has(entry.configFile)) {
+      errors.push(`agents.toml duplicate config_file "${entry.configFile}" reference`);
+    }
+    seenConfigFiles.add(entry.configFile);
+    if (seenBasenames.has(entry.basename)) {
+      errors.push(`agents.toml duplicate config_file basename "${entry.basename}" reference`);
+    }
+    seenBasenames.add(entry.basename);
+    const canonicalBasename = `${entry.role}.toml`;
+    if (entry.basename !== canonicalBasename) {
+      errors.push(
+        `agents.toml [agents.${entry.role}] config_file basename must be "${canonicalBasename}" `
+        + `(got "${entry.basename}")`
+      );
+    }
+  }
+
   // Every config_file resolves to an existing agents/<role>.toml.
   const referenced = new Set();
   for (const entry of entries) {
@@ -528,7 +919,9 @@ function readManifest(agentsDir) {
 
 // Prune stale managed/retired profiles. Order (issue §3): for each *.toml in the
 // target dir not in currentFiles —
-//   listed in prevManifest.files  -> unlink (stale-managed)
+//   listed in prevManifest.files  -> unlink only when its current bytes still
+//                                    match the recorded hash (stale-managed);
+//                                    otherwise keep as unmanaged
 //   in RETIRED_PROFILE_FILES       -> unlink (retired; works with no manifest)
 //   otherwise                      -> keep, record in extraUnmanaged (never deleted)
 function pruneStaleProfiles(agentsDir, currentFiles, prevManifest) {
@@ -546,8 +939,23 @@ function pruneStaleProfiles(agentsDir, currentFiles, prevManifest) {
     if (!name.endsWith('.toml')) continue;
     if (currentSet.has(name)) continue;
     if (prevSet.has(name)) {
-      fs.unlinkSync(path.join(agentsDir, name));
-      removed.push({ file: name, reason: 'stale-managed' });
+      const file = path.join(agentsDir, name);
+      const recordedHash = prevManifest.files[name];
+      let hashMatches = false;
+      try {
+        hashMatches = typeof recordedHash === 'string'
+          && /^sha256:[0-9a-f]{64}$/.test(recordedHash)
+          && fs.lstatSync(file).isFile()
+          && sha256(fs.readFileSync(file)) === recordedHash;
+      } catch {
+        hashMatches = false;
+      }
+      if (hashMatches) {
+        fs.unlinkSync(file);
+        removed.push({ file: name, reason: 'stale-managed' });
+      } else {
+        extraUnmanaged.push(name);
+      }
     } else if (RETIRED_PROFILE_FILES.includes(name)) {
       fs.unlinkSync(path.join(agentsDir, name));
       removed.push({ file: name, reason: 'retired' });
@@ -607,19 +1015,239 @@ function writeManifest(agentsDir, { pluginRoot: srcRoot, copiedFiles, removed })
   return manifest;
 }
 
-// Copy each source profile via write-temp-then-rename so a crash mid-copy never
-// leaves a torn profile. Returns the sorted list of copied *.toml basenames.
-function copyAgentProfiles() {
-  fs.mkdirSync(targetAgentsDir, { recursive: true });
+const ATOMIC_STAGE_ATTEMPTS = 16;
+
+function atomicStageFailure(status, detail) {
+  const error = new Error(`${status}: ${detail}`);
+  error.code = status;
+  return error;
+}
+
+function assertAtomicParent(parent, expectedStat, expectedRealPath) {
+  const current = lstatIfPresent(parent);
+  if (!current || current.isSymbolicLink() || !current.isDirectory()
+      || !sameFileIdentity(current, expectedStat)) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `staging parent changed or is not a non-symlink directory: ${parent}`);
+  }
+  const currentRealPath = fs.realpathSync(parent);
+  if (currentRealPath !== expectedRealPath) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `staging parent escaped its original filesystem location: ${parent}`);
+  }
+}
+
+function sameFileVersion(left, right) {
+  return sameFileIdentity(left, right)
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
+}
+
+function readAtomicTargetVersion(target, expectedStat) {
+  let descriptor = null;
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    try {
+      descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollow);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw atomicStageFailure('atomic_stage_conflict',
+          `atomic replacement target disappeared while reading: ${target}`);
+      }
+      if (error && error.code === 'ELOOP') {
+        throw atomicStageFailure('atomic_stage_unsafe',
+          `atomic replacement target became a symlink while reading: ${target}`);
+      }
+      throw error;
+    }
+
+    const before = fs.fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw atomicStageFailure('atomic_stage_unsafe',
+        `atomic replacement target is not a regular file: ${target}`);
+    }
+    if (!sameFileVersion(before, expectedStat)) {
+      throw atomicStageFailure('atomic_stage_conflict',
+        `atomic replacement target changed before reading: ${target}`);
+    }
+    const bytes = fs.readFileSync(descriptor);
+    const after = fs.fstatSync(descriptor);
+    const pathAfter = lstatIfPresent(target);
+    if (!pathAfter || pathAfter.isSymbolicLink() || !pathAfter.isFile()) {
+      throw atomicStageFailure(pathAfter ? 'atomic_stage_unsafe' : 'atomic_stage_conflict',
+        `atomic replacement target changed while reading: ${target}`);
+    }
+    if (!sameFileVersion(before, after) || !sameFileVersion(after, pathAfter)) {
+      throw atomicStageFailure('atomic_stage_conflict',
+        `atomic replacement target changed while reading: ${target}`);
+    }
+    return { stat: pathAfter, bytes };
+  } finally {
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor); } catch (_closeError) { /* preserve the primary result */ }
+    }
+  }
+}
+
+function captureAtomicTargetVersion(target) {
+  const current = lstatIfPresent(target);
+  if (!current) return { stat: null, bytes: null };
+  if (current.isSymbolicLink() || !current.isFile()) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `atomic replacement target is not a regular non-symlink file: ${target}`);
+  }
+  return readAtomicTargetVersion(target, current);
+}
+
+function assertAtomicTarget(target, expectedStat, expectedVersion) {
+  const current = lstatIfPresent(target);
+  if (current && (current.isSymbolicLink() || !current.isFile())) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `atomic replacement target is not a regular non-symlink file: ${target}`);
+  }
+  if (Boolean(current) !== Boolean(expectedStat)
+      || (current && !sameFileIdentity(current, expectedStat))) {
+    throw atomicStageFailure(expectedVersion === undefined
+      ? 'atomic_stage_unsafe'
+      : 'atomic_stage_conflict',
+      `atomic replacement target changed while staging: ${target}`);
+  }
+  if (expectedVersion !== undefined && current) {
+    const actualVersion = readAtomicTargetVersion(target, expectedStat);
+    if (!actualVersion.bytes.equals(expectedVersion.bytes)) {
+      throw atomicStageFailure('atomic_stage_conflict',
+        `atomic replacement target content changed while staging: ${target}`);
+    }
+  }
+}
+
+function cleanupOwnedAtomicStage(stage, ownedStat) {
+  if (!stage || !ownedStat) return;
+  try {
+    const current = lstatIfPresent(stage);
+    if (current && !current.isSymbolicLink() && current.isFile()
+        && sameFileIdentity(current, ownedStat)) {
+      fs.unlinkSync(stage);
+    }
+  } catch (_cleanupError) {
+    // Best effort only. Never unlink a replacement with a different identity,
+    // and never mask the write/validation error that caused cleanup.
+  }
+}
+
+// Create a fresh same-directory stage with O_EXCL semantics, validate that its
+// parent/target/path identities did not change, then atomically rename it into
+// place. Existing candidate names are unowned collisions: retry them untouched.
+function atomicWriteSameDirectory(target, bytes, expectedVersion) {
+  const destination = path.resolve(target);
+  const parent = path.dirname(destination);
+  if (path.join(parent, path.basename(destination)) !== destination) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `atomic replacement target is not lexically contained by its parent: ${destination}`);
+  }
+
+  const parentStat = lstatIfPresent(parent);
+  if (!parentStat || parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `staging parent must be an existing non-symlink directory: ${parent}`);
+  }
+  const parentRealPath = fs.realpathSync(parent);
+  let targetStat;
+  if (expectedVersion === undefined) {
+    targetStat = lstatIfPresent(destination);
+    if (targetStat && (targetStat.isSymbolicLink() || !targetStat.isFile())) {
+      throw atomicStageFailure('atomic_stage_unsafe',
+        `atomic replacement target is not a regular non-symlink file: ${destination}`);
+    }
+  } else {
+    targetStat = expectedVersion.stat;
+    assertAtomicTarget(destination, targetStat, expectedVersion);
+  }
+
+  for (let attempt = 0; attempt < ATOMIC_STAGE_ATTEMPTS; attempt += 1) {
+    assertAtomicParent(parent, parentStat, parentRealPath);
+    const suffix = crypto.randomBytes(16).toString('hex');
+    const stage = `${destination}.kaola-stage-${suffix}`;
+    if (path.dirname(stage) !== parent) {
+      throw atomicStageFailure('atomic_stage_unsafe',
+        `staging candidate escaped the destination directory: ${stage}`);
+    }
+
+    let descriptor = null;
+    let ownedStat = null;
+    let renamed = false;
+    try {
+      try {
+        descriptor = fs.openSync(stage, 'wx', 0o666);
+      } catch (error) {
+        if (error && error.code === 'EEXIST') continue;
+        throw error;
+      }
+
+      ownedStat = fs.fstatSync(descriptor);
+      if (!ownedStat.isFile()) {
+        throw atomicStageFailure('atomic_stage_unsafe',
+          `exclusive staging descriptor is not a regular file: ${stage}`);
+      }
+      fs.writeFileSync(descriptor, bytes);
+      fs.closeSync(descriptor);
+      descriptor = null;
+
+      assertAtomicParent(parent, parentStat, parentRealPath);
+      const currentStage = lstatIfPresent(stage);
+      if (!currentStage || currentStage.isSymbolicLink() || !currentStage.isFile()
+          || !sameFileIdentity(currentStage, ownedStat)) {
+        throw atomicStageFailure('atomic_stage_unsafe',
+          `exclusive stage changed before rename: ${stage}`);
+      }
+      const stageRealPath = fs.realpathSync(stage);
+      if (path.dirname(stageRealPath) !== parentRealPath) {
+        throw atomicStageFailure('atomic_stage_unsafe',
+          `exclusive stage escaped its destination directory: ${stage}`);
+      }
+      assertAtomicTarget(destination, targetStat, expectedVersion);
+
+      fs.renameSync(stage, destination);
+      renamed = true;
+      return;
+    } finally {
+      if (descriptor !== null) {
+        try { fs.closeSync(descriptor); } catch (_closeError) { /* cleanup below */ }
+      }
+      if (!renamed) cleanupOwnedAtomicStage(stage, ownedStat);
+    }
+  }
+
+  throw atomicStageFailure('atomic_stage_collision',
+    `could not create an exclusive stage for ${destination} after ${ATOMIC_STAGE_ATTEMPTS} attempts`);
+}
+
+// Copy each source profile via exclusive write-temp-then-rename so a crash
+// mid-copy never leaves a torn profile. Returns sorted copied *.toml basenames.
+function copyAgentProfiles(sourceDir = sourceAgentsDir, agentsDir = targetAgentsDir) {
+  const agentsDirProblem = lstatIfPresent(agentsDir);
+  if (agentsDirProblem && (agentsDirProblem.isSymbolicLink() || !agentsDirProblem.isDirectory())) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `profile destination must be a non-symlink directory: ${agentsDir}`);
+  }
+  fs.mkdirSync(agentsDir, { recursive: true });
+  const createdAgentsDir = fs.lstatSync(agentsDir);
+  if (createdAgentsDir.isSymbolicLink() || !createdAgentsDir.isDirectory()) {
+    throw atomicStageFailure('atomic_stage_unsafe',
+      `profile destination must remain a non-symlink directory: ${agentsDir}`);
+  }
   const copied = [];
 
-  for (const entry of fs.readdirSync(sourceAgentsDir, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.toml')) continue;
-    const source = path.join(sourceAgentsDir, entry.name);
-    const target = path.join(targetAgentsDir, entry.name);
-    const tmp = target + '.tmp-' + process.pid;
-    fs.writeFileSync(tmp, fs.readFileSync(source));
-    fs.renameSync(tmp, target);
+    const source = path.join(sourceDir, entry.name);
+    const target = path.join(agentsDir, entry.name);
+    const targetProblem = installTargetPathProblem(agentsDir, target, 'file');
+    if (targetProblem) {
+      throw atomicStageFailure('atomic_stage_unsafe', targetProblem);
+    }
+    atomicWriteSameDirectory(target, fs.readFileSync(source));
     copied.push(entry.name);
   }
 
@@ -659,28 +1287,60 @@ function buildManagedHooks(templateText, root) {
   return managed;
 }
 
-// #409: parse the hooks template for every relative path a managed hook command
-// references via the __KW_PLUGIN_ROOT__ token. PARSE the JSON first (so each command is
-// a real, un-escaped string — never regex over raw JSON, where the closing `\"` would be
-// captured into the path) then pull `__KW_PLUGIN_ROOT__/<relpath>` from each command up to
-// the next whitespace or quote. Returns a sorted, de-duped relpath list (e.g.
-// ['hooks/kaola-workflow-pre-commit.sh', 'scripts/kaola-workflow-codex-compact-resume.js']).
-// Per-edition templates carry edition-named basenames (kaola-{gitlab,gitea}-workflow-
-// codex-compact-resume.js) → this auto-adjusts to whatever each template references.
-// Pure + exported for unit tests.
+function hookRelPathProblem(rel) {
+  if (typeof rel !== 'string' || rel.length === 0) return 'path is empty';
+  if (rel.includes('\\')) return 'backslashes are forbidden';
+  if (rel.includes('\0')) return 'NUL is forbidden';
+  if (path.posix.isAbsolute(rel) || path.win32.isAbsolute(rel)) return 'absolute path is forbidden';
+  const segments = rel.split('/');
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
+    return 'empty, dot, and dotdot segments are forbidden';
+  }
+  if (path.posix.normalize(rel) !== rel) return 'path is not canonical';
+  if (segments.length < 2 || (segments[0] !== 'hooks' && segments[0] !== 'scripts')) {
+    return 'path must be a child of hooks/ or scripts/';
+  }
+  if (segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment))) {
+    return 'path contains non-canonical characters';
+  }
+  return null;
+}
+
+function assertHookRelPath(rel) {
+  const problem = hookRelPathProblem(rel);
+  assert(!problem, `hook reference invalid (${JSON.stringify(rel)}): ${problem}`);
+  return rel;
+}
+
+function pathIsStrictlyContained(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
+}
+
+// Parse every token occurrence rather than matching only already-valid spellings: a
+// root-only, backslash, or absolute reference must be rejected, not silently ignored.
+// Returns a sorted, de-duplicated list of canonical hooks/ or scripts/ children.
 function hookReferencedRelPaths(templateText) {
   const parsed = JSON.parse(templateText);
   const hooks = (parsed && parsed.hooks) || {};
-  const token = PLUGIN_ROOT_TOKEN + '/';
-  const re = new RegExp(escapeRegExp(token) + '([^"\\s]+)', 'g');
   const found = new Set();
   for (const event of Object.keys(hooks)) {
     for (const entry of (hooks[event] || [])) {
       for (const h of (entry.hooks || [])) {
         if (typeof h.command !== 'string') continue;
-        let m;
-        while ((m = re.exec(h.command)) !== null) {
-          found.add(m[1]);
+        let cursor = 0;
+        while (cursor < h.command.length) {
+          const tokenIndex = h.command.indexOf(PLUGIN_ROOT_TOKEN, cursor);
+          if (tokenIndex === -1) break;
+          const suffix = h.command.slice(tokenIndex + PLUGIN_ROOT_TOKEN.length);
+          assert(suffix.startsWith('/'),
+            `hook reference invalid near ${PLUGIN_ROOT_TOKEN}: expected one canonical relative child`);
+          const raw = suffix.slice(1);
+          const boundary = raw.search(/["'\s]/);
+          const rel = boundary === -1 ? raw : raw.slice(0, boundary);
+          found.add(assertHookRelPath(rel));
+          cursor = tokenIndex + PLUGIN_ROOT_TOKEN.length;
         }
       }
     }
@@ -688,51 +1348,445 @@ function hookReferencedRelPaths(templateText) {
   return [...found].sort();
 }
 
-// #409: copy every hook-referenced script from the read SOURCE (pluginRoot) into the
-// stable version-less home, so hooks.json can point at a Codex-owned path that survives
-// the install source vanishing. Sweep the prior stable {hooks,scripts} dirs first (so a
-// renamed/retired hook script leaves no orphan), then recreate + copy via
-// write-temp-then-rename (+ chmod 0o755) — the copyAgentProfiles crash-safety pattern.
-// Fails CLOSED (throws) on a missing source script, same as install.sh L600's hard fail.
-// Returns { copied: [...relpaths], removed: <count of swept files> }.
-function copyHookScripts(stableDir, relPaths) {
-  const hooksDir = path.join(stableDir, 'hooks');
-  const scriptsDir = path.join(stableDir, 'scripts');
+function preflightHookScriptReplacement(stableDir, relPaths, sourceRoot) {
+  assert(Array.isArray(relPaths), 'hook reference list must be an array');
+  const copied = [...new Set(relPaths.map(assertHookRelPath))].sort();
+  const stableRoot = path.resolve(stableDir);
+  const sourceBase = path.resolve(sourceRoot);
+  const stableStat = lstatIfPresent(stableRoot);
+  assert(!stableStat || (!stableStat.isSymbolicLink() && stableStat.isDirectory()),
+    `hook destination stable directory must be a non-symlink directory: ${stableRoot}`);
 
-  // Sweep prior copies (recursive) so stale/renamed hook scripts never linger.
+  const sourceBaseReal = fs.realpathSync(sourceBase);
+  assert(fs.statSync(sourceBaseReal).isDirectory(),
+    `hook source root must resolve to a directory: ${sourceBase}`);
+  const sources = [];
+  for (const rel of copied) {
+    const segments = rel.split('/');
+    const source = path.resolve(sourceBase, ...segments);
+    assert(pathIsStrictlyContained(sourceBase, source),
+      `hook reference invalid (${JSON.stringify(rel)}): source escapes plugin root`);
+    const sourceStat = lstatIfPresent(source);
+    assert(sourceStat, `hook-referenced source script missing: ${source}`);
+    assert(!sourceStat.isSymbolicLink(), `hook-referenced source script is a symlink: ${source}`);
+    assert(sourceStat.isFile(), `hook-referenced source script is not a regular file: ${source}`);
+    const sourceReal = fs.realpathSync(source);
+    assert(pathIsStrictlyContained(sourceBaseReal, sourceReal),
+      `hook-referenced source script resolves outside plugin root: ${source}`);
+
+    const target = path.resolve(stableRoot, ...segments);
+    assert(pathIsStrictlyContained(stableRoot, target),
+      `hook reference invalid (${JSON.stringify(rel)}): destination escapes stable directory`);
+    let current = stableRoot;
+    for (let index = 0; index < segments.length; index += 1) {
+      current = path.join(current, segments[index]);
+      const currentStat = lstatIfPresent(current);
+      if (!currentStat) continue;
+      assert(!currentStat.isSymbolicLink(), `hook destination path is a symlink: ${current}`);
+      const isLeaf = index === segments.length - 1;
+      assert(isLeaf ? currentStat.isFile() : currentStat.isDirectory(),
+        `hook destination path has the wrong kind: ${current}`);
+    }
+
+    // Read every source during preflight. Staging writes only these held bytes, so a
+    // missing/unreadable later source cannot partially replace the live stable set.
+    sources.push({ rel, bytes: fs.readFileSync(source) });
+  }
+
+  const active = {
+    hooks: path.join(stableRoot, 'hooks'),
+    scripts: path.join(stableRoot, 'scripts'),
+  };
+  const activeStats = {};
   let removed = 0;
-  for (const dir of [hooksDir, scriptsDir]) {
-    if (fs.existsSync(dir)) {
-      removed += fs.readdirSync(dir).length;
-      fs.rmSync(dir, { recursive: true, force: true });
+  for (const kind of ['hooks', 'scripts']) {
+    activeStats[kind] = lstatIfPresent(active[kind]);
+    if (activeStats[kind]) {
+      assert(!activeStats[kind].isSymbolicLink() && activeStats[kind].isDirectory(),
+        `hook destination path must be a non-symlink directory: ${active[kind]}`);
+      removed += fs.readdirSync(active[kind]).length;
     }
   }
-  fs.mkdirSync(hooksDir, { recursive: true });
-  fs.mkdirSync(scriptsDir, { recursive: true });
+  return { stableRoot, stableStat, sources, copied, removed, active, activeStats };
+}
 
-  const copied = [];
-  for (const rel of relPaths) {
-    const source = path.join(pluginRoot, rel);
-    assert(fs.existsSync(source), `hook-referenced source script missing: ${source}`);
-    const target = path.join(stableDir, rel);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const tmp = target + '.tmp-' + process.pid;
-    fs.writeFileSync(tmp, fs.readFileSync(source));
-    fs.chmodSync(tmp, 0o755);
-    fs.renameSync(tmp, target);
-    copied.push(rel);
+function sameFileIdentity(left, right) {
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
+}
+
+function ownedPathMatches(file, expectedStat, expectedKind) {
+  const current = lstatIfPresent(file);
+  if (!current || !sameFileIdentity(current, expectedStat) || current.isSymbolicLink()) return false;
+  if (expectedKind === 'directory') return current.isDirectory();
+  if (expectedKind === 'file') return current.isFile();
+  return true;
+}
+
+function cleanupOwnedFile(file, expectedStat) {
+  if (!file || !expectedStat || !ownedPathMatches(file, expectedStat, 'file')) return false;
+  try {
+    fs.unlinkSync(file);
+    return !lstatIfPresent(file);
+  } catch (_) {
+    return false;
   }
-  return { copied: copied.sort(), removed };
+}
+
+function createOwnedDirectory(parent, label) {
+  for (let attempt = 0; attempt < ATOMIC_STAGE_ATTEMPTS; attempt += 1) {
+    const candidate = path.join(parent,
+      `.kaola-${label}-${process.pid}-${crypto.randomBytes(16).toString('hex')}`);
+    try {
+      fs.mkdirSync(candidate, { mode: 0o700 });
+    } catch (error) {
+      if (error && error.code === 'EEXIST') continue;
+      throw error;
+    }
+    const stat = lstatIfPresent(candidate);
+    if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw atomicStageFailure('atomic_stage_unsafe',
+        `exclusive transaction directory changed after creation: ${candidate}`);
+    }
+    return { path: candidate, stat };
+  }
+  throw atomicStageFailure('atomic_stage_collision',
+    `could not reserve a collision-free ${label} directory in ${parent}`);
+}
+
+function snapshotTreeIdentity(root) {
+  const entries = [];
+  function visit(current, relative) {
+    const stat = fs.lstatSync(current);
+    entries.push({ relative, stat, kind: stat.isDirectory() && !stat.isSymbolicLink()
+      ? 'directory' : 'file' });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+    for (const name of fs.readdirSync(current).sort()) {
+      visit(path.join(current, name), relative ? path.join(relative, name) : name);
+    }
+  }
+  visit(root, '');
+  return entries;
+}
+
+function treeIdentityIsCurrent(root, entries) {
+  if (!entries || entries.length === 0) return !lstatIfPresent(root);
+  const expectedPaths = new Set(entries.map(entry => entry.relative));
+  for (const entry of entries) {
+    const currentPath = entry.relative ? path.join(root, entry.relative) : root;
+    const current = lstatIfPresent(currentPath);
+    if (!current || !sameFileIdentity(current, entry.stat)) return false;
+    if (entry.kind === 'directory') {
+      if (current.isSymbolicLink() || !current.isDirectory()) return false;
+      for (const name of fs.readdirSync(currentPath)) {
+        const relative = entry.relative ? path.join(entry.relative, name) : name;
+        if (!expectedPaths.has(relative)) return false;
+      }
+    } else {
+      if (current.isDirectory() && !current.isSymbolicLink()) return false;
+      if (!sameFileVersion(current, entry.stat)) return false;
+    }
+  }
+  return true;
+}
+
+// Delete only entries whose inode identity is still the one this transaction recorded.
+// Unknown/replaced children make their parents non-empty and are deliberately left behind.
+function cleanupTrackedTree(root, entries) {
+  const ordered = [...(entries || [])].sort((left, right) => {
+    const leftDepth = left.relative === '' ? 0 : left.relative.split(path.sep).length;
+    const rightDepth = right.relative === '' ? 0 : right.relative.split(path.sep).length;
+    return rightDepth - leftDepth;
+  });
+  for (const entry of ordered) {
+    const currentPath = entry.relative ? path.join(root, entry.relative) : root;
+    const current = lstatIfPresent(currentPath);
+    if (!current || !sameFileIdentity(current, entry.stat)) continue;
+    try {
+      if (entry.kind === 'directory' && !current.isSymbolicLink() && current.isDirectory()) {
+        fs.rmdirSync(currentPath);
+      } else if (entry.kind !== 'directory') {
+        fs.unlinkSync(currentPath);
+      }
+    } catch (_) {
+      // A foreign/replaced child or a concurrent owner keeps the directory non-empty.
+    }
+  }
+  return !lstatIfPresent(root);
+}
+
+function createTrackedStageDirectory(parent, kind) {
+  const owned = createOwnedDirectory(parent, `${kind}-stage`);
+  return {
+    path: owned.path,
+    stat: owned.stat,
+    entries: [{ relative: '', stat: owned.stat, kind: 'directory' }],
+  };
+}
+
+function ensureTrackedStageDirectory(stage, target) {
+  const relative = path.relative(stage.path, target);
+  assert(relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative),
+    `hook staging child escaped its owned root: ${target}`);
+  if (relative === '') return;
+  let current = stage.path;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    const existing = lstatIfPresent(current);
+    if (existing) {
+      const tracked = stage.entries.find(entry => {
+        const trackedPath = entry.relative ? path.join(stage.path, entry.relative) : stage.path;
+        return trackedPath === current;
+      });
+      assert(tracked && tracked.kind === 'directory'
+        && sameFileIdentity(existing, tracked.stat),
+      `hook staging directory was replaced after creation: ${current}`);
+      continue;
+    }
+    fs.mkdirSync(current, { mode: 0o700 });
+    const stat = fs.lstatSync(current);
+    assert(!stat.isSymbolicLink() && stat.isDirectory(),
+      `hook staging directory is unsafe: ${current}`);
+    stage.entries.push({ relative: path.relative(stage.path, current), stat, kind: 'directory' });
+  }
+}
+
+function writeTrackedStageFile(stage, target, bytes) {
+  ensureTrackedStageDirectory(stage, path.dirname(target));
+  let descriptor = null;
+  try {
+    descriptor = fs.openSync(target, 'wx', 0o600);
+    let stat = fs.fstatSync(descriptor);
+    assert(stat.isFile(), `hook staging descriptor is unsafe: ${target}`);
+    const tracked = { relative: path.relative(stage.path, target), stat, kind: 'file' };
+    stage.entries.push(tracked);
+    fs.writeFileSync(descriptor, bytes);
+    fs.closeSync(descriptor);
+    descriptor = null;
+    assert(ownedPathMatches(target, tracked.stat, 'file'),
+      `hook staging file changed while writing: ${target}`);
+    fs.chmodSync(target, 0o755);
+    stat = fs.lstatSync(target);
+    assert(sameFileIdentity(stat, tracked.stat),
+      `hook staging file changed while setting permissions: ${target}`);
+    tracked.stat = stat;
+  } finally {
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor); } catch (_) { /* tracked cleanup owns the path */ }
+    }
+  }
+}
+
+function prepareHookScriptReplacement(stableDir, relPaths, sourceRoot) {
+  const plan = preflightHookScriptReplacement(stableDir, relPaths, sourceRoot);
+  const stableExisted = Boolean(plan.stableStat);
+  let createdStableStat = null;
+  const states = [];
+  try {
+    fs.mkdirSync(plan.stableRoot, { recursive: true });
+    const currentStableStat = fs.lstatSync(plan.stableRoot);
+    assert(!currentStableStat.isSymbolicLink() && currentStableStat.isDirectory(),
+      `hook destination stable directory must remain a non-symlink directory: ${plan.stableRoot}`);
+    if (plan.stableStat) {
+      assert(sameFileIdentity(currentStableStat, plan.stableStat),
+        `hook destination stable directory changed after preflight: ${plan.stableRoot}`);
+    } else {
+      createdStableStat = currentStableStat;
+    }
+
+    for (const kind of ['hooks', 'scripts']) {
+      const stage = createTrackedStageDirectory(plan.stableRoot, kind);
+      const originalStat = plan.activeStats[kind];
+      const state = {
+        kind,
+        active: plan.active[kind],
+        originalStat,
+        originalEntries: [],
+        stage,
+        backupReservations: [],
+        backupReservation: null,
+        backup: null,
+        backupStat: null,
+        backupMade: false,
+        installed: false,
+        installedStat: null,
+      };
+      states.push(state);
+      const originalEntries = originalStat ? snapshotTreeIdentity(plan.active[kind]) : [];
+      assert(!originalStat || (originalEntries.length > 0
+        && sameFileIdentity(originalEntries[0].stat, originalStat)),
+      `hook destination changed while capturing its prior tree: ${plan.active[kind]}`);
+      state.originalEntries = originalEntries;
+    }
+    for (const source of plan.sources) {
+      const segments = source.rel.split('/');
+      const state = states.find(candidate => candidate.kind === segments[0]);
+      const target = path.join(state.stage.path, ...segments.slice(1));
+      writeTrackedStageFile(state.stage, target, source.bytes);
+    }
+  } catch (error) {
+    for (const state of states) cleanupTrackedTree(state.stage.path, state.stage.entries);
+    if (!stableExisted && createdStableStat
+        && ownedPathMatches(plan.stableRoot, createdStableStat, 'directory')) {
+      try { fs.rmdirSync(plan.stableRoot); } catch (_) { /* preserve foreign children */ }
+    }
+    throw error;
+  }
+
+  let finalized = false;
+  function reserveBackup(state) {
+    for (let attempt = 0; attempt < ATOMIC_STAGE_ATTEMPTS; attempt += 1) {
+      const reservation = createOwnedDirectory(plan.stableRoot, `${state.kind}-backup`);
+      state.backupReservations.push(reservation);
+      const backup = path.join(reservation.path, 'active');
+      const children = ownedPathMatches(reservation.path, reservation.stat, 'directory')
+        ? fs.readdirSync(reservation.path) : null;
+      if (children && children.length === 0 && !lstatIfPresent(backup)
+          && ownedPathMatches(reservation.path, reservation.stat, 'directory')) {
+        state.backupReservation = reservation;
+        state.backup = backup;
+        return;
+      }
+    }
+    throw atomicStageFailure('atomic_stage_collision',
+      `could not reserve a collision-free hook backup for ${state.active}`);
+  }
+
+  function cleanupReservations(state) {
+    for (const reservation of state.backupReservations) {
+      if (ownedPathMatches(reservation.path, reservation.stat, 'directory')) {
+        try { fs.rmdirSync(reservation.path); } catch (_) { /* preserve foreign children */ }
+      }
+    }
+  }
+
+  function rollback() {
+    if (finalized) return;
+    const problems = [];
+    for (const state of states.slice().reverse()) {
+      if (state.installed) {
+        const current = lstatIfPresent(state.active);
+        if (current && sameFileIdentity(current, state.installedStat)) {
+          cleanupTrackedTree(state.active, state.stage.entries);
+        }
+        if (lstatIfPresent(state.active)) {
+          problems.push(`installed hook path is no longer owned: ${state.active}`);
+        } else {
+          state.installed = false;
+        }
+      }
+      if (state.backupMade) {
+        const backupCurrent = lstatIfPresent(state.backup);
+        if (!backupCurrent || !sameFileIdentity(backupCurrent, state.backupStat)) {
+          problems.push(`hook backup is no longer owned: ${state.backup}`);
+        } else if (lstatIfPresent(state.active)) {
+          problems.push(`hook destination is occupied during rollback: ${state.active}`);
+        } else {
+          fs.renameSync(state.backup, state.active);
+          const restored = lstatIfPresent(state.active);
+          if (!restored || !sameFileIdentity(restored, state.originalStat)) {
+            problems.push(`hook backup restore lost ownership: ${state.active}`);
+          } else {
+            state.backupMade = false;
+          }
+        }
+      }
+      cleanupTrackedTree(state.stage.path, state.stage.entries);
+      cleanupReservations(state);
+    }
+    if (!stableExisted && createdStableStat
+        && ownedPathMatches(plan.stableRoot, createdStableStat, 'directory')) {
+      try { fs.rmdirSync(plan.stableRoot); } catch (_) { /* preserve foreign children */ }
+    }
+    if (problems.length > 0) {
+      throw new Error(problems.join('; '));
+    }
+  }
+
+  function commit() {
+    try {
+      for (const state of states) {
+        const currentStat = lstatIfPresent(state.active);
+        if (state.originalStat) {
+          assert(currentStat && !currentStat.isSymbolicLink() && currentStat.isDirectory()
+            && sameFileIdentity(currentStat, state.originalStat)
+            && treeIdentityIsCurrent(state.active, state.originalEntries),
+          `hook destination changed after preflight: ${state.active}`);
+          reserveBackup(state);
+          const backupChildren = state.backupReservation
+            && ownedPathMatches(state.backupReservation.path,
+              state.backupReservation.stat, 'directory')
+            ? fs.readdirSync(state.backupReservation.path) : null;
+          assert(backupChildren && backupChildren.length === 0
+            && !lstatIfPresent(state.backup)
+            && ownedPathMatches(state.backupReservation.path,
+              state.backupReservation.stat, 'directory'),
+            `hook backup slot was occupied after reservation: ${state.backup}`);
+          fs.renameSync(state.active, state.backup);
+          state.backupMade = true;
+          state.backupStat = state.originalStat;
+          state.backupStat = lstatIfPresent(state.backup);
+          assert(state.backupStat && sameFileIdentity(state.backupStat, state.originalStat),
+            `hook backup ownership changed during promotion: ${state.backup}`);
+        } else {
+          assert(!currentStat, `hook destination appeared after preflight: ${state.active}`);
+        }
+        assert(treeIdentityIsCurrent(state.stage.path, state.stage.entries),
+          `hook staging directory changed after creation: ${state.stage.path}`);
+        assert(!lstatIfPresent(state.active),
+          `hook destination appeared before stage promotion: ${state.active}`);
+        fs.renameSync(state.stage.path, state.active);
+        state.installed = true;
+        state.installedStat = state.stage.stat;
+        const installedCurrent = lstatIfPresent(state.active);
+        assert(installedCurrent && sameFileIdentity(installedCurrent, state.installedStat),
+          `hook destination changed during stage promotion: ${state.active}`);
+      }
+    } catch (error) {
+      try { rollback(); } catch (rollbackError) {
+        error.message += `; rollback failed: ${rollbackError.message}`;
+      }
+      throw error;
+    }
+  }
+
+  function finalize() {
+    for (const state of states) {
+      if (state.backupMade && state.backup) {
+        if (cleanupTrackedTree(state.backup, state.originalEntries)) state.backupMade = false;
+      }
+      cleanupTrackedTree(state.stage.path, state.stage.entries);
+      cleanupReservations(state);
+    }
+    finalized = true;
+  }
+
+  return {
+    summary: { copied: plan.copied, removed: plan.removed },
+    commit,
+    rollback,
+    finalize,
+  };
+}
+
+// Copy all hook-referenced scripts as one stable-set transaction. The optional
+// sourceRoot is used by isolated unit fixtures; production always defaults to pluginRoot.
+function copyHookScripts(stableDir, relPaths, sourceRoot = pluginRoot) {
+  const transaction = prepareHookScriptReplacement(stableDir, relPaths, sourceRoot);
+  try {
+    transaction.commit();
+    transaction.finalize();
+    return transaction.summary;
+  } catch (error) {
+    try { transaction.rollback(); } catch (_) { /* commit already reports rollback failure */ }
+    throw error;
+  }
 }
 
 // #325 R3 / #525: merge managed hooks into the existing hooks.json.
-//   Output is exactly { hooks }. Codex's hooks-config parser is strict (serde
-//   deny_unknown_fields) and accepts ONLY a top-level `hooks` key — a `$schema` (or any
-//   other top-level key) makes it reject the WHOLE file, dropping every managed hook
-//   (latent since #284; the prior R2 "$schema editor-hint carry" was the bug). Emitting
-//   only { hooks } both stops introducing $schema AND self-heals a hooks.json a prior
-//   install wrote with $schema (existing top-level keys are intentionally dropped, not
-//   carried). Claude is unaffected: its hooks merge into settings.json, which accepts $schema.
+//   Codex rust-v0.144.4 HooksFile accepts `hooks` plus an optional string/null
+//   `description`. Preserve that user-owned description while continuing to drop editor-only
+//   or unknown top-level keys such as `$schema`, which the strict parser rejects. Claude is
+//   unaffected: its hooks merge into settings.json, which accepts $schema.
 //   R3 — sweep EVERY event for kaola-workflow:-prefixed entries before re-adding, so an orphaned
 //        managed entry under a now-unmanaged event is cleaned too (not just the currently-managed
 //        set). Non-managed entries and unrelated events are preserved untouched.
@@ -749,58 +1803,281 @@ function mergeHooks(existing, managed) {
   for (const [event, managedEntries] of Object.entries((managed && managed.hooks) || {})) {
     hooks[event] = [...(hooks[event] || []), ...managedEntries];
   }
-  // Codex hooks config = { hooks } ONLY (no $schema / no other top-level key).
-  return { hooks };
+  const result = { hooks };
+  if (Object.prototype.hasOwnProperty.call(ex, 'description')) {
+    result.description = ex.description;
+  }
+  return result;
+}
+
+function isPlainJsonObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateExistingHooksSchema(existing) {
+  if (!isPlainJsonObject(existing)) {
+    throw new Error('invalid existing hooks.json schema: top-level value must be a JSON object');
+  }
+  if (Object.prototype.hasOwnProperty.call(existing, 'hooks')
+      && !isPlainJsonObject(existing.hooks)) {
+    throw new Error('invalid existing hooks.json schema: hooks must be a JSON object');
+  }
+  if (Object.prototype.hasOwnProperty.call(existing, 'description')
+      && existing.description !== null && typeof existing.description !== 'string') {
+    throw new Error('invalid existing hooks.json schema: description must be a string or null');
+  }
+  const normalized = Object.prototype.hasOwnProperty.call(existing, 'hooks')
+    ? existing
+    : { ...existing, hooks: {} };
+  for (const [event, groups] of Object.entries(normalized.hooks)) {
+    if (!Array.isArray(groups)) {
+      throw new Error(`invalid existing hooks.json schema: hooks.${event} must be an array`);
+    }
+    for (const [groupIndex, group] of groups.entries()) {
+      const groupPath = `hooks.${event}[${groupIndex}]`;
+      if (!isPlainJsonObject(group)) {
+        throw new Error(`invalid existing hooks.json schema: ${groupPath} must be a JSON object`);
+      }
+      if (Object.prototype.hasOwnProperty.call(group, 'id')
+          && group.id !== null && typeof group.id !== 'string') {
+        throw new Error(`invalid existing hooks.json schema: ${groupPath}.id must be a string or null`);
+      }
+      if (Object.prototype.hasOwnProperty.call(group, 'matcher')
+          && group.matcher !== null && typeof group.matcher !== 'string') {
+        throw new Error(`invalid existing hooks.json schema: ${groupPath}.matcher must be a string or null`);
+      }
+      if (Object.prototype.hasOwnProperty.call(group, 'hooks') && !Array.isArray(group.hooks)) {
+        throw new Error(`invalid existing hooks.json schema: ${groupPath}.hooks must be an array`);
+      }
+      for (const [handlerIndex, handler] of (group.hooks || []).entries()) {
+        const handlerPath = `${groupPath}.hooks[${handlerIndex}]`;
+        if (!isPlainJsonObject(handler)) {
+          throw new Error(`invalid existing hooks.json schema: ${handlerPath} must be a JSON object`);
+        }
+        if (!['command', 'prompt', 'agent'].includes(handler.type)) {
+          throw new Error(`invalid existing hooks.json schema: ${handlerPath}.type is invalid`);
+        }
+        if (handler.type === 'command') {
+          if (typeof handler.command !== 'string') {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath}.command must be a string`);
+          }
+          if (Object.prototype.hasOwnProperty.call(handler, 'commandWindows')
+              && Object.prototype.hasOwnProperty.call(handler, 'command_windows')) {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath} must not define both commandWindows and command_windows`);
+          }
+          if (Object.prototype.hasOwnProperty.call(handler, 'commandWindows')
+              && handler.commandWindows !== null && typeof handler.commandWindows !== 'string') {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath}.commandWindows must be a string or null`);
+          }
+          if (Object.prototype.hasOwnProperty.call(handler, 'command_windows')
+              && handler.command_windows !== null && typeof handler.command_windows !== 'string') {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath}.command_windows must be a string or null`);
+          }
+          if (Object.prototype.hasOwnProperty.call(handler, 'timeout')
+              && (!Number.isSafeInteger(handler.timeout) || handler.timeout < 0)) {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath}.timeout must be a non-negative integer`);
+          }
+          if (Object.prototype.hasOwnProperty.call(handler, 'async') && typeof handler.async !== 'boolean') {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath}.async must be a boolean`);
+          }
+          if (Object.prototype.hasOwnProperty.call(handler, 'statusMessage')
+              && handler.statusMessage !== null && typeof handler.statusMessage !== 'string') {
+            throw new Error(`invalid existing hooks.json schema: ${handlerPath}.statusMessage must be a string or null`);
+          }
+        }
+      }
+    }
+  }
+  return normalized;
+}
+
+function createOwnedHookFileStage(target, label, bytes) {
+  for (let attempt = 0; attempt < ATOMIC_STAGE_ATTEMPTS; attempt += 1) {
+    const candidate = `${target}.kaola-${label}-${process.pid}-${crypto.randomBytes(16).toString('hex')}`;
+    let descriptor = null;
+    let ownedStat = null;
+    let completed = false;
+    try {
+      try {
+        descriptor = fs.openSync(candidate, 'wx', 0o600);
+      } catch (error) {
+        if (error && error.code === 'EEXIST') continue;
+        throw error;
+      }
+      ownedStat = fs.fstatSync(descriptor);
+      if (!ownedStat.isFile()) {
+        throw atomicStageFailure('atomic_stage_unsafe',
+          `exclusive hook stage is not a regular file: ${candidate}`);
+      }
+      fs.writeFileSync(descriptor, bytes);
+      fs.closeSync(descriptor);
+      descriptor = null;
+      if (!ownedPathMatches(candidate, ownedStat, 'file')) {
+        throw atomicStageFailure('atomic_stage_unsafe',
+          `exclusive hook stage changed after creation: ${candidate}`);
+      }
+      completed = true;
+      return { path: candidate, stat: ownedStat };
+    } finally {
+      if (descriptor !== null) {
+        try { fs.closeSync(descriptor); } catch (_) { /* cleanup below */ }
+      }
+      if (ownedStat && !completed) cleanupOwnedFile(candidate, ownedStat);
+    }
+  }
+  throw atomicStageFailure('atomic_stage_collision',
+    `could not create a collision-free hook stage for ${target}`);
+}
+
+// A hard link is the file equivalent of rename-with-no-replace: linkSync creates the
+// backup name atomically and returns EEXIST without touching a colliding path.
+function createOwnedHookFileBackup(target, expectedStat) {
+  for (let attempt = 0; attempt < ATOMIC_STAGE_ATTEMPTS; attempt += 1) {
+    const candidate = `${target}.kaola-backup-${process.pid}-${crypto.randomBytes(16).toString('hex')}`;
+    try {
+      fs.linkSync(target, candidate);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') continue;
+      throw error;
+    }
+    const stat = lstatIfPresent(candidate);
+    if (!stat || stat.isSymbolicLink() || !stat.isFile()
+        || !sameFileIdentity(stat, expectedStat)) {
+      throw atomicStageFailure('atomic_stage_conflict',
+        `hook destination changed while reserving its backup: ${target}`);
+    }
+    return { path: candidate, stat };
+  }
+  throw atomicStageFailure('atomic_stage_collision',
+    `could not create a collision-free hook backup for ${target}`);
 }
 
 function updateHooks() {
-  // #447: hooks live in the GLOBAL ~/.codex; ensure its parent dir exists.
-  fs.mkdirSync(globalCodexDir, { recursive: true });
-
-  // R1: build the managed hooks inside a WARN-first guard — a malformed template should WARN and
-  // skip hooks, never abort copyAgentProfiles/updateConfig.
-  // #409: (a) copy the hook-referenced scripts into the version-less stable home and (b)
-  // substitute THAT home (not pluginRoot) into __KW_PLUGIN_ROOT__, so the installed commands
-  // resolve even after the install source dir is deleted / version-bumped. Both steps live
-  // inside the WARN-first guard: a malformed template or a missing source script WARNs and
-  // skips hooks rather than aborting the whole install.
-  let managedHooks;
-  let stableCopy = { copied: [], removed: 0 };
+  let transaction = null;
+  let hooksStage = null;
+  let hooksBackup = null;
+  let hooksInstalled = false;
+  let hooksInstalledStat = null;
+  let hooksOriginalStat = null;
   try {
+    // Build and read every input before staging anything. A malformed template,
+    // unsafe destination, or unreadable later source leaves both live outputs alone.
     const templateText = read(sourceHooksTemplate);
     const relPaths = hookReferencedRelPaths(templateText);
-    stableCopy = copyHookScripts(targetStableDir, relPaths);
-    managedHooks = buildManagedHooks(templateText, targetStableDir);
-  } catch (e) {
-    console.warn(`Kaola-Workflow Codex hooks: could not build managed hooks template — skipping (${e.message})`);
-    return { status: 'unchanged', stableCopy };
-  }
+    const managedHooks = buildManagedHooks(templateText, targetStableDir);
 
-  // Read existing hooks.json or default to empty; tolerate parse failures (WARN-first).
-  let existing = { hooks: {} };
-  if (fs.existsSync(targetHooks)) {
-    try {
-      existing = JSON.parse(read(targetHooks));
-      if (!existing || typeof existing.hooks !== 'object' || existing.hooks === null) {
-        existing = { hooks: {} };
+    const globalStat = lstatIfPresent(globalCodexDir);
+    assert(!globalStat || (!globalStat.isSymbolicLink() && globalStat.isDirectory()),
+      `hook destination parent must be a non-symlink directory: ${globalCodexDir}`);
+    hooksOriginalStat = lstatIfPresent(targetHooks);
+    assert(!hooksOriginalStat || (!hooksOriginalStat.isSymbolicLink() && hooksOriginalStat.isFile()),
+      `hook destination must be a non-symlink regular file: ${targetHooks}`);
+
+    // Read existing hooks.json or default to empty. Existing malformed bytes are
+    // user state: fail closed and preserve them rather than replacing them as empty.
+    let existing = { hooks: {} };
+    let current = null;
+    if (hooksOriginalStat) {
+      current = read(targetHooks);
+      try {
+        existing = validateExistingHooksSchema(JSON.parse(current));
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new Error(`malformed existing hooks.json: ${error.message}`);
+        }
+        throw error;
       }
-    } catch (e) {
-      console.warn(`Kaola-Workflow Codex hooks: malformed existing hooks.json — treating as empty (${e.message})`);
-      existing = { hooks: {} };
     }
+
+    const merged = mergeHooks(existing, managedHooks);
+    const next = JSON.stringify(merged, null, 2) + '\n';
+    const hooksChanged = next !== current;
+
+    transaction = prepareHookScriptReplacement(targetStableDir, relPaths, pluginRoot);
+    if (hooksChanged) {
+      fs.mkdirSync(globalCodexDir, { recursive: true });
+      hooksStage = createOwnedHookFileStage(targetHooks, 'stage', next);
+      if (hooksOriginalStat) {
+        const beforeBackup = lstatIfPresent(targetHooks);
+        assert(beforeBackup && !beforeBackup.isSymbolicLink() && beforeBackup.isFile()
+          && sameFileIdentity(beforeBackup, hooksOriginalStat)
+          && read(targetHooks) === current,
+        `hook destination changed before backup reservation: ${targetHooks}`);
+        hooksBackup = createOwnedHookFileBackup(targetHooks, hooksOriginalStat);
+        const afterBackup = lstatIfPresent(targetHooks);
+        assert(afterBackup && sameFileIdentity(afterBackup, hooksOriginalStat)
+          && read(targetHooks) === current,
+        `hook destination changed during backup reservation: ${targetHooks}`);
+      }
+    }
+
+    transaction.commit();
+    if (hooksChanged) {
+      const currentStat = lstatIfPresent(targetHooks);
+      if (hooksOriginalStat) {
+        assert(currentStat && !currentStat.isSymbolicLink() && currentStat.isFile()
+          && sameFileIdentity(currentStat, hooksOriginalStat)
+          && read(targetHooks) === current,
+        `hook destination changed after preflight: ${targetHooks}`);
+      } else {
+        assert(!currentStat, `hook destination appeared after preflight: ${targetHooks}`);
+      }
+      assert(hooksStage && ownedPathMatches(hooksStage.path, hooksStage.stat, 'file'),
+        `hook staging file changed before promotion: ${hooksStage && hooksStage.path}`);
+      fs.renameSync(hooksStage.path, targetHooks);
+      hooksInstalled = true;
+      hooksInstalledStat = hooksStage.stat;
+      const installedCurrent = lstatIfPresent(targetHooks);
+      assert(installedCurrent && sameFileIdentity(installedCurrent, hooksInstalledStat),
+        `hook destination changed during stage promotion: ${targetHooks}`);
+    }
+
+    transaction.finalize();
+    if (hooksBackup) cleanupOwnedFile(hooksBackup.path, hooksBackup.stat);
+    return { status: hooksChanged ? 'updated' : 'unchanged', stableCopy: transaction.summary };
+  } catch (error) {
+    if (hooksInstalled) {
+      const installedCurrent = lstatIfPresent(targetHooks);
+      if ((!installedCurrent || sameFileIdentity(installedCurrent, hooksInstalledStat))
+          && hooksBackup && ownedPathMatches(hooksBackup.path, hooksBackup.stat, 'file')) {
+        try {
+          fs.renameSync(hooksBackup.path, targetHooks);
+          hooksBackup = null;
+        } catch (rollbackError) {
+          error.message += `; hooks.json rollback failed: ${rollbackError.message}`;
+        }
+      } else if (installedCurrent && sameFileIdentity(installedCurrent, hooksInstalledStat)) {
+        try {
+          if (!hooksOriginalStat) {
+            fs.unlinkSync(targetHooks);
+          } else {
+            error.message += '; hooks.json rollback failed: owned backup is unavailable';
+          }
+        } catch (rollbackError) {
+          error.message += `; hooks.json rollback failed: ${rollbackError.message}`;
+        }
+      } else if (installedCurrent) {
+        error.message += '; hooks.json rollback refused: live destination is no longer owned';
+      }
+      hooksInstalled = false;
+    }
+    if (hooksStage) cleanupOwnedFile(hooksStage.path, hooksStage.stat);
+    if (hooksBackup) {
+      const liveCurrent = lstatIfPresent(targetHooks);
+      if (liveCurrent && sameFileIdentity(liveCurrent, hooksOriginalStat)) {
+        cleanupOwnedFile(hooksBackup.path, hooksBackup.stat);
+      }
+    }
+    if (transaction) {
+      try { transaction.rollback(); } catch (rollbackError) {
+        error.message += `; stable hook rollback failed: ${rollbackError.message}`;
+      }
+    }
+    const refreshError = new Error(`hook_refresh_failed: ${error.message}`);
+    refreshError.code = 'hook_refresh_failed';
+    refreshError.cause = error;
+    throw refreshError;
   }
-
-  const merged = mergeHooks(existing, managedHooks);
-
-  const next = JSON.stringify(merged, null, 2) + '\n';
-  const current = fs.existsSync(targetHooks) ? read(targetHooks) : null;
-
-  if (next !== current) {
-    fs.writeFileSync(targetHooks, next);
-    return { status: 'updated', stableCopy };
-  }
-
-  return { status: 'unchanged', stableCopy };
 }
 
 // Post-verify (AC8 parity): re-read every installed profile + assert the managed
@@ -825,13 +2102,23 @@ function postVerify(templateEntries) {
   }
 
   const configText = fs.existsSync(targetConfig) ? read(targetConfig) : '';
-  const beginIdx = configText.indexOf(beginMarker);
-  const endIdx = configText.indexOf(endMarker);
-  let blockBody = '';
-  if (beginIdx !== -1 && endIdx !== -1 && beginIdx < endIdx) {
-    blockBody = configText.slice(beginIdx + beginMarker.length, endIdx);
-  } else {
+  const configProof = managedConfigProof(configText, templateRoles, {
+    requireCanonicalBody: true,
+  });
+  const blockBody = configProof.actualBlock;
+  if (configProof.range.state === 'invalid') {
+    problems.push('managed block markers are ambiguous in .codex/config.toml after install');
+  } else if (configProof.range.state !== 'present') {
     problems.push('managed block markers not found in .codex/config.toml after install');
+  }
+  if (!configProof.bodyCanonical) {
+    problems.push('managed block body is not the canonical selected template after install');
+  }
+  if (configProof.conflictingRolesOutside.length > 0) {
+    problems.push(
+      'managed role declarations remain outside the managed block after install: '
+      + configProof.conflictingRolesOutside.join(', '),
+    );
   }
   for (const role of templateRoles) {
     const re = new RegExp(`^\\[agents\\.${escapeRegExp(role)}\\]`, 'm');
@@ -855,36 +2142,66 @@ function postVerify(templateEntries) {
 // enable_adaptive field. WARN-first: a corrupt/non-object existing config warns and is left UNTOUCHED
 // (never throws, never aborts the success path). Write-temp-then-rename for crash-safety parity with
 // copyAgentProfiles. Pure + exported for unit tests.
+const SHARED_CONFIG_CAS_ATTEMPTS = 4;
+
 function seedKaolaConfig(homeDir, withFast, withFull) {
   const configDir = path.join(homeDir, '.config', 'kaola-workflow');
   const configFile = path.join(configDir, 'config.json');
-  let config = {};
-  if (fs.existsSync(configFile)) {
-    let parsed;
-    try { parsed = JSON.parse(read(configFile)); }
-    catch (e) {
-      console.warn(`Kaola-Workflow Codex installer: ${configFile} is not valid JSON (${e.message}); leaving it untouched.`);
-      return { status: 'skipped_corrupt' };
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      console.warn(`Kaola-Workflow Codex installer: ${configFile} is not a JSON object; leaving it untouched.`);
-      return { status: 'skipped_non_object' };
-    }
-    config = parsed;
+  const preflightProblem = installTargetPathProblem(homeDir, configDir, 'directory')
+    || installTargetPathProblem(homeDir, configFile, 'file');
+  if (preflightProblem) {
+    throw atomicStageFailure('atomic_stage_unsafe', preflightProblem);
   }
-  if (config.parallel_mode === undefined) config.parallel_mode = 'auto';   // setdefault, never overwrite user value
-  const existing = Array.isArray(config.installed_paths) ? config.installed_paths : [];
-  const paths = new Set(existing);
-  if (withFast) paths.add('fast');
-  if (withFull) paths.add('full');
-  config.installed_paths = ['fast', 'full'].filter(p => paths.has(p));    // canonical order, {fast,full} only
-  delete config.enable_adaptive;                                           // migrate retired field
-  fs.mkdirSync(configDir, { recursive: true });
-  const tmp = configFile + '.tmp-' + process.pid;                          // crash-safety parity w/ copyAgentProfiles
-  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n');
-  fs.renameSync(tmp, configFile);
-  console.log(`Kaola-Workflow Codex installer: installed_paths (adaptive always; opt-ins: ${JSON.stringify(config.installed_paths)}) in ${configFile}`);
-  return { status: 'updated', installed_paths: config.installed_paths };
+
+  for (let attempt = 0; attempt < SHARED_CONFIG_CAS_ATTEMPTS; attempt += 1) {
+    try {
+      const expectedVersion = captureAtomicTargetVersion(configFile);
+      let config = {};
+      if (expectedVersion.stat) {
+        let parsed;
+        try { parsed = JSON.parse(expectedVersion.bytes.toString('utf8')); }
+        catch (e) {
+          console.warn(`Kaola-Workflow Codex installer: ${configFile} is not valid JSON (${e.message}); leaving it untouched.`);
+          return { status: 'skipped_corrupt' };
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          console.warn(`Kaola-Workflow Codex installer: ${configFile} is not a JSON object; leaving it untouched.`);
+          return { status: 'skipped_non_object' };
+        }
+        config = parsed;
+      }
+      if (config.parallel_mode === undefined) config.parallel_mode = 'auto'; // setdefault, preserve user value
+      const existing = Array.isArray(config.installed_paths) ? config.installed_paths : [];
+      const paths = new Set(existing);
+      if (withFast) paths.add('fast');
+      if (withFull) paths.add('full');
+      config.installed_paths = ['fast', 'full'].filter(p => paths.has(p));  // canonical order, {fast,full} only
+      delete config.enable_adaptive;                                       // migrate retired field
+
+      fs.mkdirSync(configDir, { recursive: true });
+      const postMkdirProblem = installTargetPathProblem(homeDir, configDir, 'directory')
+        || installTargetPathProblem(homeDir, configFile, 'file');
+      if (postMkdirProblem) {
+        throw atomicStageFailure('atomic_stage_unsafe', postMkdirProblem);
+      }
+      atomicWriteSameDirectory(
+        configFile,
+        JSON.stringify(config, null, 2) + '\n',
+        expectedVersion,
+      );
+      console.log(`Kaola-Workflow Codex installer: installed_paths (adaptive always; opt-ins: ${JSON.stringify(config.installed_paths)}) in ${configFile}`);
+      return { status: 'updated', installed_paths: config.installed_paths };
+    } catch (error) {
+      if (error && error.code === 'atomic_stage_conflict'
+          && attempt + 1 < SHARED_CONFIG_CAS_ATTEMPTS) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw atomicStageFailure('atomic_stage_conflict',
+    `shared config changed during all ${SHARED_CONFIG_CAS_ATTEMPTS} merge attempts: ${configFile}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -927,20 +2244,145 @@ function stripTomlComment(line) {
   return line;
 }
 
-function parseTomlTableName(line) {
-  const trimmed = String(line || '').trim();
-  let body = null;
-  let isArrayTable = false;
-  if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-    body = trimmed.slice(2, -2).trim();
-    isArrayTable = true;
-  } else if (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.startsWith('[[')) {
-    body = trimmed.slice(1, -1).trim();
-  } else {
-    return null;
-  }
-  if (!body) return null;
+// Return a line-for-line structural view of TOML while masking multiline string
+// bodies. Configuration prose may contain text such as `[agents.foo]` or
+// `[features.multi_agent_v2]`; those bytes are data, not declarations. Ordinary
+// quoted values stay intact because the small parsers below still need them.
+function tomlStructuralContent(content) {
+  const source = String(content || '');
+  let output = '';
+  let mode = 'normal';
+  let escaped = false;
 
+  function quoteRun(start, quote) {
+    let end = start;
+    while (end < source.length && source[end] === quote) end++;
+    return end - start;
+  }
+
+  function precedingBackslashes(start) {
+    let count = 0;
+    for (let index = start - 1; index >= 0 && source[index] === '\\'; index--) count++;
+    return count;
+  }
+
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+
+    if (mode === 'multiline-basic' || mode === 'multiline-literal') {
+      const quote = mode === 'multiline-basic' ? '"' : "'";
+      const run = ch === quote ? quoteRun(index, quote) : 0;
+      const closes = run >= 3
+        && (mode === 'multiline-literal' || precedingBackslashes(index) % 2 === 0);
+      if (closes) {
+        output += ' '.repeat(run);
+        index += run - 1;
+        mode = 'normal';
+      } else {
+        output += ch === '\n' || ch === '\r' ? ch : ' ';
+      }
+      continue;
+    }
+
+    if (mode === 'comment') {
+      output += ch;
+      if (ch === '\n') mode = 'normal';
+      continue;
+    }
+
+    if (mode === 'basic') {
+      output += ch;
+      if (ch === '\n' || ch === '\r') {
+        mode = 'normal';
+        escaped = false;
+      } else if (ch === '\\' && !escaped) {
+        escaped = true;
+      } else {
+        if (ch === '"' && !escaped) mode = 'normal';
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (mode === 'literal') {
+      output += ch;
+      if (ch === "'") mode = 'normal';
+      else if (ch === '\n' || ch === '\r') mode = 'normal';
+      continue;
+    }
+
+    if (ch === '#') {
+      output += ch;
+      mode = 'comment';
+      continue;
+    }
+    if (source.startsWith('"""', index)) {
+      output += '   ';
+      index += 2;
+      mode = 'multiline-basic';
+      continue;
+    }
+    if (source.startsWith("'''", index)) {
+      output += '   ';
+      index += 2;
+      mode = 'multiline-literal';
+      continue;
+    }
+    output += ch;
+    if (ch === '"') {
+      mode = 'basic';
+      escaped = false;
+    } else if (ch === "'") {
+      mode = 'literal';
+    }
+  }
+
+  return output;
+}
+
+function tomlStructuralLines(content) {
+  return tomlStructuralContent(content).split(/\r?\n/);
+}
+
+function decodeTomlBasicStringBody(value) {
+  const source = String(value || '');
+  let decoded = '';
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+    if (ch !== '\\') {
+      decoded += ch;
+      continue;
+    }
+    if (++index >= source.length) return null;
+    const escape = source[index];
+    const simple = {
+      b: '\b',
+      t: '\t',
+      n: '\n',
+      f: '\f',
+      r: '\r',
+      '"': '"',
+      '\\': '\\',
+    };
+    if (Object.prototype.hasOwnProperty.call(simple, escape)) {
+      decoded += simple[escape];
+      continue;
+    }
+    if (escape !== 'u' && escape !== 'U') return null;
+    const width = escape === 'u' ? 4 : 8;
+    const digits = source.slice(index + 1, index + 1 + width);
+    if (digits.length !== width || !/^[0-9A-Fa-f]+$/.test(digits)) return null;
+    const codePoint = parseInt(digits, 16);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return null;
+    decoded += String.fromCodePoint(codePoint);
+    index += width;
+  }
+  return decoded;
+}
+
+function parseTomlDottedKeySegments(bodyValue) {
+  const body = String(bodyValue || '').trim();
+  if (!body) return null;
   const segments = [];
   let i = 0;
   function skipSpace() {
@@ -974,6 +2416,10 @@ function parseTomlTableName(line) {
         i++;
       }
       if (!closed) return null;
+      if (quote === '"') {
+        value = decodeTomlBasicStringBody(value);
+        if (value === null) return null;
+      }
       segments.push({ value, quoted: true });
     } else {
       const m = body.slice(i).match(/^[A-Za-z0-9_-]+/);
@@ -988,7 +2434,65 @@ function parseTomlTableName(line) {
     i++;
   }
 
-  return { segments, isArrayTable };
+  return segments;
+}
+
+function parseTomlTableName(line) {
+  const trimmed = String(line || '').trim();
+  let body = null;
+  let isArrayTable = false;
+  if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
+    body = trimmed.slice(2, -2).trim();
+    isArrayTable = true;
+  } else if (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.startsWith('[[')) {
+    body = trimmed.slice(1, -1).trim();
+  } else {
+    return null;
+  }
+  const segments = parseTomlDottedKeySegments(body);
+  return segments ? { segments, isArrayTable } : null;
+}
+
+function parseTomlAssignment(line) {
+  const source = String(line || '');
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+    if (inDouble && ch === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
+    else if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '=' && !inSingle && !inDouble) {
+      const key = parseTomlDottedKeySegments(source.slice(0, index));
+      return key ? { key, value: source.slice(index + 1).trim() } : null;
+    } else if (ch === '#' && !inSingle && !inDouble) {
+      return null;
+    }
+    escaped = false;
+  }
+  return null;
+}
+
+function tomlAssignmentPath(tableName, assignment) {
+  if (!assignment) return null;
+  let segments = [];
+  if (tableName !== null) {
+    if (!tableName || tableName.isArrayTable || !Array.isArray(tableName.segments)) return null;
+    segments = tableName.segments;
+  }
+  return [...segments, ...assignment.key].map(segment => segment.value);
+}
+
+function tomlAssignmentPathMatches(tableName, assignment, dottedPath) {
+  const actual = tomlAssignmentPath(tableName, assignment);
+  if (!actual) return false;
+  const expected = Array.isArray(dottedPath) ? dottedPath : String(dottedPath || '').split('.');
+  return actual.length === expected.length
+    && actual.every((segment, index) => segment === expected[index]);
 }
 
 function tomlTableNameMatches(tableName, dottedPath) {
@@ -1014,12 +2518,7 @@ function parseTomlString(value) {
     return trimmed.slice(1, -1);
   }
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      return typeof parsed === 'string' ? parsed : null;
-    } catch {
-      return null;
-    }
+    return decodeTomlBasicStringBody(trimmed.slice(1, -1));
   }
   return null;
 }
@@ -1030,6 +2529,8 @@ function splitInlineTomlFields(body) {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let braceDepth = 0;
+  let bracketDepth = 0;
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (inDouble && ch === '\\' && !escaped) {
@@ -1038,7 +2539,13 @@ function splitInlineTomlFields(body) {
     }
     if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
     if (ch === "'" && !inDouble) inSingle = !inSingle;
-    if (ch === ',' && !inSingle && !inDouble) {
+    if (!inSingle && !inDouble) {
+      if (ch === '{') braceDepth++;
+      else if (ch === '}') braceDepth--;
+      else if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth--;
+    }
+    if (ch === ',' && !inSingle && !inDouble && braceDepth === 0 && bracketDepth === 0) {
       fields.push(body.slice(start, i).trim());
       start = i + 1;
     }
@@ -1046,6 +2553,20 @@ function splitInlineTomlFields(body) {
   }
   fields.push(body.slice(start).trim());
   return fields.filter(Boolean);
+}
+
+function parseInlineTomlTableAssignments(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) return [];
+  const assignments = [];
+  for (const field of splitInlineTomlFields(body)) {
+    const assignment = parseTomlAssignment(field);
+    if (!assignment || assignment.key.length !== 1) return null;
+    assignments.push(assignment);
+  }
+  return assignments;
 }
 
 function parseMultiAgentV2Value(value) {
@@ -1075,46 +2596,45 @@ function parseMultiAgentV2Value(value) {
   let namespaceAmbiguous = false;
   let toolNamespace = null;
   for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
-    const enabledMatch = field.match(/^enabled\s*=\s*(.+)$/);
-    if (enabledMatch) {
+    const assignment = parseTomlAssignment(field);
+    if (!assignment || assignment.key.length !== 1) continue;
+    const key = assignment.key[0].value;
+    if (key === 'enabled') {
       if (enabledFound) return { valid: false, enabled: false, non_code_mode_only: null };
-      const fieldBool = parseTomlBoolean(enabledMatch[1]);
+      const fieldBool = parseTomlBoolean(assignment.value);
       if (fieldBool === null) return { valid: false, enabled: false, non_code_mode_only: null };
       enabledFound = true;
       enabled = fieldBool;
       continue;
     }
-    const transportMatch = field.match(/^non_code_mode_only\s*=\s*(.+)$/);
-    if (transportMatch) {
+    if (key === 'non_code_mode_only') {
       if (transportFound) {
         transportAmbiguous = true;
         continue;
       }
-      const fieldBool = parseTomlBoolean(transportMatch[1]);
+      const fieldBool = parseTomlBoolean(assignment.value);
       transportFound = true;
       if (fieldBool === null) transportAmbiguous = true;
       else nonCodeModeOnly = fieldBool;
       continue;
     }
-    const metadataMatch = field.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
-    if (metadataMatch) {
+    if (key === 'hide_spawn_agent_metadata') {
       if (metadataFound) {
         metadataAmbiguous = true;
         continue;
       }
-      const fieldBool = parseTomlBoolean(metadataMatch[1]);
+      const fieldBool = parseTomlBoolean(assignment.value);
       metadataFound = true;
       if (fieldBool === null) metadataAmbiguous = true;
       else hideSpawnAgentMetadata = fieldBool;
       continue;
     }
-    const namespaceMatch = field.match(/^tool_namespace\s*=\s*(.+)$/);
-    if (namespaceMatch) {
+    if (key === 'tool_namespace') {
       if (namespaceFound) {
         namespaceAmbiguous = true;
         continue;
       }
-      const fieldString = parseTomlString(namespaceMatch[1]);
+      const fieldString = parseTomlString(assignment.value);
       namespaceFound = true;
       if (fieldString === null) namespaceAmbiguous = true;
       else toolNamespace = fieldString;
@@ -1136,7 +2656,7 @@ function parseMultiAgentV2Value(value) {
 }
 
 function detectCodexDispatchMode(configContent) {
-  const lines = String(configContent || '').split(/\r?\n/);
+  const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
@@ -1150,6 +2670,14 @@ function detectCodexDispatchMode(configContent) {
   let namespaceSeen = false;
   let namespaceAmbiguous = false;
   let toolNamespace = null;
+  let forcedUnsafe = false;
+
+  function forceUnsafe() {
+    forcedUnsafe = true;
+    transportAmbiguous = true;
+    metadataAmbiguous = true;
+    namespaceAmbiguous = true;
+  }
 
   function recordTransport(value) {
     if (value === null || value === undefined) return;
@@ -1210,42 +2738,53 @@ function detectCodexDispatchMode(configContent) {
       continue;
     }
 
-    if (tomlTableNameMatches(table, 'features')) {
-      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
-      if (m) record(parseMultiAgentV2Value(m[1]));
-    } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-      const enabledMatch = line.match(/^enabled\s*=\s*(.+)$/);
-      if (enabledMatch) {
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) {
+        forceUnsafe();
+        continue;
+      }
+      const v2Fields = featureFields.filter(field => field.key[0].value === 'multi_agent_v2');
+      if (v2Fields.length > 1) {
+        forceUnsafe();
+        continue;
+      }
+      if (v2Fields.length === 1) {
+        const parsed = parseMultiAgentV2Value(v2Fields[0].value);
+        if (parsed.valid) record(parsed);
+        else forceUnsafe();
+      }
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+      record(parseMultiAgentV2Value(assignment.value));
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'enabled'])) {
         record({
-          valid: parseTomlBoolean(enabledMatch[1]) !== null,
-          enabled: parseTomlBoolean(enabledMatch[1]) === true,
+          valid: parseTomlBoolean(assignment.value) !== null,
+          enabled: parseTomlBoolean(assignment.value) === true,
           non_code_mode_only: null,
           hide_spawn_agent_metadata: null,
           tool_namespace: null,
         });
-      }
-      const transportMatch = line.match(/^non_code_mode_only\s*=\s*(.+)$/);
-      if (transportMatch) {
-        const transportValue = parseTomlBoolean(transportMatch[1]);
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'non_code_mode_only'])) {
+        const transportValue = parseTomlBoolean(assignment.value);
         if (transportValue === null) transportAmbiguous = true;
         else recordTransport(transportValue);
-      }
-      const metadataMatch = line.match(/^hide_spawn_agent_metadata\s*=\s*(.+)$/);
-      if (metadataMatch) {
-        const metadataValue = parseTomlBoolean(metadataMatch[1]);
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'hide_spawn_agent_metadata'])) {
+        const metadataValue = parseTomlBoolean(assignment.value);
         if (metadataValue === null) metadataAmbiguous = true;
         else recordMetadata(metadataValue);
-      }
-      const namespaceMatch = line.match(/^tool_namespace\s*=\s*(.+)$/);
-      if (namespaceMatch) {
-        const namespaceValue = parseTomlString(namespaceMatch[1]);
+    } else if (tomlAssignmentPathMatches(
+      table, assignment, ['features', 'multi_agent_v2', 'tool_namespace'])) {
+        const namespaceValue = parseTomlString(assignment.value);
         if (namespaceValue === null) namespaceAmbiguous = true;
         else recordNamespace(namespaceValue);
-      }
     }
   }
 
-  enabled = seen && !ambiguous && enabled;
+  enabled = forcedUnsafe || (seen && !ambiguous && enabled);
   const transportMode = !enabled
     ? 'not_applicable'
     : (transportAmbiguous
@@ -1292,7 +2831,7 @@ const CODEX_V2_ROLE_TRANSPORT_NOTE = 'Kaola-Workflow role-aware MultiAgentV2 on 
 // first-match/ambiguous-fails-closed strategy: a repeated key or malformed boolean
 // short-circuits to false rather than guessing.
 function parseFeaturesMultiAgentEnabled(configContent) {
-  const lines = String(configContent || '').split(/\r?\n/);
+  const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
@@ -1308,10 +2847,13 @@ function parseFeaturesMultiAgentEnabled(configContent) {
       continue;
     }
 
-    if (tomlTableNameMatches(table, 'features')) {
-      const m = line.match(/^multi_agent\s*=\s*(.+)$/);
-      if (m) {
-        const b = parseTomlBoolean(m[1]);
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) continue;
+      for (const field of featureFields) {
+        if (field.key[0].value !== 'multi_agent') continue;
+        const b = parseTomlBoolean(field.value);
         if (b === null || seen) {
           ambiguous = true;
           enabled = false;
@@ -1320,6 +2862,15 @@ function parseFeaturesMultiAgentEnabled(configContent) {
           enabled = b;
         }
       }
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent'])) {
+        const b = parseTomlBoolean(assignment.value);
+        if (b === null || seen) {
+          ambiguous = true;
+          enabled = false;
+        } else {
+          seen = true;
+          enabled = b;
+        }
     }
   }
 
@@ -1332,11 +2883,25 @@ function parseFeaturesMultiAgentEnabled(configContent) {
 // table line is the correct (and only valid) place a user- or installer-owned root
 // key can live — the same `top` convention used by validateProfileText.
 function parseTopLevelModelReasoningEffort(configContent) {
-  const text = String(configContent || '');
-  const firstTableIdx = text.search(/^\[/m);
-  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
-  const m = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  return m ? m[1] : null;
+  let table = null;
+  let seen = false;
+  let effort = null;
+  for (const rawLine of tomlStructuralLines(configContent)) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+    const assignment = parseTomlAssignment(line);
+    if (!tomlAssignmentPathMatches(table, assignment, ['model_reasoning_effort'])) continue;
+    const value = parseTomlString(assignment.value);
+    if (seen || value === null) return null;
+    seen = true;
+    effort = value;
+  }
+  return effort;
 }
 
 // Exact remediation text for a non-proactive posture; null when nothing to remediate. Leads with
@@ -1433,12 +2998,14 @@ function parseMultiAgentV2NumericFields(configContent) {
 
   function recordFromInlineObject(body) {
     for (const field of splitInlineTomlFields(body)) {
-      const m = field.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-      if (m) recordField(m[1], m[2]);
+      const assignment = parseTomlAssignment(field);
+      if (assignment && assignment.key.length === 1) {
+        recordField(assignment.key[0].value, assignment.value);
+      }
     }
   }
 
-  const lines = String(configContent || '').split(/\r?\n/);
+  const lines = tomlStructuralLines(configContent);
   let table = null;
   for (const rawLine of lines) {
     const line = stripTomlComment(rawLine).trim();
@@ -1450,15 +3017,26 @@ function parseMultiAgentV2NumericFields(configContent) {
       continue;
     }
 
-    if (tomlTableNameMatches(table, 'features')) {
-      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
-      if (m) {
-        const v = m[1].trim();
-        if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
+    const assignment = parseTomlAssignment(line);
+    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
+      const featureFields = parseInlineTomlTableAssignments(assignment.value);
+      if (featureFields === null) continue;
+      for (const field of featureFields) {
+        if (field.key[0].value !== 'multi_agent_v2') continue;
+        const value = field.value.trim();
+        if (value.startsWith('{') && value.endsWith('}')) {
+          recordFromInlineObject(value.slice(1, -1));
+        }
       }
-    } else if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-      const m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-      if (m) recordField(m[1], m[2]);
+    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
+        const v = assignment.value.trim();
+        if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
+    } else {
+      const fullPath = tomlAssignmentPath(table, assignment);
+      if (fullPath && fullPath.length === 3
+          && fullPath[0] === 'features' && fullPath[1] === 'multi_agent_v2') {
+        recordField(fullPath[2], assignment.value);
+      }
     }
   }
 
@@ -1510,10 +3088,30 @@ function main() {
   const templateRoles = sourceCheck.roles;
   const templateEntries = sourceCheck.entries;
 
+  const unsafeInstallTarget = validateInstallTargets(templateEntries);
+  if (unsafeInstallTarget) {
+    process.stderr.write(`install_target_unsafe: ${unsafeInstallTarget}\n`);
+    process.exit(1);
+  }
+
   // MultiAgentV2 encrypts message arguments before direct tool execution, and the model reserves
   // collaboration.spawn_agent to its hidden-metadata schema. Kaola needs visible agent_type role
   // selection, so require the proven direct `agents` namespace before writing profiles/config.
   const preInstallConfigContent = fs.existsSync(targetConfig) ? read(targetConfig) : '';
+  const preInstallConfigProof = managedConfigProof(preInstallConfigContent, templateRoles);
+  if (preInstallConfigProof.range.state === 'invalid') {
+    process.stderr.write(
+      'managed_block_ambiguous: expected zero or one ordered top-level kaola-workflow marker pair; repair config.toml manually before reinstalling\n'
+    );
+    process.exit(1);
+  }
+  if (preInstallConfigProof.conflictingRolesOutside.length > 0) {
+    process.stderr.write(
+      'managed_role_conflict_outside: pre-existing declarations outside the managed block alias Kaola role(s): '
+      + `${preInstallConfigProof.conflictingRolesOutside.join(', ')}; repair config.toml manually before reinstalling\n`
+    );
+    process.exit(1);
+  }
   const preInstallDispatchMode = detectCodexDispatchMode(preInstallConfigContent);
   if (preInstallDispatchMode.codex_v2_role_transport_ready === false) {
     const directUnsafe = preInstallDispatchMode.codex_v2_direct_transport_ready === false;
@@ -1648,11 +3246,14 @@ module.exports = {
   updateHooks,
   hookReferencedRelPaths,
   copyHookScripts,
+  copyAgentProfiles,
   seedKaolaConfig,
   validateProfileText,
   reviewerProfileContract,
   classifyProfilePinPosture,
   validateSourceProfiles,
+  installTargetPathProblem,
+  validateInstallTargets,
   pruneStaleProfiles,
   readManifest,
   writeManifest,

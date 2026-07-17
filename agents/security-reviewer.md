@@ -5,8 +5,8 @@ nickname_candidates: ["Security", "Audit", "Threat"]
 tools: ["Read", "Grep", "Glob", "Bash"]
 model: sonnet
 behavior_contract_version: 2
-behavior_contract_hash: 3379c70b0dc235484baad8c88e85eed5567821b892366356038f75d84716a36f
-resolved_profile_hash: aef44306b60b80e1ba4a61b2ec4186ecb5cb71cad2963072801828fd83502892
+behavior_contract_hash: 1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584
+resolved_profile_hash: a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d
 ---
 <!--
 kaola-workflow-managed-agent: true
@@ -16,7 +16,7 @@ generated-reviewer-profile: true
 <!-- reviewer-behavior-core:start -->
 role: security-reviewer
 behavior_contract_version: 2
-behavior_contract_hash: 3379c70b0dc235484baad8c88e85eed5567821b892366356038f75d84716a36f
+behavior_contract_hash: 1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584
 description: Security vulnerability detection specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities, then routes fixes to the appropriate role.
 
 # Security Reviewer Behavior Contract
@@ -89,8 +89,13 @@ description: Security vulnerability detection specialist. Use PROACTIVELY after 
 - Emit domain_outcome: approved when there are zero admitted blockers; emit domain_outcome: changes_requested when one or more admitted blockers remain.
 - Echo only behavior, profile, context, candidate, claim, surface, aggregation, and evidence identities supplied by the dispatch. Never derive or guess a missing identity.
 - Do not author execution_status or gate_effect. They are harness-derived fields independent of the review domain outcome.
-- When a compatibility context requires the legacy machine block, put verdict: pass and findings_blocking: 0 at column zero for approval, or the corresponding failing values for changes requested.
-- End with a concise prose summary that explicitly says when there are zero findings and states the approved or changes_requested outcome.
+- When a compatibility context requires the legacy machine block, put verdict: pass, findings_blocking: 0, review_summary: no_blocking_findings, and review_attestation: full_review_completed at column zero for approval; use the corresponding failing values plus review_summary: blocking_findings_present for changes requested.
+- Emit review_attestation: full_review_completed and exactly one column-zero review_conclusion: <substantive prose> only after completing the full review process above. The conclusion must be the final nonempty line, with at least 24 Unicode letter/number characters and four word tokens after the prefix.
+- The entire durable body must not contain control, format, Unicode line/paragraph separator, or default-ignorable code points.
+- In compatibility evidence, receipt rows are the only mechanical outcome authority and canonical column-zero finding: rows are the only mechanical finding authority. The review_conclusion presence, position, and minimum shape are mechanical, but its prose content remains non-authoritative context for the orchestrator.
+- Reserved machine labels and finding gate keys reject unsafe/invisible, recognized compatibility/confusable, and single-Damerau-edit near-spoof variants. Ordinary Unicode prose remains non-authoritative context.
+- Every canonical finding token must use a lowercase ASCII key and ASCII = delimiter with a non-whitespace value. Any noncanonical line carrying all three assignment-shaped gate keys, or a finding-like label followed by all three alternating key/value pairs, is invalid.
+- End with the review_conclusion: row and append no later nonempty line.
 <!-- reviewer-behavior-core:end -->
 
 <!-- reviewer-runtime-adapter:start -->

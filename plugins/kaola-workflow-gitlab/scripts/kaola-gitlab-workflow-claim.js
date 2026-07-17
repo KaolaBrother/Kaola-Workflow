@@ -2282,28 +2282,113 @@ function computeGoalCheck(planDirs) {
   return 'absent';
 }
 
+// Source-missing Finalization must bind to one archive transaction authority, never merely to the
+// historical exact path. archiveProjectDir suffixes a new destination when archive/<project>
+// already exists, so exact + suffixed matches are ambiguous without a surviving live claim anchor.
+function findArchiveAuthorities(root, project) {
+  const candidateRoots = [root];
+  try {
+    const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    if (!candidateRoots.some(candidate => path.resolve(candidate) === path.resolve(main))) candidateRoots.push(main);
+  } catch (_) {}
+  const authorities = [];
+  const seen = new Set();
+  for (const candidateRoot of candidateRoots) {
+    const archiveBase = path.join(candidateRoot, 'kaola-workflow', 'archive');
+    let names = [];
+    try { names = fs.readdirSync(archiveBase); }
+    catch (_) { if (fs.existsSync(path.join(archiveBase, project))) names = [project]; }
+    for (const name of names) {
+      if (name !== project && !name.startsWith(project + '.archived-')) continue;
+      const authority = path.resolve(archiveBase, name);
+      if (seen.has(authority) || !fs.existsSync(authority)) continue;
+      seen.add(authority);
+      authorities.push(authority);
+    }
+  }
+  return authorities;
+}
+
 function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
   const folder = activeByProject(root, args.project);
+  const finalizeLiveDir = projectDir(root, args.project);
+  let finalizeLiveSourcePresent = false;
+  try {
+    fs.lstatSync(finalizeLiveDir);
+    finalizeLiveSourcePresent = true;
+  } catch (error) {
+    // Only a genuinely absent directory enters the source-missing crash-resume
+    // path. An unreadable entry remains live authority and fails type proof below.
+    finalizeLiveSourcePresent = !error || error.code !== 'ENOENT';
+  }
+  let finalizeAuthorityDir = null;
+  let finalizeAuthorityState = '';
+  // Finalization may legitimately resume after archiveProjectDir has already moved the live
+  // source, but plan absence must never turn a malformed LIVE source into that crash-resume
+  // exemption. Prove that the selected authority has a readable regular state file before any
+  // gate or archive side effect. A source-missing archive is a narrow crash-resume exemption:
+  // archiveProjectDir must already have terminal-stamped it closed before the rename. An active,
+  // abandoned, or otherwise nonterminal manual move is not proof that the live finalize gates ran.
+  {
+    const authorityCandidates = finalizeLiveSourcePresent
+      ? [finalizeLiveDir]
+      : findArchiveAuthorities(root, args.project);
+    finalizeAuthorityDir = authorityCandidates.length === 1 ? authorityCandidates[0] : null;
+    const authorityStatePath = finalizeAuthorityDir
+      ? path.join(finalizeAuthorityDir, 'workflow-state.md') : null;
+    let innerReason = null;
+    if (!finalizeLiveSourcePresent && authorityCandidates.length > 1) {
+      innerReason = 'archive_authority_ambiguous';
+    } else if (!finalizeAuthorityDir) {
+      innerReason = 'archive_authority_missing';
+    } else {
+      let authorityStat = null;
+      try { authorityStat = fs.lstatSync(finalizeAuthorityDir); } catch (_) {}
+      if (!authorityStat || !authorityStat.isDirectory() || authorityStat.isSymbolicLink()) {
+        innerReason = 'archive_authority_invalid_type';
+      }
+      let stateStat = null;
+      try { if (!innerReason) stateStat = fs.lstatSync(authorityStatePath); }
+      catch (error) { innerReason = error && error.code === 'ENOENT' ? 'state_missing' : 'state_unreadable'; }
+      if (!innerReason && (!stateStat || !stateStat.isFile() || stateStat.isSymbolicLink())) {
+        innerReason = 'state_invalid_type';
+      }
+      if (!innerReason) {
+        try { finalizeAuthorityState = fs.readFileSync(authorityStatePath, 'utf8'); }
+        catch (_) { innerReason = 'state_unreadable'; }
+      }
+      if (!innerReason && !finalizeLiveSourcePresent
+          && field(finalizeAuthorityState, 'status') !== 'closed') {
+        innerReason = 'archive_state_not_closed';
+      }
+    }
+    if (innerReason) {
+      output({
+        result: 'refuse',
+        reason: 'finalize_gate_unverified',
+        gate: 'workflow_state',
+        inner_reason: innerReason,
+        operator_hint: finalizeLiveSourcePresent
+          ? 'Restore workflow-state.md as a readable regular file before Finalization. No archive or closure side effect was made.'
+          : (innerReason === 'archive_state_not_closed'
+            ? 'Restore the live project and complete Finalization from its verified gates. Only an archive already stamped status: closed by the finalize transaction may resume source-missing; no closure side effect was made.'
+            : (innerReason === 'archive_authority_ambiguous'
+              ? 'Multiple exact/suffixed archives match this project, so no current transaction authority can be proven. Restore the live project or retain exactly the archive for the interrupted finalize transaction; no closure side effect was made.'
+              : 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.')),
+        errors: [innerReason]
+      }, 1);
+      return;
+    }
+  }
   // Re-plan fencing is a pre-side-effect finalization gate. A partial epoch
   // transition may be resumed only by the transaction authority; archive,
   // issue, branch, and worktree mutation remain forbidden until it commits and
   // every durable parent snapshot re-verifies.
   {
-    const liveDir = projectDir(root, args.project);
-    const authorityCandidates = [];
-    if (fs.existsSync(liveDir)) authorityCandidates.push(liveDir);
-    if (authorityCandidates.length === 0) {
-      authorityCandidates.push(path.join(root, 'kaola-workflow', 'archive', args.project));
-      try {
-        const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-        const mainArchive = path.join(main, 'kaola-workflow', 'archive', args.project);
-        if (!authorityCandidates.includes(mainArchive)) authorityCandidates.push(mainArchive);
-      } catch (_) {}
-    }
-    const authorityDir = authorityCandidates.find(candidate => fs.existsSync(candidate)) || null;
+    const authorityDir = finalizeAuthorityDir;
     const authorityState = authorityDir ? path.join(authorityDir, 'workflow-state.md') : null;
     const txPath = authorityDir
       ? path.join(authorityDir, '.cache', adaptiveSchema.REPLAN_TRANSACTION_NAME) : null;
@@ -2364,10 +2449,11 @@ function cmdFinalize() {
   // Both modes also run the attribution sweep (B). On any non-`pass` result, refuse to commit —
   // exit non-zero with finalize_gate_unverified carrying the inner reason. Gate is UNCONDITIONAL
   // for BOTH the --keep-worktree path and the in-place path, placed here (before archiveProjectDir)
-  // so no side effect has occurred on refusal. Plan-absent (non-adaptive run) → gate N/A, proceed.
+  // so no side effect has occurred on refusal. A plan-absent full run (including the contract's
+  // absent-field default) shells sibling full-advance phase5-verify; only explicit fast stays N/A.
   {
-    const livePlanPath = path.join(root, 'kaola-workflow', args.project, adaptiveSchema.PLAN_FILE);
-    if (fs.existsSync(livePlanPath)) {
+    const authorityPlanPath = path.join(finalizeAuthorityDir, adaptiveSchema.PLAN_FILE);
+    if (fs.existsSync(authorityPlanPath)) {
       const validatorScript = path.join(__dirname, 'kaola-gitlab-workflow-plan-validator.js');
       let gateResult = null;
       let gateError = null;
@@ -2378,7 +2464,7 @@ function cmdFinalize() {
         // byte-equivalent to today for branch-per-issue runs, so existing tests stay green). The
         // per-node --barrier-check STILL rejects --base (the anti-laundering guard) — unchanged.
         const finalizeBase = args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null;
-        const validatorArgv = [validatorScript, livePlanPath, '--finalize-check', '--json'];
+        const validatorArgv = [validatorScript, authorityPlanPath, '--finalize-check', '--json'];
         if (finalizeBase) validatorArgv.push('--base', finalizeBase);
         const raw = execFileSync(process.execPath, validatorArgv,
           { cwd: root, encoding: 'utf8', timeout: 120000 });
@@ -2401,6 +2487,71 @@ function cmdFinalize() {
         }, 1);
         return;
       }
+    } else {
+      const workflowPath = field(finalizeAuthorityState, 'workflow_path');
+      if (!workflowPath || workflowPath === 'full') {
+        const fullAdvanceScript = path.join(__dirname, 'kaola-gitlab-workflow-full-advance.js');
+        let gateResult = null;
+        let gateError = null;
+        let gateExitedZero = false;
+        let verifierRoot = root;
+        let verifierProjectionRoot = null;
+        try {
+          if (!finalizeLiveSourcePresent) {
+            verifierProjectionRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-verify-')));
+            const projectedWorkflowDir = path.join(verifierProjectionRoot, 'kaola-workflow');
+            fs.mkdirSync(projectedWorkflowDir, { recursive: true });
+            fs.cpSync(finalizeAuthorityDir, path.join(projectedWorkflowDir, args.project), {
+              recursive: true,
+              dereference: false,
+              preserveTimestamps: true,
+              verbatimSymlinks: true,
+            });
+            verifierRoot = verifierProjectionRoot;
+          }
+          const raw = execFileSync(process.execPath, [fullAdvanceScript, 'phase5-verify',
+            '--project', args.project, '--root', verifierRoot, '--json'],
+          { cwd: verifierRoot, encoding: 'utf8', timeout: 120000 });
+          gateResult = JSON.parse(raw.trim());
+          gateExitedZero = true;
+        } catch (e) {
+          const stdout = e && e.stdout ? String(e.stdout).trim() : '';
+          try { gateResult = JSON.parse(stdout); } catch (_) { gateError = stdout || String(e && e.message || e); }
+        } finally {
+          if (verifierProjectionRoot) {
+            try { fs.rmSync(verifierProjectionRoot, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+        if (!gateExitedZero || !gateResult || gateResult.result !== 'ok' ||
+            gateResult.phase5_verified !== true || gateResult.project !== args.project) {
+          const innerReason = (gateResult && gateResult.reason) || gateError || 'full_phase5_verifier_error';
+          const innerHint = (gateResult && gateResult.operator_hint) ||
+            'Repair the full-path Phase 5 evidence, then re-run finalize. No archive or closure side effect was made.';
+          output({
+            result: 'refuse',
+            reason: 'finalize_gate_unverified',
+            gate: 'full_phase5',
+            inner_reason: innerReason,
+            operator_hint: innerHint,
+            errors: (gateResult && gateResult.errors) || [innerReason]
+          }, 1);
+          return;
+        }
+      } else if (workflowPath !== 'fast') {
+        const innerReason = workflowPath === 'adaptive' ? 'adaptive_plan_missing' : 'invalid_workflow_path';
+        output({
+          result: 'refuse',
+          reason: 'finalize_gate_unverified',
+          gate: 'workflow_path',
+          inner_reason: innerReason,
+          workflow_path: workflowPath,
+          operator_hint: workflowPath === 'adaptive'
+            ? 'Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.'
+            : 'Repair workflow_path to an installed canonical value before Finalization. No archive or closure side effect was made.',
+          errors: [innerReason]
+        }, 1);
+        return;
+      }
     }
   }
   const result = archiveProjectDirSafely(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
@@ -2410,6 +2561,7 @@ function cmdFinalize() {
       reasoning: 'archival did not return an explicit success result; no roadmap, issue, label, worktree, or branch cleanup was performed.' }, 1);
     return;
   }
+  if (result.skipped === 'source-missing') result.dest = result.dest || finalizeAuthorityDir;
   // #676: receipt honesty — a lossy archive copy (verifyArchiveComplete refused BEFORE deleting
   // the live copy/copies because the DEST dropped an evidence file the live SOURCE held) must halt
   // finalize here, before any downstream side effect (roadmap source removal, issue close,
@@ -2449,8 +2601,7 @@ function cmdFinalize() {
     try {
       // #426: backstop destDir is worktree-aware — non-keep-worktree linked run archives to main;
       // keep-worktree linked run archives to the linked worktree (will merge into main later).
-      const destRoot = (cmdFinalizeIsLinkedRun && !args.keepWorktree) ? cmdFinalizeMainRoot : root;
-      const destDir = path.join(destRoot, 'kaola-workflow', 'archive', args.project);
+      const destDir = result.dest || finalizeAuthorityDir;
       const destState = path.join(destDir, 'workflow-state.md');
       if (fs.existsSync(destState)) {
         const raw = fs.readFileSync(destState, 'utf8');

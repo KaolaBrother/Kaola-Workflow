@@ -12,7 +12,9 @@
 // RED on a forge-codex tree without those SKILLs and GREEN once the adaptive SKILL pack ships.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
 let passed = 0, failed = 0;
@@ -904,6 +906,661 @@ for (const ed of codexEditions) {
     'T17: the three forge-neutral workflow-planner TOMLs remain byte-identical');
 }
 
+// ---------------------------------------------------------------------------
+// T18: the optional full-path review/fix loop must keep the same executable
+// semantics across all three Claude command surfaces and all three Codex skill
+// surfaces. Runtime-specific dispatch syntax may differ; resume, routing,
+// re-review, validation, evidence, and convergence behavior may not.
+// ---------------------------------------------------------------------------
+{
+  const claudeReviewSurfaces = claudeEditions.map(edition =>
+    `${edition.commandsDir}/kaola-workflow-phase5.md`);
+  const codexReviewSurfaces = codexEditions.map(edition =>
+    `${edition.skillsDir}/kaola-workflow-review/SKILL.md`);
+  const claudePlanRunSurfaces = claudeEditions.map(edition =>
+    `${edition.commandsDir}/kaola-workflow-plan-run.md`);
+  const finalizeSurfaces = [
+    ...claudeEditions.map(edition => `${edition.commandsDir}/kaola-workflow-finalize.md`),
+    ...codexEditions.map(edition => `${edition.skillsDir}/kaola-workflow-finalize/SKILL.md`),
+  ];
+  const reviewLoopTokens = [
+    'fix cache exists but reviewer not re-run',
+    '`code-reviewer` is always required',
+    'Review fixes are subagent-executed',
+    'CRITICAL and HIGH findings block Finalization',
+    'validation after non-trivial review fixes',
+    '## Trivial Inline Edit Exception',
+    'step: code-review',
+    're-run relevant reviewer',
+    're-run `security-reviewer`',
+    '.cache/review-fix-{n}.md',
+    'After three fix-and-re-review iterations without convergence, stop and ask.',
+    '`tdd-guide`',
+    '`build-error-resolver`',
+  ];
+  for (const file of [...claudeReviewSurfaces, ...codexReviewSurfaces]) {
+    const content = norm(fs.readFileSync(path.join(REPO, file), 'utf8'));
+    for (const token of reviewLoopTokens) {
+      const needle = norm(token);
+      assert(content.includes(needle),
+        `T18: ${file} carries full review-loop token ${JSON.stringify(token)}`);
+      const mutated = content.split(needle).join('');
+      assert(!mutated.includes(needle),
+        `T18 mutation: deleting ${JSON.stringify(token)} reds ${file}`);
+    }
+  }
+  const strictEvidenceTokens = [
+    'comma-enumerate',
+    'strictly ascending numeric order',
+    'coexisting noncanonical',
+    'mtime strictly greater',
+    'equal time is stale',
+    '`domain_outcome: approved`',
+    '`verdict: pass`',
+    '`findings_blocking: 0`',
+    '`review_summary: no_blocking_findings`',
+    'Reserved receipt rows are the only mechanical outcome authority',
+    'canonical `finding:` rows are the only mechanical finding authority',
+    'Unicode-obfuscated',
+    'Unicode line/paragraph separator',
+    'exact ASCII spelling and delimiters',
+    'single-Damerau-edit near-spoof variants',
+    'all three assignment-shaped gate keys',
+    'all three alternating key/value pairs',
+    'its prose content is retained only as orchestrator context and is not mechanically classified',
+    '`no CRITICAL/HIGH blocking findings`',
+    '`review_attestation: full_review_completed`',
+    '`review_conclusion: <substantive prose>`',
+    'Named reviewer invocation remains required',
+  ];
+  for (const file of [...claudeReviewSurfaces, ...codexReviewSurfaces]) {
+    const content = norm(fs.readFileSync(path.join(REPO, file), 'utf8'));
+    for (const token of strictEvidenceTokens) {
+      assert(content.includes(norm(token)),
+        `T18: ${file} documents strict terminal review evidence token ${JSON.stringify(token)}`);
+    }
+  }
+  for (const file of codexReviewSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    assert(!content.includes('or `codex review`'),
+      `T18: ${file} must not bypass the named generated reviewer profile with codex review`);
+  }
+
+  // The Phase 5 point-of-use gate accepts only the exact approval receipt below. Because these
+  // reviewer roles are dispatched with fork_turns:none, the dispatch itself must declare that
+  // compatibility context; nearby gate prose cannot repair an under-specified child prompt.
+  const phase5TerminalFields = [
+    'domain_outcome: approved',
+    'verdict: pass',
+    'findings_blocking: 0',
+    'review_summary: no_blocking_findings',
+    'review_attestation: full_review_completed',
+    'review_conclusion: <substantive prose>',
+  ];
+  const phase5ReviewerDispatches = [
+    {
+      taskName: 'phase5_code_review_{iteration}',
+      agentType: 'code-reviewer',
+      evidenceFile: 'kaola-workflow/{project}/.cache/code-reviewer.md',
+    },
+    {
+      taskName: 'phase5_security_review_{iteration}',
+      agentType: 'security-reviewer',
+      evidenceFile: 'kaola-workflow/{project}/.cache/security-reviewer.md',
+    },
+  ];
+  function phase5ReviewerDispatchValid(content, spec) {
+    const blocks = [...content.matchAll(/```yaml\s*\nagents\.spawn_agent:\n([\s\S]*?)\n```/g)];
+    const block = blocks.map(match => match[1]).find(candidate =>
+      candidate.includes(`task_name: "${spec.taskName}"`));
+    if (!block) return false;
+    const entries = block.split('\n').map(line => line.match(/^  ([a-z_]+): "([^"]*)"$/));
+    if (entries.some(entry => !entry)) return false;
+    const expectedKeys = ['task_name', 'agent_type', 'fork_turns', 'message'];
+    const keys = entries.map(entry => entry[1]);
+    if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+      return false;
+    }
+    const values = Object.fromEntries(entries.map(entry => [entry[1], entry[2]]));
+    return values.task_name === spec.taskName
+      && values.agent_type === spec.agentType
+      && values.fork_turns === 'none'
+      && values.message.includes(`dispatch.evidence_file=${spec.evidenceFile}`)
+      && values.message.includes('approval receipt')
+      && values.message.includes('exactly one column-zero')
+      && phase5TerminalFields.every(field => values.message.includes(field));
+  }
+  for (const file of codexReviewSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    for (const spec of phase5ReviewerDispatches) {
+      assert(phase5ReviewerDispatchValid(content, spec),
+        `T18 receipt alignment: ${file} ${spec.agentType} dispatch requires the exact terminal approval receipt`);
+      for (const field of phase5TerminalFields) {
+        const taskOffset = content.indexOf(`task_name: "${spec.taskName}"`);
+        const fieldOffset = content.indexOf(field, taskOffset);
+        const mutated = content.slice(0, fieldOffset) + field.replace(': ', '_mutated_')
+          + content.slice(fieldOffset + field.length);
+        assert(!phase5ReviewerDispatchValid(mutated, spec),
+          `T18 receipt mutation: ${file} ${spec.agentType} dispatch rejects drift in ${field}`);
+      }
+    }
+  }
+
+  function claudePhase5ReviewerDispatchValid(content, spec) {
+    const start = content.indexOf(spec.start);
+    const end = start >= 0 ? content.indexOf(spec.end, start) : -1;
+    if (start < 0 || end <= start) return false;
+    const dispatch = norm(content.slice(start, end));
+    return dispatch.includes(`subagent_type="${spec.agentType}"`)
+      && dispatch.includes('Review only; do not edit files.')
+      && dispatch.includes('Compatibility context: for approval')
+      && dispatch.includes('approval receipt')
+      && dispatch.includes('exactly one column-zero')
+      && phase5TerminalFields.every(field => dispatch.includes(field));
+  }
+  const claudeReviewerDispatches = [
+    {
+      agentType: 'code-reviewer',
+      start: 'Invoke the Claude Code agent `code-reviewer`:',
+      end: '## Step 2 - Security Review',
+    },
+    {
+      agentType: 'security-reviewer',
+      start: 'If security-sensitive files were touched, invoke the',
+      end: 'If security review is not needed',
+    },
+  ];
+  for (const file of claudeReviewSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    for (const spec of claudeReviewerDispatches) {
+      assert(claudePhase5ReviewerDispatchValid(content, spec),
+        `T18 receipt alignment: ${file} ${spec.agentType} dispatch requires the exact terminal approval receipt`);
+      for (const field of phase5TerminalFields) {
+        const taskOffset = content.indexOf(spec.start);
+        const fieldOffset = content.indexOf(field, taskOffset);
+        const mutated = content.slice(0, fieldOffset) + field.replace(': ', '_mutated_')
+          + content.slice(fieldOffset + field.length);
+        assert(!claudePhase5ReviewerDispatchValid(mutated, spec),
+          `T18 receipt mutation: ${file} ${spec.agentType} dispatch rejects drift in ${field}`);
+      }
+    }
+  }
+
+  const receiptPromptSentence = 'Compatibility context: for approval, the durable body MUST contain '
+    + 'the approval receipt with exactly one column-zero domain_outcome: approved, exactly one '
+    + 'column-zero verdict: pass, exactly one column-zero findings_blocking: 0, exactly one '
+    + 'column-zero review_summary: no_blocking_findings, exactly one column-zero '
+    + 'review_attestation: full_review_completed, and exactly one final column-zero '
+    + 'review_conclusion: <substantive prose>. Emit the attestation and conclusion only after '
+    + 'completing the full review; the conclusion text after the prefix must contain at least '
+    + '24 Unicode letter/number characters and four word tokens. The entire durable body must not '
+    + 'contain control, format, Unicode line/paragraph separator, or default-ignorable code points, '
+    + 'and every machine label and finding gate key must use exact ASCII spelling and delimiters. '
+    + 'Every finding token must use a lowercase ASCII key and ASCII = delimiter with a '
+    + 'non-whitespace value. '
+    + 'Emit every finding as a canonical column-zero '
+    + 'finding: row; use the corresponding failing receipt values plus '
+    + 'review_summary: blocking_findings_present when changes are requested.';
+  for (const [label, surfaces] of [
+    ['Claude', claudeReviewSurfaces],
+    ['Codex', codexReviewSurfaces],
+  ]) {
+    const counts = surfaces.map(file => norm(fs.readFileSync(path.join(REPO, file), 'utf8'))
+      .split(receiptPromptSentence).length - 1);
+    assert(counts.every(count => count === 2),
+      `T18 receipt parity: all three ${label} editions carry the same approval receipt prompt twice`);
+  }
+
+  const behaviorContracts = JSON.parse(fs.readFileSync(
+    path.join(REPO, 'templates/reviewers/behavior-contracts.json'), 'utf8'));
+  for (const role of ['code-reviewer', 'security-reviewer']) {
+    const receiptSection = behaviorContracts.roles[role].sections.find(section =>
+      section.id === 'receipt-contract');
+    const receiptContract = (receiptSection && receiptSection.lines || []).join(' ');
+    assert(receiptContract.includes('compatibility context requires the legacy machine block')
+        && phase5TerminalFields.every(field => receiptContract.includes(field)),
+      `T18 receipt alignment: canonical ${role} profile can emit the Phase 5 terminal approval receipt`);
+    for (const edition of codexEditions) {
+      const agentsDir = edition.skillsDir.replace(/\/skills$/, '/agents');
+      const profile = fs.readFileSync(path.join(REPO, agentsDir, `${role}.toml`), 'utf8');
+      assert(profile.includes('compatibility context requires the legacy machine block')
+          && phase5TerminalFields.every(field => profile.includes(field)),
+        `T18 receipt alignment: generated ${agentsDir}/${role}.toml carries terminal receipt capability`);
+    }
+  }
+
+  const phase5MechanicalTokens = [
+    '`phase4-progress.md`',
+    '`## Tasks` table',
+    'at least one task row',
+    'every task status must be `complete`',
+    'explicit `compliance` array',
+    'exactly one `code-reviewer` row',
+    'canonical `.cache/code-reviewer.md`',
+    'exactly one `security-reviewer` row',
+    'documented N/A file-risk decision',
+    'exactly one `review-fix executors` row',
+    'no blocking findings',
+    'mtime strictly greater than both',
+    '`binding`',
+    '`binding: n/a`',
+    'seed-only',
+    'compact-summary-only',
+  ];
+  for (const file of claudeReviewSurfaces) {
+    const content = norm(fs.readFileSync(path.join(REPO, file), 'utf8'));
+    for (const token of phase5MechanicalTokens) {
+      assert(content.includes(norm(token)),
+        `T18: ${file} documents mechanical Phase 5 prerequisite ${JSON.stringify(token)}`);
+    }
+    assert(!/never gates Finalization/i.test(content),
+      `T18: ${file} does not claim the mechanical Phase 5 gate never gates Finalization`);
+  }
+
+  const codexEvidenceBindingTokens = [
+    '`evidence-binding: <node-id> <nonce>`',
+    '`dispatch.evidence_file`',
+    'seed only the evidence-binding header',
+    'never synthesize reviewer evidence',
+    'nonempty body below the unchanged header',
+    'agent_type: "code-reviewer"',
+    'agent_type: "security-reviewer"',
+    'agent_type: "tdd-guide"',
+    'agent_type: "build-error-resolver"',
+    'dispatch.evidence_file=kaola-workflow/{project}/.cache/code-reviewer.md',
+    'dispatch.evidence_file=kaola-workflow/{project}/.cache/security-reviewer.md',
+    'dispatch.evidence_file=kaola-workflow/{project}/.cache/review-fix-{n}.md',
+    'Before every re-review',
+    "invoked compliance row's `binding`",
+    '`binding: n/a`',
+    'substantive role body',
+  ];
+  for (const file of codexReviewSurfaces) {
+    const rawContent = fs.readFileSync(path.join(REPO, file), 'utf8');
+    const content = norm(rawContent);
+    for (const token of codexEvidenceBindingTokens) {
+      assert(content.includes(norm(token)),
+        `T18: ${file} binds generated role dispatch to durable evidence token ${JSON.stringify(token)}`);
+    }
+    assert(!/find[^\n]*full-advance\.js/.test(rawContent),
+      `T18: ${file} never selects a full-path transaction with a generic find selector`);
+    for (const token of ['y==="."||y===".."', '[".codex","plugins","cache"', '"$HOME" "$KAOLA_CODEX_CACHE_ROOT"']) {
+      assert(rawContent.includes(token),
+        `T18: ${file} hardens active transaction resolver token ${JSON.stringify(token)}`);
+    }
+  }
+
+  const pointOfUseTokens = [
+    'phase5-verify',
+    'five-column review compliance table',
+    'exact seeded evidence bindings',
+    'substantive bodies',
+    'evidence freshness',
+    'fix decisions',
+    'project-path authority',
+    'phase5_point_of_use_failed',
+  ];
+  for (const file of finalizeSurfaces) {
+    const content = norm(fs.readFileSync(path.join(REPO, file), 'utf8'));
+    for (const token of pointOfUseTokens) {
+      assert(content.includes(norm(token)),
+        `T18: ${file} carries Phase 5 point-of-use token ${JSON.stringify(token)}`);
+    }
+  }
+  for (const file of codexEditions.map(edition =>
+    `${edition.skillsDir}/kaola-workflow-finalize/SKILL.md`)) {
+    const rawContent = fs.readFileSync(path.join(REPO, file), 'utf8');
+    const content = norm(rawContent);
+    for (const token of [
+      'Freshly re-resolve the exact active plugin tuple in this shell',
+      'does not depend on variables from an earlier shell',
+      'codex plugin list --json',
+    ]) {
+      assert(content.includes(norm(token)),
+        `T18: ${file} carries fresh-shell point-of-use resolver token ${JSON.stringify(token)}`);
+    }
+    for (const token of ['y==="."||y===".."', '[".codex","plugins","cache"', '"$HOME" "$KAOLA_CODEX_CACHE_ROOT"']) {
+      assert(rawContent.includes(token),
+        `T18: ${file} hardens point-of-use resolver token ${JSON.stringify(token)}`);
+    }
+  }
+
+  for (const file of claudePlanRunSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    assert(!content.includes('Codex Profile Freshness Gate'),
+      `T18: ${file} excludes the Codex-only profile gate`);
+    assert(!content.includes('profile_preflight_refused'),
+      `T18: ${file} excludes the Codex-only profile refusal token`);
+  }
+  const codexBlocks = codexReviewSurfaces.map(file => {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    const marker = '<!-- PIN: full-review-fix-loop-parity -->';
+    const start = content.indexOf(marker);
+    const end = start >= 0 ? content.indexOf('<!-- /PIN -->', start) : -1;
+    return start >= 0 && end > start ? content.slice(start, end) : '';
+  });
+  assert(codexBlocks.every(block => block.length > 0),
+    'T18: all three Codex review skills carry the bounded full review/fix loop');
+  assert(codexBlocks.every(block => block === codexBlocks[0]),
+    'T18: all three Codex review skills carry one byte-identical review/fix block');
+
+  // Execute the exact review transaction fence in a fresh shell. No variable
+  // exported by the earlier profile gate may be required to find the exact
+  // active edition/version transaction script.
+  const transactionBlocks = codexReviewSurfaces.map(file => {
+    const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+    return [...content.matchAll(/```bash\n([\s\S]*?)\n```/g)]
+      .map(match => match[1])
+      .find(block => block.includes('phase5-finalize')) || '';
+  });
+  assert(transactionBlocks.every(block => block.length > 0),
+    'T18: all Codex review skills expose an executable Phase 5 transaction fence');
+  if (transactionBlocks.every(block => block.length > 0)) {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-phase5-fresh-shell-'));
+    const fakeHome = path.join(fixtureRoot, 'home');
+    const fakeBin = path.join(fixtureRoot, 'bin');
+    const project = path.join(fixtureRoot, 'project');
+    const markerPath = path.join(fixtureRoot, 'selected.json');
+    fs.mkdirSync(fakeHome, { recursive: true });
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.mkdirSync(project, { recursive: true });
+    const fakeCodex = path.join(fakeBin, 'codex');
+    fs.writeFileSync(fakeCodex,
+      '#!/bin/sh\n'
+      + 'if [ "$1" = plugin ] && [ "$2" = list ] && [ "$3" = --json ]; then printf "%s\\n" "$KAOLA_PLUGIN_LIST_JSON"; exit 0; fi\n'
+      + 'exit 9\n');
+    fs.chmodSync(fakeCodex, 0o755);
+    const scriptNames = {
+      'kaola-workflow': 'kaola-workflow-full-advance.js',
+      'kaola-workflow-gitlab': 'kaola-gitlab-workflow-full-advance.js',
+      'kaola-workflow-gitea': 'kaola-gitea-workflow-full-advance.js',
+    };
+    try {
+      for (const [name, scriptName] of Object.entries(scriptNames)) {
+        const script = path.join(fakeHome, '.codex', 'plugins', 'cache',
+          'kaola-marketplace', name, '4.23.1', 'scripts', scriptName);
+        fs.mkdirSync(path.dirname(script), { recursive: true });
+        fs.writeFileSync(script,
+          'const fs=require("fs");\n'
+          + 'fs.writeFileSync(process.env.KAOLA_TRANSACTION_MARKER, JSON.stringify(process.argv.slice(2)));\n');
+        const registry = JSON.stringify({ installed: [{
+          pluginId: `${name}@kaola-marketplace`, name,
+          marketplaceName: 'kaola-marketplace', version: '4.23.1',
+          installed: true, enabled: true,
+        }] });
+        const env = { ...process.env };
+        for (const key of Object.keys(env)) {
+          if (/^KAOLA_(?:CODEX|SCRIPTS|FULL_ADVANCE)/.test(key)) delete env[key];
+        }
+        Object.assign(env, {
+          HOME: fakeHome,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+          KAOLA_PLUGIN_LIST_JSON: registry,
+          KAOLA_TRANSACTION_MARKER: markerPath,
+        });
+        fs.rmSync(markerPath, { force: true });
+        const run = spawnSync('bash', ['-c', transactionBlocks[0]], {
+          cwd: project, env, encoding: 'utf8',
+        });
+        assert(run.status === 0,
+          `T18 executable: fresh shell resolves ${name} Phase 5 transaction: ${run.stderr}`);
+        const selected = fs.existsSync(markerPath)
+          ? JSON.parse(fs.readFileSync(markerPath, 'utf8')) : [];
+        assert(selected[0] === 'phase5-finalize',
+          `T18 executable: fresh shell executes exact ${name} Phase 5 transaction`);
+      }
+
+      function runTransaction(metadata) {
+        const env = { ...process.env };
+        for (const key of Object.keys(env)) {
+          if (/^KAOLA_(?:CODEX|SCRIPTS|FULL_ADVANCE)/.test(key)) delete env[key];
+        }
+        Object.assign(env, {
+          HOME: fakeHome,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+          KAOLA_PLUGIN_LIST_JSON: metadata,
+          KAOLA_TRANSACTION_MARKER: markerPath,
+        });
+        return spawnSync('bash', ['-c', transactionBlocks[0]], {
+          cwd: project, env, encoding: 'utf8',
+        });
+      }
+      const registry = (marketplace, version) => JSON.stringify({ installed: [{
+        pluginId: `kaola-workflow@${marketplace}`,
+        name: 'kaola-workflow', marketplaceName: marketplace, version,
+        installed: true, enabled: true,
+      }] });
+      const cacheRoot = path.join(fakeHome, '.codex', 'plugins', 'cache');
+      const relocatedCache = path.join(fixtureRoot, 'relocated-cache');
+      fs.renameSync(cacheRoot, relocatedCache);
+      fs.symlinkSync(relocatedCache, cacheRoot, 'dir');
+      let refused = runTransaction(registry('kaola-marketplace', '4.23.1'));
+      assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
+        'T18 executable: transaction refuses a symlinked cache ancestor');
+      fs.rmSync(cacheRoot, { force: true });
+      fs.renameSync(relocatedCache, cacheRoot);
+      for (const [label, metadata] of [
+        ['dot marketplace', registry('.', '4.23.1')],
+        ['dot-dot marketplace', registry('..', '4.23.1')],
+        ['dot version', registry('kaola-marketplace', '.')],
+        ['dot-dot version', registry('kaola-marketplace', '..')],
+      ]) {
+        refused = runTransaction(metadata);
+        assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
+          `T18 executable: transaction refuses ${label} metadata`);
+      }
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T19: every Codex skill that can directly dispatch a named role must execute
+// the normal, fail-closed profile gate on entry. A doctor-only probe reports
+// state but cannot authorize dispatch, and downstream skills are valid direct
+// resume entry points, so a router-only check is insufficient.
+// ---------------------------------------------------------------------------
+{
+  const expectedDispatchSkills = [
+    'kaola-workflow-adapt',
+    'kaola-workflow-execute',
+    'kaola-workflow-fast',
+    'kaola-workflow-finalize',
+    'kaola-workflow-ideation',
+    'kaola-workflow-next',
+    'kaola-workflow-plan',
+    'kaola-workflow-plan-run',
+    'kaola-workflow-research',
+    'kaola-workflow-review',
+  ];
+  const dispatchSignal = /(?:subagent-invoked|agents\.spawn_agent|MUST delegate|Use the `[^`]+` Codex agent role)/;
+  const marker = '<!-- PIN: codex-profile-preflight -->';
+  const requiredTokens = [
+    'normal preflight gate, not `--doctor`',
+    '`kaola-workflow-codex-preflight.js`',
+    '`codex plugin list --json`',
+    'Resolve exactly one enabled installed Kaola edition from',
+    'Never search `$PWD/plugins`',
+    '`$HOME/.codex/plugins/cache/$KAOLA_CODEX_MARKETPLACE/$KAOLA_CODEX_PLUGIN_NAME/$KAOLA_CODEX_PLUGIN_VERSION`',
+    '`--project-root "$PWD" --no-autofix --json`',
+    'merges persisted config from HOME through the repository root to `"$PWD"`',
+    '`status: "ok"`',
+    '`profile_preflight_refused`',
+    'STOP before any `agents.spawn_agent` call',
+    'never record `subagent-invoked`',
+    '`profile_bytes_mismatch`',
+    'item==="."||item===".."',
+    'plugin cache root escapes HOME',
+    'const parts=[".codex","plugins","cache"',
+    'Re-run the gate if the installed profile set changes',
+  ];
+  const allPreflightBlocks = [];
+
+  for (const edition of codexEditions) {
+    const skillNames = fs.readdirSync(path.join(REPO, edition.skillsDir), { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+      .filter(name => {
+        const skillPath = path.join(REPO, edition.skillsDir, name, 'SKILL.md');
+        return fs.existsSync(skillPath) && dispatchSignal.test(fs.readFileSync(skillPath, 'utf8'));
+      })
+      .sort();
+    assert(JSON.stringify(skillNames) === JSON.stringify(expectedDispatchSkills),
+      `T19: ${edition.skillsDir} dispatch-capable skill universe stays explicit and complete`);
+
+    for (const name of skillNames) {
+      const file = `${edition.skillsDir}/${name}/SKILL.md`;
+      const content = fs.readFileSync(path.join(REPO, file), 'utf8');
+      const start = content.indexOf(marker);
+      const end = start >= 0 ? content.indexOf('<!-- /PIN -->', start) : -1;
+      const block = start >= 0 && end > start ? content.slice(start, end) : '';
+      assert(block.length > 0, `T19: ${file} carries the bounded Codex profile preflight gate`);
+      allPreflightBlocks.push(block);
+      for (const token of requiredTokens) {
+        const normalizedBlock = norm(block);
+        const needle = norm(token);
+        assert(normalizedBlock.includes(needle), `T19: ${file} preflight block carries ${JSON.stringify(token)}`);
+        const mutated = normalizedBlock.replace(needle, '');
+        assert(!mutated.includes(needle),
+          `T19 mutation: deleting ${JSON.stringify(token)} reds ${file}`);
+      }
+      assert(content.indexOf(marker) < content.search(/(?:agents\.spawn_agent|subagent-invoked|MUST delegate|Use the `[^`]+` Codex agent role)/),
+        `T19: ${file} profile gate appears before its first named-role dispatch contract`);
+      assert(!block.includes('for candidate_root in "$PWD/plugins"'),
+        `T19: ${file} never executes a repository-local first-match preflight`);
+      assert(!block.includes('find "$candidate_root"'),
+        `T19: ${file} never uses nondeterministic find/head cache selection`);
+    }
+  }
+  assert(allPreflightBlocks.every(block => block === allPreflightBlocks[0]),
+    'T19: all dispatch-capable Codex skills carry one byte-identical profile preflight block');
+
+  // Execute the exact fenced Bash block against a fake Codex registry. A malicious
+  // lexically-first repository script and an older cache version must never run;
+  // all metadata/preflight failures retain the typed refusal prefix.
+  const bashMatch = allPreflightBlocks[0].match(/```bash\n([\s\S]*?)\n```/);
+  assert(!!bashMatch, 'T19: canonical preflight block exposes one executable Bash fence');
+  if (bashMatch) {
+    const gateScript = bashMatch[1];
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-active-plugin-gate-'));
+    const fakeHome = path.join(fixtureRoot, 'home');
+    const fakeBin = path.join(fixtureRoot, 'bin');
+    const project = path.join(fixtureRoot, 'project');
+    const markerPath = path.join(fixtureRoot, 'selected.txt');
+    fs.mkdirSync(fakeHome, { recursive: true });
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.mkdirSync(project, { recursive: true });
+    const fakeCodex = path.join(fakeBin, 'codex');
+    fs.writeFileSync(fakeCodex,
+      '#!/bin/sh\n'
+      + 'if [ "${KAOLA_PLUGIN_LIST_EXIT:-0}" -ne 0 ]; then printf "metadata-error\\n" >&2; exit "$KAOLA_PLUGIN_LIST_EXIT"; fi\n'
+      + 'if [ "$1" = plugin ] && [ "$2" = list ] && [ "$3" = --json ]; then printf "%s\\n" "$KAOLA_PLUGIN_LIST_JSON"; exit 0; fi\n'
+      + 'exit 9\n');
+    fs.chmodSync(fakeCodex, 0o755);
+
+    function writeProbe(file, label) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file,
+        '#!/usr/bin/env node\n'
+        + 'const fs=require("fs");\n'
+        + `fs.writeFileSync(process.env.KAOLA_GATE_MARKER, ${JSON.stringify(label)});\n`
+        + 'process.stdout.write(process.env.KAOLA_PREFLIGHT_OUTPUT || "{\\"status\\":\\"ok\\"}\\n");\n'
+        + 'process.exit(Number(process.env.KAOLA_PREFLIGHT_EXIT || 0));\n');
+      fs.chmodSync(file, 0o755);
+    }
+
+    function registryJson(name, version = '4.23.1', marketplace = 'kaola-marketplace') {
+      return JSON.stringify({ installed: [{
+        pluginId: `${name}@${marketplace}`,
+        name,
+        marketplaceName: marketplace,
+        version,
+        installed: true,
+        enabled: true,
+      }] });
+    }
+
+    function runGate(extraEnv = {}) {
+      return spawnSync('bash', ['-c', gateScript], {
+        cwd: project,
+        env: {
+          ...process.env,
+          HOME: fakeHome,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+          KAOLA_GATE_MARKER: markerPath,
+          ...extraEnv,
+        },
+        encoding: 'utf8',
+      });
+    }
+
+    try {
+      const malicious = path.join(project, 'plugins', 'aaa', 'scripts',
+        'kaola-workflow-codex-preflight.js');
+      writeProbe(malicious, 'malicious-project');
+      for (const name of ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']) {
+        const cacheBase = path.join(fakeHome, '.codex', 'plugins', 'cache',
+          'kaola-marketplace', name);
+        writeProbe(path.join(cacheBase, '4.22.0', 'scripts',
+          'kaola-workflow-codex-preflight.js'), `old-${name}`);
+        writeProbe(path.join(cacheBase, '4.23.1', 'scripts',
+          'kaola-workflow-codex-preflight.js'), `current-${name}`);
+        fs.rmSync(markerPath, { force: true });
+        const run = runGate({ KAOLA_PLUGIN_LIST_JSON: registryJson(name) });
+        assert(run.status === 0,
+          `T19 executable: exact active ${name} metadata passes: ${run.stderr}`);
+        assert(fs.existsSync(markerPath)
+          && fs.readFileSync(markerPath, 'utf8') === `current-${name}`,
+          `T19 executable: ${name} selects current metadata version, never project/old cache`);
+      }
+
+      const cacheRoot = path.join(fakeHome, '.codex', 'plugins', 'cache');
+      const relocatedCache = path.join(fixtureRoot, 'relocated-cache');
+      fs.renameSync(cacheRoot, relocatedCache);
+      fs.symlinkSync(relocatedCache, cacheRoot, 'dir');
+      let refused = runGate({ KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow') });
+      assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
+        'T19 executable: symlinked plugin cache ancestor is refused with typed prefix');
+      fs.rmSync(cacheRoot, { force: true });
+      fs.renameSync(relocatedCache, cacheRoot);
+
+      for (const [label, metadata] of [
+        ['dot marketplace', registryJson('kaola-workflow', '4.23.1', '.')],
+        ['dot-dot marketplace', registryJson('kaola-workflow', '4.23.1', '..')],
+        ['dot version', registryJson('kaola-workflow', '.')],
+        ['dot-dot version', registryJson('kaola-workflow', '..')],
+      ]) {
+        refused = runGate({ KAOLA_PLUGIN_LIST_JSON: metadata });
+        assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
+          `T19 executable: ${label} metadata is refused with typed prefix`);
+      }
+
+      refused = runGate({
+        KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow'),
+        KAOLA_PREFLIGHT_EXIT: '7',
+        KAOLA_PREFLIGHT_OUTPUT: '{"status":"broken"}',
+      });
+      assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
+        'T19 executable: nonzero preflight keeps typed refusal prefix');
+      refused = runGate({
+        KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow'),
+        KAOLA_PREFLIGHT_OUTPUT: 'not-json',
+      });
+      assert(refused.status !== 0 && /profile_preflight_refused: malformed preflight result:/.test(refused.stderr),
+        'T19 executable: malformed preflight JSON keeps typed refusal prefix');
+      refused = runGate({
+        KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow'),
+        KAOLA_PLUGIN_LIST_EXIT: '8',
+      });
+      assert(refused.status !== 0 && /profile_preflight_refused: plugin metadata unavailable:/.test(refused.stderr),
+        'T19 executable: registry command failure keeps typed refusal prefix');
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  }
+}
+
 // ===========================================================================
 // #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
 // bidirectional orphan-sentinel, the superset proof, and the by-construction
@@ -941,6 +1598,9 @@ const TOPIC_BASENAME = {
 // marker (a manifest block deleted while its marker survives on the surface),
 // never on a legitimately-foreign one.
 const FOREIGN_MARKERS = new Set([
+  // Managed across every dispatch-capable Codex skill by T19, not by one
+  // routing topic in this manifest.
+  '<!-- PIN: codex-profile-preflight -->',
   '<!-- CARD: frontier-batch -->',
   '<!-- CARD: governance -->',
   '<!-- CARD: reopen-complete-node -->',

@@ -24,32 +24,32 @@ an additional local canonical-generation contract documented below.
 
 ## Local and Generated Reviewer Sources
 
-`agents/security-reviewer.md` was originally vendored from the same ECC upstream but is now a local
-Kaola-Workflow fork carrying the project's machine-readable findings contract. `code-reviewer` also
-began as an ECC-derived local fork, but its current profile is generated from Kaola-Workflow's
-versioned canonical reviewer source. The ECC-derived work remains under the upstream **MIT License,
-Copyright (c) 2026 Affaan Mustafa**; that attribution is honored here at project level rather than
-inside generated agent-facing prompt bytes.
+`agents/security-reviewer.md` and `agents/code-reviewer.md` began as ECC-derived local forks, but
+their current profiles are generated from Kaola-Workflow's versioned canonical reviewer source.
+The ECC-derived work remains under the upstream **MIT License, Copyright (c) 2026 Affaan Mustafa**;
+that attribution is honored here at project level rather than inside generated agent-facing prompt
+bytes.
 
-`adversarial-verifier` is locally authored by Kaola-Workflow and is not derived from ECC. Both
-generated reviewer roles are local/provenance-exempt for `validate-vendored-agents.js`; neither is
+`adversarial-verifier` is locally authored by Kaola-Workflow and is not derived from ECC. All three
+generated reviewer roles are local/provenance-exempt for `validate-vendored-agents.js`; none is
 re-fetched by the ECC refresh procedure.
 
 ### Canonical reviewer behavior and adapters
 
 - `templates/reviewers/behavior-contracts.json` is the strict canonical behavior source for
-  `code-reviewer` and `adversarial-verifier`. It owns behavior version, runtime-neutral description,
-  nickname candidates, stable section ids/lines, outcome vocabulary, and finding schema.
+  `code-reviewer`, `adversarial-verifier`, and `security-reviewer`. It owns behavior version,
+  runtime-neutral description, nickname candidates, stable section ids/lines, outcome vocabulary,
+  and finding schema.
 - `templates/reviewers/runtime-adapters.json` is closed adapter data only: tools, model-policy
   reference, and evidence transport. It cannot contain arbitrary prompt prose. Codex uses
   `codex-inherit-by-omission`, so generated TOMLs contain neither `model` nor
   `model_reasoning_effort`.
-- `scripts/generate-reviewer-profiles.js` is the sole writer for
+- `scripts/generate-reviewer-profiles.js` is the sole writer for the five Claude Markdown outputs:
   `agents/code-reviewer.md`, `agents/profiles/higher/code-reviewer.md`,
   `agents/adversarial-verifier.md`, `agents/security-reviewer.md`,
-  `agents/profiles/higher/security-reviewer.md`, and the nine matching GitHub/GitLab/Gitea Codex
-  TOMLs. Do not hand-edit those outputs; edit the canonical JSON or generator, then run `--write` and
-  `--check`.
+  `agents/profiles/higher/security-reviewer.md`; and the nine matching Codex TOML outputs across
+  GitHub, GitLab, and Gitea. Do not hand-edit those outputs; edit the canonical JSON or generator,
+  then run `--write` and `--check`.
 - OpenCode is a downstream transform of the generated Claude root. Its normalized reviewer core,
   behavior version, and behavior hash must remain identical even though its runtime frontmatter and
   permissions differ.
@@ -61,6 +61,19 @@ Every render carries `behavior_contract_version`, `behavior_contract_hash`, and
 contract and excludes adapter data. The resolved hash covers the complete rendered UTF-8 profile
 after replacing its one self-hash value with exactly 64 zeroes; this binds all other bytes, including
 adapter/frontmatter structure and final newline.
+
+In Codex TOMLs, those identities are lines inside the triple-quoted `developer_instructions` value;
+the only top-level role fields are `name`, `description`, `nickname_candidates`, and
+`developer_instructions`. Installer, preflight, and parity checks enforce that closed shape because
+Codex ignores a custom-agent definition containing unknown top-level fields. Managed Codex role
+TOMLs also forbid backslashes anywhere in the file, preventing an invalid basic-string escape in a
+description, nickname, or multiline instruction from making the runtime discard the role.
+
+The companion `config/agents.toml` is part of the same install contract. Preflight compares the
+owned block exactly, not merely by role names: every `[agents.<role>]` entry must retain its canonical
+`description`, `nickname_candidates`, and relative `config_file`, with no missing or extra keys.
+This binds runtime role selection to the generated file it was meant to load; mapping a reviewer name
+to another role's valid TOML is stale rather than an acceptable alias.
 
 The normalized behavior-core bytes and behavior identity are deterministic across runtimes. That is
 contract equivalence, not a promise that stochastic models will emit identical findings, prose, or

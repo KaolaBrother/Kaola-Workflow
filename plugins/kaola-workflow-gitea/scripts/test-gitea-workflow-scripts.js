@@ -3920,7 +3920,7 @@ function testInstallSchemaPruneManifest332Gitea() {
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
     assert.strictEqual(manifest.roles.length, 16, '#463 gt AC: manifest must list 16 roles (14 base + synthesizer + metric-optimizer)');
-    for (const role of ['code-reviewer', 'adversarial-verifier']) {
+    for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
       const file = role + '.toml';
       const sourceBytes = fs.readFileSync(path.join(giteaPluginRoot, 'agents', file));
       const installedBytes = fs.readFileSync(path.join(agentsDir, file));
@@ -3928,9 +3928,9 @@ function testInstallSchemaPruneManifest332Gitea() {
         'reviewer contract: installed ' + file + ' must byte-match the selected source');
       const text = installedBytes.toString('utf8');
       assert.deepStrictEqual(manifest.profile_contracts[file], {
-        behavior_contract_version: Number(text.match(/^behavior_contract_version = (\d+)$/m)[1]),
-        behavior_contract_hash: text.match(/^behavior_contract_hash = "([0-9a-f]{64})"$/m)[1],
-        resolved_profile_hash: text.match(/^resolved_profile_hash = "([0-9a-f]{64})"$/m)[1],
+        behavior_contract_version: Number(text.match(/^behavior_contract_version: (\d+)$/m)[1]),
+        behavior_contract_hash: text.match(/^behavior_contract_hash: ([0-9a-f]{64})$/m)[1],
+        resolved_profile_hash: text.match(/^resolved_profile_hash: ([0-9a-f]{64})$/m)[1],
       }, 'reviewer contract: manifest must bind behavior/profile identity for ' + file);
     }
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
