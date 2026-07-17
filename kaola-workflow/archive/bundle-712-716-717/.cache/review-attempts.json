@@ -1,0 +1,262 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "bed0dfb8bc2ce871e7901baa9d28f6656229df49c1bb02ec4e3cef98e6678899",
+  "attempts": [
+    {
+      "attempt_id": "review2-4c951794cc198bec:1",
+      "ordinal": 1,
+      "plan_hash": "bed0dfb8bc2ce871e7901baa9d28f6656229df49c1bb02ec4e3cef98e6678899",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "fd86ae553d48499d57658aa4bfd910ec4f11cea11abe76bd667c1dff852a28ed",
+        "key": "4c951794cc198bec363364229d2ae5ad8a508fd7889f7c74dc13fa470e040b26",
+        "kind": "sequence",
+        "members": [
+          "n4-code-review"
+        ],
+        "surface_digests": [
+          "9681f0665a78d557037f62da729b24fa14713c63040a37a683dd0c974cfb3566"
+        ]
+      },
+      "transaction_key": "e9631ae5bdf9babbbf086e3067d309d9dd888d7a965a972337692705a3a0ed0a",
+      "candidate_digest": "b8b618a4f2ef7a056e9ef535cd5bd2105a54083b319ecabbb2af9b8d6d342a97",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 58aef375a4d5a7da1c2319b838bcf4c5da5cda83",
+        "docs/api.md": "100644 c62edace826a74b100cf40f95c575aa2ab78eb5a",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 8c3dbcb8e8d162a556a140a892b78164a1949684",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 f3ef6034c1ef740e382ad3fa38ea71260ed1ebf3",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 727aaf02edd8f63741b10967003e7d548570e248",
+        "plugins/kaola-workflow/scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 727aaf02edd8f63741b10967003e7d548570e248",
+        "scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "scripts/simulate-workflow-walkthrough.js": "100755 a85bd9e7f46f6bcd106b19ab6da6b21a6f6a8fd5",
+        "scripts/test-adaptive-node.js": "100644 101af1f5132008b0599917d00eb099ef72ddbf5c",
+        "scripts/test-install-model-rendering.js": "100755 122dc2d58bfebf9c041303749462c55ac0bf40d7"
+      },
+      "candidate_residue_digest": "74ead4991aa81538ee5f13c03026a6c523dd43e9ba4379e4ed737127516c11dc",
+      "epoch_lineage_id": "9c7628c68fcbab288073632a8f5a814bef752f337c26f4510e55e8ab9dbad72d",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "3a7ee54a2d37c2ce28cf1d2296b75e99ec4de52d1f95b491c3cea90c0049ce5f",
+      "context_hashes": [
+        "4ebe8f0fe7f5d19812b31ad00b379c7234c7057560cbcef4598f2f5673357f9e"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "b8b618a4f2ef7a056e9ef535cd5bd2105a54083b319ecabbb2af9b8d6d342a97",
+          "certifier_digest": "b8b618a4f2ef7a056e9ef535cd5bd2105a54083b319ecabbb2af9b8d6d342a97",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n4-code-review",
+            "nonce": "483d04c1c98f"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n4-code-review",
+          "raw_evidence_sha256": "7eafa5b235ebe9c5ccef535b7f7d74d37e5fd924dac7a40a4ac03364a49814ee",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "4ebe8f0fe7f5d19812b31ad00b379c7234c7057560cbcef4598f2f5673357f9e",
+          "schema_version": 2,
+          "surface": "complete candidate: the adaptive-node and codex-preflight four-edition families, their claude-chain test surfaces, and the documentation delta",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-node",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-reviewer-profile-resolution": {
+          "baseline": "0126b9d3ef32321796be086b214fdc61ea986c91",
+          "anchored_ref": "0126b9d3ef32321796be086b214fdc61ea986c91",
+          "open_token": "a1b3a1ed27e8b35b880a2bfac92f5ee16783b0ab",
+          "generation": "0126b9d3ef32",
+          "ref": "refs/kaola-workflow/barrier/bundle-712-716-717/n1-reviewer-profile-resolution"
+        },
+        "n2-preflight-builtin-roles": {
+          "baseline": "faef57844c0a48936a15bef27b4f581a67da9582",
+          "anchored_ref": "faef57844c0a48936a15bef27b4f581a67da9582",
+          "open_token": "a1b3a1ed27e8b35b880a2bfac92f5ee16783b0ab",
+          "generation": "faef57844c0a",
+          "ref": "refs/kaola-workflow/barrier/bundle-712-716-717/n2-preflight-builtin-roles"
+        },
+        "n3-documentation": {
+          "baseline": "91d32191ea7f945a27fb22c4c3fc55f7370e3674",
+          "anchored_ref": "91d32191ea7f945a27fb22c4c3fc55f7370e3674",
+          "open_token": "683e4171616b957f25968b0ad2664ee8aab03ec7",
+          "generation": "91d32191ea7f",
+          "ref": "refs/kaola-workflow/barrier/bundle-712-716-717/n3-documentation"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-36688df4cc7851a4:1",
+      "ordinal": 1,
+      "plan_hash": "bed0dfb8bc2ce871e7901baa9d28f6656229df49c1bb02ec4e3cef98e6678899",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n1-reviewer-profile-resolution",
+          "n2-preflight-builtin-roles"
+        ],
+        "claim_digest": "ae783ce1faecbf1d66ba8af6ab4a4fb307d7f36cb8b1be9c5e4ec6c09e6b0542",
+        "key": "36688df4cc7851a4a6dce6dde0b58f8047e51319a97499f1f8e12fc8c4f8738d",
+        "kind": "sequence",
+        "members": [
+          "n5-falsify-review-gate-fixes"
+        ],
+        "surface_digests": [
+          "8bb5fe99db2bfbab46754ee11e31b7a64223ffbb58ca0b1ad8bc08eb372a9e36"
+        ]
+      },
+      "transaction_key": "bd66015cdb28c7ad4c8019a30bc82adb30dd865c8aba9b3894d80c8b23045176",
+      "candidate_digest": "b8b618a4f2ef7a056e9ef535cd5bd2105a54083b319ecabbb2af9b8d6d342a97",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 58aef375a4d5a7da1c2319b838bcf4c5da5cda83",
+        "docs/api.md": "100644 c62edace826a74b100cf40f95c575aa2ab78eb5a",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 8c3dbcb8e8d162a556a140a892b78164a1949684",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 f3ef6034c1ef740e382ad3fa38ea71260ed1ebf3",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 727aaf02edd8f63741b10967003e7d548570e248",
+        "plugins/kaola-workflow/scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 727aaf02edd8f63741b10967003e7d548570e248",
+        "scripts/kaola-workflow-codex-preflight.js": "100644 70fbf043defdd1037e5e6c639a0e91c32b23571e",
+        "scripts/simulate-workflow-walkthrough.js": "100755 a85bd9e7f46f6bcd106b19ab6da6b21a6f6a8fd5",
+        "scripts/test-adaptive-node.js": "100644 101af1f5132008b0599917d00eb099ef72ddbf5c",
+        "scripts/test-install-model-rendering.js": "100755 122dc2d58bfebf9c041303749462c55ac0bf40d7"
+      },
+      "candidate_residue_digest": "74ead4991aa81538ee5f13c03026a6c523dd43e9ba4379e4ed737127516c11dc",
+      "epoch_lineage_id": "3db4e18cb5284f22d77c3585e860966e9b3e76dd892137661df228f49415f6e2",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "148847e342da8e0e3194b4317f1634606b9df7f49f5b1acd8d2f6aaf1162870d",
+      "context_hashes": [
+        "68e499675ca0f074b42beaa8459c498b41b70c9fecf50f86d932acb86d39364e"
+      ],
+      "profile_hashes": [
+        "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b",
+          "blocking_findings": 0,
+          "candidate_digest": "b8b618a4f2ef7a056e9ef535cd5bd2105a54083b319ecabbb2af9b8d6d342a97",
+          "certifier_digest": "b8b618a4f2ef7a056e9ef535cd5bd2105a54083b319ecabbb2af9b8d6d342a97",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n5-falsify-review-gate-fixes",
+          "raw_evidence_sha256": "14ac5513b514a090afbc3fe41a5f6257aa144c9549bda1905edb5f96b07152b4",
+          "resolutions": [],
+          "resolved_profile_hash": "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce",
+          "review_context_hash": "68e499675ca0f074b42beaa8459c498b41b70c9fecf50f86d932acb86d39364e",
+          "schema_version": 2,
+          "surface": "runtime-layout detection and profile-resolution matrix (claude native install, claude legacy probed dir, claude self-dev, codex source-tree, codex versioned cache across all three codex editions, kimi, opencode, unknown) plus the preflight role-classification matrix (delegated, built-in non-delegable, unknown)",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-node",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-reviewer-profile-resolution": {
+          "baseline": "0126b9d3ef32321796be086b214fdc61ea986c91",
+          "anchored_ref": "0126b9d3ef32321796be086b214fdc61ea986c91",
+          "open_token": "a1b3a1ed27e8b35b880a2bfac92f5ee16783b0ab",
+          "generation": "0126b9d3ef32",
+          "ref": "refs/kaola-workflow/barrier/bundle-712-716-717/n1-reviewer-profile-resolution"
+        },
+        "n2-preflight-builtin-roles": {
+          "baseline": "faef57844c0a48936a15bef27b4f581a67da9582",
+          "anchored_ref": "faef57844c0a48936a15bef27b4f581a67da9582",
+          "open_token": "a1b3a1ed27e8b35b880a2bfac92f5ee16783b0ab",
+          "generation": "faef57844c0a",
+          "ref": "refs/kaola-workflow/barrier/bundle-712-716-717/n2-preflight-builtin-roles"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

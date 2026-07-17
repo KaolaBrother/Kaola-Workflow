@@ -1,0 +1,12 @@
+{"timestamp":"2026-07-17T17:04:32.910Z","event":"open","nodeId":"n1-reviewer-profile-resolution","nonce":"0126b9d3ef32","by":"adaptive-node"}
+{"timestamp":"2026-07-17T17:04:33.006Z","event":"open","nodeId":"n2-preflight-builtin-roles","nonce":"faef57844c0a","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:04:11.147Z","event":"close","nodeId":"n1-reviewer-profile-resolution","nonce":"0126b9d3ef32","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:04:31.251Z","event":"close","nodeId":"n2-preflight-builtin-roles","nonce":"faef57844c0a","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:04:56.656Z","event":"open","nodeId":"n3-documentation","nonce":"91d32191ea7f","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:13:13.305Z","event":"close","nodeId":"n3-documentation","nonce":"91d32191ea7f","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:13:32.747Z","event":"open","nodeId":"n4-code-review","nonce":"483d04c1c98f","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:44:47.243Z","event":"close","nodeId":"n4-code-review","nonce":"483d04c1c98f","by":"adaptive-node"}
+{"timestamp":"2026-07-17T18:45:04.473Z","event":"open","nodeId":"n5-falsify-review-gate-fixes","nonce":"64eaea6a2837","by":"adaptive-node"}
+{"timestamp":"2026-07-17T19:15:46.051Z","event":"close","nodeId":"n5-falsify-review-gate-fixes","nonce":"64eaea6a2837","by":"adaptive-node"}
+{"timestamp":"2026-07-17T19:16:16.146Z","event":"open","nodeId":"n6-finalize","nonce":"22e91e8c44b6","by":"adaptive-node"}
+{"timestamp":"2026-07-17T20:33:36.422Z","event":"close","nodeId":"n6-finalize","nonce":"22e91e8c44b6","by":"adaptive-node"}

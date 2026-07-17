@@ -1,0 +1,15 @@
+{
+  "project": "bundle-712-716-717",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:environmental-flake",
+      "sample": "run-chains first attempt: claude chain TIMED OUT at the default 1800s per-chain cap; no test failure — the same chain passed green in the n6 validation run minutes earlier and again in the receipt stamp with KAOLA_RUN_CHAINS_TIMEOUT_MS raised; machine-speed flake, manual retry",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:in-run-finalize-refusal",
+      "sample": "cmdFinalize refused replan_snapshot_incomplete/state_compliance_authority_invalid: the close-node compliance appender wrote the n4 row without its node-id suffix the authority validator requires; this is the already-filed #714 appender/validator mismatch firing in-run",
+      "count": 1
+    }
+  ]
+}
