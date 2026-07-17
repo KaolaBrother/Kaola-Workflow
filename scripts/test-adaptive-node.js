@@ -16262,6 +16262,11 @@ function rtHarness(initialFiles, opts) {
     }
   }
 
+  function require683Setup(condition, phase, detail) {
+    if (condition) return;
+    throw new Error('#683 fixture setup failed at ' + phase + ': ' + JSON.stringify(detail));
+  }
+
   // Drive steps 1-5: seed closed, wa+wb co-opened in legs and closed, ga+gb co-opened and BOTH
   // settled fail. Returns the wedged world every scenario below starts from.
   function drive683(cfg) {
@@ -16297,7 +16302,11 @@ function rtHarness(initialFiles, opts) {
     //    production write-leg dispatch discipline), so both baselines predate the sibling's write.
     r = R(['open-ready', ...P]);
     const opened2 = (r.opened || []).map(n => n.id).sort().join(',');
-    const legs = rs().lane_group.legs;
+    const writerRunningSet = rs();
+    require683Setup(r.result === 'ok' && opened2 === 'wa,wb'
+      && writerRunningSet.lane_group && writerRunningSet.lane_group.legs,
+      'writer_open', { repoRoot, openReady: r, runningSet: writerRunningSet });
+    const legs = writerRunningSet.lane_group.legs;
     for (const [id, nonce, files] of [
       ['wa', nonceOf(r.opened, 'wa'), c.waFiles || { 'ax.js': '// wa v1 (refuted)\n' }],
       ['wb', nonceOf(r.opened, 'wb'), c.wbFiles || { 'bx.js': '// wb v1 (refuted)\n' }],
@@ -16316,24 +16325,37 @@ function rtHarness(initialFiles, opts) {
     }
     const closeWa = R(['close-node', '--node-id', 'wa', ...P]);
     const closeWb = R(['close-node', '--node-id', 'wb', ...P]);
+    require683Setup(closeWa.result === 'ok' && closeWb.result === 'ok',
+      'writer_close', { repoRoot, closeWa, closeWb });
 
     // 3. co-open the gate frontier; both reviewers refute their OWN writer's file.
     r = R(['open-ready', ...P]);
     const openedGates = (r.opened || []).map(n => n.id).sort().join(',');
+    require683Setup(r.result === 'ok' && openedGates === 'ga,gb',
+      'gate_open', { repoRoot, openReady: r, openedGates });
     const gev = (id, n, file) => 'evidence-binding: ' + id + ' ' + n + '\nverdict: fail\nfindings_blocking: 1\n\n'
       + '## Findings\n\n| id | scope | action | status | severity | file | fix_role |\n'
       + '| --- | --- | --- | --- | --- | --- | --- |\n'
       + '| F1 | in_scope | fix | open | blocking | ' + file + ' | tdd-guide |\n';
-    R(['record-evidence', '--node-id', 'ga', '--stdin', ...P], gev('ga', nonceOf(r.opened, 'ga'), 'ax.js'));
+    const recordGa = R(['record-evidence', '--node-id', 'ga', '--stdin', ...P],
+      gev('ga', nonceOf(r.opened, 'ga'), 'ax.js'));
     // c.gbPass: gb APPROVES bx.js@v1 instead of refuting it. The tree then holds a gate-APPROVED
     // sibling file with NO blocker of its own — the precondition for N11's silent-waiver probe.
-    R(['record-evidence', '--node-id', 'gb', '--stdin', ...P], c.gbPass
+    const recordGb = R(['record-evidence', '--node-id', 'gb', '--stdin', ...P], c.gbPass
       ? 'evidence-binding: gb ' + nonceOf(r.opened, 'gb') + '\nverdict: pass\nfindings_blocking: 0\n'
       : gev('gb', nonceOf(r.opened, 'gb'), 'bx.js'));
 
     // 4 + 5. both gates settle fail -> two permanent blockers.
     const cga = R(['close-node', '--node-id', 'ga', ...P]);
     const cgb = R(['close-node', '--node-id', 'gb', ...P]);
+    const gaSettled = cga.result === 'review_failed' && cga.attempt_id === 'ga:1'
+      && cga.lifecycle_settled === true;
+    const gbSettled = c.gbPass
+      ? cgb.result === 'ok'
+      : cgb.result === 'review_failed' && cgb.attempt_id === 'gb:1'
+        && cgb.lifecycle_settled === true;
+    require683Setup(recordGa.result === 'ok' && recordGb.result === 'ok' && gaSettled && gbSettled,
+      'gate_settlement', { repoRoot, recordGa, recordGb, cga, cgb, gbPass: !!c.gbPass });
 
     return { ...env, P, R, nonceOf, nonceFor, ledger683, journal683, attempt683, refSha683,
       opened2, openedGates, closeWa, closeWb, cga, cgb };

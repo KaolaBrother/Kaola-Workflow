@@ -34,6 +34,14 @@ function tempRoot(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), name));
 }
 
+function markPlanAbsentFinalizeFixtureFast(root, project) {
+  const stateFile = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
+  const content = fs.readFileSync(stateFile, 'utf8');
+  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
+    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
+    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+}
+
 function setupRealRepo(name, project) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), name + '-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -764,12 +772,14 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
       '## Sink', 'branch: workflow/test-kw-proj', 'issue_number: 1', 'sink: merge',
       'worktree_path: ' + wtPath, ''
     ].join('\n'));
+    markPlanAbsentFinalizeFixtureFast(wtPath, 'test-kw-proj');
     execFileSync('git', ['add', 'kaola-workflow/'], { cwd: wtPath, encoding: 'utf8' });
     execFileSync('git', ['commit', '-m', 'chore: finalize test-kw-proj'], { cwd: wtPath, encoding: 'utf8' });
     // Also set up main worktree with the live folder
     const mainProjDir = path.join(mainRoot, 'kaola-workflow', 'test-kw-proj');
     fs.mkdirSync(mainProjDir, { recursive: true });
     fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), fs.readFileSync(path.join(projDir, 'workflow-state.md'), 'utf8'));
+    markPlanAbsentFinalizeFixtureFast(mainRoot, 'test-kw-proj');
     git('add', 'kaola-workflow/');
     git('commit', '-m', 'mirror: test-kw-proj live folder on main');
     // Run finalize --keep-worktree from linked worktree

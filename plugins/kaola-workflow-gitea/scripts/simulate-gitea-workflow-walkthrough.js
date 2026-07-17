@@ -33,6 +33,14 @@ process.env.USERPROFILE = kwSandboxHome;
 const sinkPr = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-pr'));
 const claimScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js');
 
+function markPlanAbsentFinalizeFixtureFast(fixtureRoot, project) {
+  const stateFile = path.join(fixtureRoot, 'kaola-workflow', project, 'workflow-state.md');
+  const content = fs.readFileSync(stateFile, 'utf8');
+  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
+    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
+    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+}
+
 function tail30(str) {
   if (!str) return '';
   const lines = str.split('\n');
@@ -433,14 +441,20 @@ function testRepairFinalizationRoute() {
     assert.ok(legacyComplete.complete !== true,
       'R2: phase6-summary.md alone must NOT be the completion signal (hard-removed), got: ' + JSON.stringify(legacyComplete));
 
-    // --- R3: phase5-review.md present (with compliance) → state must use finalization names ---
+    // --- R3: point-of-use-verified phase5-review.md → finalization names ---
+    const binding = 'evidence-binding: phase5-code-review-1 nonce-fin-route-1';
     const phase5Content = [
       '# Phase 5 - Review: fin-route',
       '',
       '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-reviewer | subagent-invoked | .cache/review.md | |',
+      '| Requirement | Status | Evidence | Binding | Skip Reason |',
+      '|-------------|--------|----------|---------|-------------|',
+      '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | ' + binding + ' |  |',
+      '| security-reviewer | n/a |  | n/a | no security-sensitive files in write set |',
+      '| review-fix executors | n/a |  | n/a | no CRITICAL/HIGH blocking findings |',
+      '',
+      '## Review Status',
+      'PASSED',
       ''
     ].join('\n');
     writeProject('fin-route', {
@@ -454,12 +468,26 @@ function testRepairFinalizationRoute() {
         ''
       ].join('\n')
     });
+    const finRouteCache = path.join(workflowDir, 'fin-route', '.cache');
+    fs.mkdirSync(finRouteCache, { recursive: true });
+    fs.writeFileSync(path.join(finRouteCache, 'code-reviewer.md'), [
+      binding,
+      'domain_outcome: approved',
+      'verdict: pass',
+      'findings_blocking: 0',
+      'review_summary: no_blocking_findings',
+      'review_attestation: full_review_completed',
+      'No admitted findings.',
+      'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
+      '',
+    ].join('\n'));
     const r3 = spawnSync(process.execPath, [repairScript, 'fin-route'], {
       cwd: tmp,
       encoding: 'utf8',
       env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
     });
-    assert.strictEqual(r3.status, 0, 'R3: repair must exit 0 for fin-route, stderr: ' + r3.stderr);
+    assert.strictEqual(r3.status, 0,
+      'R3: repair must exit 0 for fin-route, stdout: ' + r3.stdout + ' stderr: ' + r3.stderr);
     const finRouteState = readState('fin-route');
     assert.ok(finRouteState.includes('stage: finalization'),
       'R3: repair must emit stage: finalization for terminal routine, got state:\n' + finRouteState);
@@ -1007,9 +1035,13 @@ function testGiteaAdaptive() {
       + 'next_command: /kaola-workflow-plan-run issue-9701\n'
       + '## Sink\nbranch: workflow/issue-9701\nsink: merge\n'
       + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-9701');
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-9701.md'),
       'issue: #9701\ntitle: t\nstatus: open\nworkflow_project: issue-9701\nnext_step: ready\n');
-    const csResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-9701', '--attest-contractor-spawn'], tmp).stdout);
+    const csRun = spawnNode(claimScript, ['finalize', '--project', 'issue-9701', '--attest-contractor-spawn'], tmp);
+    assert.strictEqual(csRun.status, 0,
+      '#338: gitea finalize command must exit 0, stdout: ' + csRun.stdout + ' stderr: ' + csRun.stderr);
+    const csResult = JSON.parse(csRun.stdout);
     assert.strictEqual(csResult.status, 'closed', '#338: gitea finalize --attest-contractor-spawn returns status:closed');
     assert.strictEqual(csResult.closure_receipt.finalize_contractor_attested, 'attested',
       '#338: gitea --attest-contractor-spawn must make finalize_contractor_attested attested, got ' + csResult.closure_receipt.finalize_contractor_attested);
@@ -1025,9 +1057,13 @@ function testGiteaAdaptive() {
       + 'next_command: /kaola-workflow-plan-run issue-971\n'
       + '## Sink\nbranch: workflow/issue-971\nsink: merge\n'
       + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-971');
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-971.md'),
       'issue: #971\ntitle: t\nstatus: open\nworkflow_project: issue-971\nnext_step: ready\n');
-    const koResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-971', '--keep-open'], tmp).stdout);
+    const koRun = spawnNode(claimScript, ['finalize', '--project', 'issue-971', '--keep-open'], tmp);
+    assert.strictEqual(koRun.status, 0,
+      '#333: gitea keep-open finalize command must exit 0, stdout: ' + koRun.stdout + ' stderr: ' + koRun.stderr);
+    const koResult = JSON.parse(koRun.stdout);
     assert.strictEqual(koResult.status, 'closed', '#333: gitea keep-open finalize returns status:closed');
     assert.strictEqual(koResult.issue_disposition, 'kept-open', '#333: gitea keep-open JSON issue_disposition is kept-open');
     const koArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-971'));
@@ -1036,22 +1072,27 @@ function testGiteaAdaptive() {
     assert.ok(/^## Closure$/m.test(koState), '#333: gitea keep-open archived state carries a ## Closure block');
     assert.ok(koState.includes('issue_disposition: kept-open'), '#333: gitea keep-open ## Closure records issue_disposition: kept-open');
 
-    // #333 (port gap 3/5): manual-archive backstop — a state archived MANUALLY (live folder
-    // absent) with status: active must be healed in place. This fails loudly (status stays
-    // active, archive_state_stamped: 'failed') if the port backstop ever leaks a
-    // removeLegacyStateBlocks call that throws a swallowed ReferenceError.
+    // #333: a manually archived active state is not proof that pre-rename gates ran.
+    // Finalize must refuse without terminal-stamping or appending closure evidence.
     const bsArchiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-972');
     fs.mkdirSync(bsArchiveDir, { recursive: true });
-    fs.writeFileSync(path.join(bsArchiveDir, 'workflow-state.md'),
+    const bsStatePath = path.join(bsArchiveDir, 'workflow-state.md');
+    fs.writeFileSync(bsStatePath,
       '## Project\nname: issue-972\nstatus: active\nissue_number: 972\n'
       + 'next_command: /kaola-workflow-plan-run issue-972\n'
       + '## Sink\nbranch: workflow/issue-972\nsink: merge\n');
-    const bsResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-972'], tmp).stdout);
-    assert.strictEqual(bsResult.status, 'closed', '#333: gitea backstop finalize returns status:closed');
-    assert.strictEqual(bsResult.archive_state_stamped, 'repaired', '#333: gitea backstop must report archive_state_stamped: repaired (port has no removeLegacyStateBlocks)');
-    const bsState = fs.readFileSync(path.join(bsArchiveDir, 'workflow-state.md'), 'utf8');
-    assert.ok(bsState.includes('status: closed'), '#333: gitea backstop must stamp manual archive status: closed, got: ' + bsState);
-    assert.ok(/^## Closure$/m.test(bsState), '#333: gitea backstop appends a ## Closure block');
+    const bsBefore = fs.readFileSync(bsStatePath, 'utf8');
+    const bsRun = spawnNode(claimScript, ['finalize', '--project', 'issue-972'], tmp);
+    let bsResult = null;
+    try { bsResult = JSON.parse(bsRun.stdout); } catch (_) {}
+    assert.ok(bsRun.status !== 0 && bsResult && bsResult.reason === 'finalize_gate_unverified'
+      && bsResult.inner_reason === 'archive_state_not_closed',
+    '#333: gitea manual archive must refuse through archive_state_not_closed, stdout: '
+      + bsRun.stdout + ' stderr: ' + bsRun.stderr);
+    const bsState = fs.readFileSync(bsStatePath, 'utf8');
+    assert.strictEqual(bsState, bsBefore, '#333: gitea manual-archive refusal leaves state byte-identical');
+    assert.ok(bsState.includes('status: active') && !/^## Closure$/m.test(bsState),
+      '#333: gitea manual-archive refusal neither terminal-stamps nor appends closure evidence');
 
     // #425: ledger-header freeze-wall on the GITEA edition validator.
     // A plan with `| node | status |` ledger header must refuse with ledger_header_invalid;
@@ -1345,6 +1386,9 @@ function testGiteaAttestationWarningPersistence() {
       ].join('\n')
     });
     gtPlantRoadmapIssue(tmp, 653101);
+    // This fixture jumps directly from claim state to finalize and intentionally
+    // does not author an adaptive plan.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     // Seed .cache/dispatch-log.jsonl with ONLY a contractor entry (no workflow-planner entry) —
     // the exact inline-bypass scenario the ATTESTATION WARNING exists to catch.
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
@@ -1406,6 +1450,7 @@ function testGiteaSelectionEvidenceDocking() {
         ].join('\n')
       });
       gtPlantRoadmapIssue(tmp, issue);
+      markPlanAbsentFinalizeFixtureFast(tmp, project);
       if (seed) {
         const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
         fs.mkdirSync(cacheDir, { recursive: true });
@@ -1592,6 +1637,9 @@ function testGiteaBundleFinalizeRoadmapCleanup() {
         'sink: merge', 'run_posture: in-place', ''
       ].join('\n')
     });
+    // This bundle fixture isolates roadmap and closure-receipt behavior and
+    // intentionally omits adaptive planning.
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     gtPlantRoadmapIssue(tmp, 42);
     gtPlantRoadmapIssue(tmp, 47);
     gtPlantRoadmapIssue(tmp, 53);
@@ -1803,6 +1851,7 @@ function testGiteaFinalizeClosesIssueBundleMembers() {
         'sink: pr', 'run_posture: in-place', ''
       ].join('\n')
     });
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     gtPlantRoadmapIssue(tmp, 42);
     gtPlantRoadmapIssue(tmp, 47);
 
@@ -1860,6 +1909,7 @@ function testGiteaBundleFinalizeAllOpenCloseIsPending() {
         'sink: merge', 'run_posture: in-place', ''
       ].join('\n')
     });
+    markPlanAbsentFinalizeFixtureFast(tmp, project);
     gtPlantRoadmapIssue(tmp, 71);
     gtPlantRoadmapIssue(tmp, 72);
     // Both members probe as OPEN (close deferred to sink-merge on merge-lane).
@@ -1908,6 +1958,7 @@ function testGiteaFinalizeRoadmapResidueDetection() {
         '## Sink', 'branch: workflow/issue-428gt', 'issue_number: 428', 'sink: pr', ''
       ].join('\n')
     });
+    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428gt');
     gtPlantRoadmapIssue(tmp, 428);
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428gt'], {

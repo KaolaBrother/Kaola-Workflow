@@ -114,6 +114,23 @@ function writeState(root, project, issueIid, extra) {
   return dir;
 }
 
+function markPlanAbsentFinalizeFixtureFast(root, project) {
+  const stateFile = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
+  const content = fs.readFileSync(stateFile, 'utf8');
+  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
+    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
+    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+}
+
+function trustCodexProject(homeRoot, projectRoot) {
+  const configPath = path.join(homeRoot, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const prefix = existing.length === 0 ? '' : existing.replace(/\s*$/, '\n\n');
+  fs.writeFileSync(configPath,
+    prefix + '[projects.' + JSON.stringify(path.resolve(projectRoot)) + ']\ntrust_level = "trusted"\n');
+}
+
 function runNode(args, cwd) {
   const result = spawnSync(process.execPath, args, { cwd, encoding: 'utf8' });
   if (result.error) throw result.error;
@@ -1117,6 +1134,9 @@ withForge({
     result = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-71', '--', wtFinalize, 'HEAD'], { cwd: root, encoding: 'utf8' });
     assert.strictEqual(result.status, 0, result.stderr);
     writeState(root, 'finalize-project', 71, 'worktree_path: ' + wtFinalize);
+    // This fixture validates worktree retention and archive movement, not the
+    // adaptive Phase 4/5 gate, and intentionally jumps directly to finalize.
+    markPlanAbsentFinalizeFixtureFast(root, 'finalize-project');
     runNode([claimScript, 'finalize', '--project', 'finalize-project', '--keep-worktree'], root);
     assert(fs.existsSync(wtFinalize), 'GitLab keep-worktree finalize should preserve worktree for final commit');
     assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'finalize-project')), 'GitLab keep-worktree finalize should archive active folder');
@@ -1943,7 +1963,8 @@ withForge({
     fs.writeFileSync(path.join(dir, 'phase5-review.md'), '# Phase 5\n');
     const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-guard');
     assert(!result.nextCommand, 'guard must not route to Finalization when Phase 4 tasks are open');
-    assert(/open tasks/.test(result.reason || ''), 'reason must mention open tasks');
+    assert(/progress_incomplete/.test(result.reason || ''),
+      'guard must surface the strict Phase 4 point-of-use refusal, got: ' + JSON.stringify(result));
     repair.repair('issue107-guard', root);
     const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
     assert(!/stage: finalization\b/.test(state), 'state file must not advance to Finalization with open Phase 4 tasks');
@@ -1960,14 +1981,29 @@ withForge({
     const dir = writeState(root, 'issue107-allow', 108);
     fs.writeFileSync(path.join(dir, 'phase4-progress.md'),
       '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | complete |\n');
-    // phase5-review carries a resolved compliance table so the Finalization boundary
-    // crossing is allowed (the gate-project test above covers the refusal).
+    // Phase 5 must satisfy the same strict point-of-use contract used at Finalization.
+    const binding = 'evidence-binding: phase5-code-review-1 nonce-issue107-allow';
     fs.writeFileSync(path.join(dir, 'phase5-review.md'), [
       '# Phase 5 - Review', '',
       '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-reviewer | invoked | .cache/code-reviewer.md | |', ''
+      '| Requirement | Status | Evidence | Binding | Skip Reason |',
+      '|-------------|--------|----------|---------|-------------|',
+      '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | ' + binding + ' |  |',
+      '| security-reviewer | n/a |  | n/a | no security-sensitive files in write set |',
+      '| review-fix executors | n/a |  | n/a | no CRITICAL/HIGH blocking findings |', '',
+      '## Review Status', 'PASSED', ''
+    ].join('\n'));
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.cache', 'code-reviewer.md'), [
+      binding,
+      'domain_outcome: approved',
+      'verdict: pass',
+      'findings_blocking: 0',
+      'review_summary: no_blocking_findings',
+      'review_attestation: full_review_completed',
+      'No admitted findings.',
+      'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
+      '',
     ].join('\n'));
     const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-allow');
     assert.strictEqual(result.stage, 'finalization', 'happy path must still route to Finalization');
@@ -3721,6 +3757,20 @@ function testGitlabPreflight266() {
     if (installResult.error) throw installResult.error;
     assert.ok(installResult.status === 0, 'gitlab preflight fixture install failed: ' + installResult.stderr);
 
+    // Project-scoped Codex layers are ignored until the project is explicitly trusted.
+    const trustRequiredResult = spawnSync(process.execPath,
+      [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+      { encoding: 'utf8', env: hEnvGl });
+    assert.strictEqual(trustRequiredResult.status, 4,
+      '#266 gl trust guard: unknown project trust must exit 4, got ' + trustRequiredResult.status
+        + '\n' + trustRequiredResult.stdout);
+    const trustRequiredJson = JSON.parse(trustRequiredResult.stdout);
+    assert.strictEqual(trustRequiredJson.status, 'project_trust_required',
+      '#266 gl trust guard: expected project_trust_required, got ' + trustRequiredJson.status);
+    assert.strictEqual(trustRequiredJson.project_trust, 'unknown',
+      '#266 gl trust guard: expected unknown trust, got ' + trustRequiredJson.project_trust);
+    trustCodexProject(emptyHomeGl, root);
+
     // --- GREEN: fresh fixture must pass preflight ---
     const freshResult = spawnSync(process.execPath,
       [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
@@ -3734,8 +3784,12 @@ function testGitlabPreflight266() {
         // --- Case 1 RED: remove a role from the managed block → config_stale ---
         const configPath = path.join(root, '.codex', 'config.toml');
         const origConfig = fs.readFileSync(configPath, 'utf8');
+        const managedConfigWithoutFeatures = origConfig.replace('[features]\nmulti_agent = true\n\n', '');
+        function configWithFeatures(lines) {
+          return '[features]\n' + lines.join('\n') + '\n\n' + managedConfigWithoutFeatures;
+        }
         function configWithFeatureLine(line) {
-          return origConfig.replace('multi_agent = true', 'multi_agent = true\n' + line);
+          return configWithFeatures(['multi_agent = true', line]);
         }
         const roleSafeV2Inline = 'multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }';
         const roleSafeV2Table = '[features.multi_agent_v2]\nenabled = true\ntool_namespace = "agents"\nhide_spawn_agent_metadata = false\nnon_code_mode_only = true';
@@ -3802,7 +3856,7 @@ function testGitlabPreflight266() {
             label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
         }
         assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gl base fixture (multi_agent=true, no effort)');
-        assertDispatchPostureForConfig(origConfig.replace('multi_agent = true', 'multi_agent = false'), 'none',
+        assertDispatchPostureForConfig(configWithFeatures(['multi_agent = false']), 'none',
           '#598 gl multi_agent=false, no multi_agent_v2 -> none');
         assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
           '#598 gl effort=ultra with multi_agent=true -> proactive');
@@ -3811,7 +3865,7 @@ function testGitlabPreflight266() {
         assertDispatchPostureForConfig(configWithFeatureLine(roleSafeV2Inline), 'explicitRequestOnly',
           '#598 gl multi_agent_v2=true, no effort -> explicitRequestOnly');
         assertDispatchPostureForConfig(
-          origConfig.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
+          configWithFeatureLine('model_reasoning_effort = "ultra"'),
           'explicitRequestOnly', '#598 gl effort AFTER the first [table] is not a valid TOML root key -> ignored');
 
         fs.writeFileSync(configPath, origConfig);
@@ -3832,6 +3886,7 @@ function testGitlabPreflight266() {
     // --- Case 1 GREEN (autofix): ---
     const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-preflight-autofix-'));
     try {
+      trustCodexProject(emptyHomeGl, autofixRoot);
       fs.mkdirSync(path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow'), { recursive: true });
       fs.writeFileSync(path.join(autofixRoot, '.codex', 'config.toml'), staleConfig);
       const srcAgentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
@@ -4144,6 +4199,7 @@ function testGitlabPreflight332() {
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-preflight-'));
   try {
+    trustCodexProject(kwSandboxHome, root);
     runInstallProfiles(root);
     const agentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
     const ce = path.join(agentsDir, 'code-explorer.toml');
@@ -4187,14 +4243,22 @@ function testGitlabPreflight332() {
     pf(['--project-root', root, '--json']);
     assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gl AC7b: autofix prunes docs-lookup');
 
-    // AC9: [agents.docs-lookup] inside markers -> managed_block_stale.
+    // AC9: an injected retired role changes the canonical managed bytes, so
+    // config_stale wins; doctor retains the role-level evidence.
     const cfgPath = path.join(root, '.codex', 'config.toml');
     fs.writeFileSync(cfgPath, fs.readFileSync(cfgPath, 'utf8').replace('# END kaola-workflow agents',
       '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents'));
     r = pf(['--project-root', root, '--no-autofix', '--json']);
     j = JSON.parse(r.stdout);
-    assert.ok(r.status !== 0 && j.status === 'managed_block_stale', '#332 gl AC9: managed_block_stale');
-    assert.ok(j.stale_roles_in_block.includes('docs-lookup'), '#332 gl AC9: stale_roles_in_block lists docs-lookup');
+    assert.ok(r.status !== 0 && j.status === 'config_stale',
+      '#332 gl AC9: canonical managed-block drift must return config_stale, got ' + j.status);
+    const managedDoctor = pf(['--doctor', '--project-root', root, '--json']);
+    const managedDoctorJson = JSON.parse(managedDoctor.stdout);
+    const managedProjectScope = managedDoctorJson.scopes.find(s => s.scope === 'project');
+    assert.ok(managedDoctor.status !== 0 && managedProjectScope && managedProjectScope.managed_block_drift === true,
+      '#332 gl AC9: doctor must report canonical managed-block drift');
+    assert.ok(managedProjectScope.stale_roles_in_block.includes('docs-lookup'),
+      '#332 gl AC9: doctor stale_roles_in_block lists docs-lookup');
     pf(['--project-root', root, '--json']);
 
     // schema_version 2 -> exit 6.
@@ -4214,6 +4278,7 @@ function testGitlabPreflight332() {
     try {
       runInstallProfiles(home);
       runInstallProfiles(proj);
+      trustCodexProject(home, proj);
       fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),
         path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
@@ -4227,10 +4292,16 @@ function testGitlabPreflight332() {
       runInstallProfiles(home);
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
       assert.strictEqual(r.status, 0, '#332 gl AC10: doctor exit 0 when both clean');
-      const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
-      fs.mkdirSync(cacheAgents, { recursive: true });
-      fs.copyFileSync(path.join(gitlabPluginRoot, 'agents', 'code-reviewer.toml'),
-        path.join(cacheAgents, 'code-reviewer.toml'));
+      const pluginIdentity = JSON.parse(fs.readFileSync(
+        path.join(gitlabPluginRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
+      const cacheRoot = path.join(home, '.codex', 'plugins', 'cache', 'm',
+        pluginIdentity.name, pluginIdentity.version);
+      const cacheAgents = path.join(cacheRoot, 'agents');
+      fs.mkdirSync(cacheRoot, { recursive: true });
+      fs.cpSync(path.join(gitlabPluginRoot, 'agents'), cacheAgents, { recursive: true });
+      fs.cpSync(path.join(gitlabPluginRoot, 'config'), path.join(cacheRoot, 'config'), { recursive: true });
+      fs.cpSync(path.join(gitlabPluginRoot, '.codex-plugin'), path.join(cacheRoot, '.codex-plugin'),
+        { recursive: true });
       const cachedReviewer = path.join(cacheAgents, 'code-reviewer.toml');
       fs.writeFileSync(cachedReviewer, fs.readFileSync(cachedReviewer, 'utf8').replace(
         'Precision-first code review specialist', 'Precision-first cached code review specialist'));
@@ -4241,7 +4312,8 @@ function testGitlabPreflight332() {
       assert.ok(cacheScope && cacheScope.read_only === true && cacheScope.stale_profiles.length > 0,
         '#332 gl AC11: cache scope read_only + stale profile evidence');
       assert.strictEqual(cacheScope.repair,
-        'codex plugin remove p@m && codex plugin add p@m  # refresh plugin cache',
+        'codex plugin remove ' + pluginIdentity.name + '@m && codex plugin add '
+          + pluginIdentity.name + '@m  # refresh plugin cache',
         '#332 gl AC11: cache scope must name the exact refresh command');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

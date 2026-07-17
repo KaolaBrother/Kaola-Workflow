@@ -200,6 +200,7 @@ function runChainSync(spec, cwd, timeoutMs) {
     stdio: 'pipe',
     shell: false,
     encoding: 'utf8',
+    env: spec.env || process.env,
     timeout: timeoutMs,
   });
   const duration_ms = Date.now() - t0;
@@ -224,6 +225,46 @@ function runChainSync(spec, cwd, timeoutMs) {
   };
 }
 
+// Give one logical chain (including all of its transient retries) a private temp root without
+// mutating the runner's own environment. TMP and TEMP follow TMPDIR because child libraries use
+// different variables across platforms. Cleanup checks the directory identity captured at creation
+// time, so a child that removes/replaces its root cannot make the runner recursively remove the
+// replacement. A foreign replacement is deliberately left untouched.
+function createIsolatedChainSpec(spec) {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-chain-')));
+  const ownedStat = fs.lstatSync(tempRoot);
+  return {
+    spec: Object.assign({}, spec, {
+      env: Object.assign({}, process.env, {
+        TMPDIR: tempRoot,
+        TMP: tempRoot,
+        TEMP: tempRoot,
+      }),
+    }),
+    tempRoot,
+    ownedStat,
+  };
+}
+
+function cleanupIsolatedChain(isolation) {
+  let current;
+  try {
+    current = fs.lstatSync(isolation.tempRoot);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return;
+    return;
+  }
+  if (current.isSymbolicLink() || !current.isDirectory()
+      || current.dev !== isolation.ownedStat.dev || current.ino !== isolation.ownedStat.ino) {
+    return;
+  }
+  try {
+    fs.rmSync(isolation.tempRoot, { recursive: true, force: true });
+  } catch (_) {
+    // Cleanup is best-effort: a chain's verdict must not be replaced by a temp-cleanup exception.
+  }
+}
+
 // #550: re-run a SINGLE chain ONLY on a POSITIVE transient-infra signature, up to maxAttempts.
 // `runOne(spec, cwd, timeoutMs)` is either runChainSync (sync) or runChainAsync (Promise); `await`
 // handles both uniformly. Returns the LAST attempt's result, augmented with `attempts` and
@@ -231,24 +272,29 @@ function runChainSync(spec, cwd, timeoutMs) {
 // signature in _output — is NEVER retried; a timeout kill (_timedOut) is non-retryable by default.
 // Retry therefore can never flip a determinate red to green; a still-red-after-retry chain stays red.
 async function runChainWithRetry(spec, cwd, timeoutMs, runOne, maxAttempts) {
-  const max = Math.max(1, maxAttempts | 0);
-  let attempt = 0;
-  let result;
-  let retried = false;
-  for (;;) {
-    attempt++;
-    result = await runOne(spec, cwd, timeoutMs);
-    if (result.exitCode === 0) break;                       // green — done
-    const retryable = attempt < max
-      && !result._timedOut                                  // a timeout kill is non-retryable
-      && isTransientFetchStderr(result._output);            // POSITIVE transient signature required
-    if (!retryable) break;                                  // determinate red OR budget exhausted
-    retried = true;
-    await delayMs(retryBackoffMs(attempt));                 // small backoff before re-running THIS spec
+  const isolation = createIsolatedChainSpec(spec);
+  try {
+    const max = Math.max(1, maxAttempts | 0);
+    let attempt = 0;
+    let result;
+    let retried = false;
+    for (;;) {
+      attempt++;
+      result = await runOne(isolation.spec, cwd, timeoutMs);
+      if (result.exitCode === 0) break;                       // green — done
+      const retryable = attempt < max
+        && !result._timedOut                                  // a timeout kill is non-retryable
+        && isTransientFetchStderr(result._output);            // POSITIVE transient signature required
+      if (!retryable) break;                                  // determinate red OR budget exhausted
+      retried = true;
+      await delayMs(retryBackoffMs(attempt));                 // small backoff before re-running THIS spec
+    }
+    result.attempts = attempt;
+    result.retried_transient = retried;
+    return result;
+  } finally {
+    cleanupIsolatedChain(isolation);
   }
-  result.attempts = attempt;
-  result.retried_transient = retried;
-  return result;
 }
 
 // #550: small fixed-ish backoff between transient retries (linear by attempt). Kept tiny so the gate
@@ -280,7 +326,7 @@ function runChainAsync(spec, cwd, timeoutMs) {
         cwd,
         stdio: 'pipe',
         shell: false,
-        env: { ...process.env },   // isolated copy per child
+        env: spec.env || { ...process.env },
       });
     } catch (e) {
       resolve(Object.assign({}, base, { exitCode: 1, duration_ms: Date.now() - t0, _output: 'spawn threw: ' + String((e && e.message) || e) }));
