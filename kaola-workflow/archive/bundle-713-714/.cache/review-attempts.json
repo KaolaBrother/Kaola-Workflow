@@ -1,0 +1,245 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "8bcb4f6904ae9350e319bdd764cc4e2095835fd4bd09a94fc0f99b96dc086b1b",
+  "attempts": [
+    {
+      "attempt_id": "review2-dab24b01b471893f:1",
+      "ordinal": 1,
+      "plan_hash": "8bcb4f6904ae9350e319bdd764cc4e2095835fd4bd09a94fc0f99b96dc086b1b",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "e172d80d52ae6e2f83cff84fcf6f09d2d9cab1d829ff04a262a77254aca69419",
+        "key": "dab24b01b471893ffdb61e81c9351a496e138a03abcc8896edc5b8a03499ecb3",
+        "kind": "sequence",
+        "members": [
+          "n3-code-review"
+        ],
+        "surface_digests": [
+          "4d0a8e7b03355a8ebb3024984c14a3119af3cc8a9f7cd94c8432b383f3b6075d"
+        ]
+      },
+      "transaction_key": "5bae46692b014cbadbe3cd4374c7c1a18f4b29f60fdd821123fea51fa8d0d3b8",
+      "candidate_digest": "4e9024c3b25112141780f7eb5b11f5487004eea99a470a729a2603194d9868a8",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 413dc045db2252e7a0e1aaea4f30cc8e095260b5",
+        "docs/plan-run-cards/reopen-complete-node.md": "100644 3a97b1c3c8399b9d7d73fba08eb9bc7f850f43b7",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 8c3d93a3981c6090826946321b4e6aafe5c12615",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 51826743c6e59453208a9cea2056cb8b2f24a394",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 3bfd944f634453c76740f42638afbd9e9dc278e5",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 3bfd944f634453c76740f42638afbd9e9dc278e5",
+        "scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "scripts/simulate-workflow-walkthrough.js": "100755 a85bd9e7f46f6bcd106b19ab6da6b21a6f6a8fd5",
+        "scripts/test-adaptive-node.js": "100644 d4da5d953f934ab3f461963247e80d8ad0daeab1"
+      },
+      "candidate_residue_digest": "13ef0023f309d2365723cdeb87a48222a1e2f5e47792abc9136fc9a5a2341e33",
+      "epoch_lineage_id": "f0e4537b199df9e0692ccf6f601f05d922eea96f9cedbf7e5120fc90dd5e170b",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "d985aa82eac27b823437e9a9003b57c100ed23a1afd7c74dddcd82a87a42c331",
+      "context_hashes": [
+        "3d59b67c160b4cbb6dc4541666232f6566a4f86c1c0e39821691bd78992ee424"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "4e9024c3b25112141780f7eb5b11f5487004eea99a470a729a2603194d9868a8",
+          "certifier_digest": "4e9024c3b25112141780f7eb5b11f5487004eea99a470a729a2603194d9868a8",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n3-code-review",
+            "nonce": "aa00ad32a72e"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n3-code-review",
+          "raw_evidence_sha256": "d173d88c39323e8d11871ed4b68f410a741d97f2fd6687038bdabcd979c5b59f",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "3d59b67c160b4cbb6dc4541666232f6566a4f86c1c0e39821691bd78992ee424",
+          "schema_version": 2,
+          "surface": "complete candidate: the adaptive-node and adaptive-schema four-edition families, their claude-chain test surfaces, and the documentation delta",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-lifecycle-producer-fixes": {
+          "baseline": "76608b1dae095a4fbee6602177dcf7e4eb752895",
+          "anchored_ref": "76608b1dae095a4fbee6602177dcf7e4eb752895",
+          "open_token": "fe994d69885f5abf5234b5f116575201e8bb3fa9",
+          "generation": "76608b1dae09",
+          "ref": "refs/kaola-workflow/barrier/bundle-713-714/n1-lifecycle-producer-fixes"
+        },
+        "n2-documentation": {
+          "baseline": "a6649907cf19a6a7606240f7d9fbf8c5ea516e0c",
+          "anchored_ref": "a6649907cf19a6a7606240f7d9fbf8c5ea516e0c",
+          "open_token": "fe994d69885f5abf5234b5f116575201e8bb3fa9",
+          "generation": "a6649907cf19",
+          "ref": "refs/kaola-workflow/barrier/bundle-713-714/n2-documentation"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-31ccbf3d2abbf1ce:1",
+      "ordinal": 1,
+      "plan_hash": "8bcb4f6904ae9350e319bdd764cc4e2095835fd4bd09a94fc0f99b96dc086b1b",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n1-lifecycle-producer-fixes"
+        ],
+        "claim_digest": "9d20792fb38601bb29b658af1f1ea35f7f0d151bf1523473678ed20615f8e4af",
+        "key": "31ccbf3d2abbf1ce91f2db12e1b547fe5af664fa05793943df0f5cebd00ef40f",
+        "kind": "sequence",
+        "members": [
+          "n4-falsify-lifecycle-fixes"
+        ],
+        "surface_digests": [
+          "6b4542ed461c74cc18d0ecf436c55ec208f4b089bc0e8f499ef8823eded096c8"
+        ]
+      },
+      "transaction_key": "db87af9daff720aea737664cd6a228242c107936fe953996de8c5f2c92d04897",
+      "candidate_digest": "4e9024c3b25112141780f7eb5b11f5487004eea99a470a729a2603194d9868a8",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 413dc045db2252e7a0e1aaea4f30cc8e095260b5",
+        "docs/plan-run-cards/reopen-complete-node.md": "100644 3a97b1c3c8399b9d7d73fba08eb9bc7f850f43b7",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 8c3d93a3981c6090826946321b4e6aafe5c12615",
+        "plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 51826743c6e59453208a9cea2056cb8b2f24a394",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 3bfd944f634453c76740f42638afbd9e9dc278e5",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 3bfd944f634453c76740f42638afbd9e9dc278e5",
+        "scripts/kaola-workflow-adaptive-schema.js": "100644 2102df80f4ad21f4fa5aaf925799b60fb3994524",
+        "scripts/simulate-workflow-walkthrough.js": "100755 a85bd9e7f46f6bcd106b19ab6da6b21a6f6a8fd5",
+        "scripts/test-adaptive-node.js": "100644 d4da5d953f934ab3f461963247e80d8ad0daeab1"
+      },
+      "candidate_residue_digest": "13ef0023f309d2365723cdeb87a48222a1e2f5e47792abc9136fc9a5a2341e33",
+      "epoch_lineage_id": "7dd8e8349964cf77c0e2747791be9f9031f2a09acbcb7cbc52399a32ced732b2",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "44b94282f38de77d6cb6611cf86335a2d8bde9380c1c39f04b07d4ce5de78032",
+      "context_hashes": [
+        "c1124216a7969b4745571afbf305d4f28e14af52418b6870728ce6e593eb273d"
+      ],
+      "profile_hashes": [
+        "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b",
+          "blocking_findings": 0,
+          "candidate_digest": "4e9024c3b25112141780f7eb5b11f5487004eea99a470a729a2603194d9868a8",
+          "certifier_digest": "4e9024c3b25112141780f7eb5b11f5487004eea99a470a729a2603194d9868a8",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n4-falsify-lifecycle-fixes",
+          "raw_evidence_sha256": "e52f2fc263c5b40ac118b3d4a4d9b5c64d5ec842267fd1bb2a11e1524a6d51a4",
+          "resolutions": [],
+          "resolved_profile_hash": "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce",
+          "review_context_hash": "c1124216a7969b4745571afbf305d4f28e14af52418b6870728ce6e593eb273d",
+          "schema_version": 2,
+          "surface": "the schema-2 repair/fold/reopen matrix (serial multi-gate pass-then-fail, mid-gate repair, adversarial fan-out group fold, crash-window retry) and the compliance emission matrix (legacy no-section append, pre-seeded in-place advance, review-role cells, heading adjacency) across all four edition copies",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-lifecycle-producer-fixes": {
+          "baseline": "76608b1dae095a4fbee6602177dcf7e4eb752895",
+          "anchored_ref": "76608b1dae095a4fbee6602177dcf7e4eb752895",
+          "open_token": "fe994d69885f5abf5234b5f116575201e8bb3fa9",
+          "generation": "76608b1dae09",
+          "ref": "refs/kaola-workflow/barrier/bundle-713-714/n1-lifecycle-producer-fixes"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

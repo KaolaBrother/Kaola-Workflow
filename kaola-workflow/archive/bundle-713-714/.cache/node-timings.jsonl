@@ -1,0 +1,13 @@
+{"node":"n1-lifecycle-producer-fixes","event":"opened","ts":"2026-07-17T22:56:25.208Z"}
+{"node":"n1-lifecycle-producer-fixes","event":"closed","ts":"2026-07-18T00:28:09.126Z"}
+{"node":"n2-documentation","event":"opened","ts":"2026-07-18T00:28:09.728Z"}
+{"node":"n2-documentation","event":"closed","ts":"2026-07-18T00:35:06.645Z"}
+{"node":"n3-code-review","event":"opened","ts":"2026-07-18T00:35:08.382Z"}
+{"node":"n3-code-review","event":"evidence","ts":"2026-07-18T01:27:21.239Z"}
+{"node":"n3-code-review","event":"closed","ts":"2026-07-18T01:27:37.344Z"}
+{"node":"n4-falsify-lifecycle-fixes","event":"opened","ts":"2026-07-18T01:27:39.149Z"}
+{"node":"n4-falsify-lifecycle-fixes","event":"evidence","ts":"2026-07-18T03:02:45.159Z"}
+{"node":"n4-falsify-lifecycle-fixes","event":"closed","ts":"2026-07-18T03:02:47.759Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-07-18T03:02:48.433Z"}
+{"node":"n5-finalize","event":"evidence","ts":"2026-07-18T04:24:24.733Z"}
+{"node":"n5-finalize","event":"closed","ts":"2026-07-18T04:24:36.117Z"}
