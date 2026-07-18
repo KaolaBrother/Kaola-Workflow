@@ -1,0 +1,1 @@
+{"result":"ok","closed":"n6-finalize-epoch3","opened":null,"allDone":true,"taskTransitions":[{"id":"n6-finalize-epoch3","status":"completed","ledger_status":"complete","reason":"close-and-open-next"}],"taskMirror":{"status":"updated","path":"kaola-workflow/issue-715/workflow-tasks.json"}}

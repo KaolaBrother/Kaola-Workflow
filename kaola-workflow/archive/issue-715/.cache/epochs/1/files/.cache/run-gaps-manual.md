@@ -1,0 +1,2 @@
+gap: manual:replan-compliance-authority — mid-run replan prepare refused state_compliance_authority_invalid on the partial legacy-append compliance table; missing canonical pending rows hand-appended; systemic freeze/replan asymmetry filed as #719
+gap: manual:replan-candidate-digest-mismatch — replan prepare verifyCandidate compared schema-2 landable attempt digest against raw ls-tree digest and falsely refused replan_source_candidate_changed; prepare and resume run through a tmpdir-patched script copy; filed as #720

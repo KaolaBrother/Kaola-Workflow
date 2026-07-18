@@ -1,0 +1,30 @@
+{
+  "project": "issue-715",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:manual-replan-compliance-authority",
+      "sample": "mid-run replan prepare refused state_compliance_authority_invalid on the partial legacy-append compliance table; missing canonical pending rows hand-appended; systemic freeze/replan asymmetry filed as #719",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:manual-replan-candidate-digest-mismatch",
+      "sample": "replan prepare verifyCandidate compared schema-2 landable attempt digest against raw ls-tree digest and falsely refused replan_source_candidate_changed; prepare and resume run through a tmpdir-patched script copy; filed as #720",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:manual-replan-attestation-prestamp-wedge",
+      "sample": "planner attested the unstamped child and the transaction wedged at child_frozen with no CLI recovery; transaction scratch rebuilt from source and planner re-attested over the pre-stamped child; filed as #721",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:manual-replan-journal-rotation",
+      "sample": "child epoch first gate close refused review_journal_plan_hash_mismatch on the parent-bound active journal; active journal rotated to a fresh child-bound V2 journal with the parent journal digest-preserved in the epoch snapshot; filed as #722",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:manual-barrier-check-lineage-union",
+      "sample": "whole-plan --barrier-check on a schema-2 child plan unions only the child's declared write sets, so parent-epoch writes in the accumulated candidate refuse write_set_overflow at finalize entry; a lineage-aware equivalent over the child plus epoch-2 plus epoch-1 declared union passed 14-of-14; filed as #724",
+      "count": 1
+    }
+  ]
+}

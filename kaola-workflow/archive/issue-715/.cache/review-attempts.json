@@ -1,0 +1,356 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "3d86a73e85a894190dd466cbc902676fa048e97911e33265d567f2c8db00eafd",
+  "attempts": [
+    {
+      "attempt_id": "review2-e11e8ce6e940d3a4:1",
+      "ordinal": 1,
+      "plan_hash": "3d86a73e85a894190dd466cbc902676fa048e97911e33265d567f2c8db00eafd",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "25e9e658d2e500d1d5a7adcee64a6920a28e13f0f35971e260689d89d711484a",
+        "key": "e11e8ce6e940d3a4c5541739beec0ebfb58a6913d63e582cd2678d03d68bdb11",
+        "kind": "sequence",
+        "members": [
+          "n3-code-certify-hardening"
+        ],
+        "surface_digests": [
+          "76b827b54bdd1374adb4a35fce727b5e5a701861e314d999979a6d0215ac962e"
+        ]
+      },
+      "transaction_key": "3efcc9de4c54cf3178e3ce850f0f75ea45eccae6e8416b2af66bc41ae57ebdb9",
+      "candidate_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 9d6e677761ce88e827a1b5cc7bf602e701418d25",
+        "docs/api.md": "100644 8d84d162d3e7bda38ba29935332a4f477982efd5",
+        "docs/workflow-state-contract.md": "100644 afc117ce5d75f17516e4069dba8e6f3fdbf8873c",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 0fdaf4e138a6cdecbc338fef1d1a833d1a0a3380",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 7fcc3b436b2821810e0cabd2f6f86da8eb7f8153",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 2af12783468f2cd64481afcbcf676259a706fc89",
+        "scripts/kaola-workflow-claim.js": "100644 2af12783468f2cd64481afcbcf676259a706fc89",
+        "scripts/simulate-workflow-walkthrough.js": "100755 4a28b11601c6a17f63126f6a2fe4f48255d2d166",
+        "scripts/test-claim-hardening.js": "100644 222b95fdf47d34f22ef4f3c5fa2da4524f98e8da"
+      },
+      "candidate_residue_digest": "61971a6cb3073533618ee91913f3f1efc18cc417fd8c1c4162fc34584c429876",
+      "epoch_lineage_id": "e7aca78f34436bc91971c55844464388d936ebbce2289dbe5ebe26a5ad66b3cd",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "2db15a203b5d57ef771b8f4c673beb9c07aee0ae95896583712934cfeeb18f50",
+      "context_hashes": [
+        "8c7891298e328e371612bfe338489c45f341a5e85ab9fdc9e8da7401491acec1"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+          "certifier_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n3-code-certify-hardening",
+            "nonce": "212afaa15a1f"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n3-code-certify-hardening",
+          "raw_evidence_sha256": "5ace295a61e9447a63d2fc5caa795440e970a1e80f7c29d76eec90eddf4e92f2",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "8c7891298e328e371612bfe338489c45f341a5e85ab9fdc9e8da7401491acec1",
+          "schema_version": 2,
+          "surface": "the complete epoch-3 candidate: the claim.js four-edition family (canonical, codex byte twin, gitlab and gitea hand ports), the claude-chain test surfaces (simulate-workflow-walkthrough.js, test-claim-hardening.js), and the documentation delta, reviewed against the epoch-2 n5 refutation evidence and the accumulated diff vs the claim root base",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-guard-hardening-fix": {
+          "baseline": "f6077183028ac96d4830a184d8981a591626ffaa",
+          "anchored_ref": "f6077183028ac96d4830a184d8981a591626ffaa",
+          "open_token": "cd28e8e52fb641cf2173ced57c91a042e3c13e1e",
+          "generation": "f6077183028a",
+          "ref": "refs/kaola-workflow/barrier/issue-715/n1-guard-hardening-fix"
+        },
+        "n2-guard-hardening-docs": {
+          "baseline": "29e34dc5f164f9e2008b338f33ae5a1cded5e877",
+          "anchored_ref": "29e34dc5f164f9e2008b338f33ae5a1cded5e877",
+          "open_token": "cd28e8e52fb641cf2173ced57c91a042e3c13e1e",
+          "generation": "29e34dc5f164",
+          "ref": "refs/kaola-workflow/barrier/issue-715/n2-guard-hardening-docs"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-2a14e103da284640:1",
+      "ordinal": 1,
+      "plan_hash": "3d86a73e85a894190dd466cbc902676fa048e97911e33265d567f2c8db00eafd",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "ea6fcdbd85176effb8b7e08bc54da8124194d2df50944b8cfd82bc1167669253",
+        "key": "2a14e103da284640af074041d4b21da47b28af76096e1f482bae3706a18c7eba",
+        "kind": "sequence",
+        "members": [
+          "n4-security-certify-hardening"
+        ],
+        "surface_digests": [
+          "ef1f692aff97accec28d33773e43b1f6491f59ed8b7a5314a450eb6a4c1b5be0"
+        ]
+      },
+      "transaction_key": "3cfcf6277a010674e4f2e0290960ca2aa2495bc3cf4408d1a835633d2387f808",
+      "candidate_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 9d6e677761ce88e827a1b5cc7bf602e701418d25",
+        "docs/api.md": "100644 8d84d162d3e7bda38ba29935332a4f477982efd5",
+        "docs/workflow-state-contract.md": "100644 afc117ce5d75f17516e4069dba8e6f3fdbf8873c",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 0fdaf4e138a6cdecbc338fef1d1a833d1a0a3380",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 7fcc3b436b2821810e0cabd2f6f86da8eb7f8153",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 2af12783468f2cd64481afcbcf676259a706fc89",
+        "scripts/kaola-workflow-claim.js": "100644 2af12783468f2cd64481afcbcf676259a706fc89",
+        "scripts/simulate-workflow-walkthrough.js": "100755 4a28b11601c6a17f63126f6a2fe4f48255d2d166",
+        "scripts/test-claim-hardening.js": "100644 222b95fdf47d34f22ef4f3c5fa2da4524f98e8da"
+      },
+      "candidate_residue_digest": "61971a6cb3073533618ee91913f3f1efc18cc417fd8c1c4162fc34584c429876",
+      "epoch_lineage_id": "e7aca78f34436bc91971c55844464388d936ebbce2289dbe5ebe26a5ad66b3cd",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "1c520a7fa2163bb48e98e1cbc5143826fb80a2a95b1e7ae4ee0f26eb3432dd76",
+      "context_hashes": [
+        "dd5d2ae468ed5bf571eed9f34991c1741844a40bdd038414f2fb44f8404870bb"
+      ],
+      "profile_hashes": [
+        "a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "security-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584",
+          "blocking_findings": 0,
+          "candidate_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+          "certifier_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n4-security-certify-hardening",
+          "raw_evidence_sha256": "17cdb81fabe2bc00935702ce4bbd5f610e0f86e71ee5c14a84beeed9e90e502f",
+          "resolutions": [],
+          "resolved_profile_hash": "a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d",
+          "review_context_hash": "dd5d2ae468ed5bf571eed9f34991c1741844a40bdd038414f2fb44f8404870bb",
+          "schema_version": 2,
+          "surface": "the full epoch-3 claim.js delta in all four editions (guard validation, post-commit re-verification, both call sites, restore-gate interplay) plus its interaction with the epoch-1 sink-preflight exemption surface, attacked for injection, path-traversal, staging-scope, ref-spoofing, and guard-weakening primitives",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-guard-hardening-fix": {
+          "baseline": "f6077183028ac96d4830a184d8981a591626ffaa",
+          "anchored_ref": "f6077183028ac96d4830a184d8981a591626ffaa",
+          "open_token": "cd28e8e52fb641cf2173ced57c91a042e3c13e1e",
+          "generation": "f6077183028a",
+          "ref": "refs/kaola-workflow/barrier/issue-715/n1-guard-hardening-fix"
+        },
+        "n2-guard-hardening-docs": {
+          "baseline": "29e34dc5f164f9e2008b338f33ae5a1cded5e877",
+          "anchored_ref": "29e34dc5f164f9e2008b338f33ae5a1cded5e877",
+          "open_token": "cd28e8e52fb641cf2173ced57c91a042e3c13e1e",
+          "generation": "29e34dc5f164",
+          "ref": "refs/kaola-workflow/barrier/issue-715/n2-guard-hardening-docs"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-c0fc7889e240220b:1",
+      "ordinal": 1,
+      "plan_hash": "3d86a73e85a894190dd466cbc902676fa048e97911e33265d567f2c8db00eafd",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n1-guard-hardening-fix"
+        ],
+        "claim_digest": "5d2ff8a95679f9903743c9b858bbae4f3b3f0752fa631caed134c87ed2275845",
+        "key": "c0fc7889e240220baa1d2740de2296a5c023b59e1fd4f2318cd825b1a617a9a6",
+        "kind": "sequence",
+        "members": [
+          "n5-falsify-guard-hardening"
+        ],
+        "surface_digests": [
+          "55fc710907f3b79fc556aa9121e28b4704553b7730628909d0d0d396d0f26ab1"
+        ]
+      },
+      "transaction_key": "0f4dc189b74f0b44a7ac0cbc5628482fd39356224b791b23b908f08049f06ce1",
+      "candidate_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 9d6e677761ce88e827a1b5cc7bf602e701418d25",
+        "docs/api.md": "100644 8d84d162d3e7bda38ba29935332a4f477982efd5",
+        "docs/workflow-state-contract.md": "100644 afc117ce5d75f17516e4069dba8e6f3fdbf8873c",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js": "100644 0fdaf4e138a6cdecbc338fef1d1a833d1a0a3380",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js": "100644 7fcc3b436b2821810e0cabd2f6f86da8eb7f8153",
+        "plugins/kaola-workflow/scripts/kaola-workflow-claim.js": "100644 2af12783468f2cd64481afcbcf676259a706fc89",
+        "scripts/kaola-workflow-claim.js": "100644 2af12783468f2cd64481afcbcf676259a706fc89",
+        "scripts/simulate-workflow-walkthrough.js": "100755 4a28b11601c6a17f63126f6a2fe4f48255d2d166",
+        "scripts/test-claim-hardening.js": "100644 222b95fdf47d34f22ef4f3c5fa2da4524f98e8da"
+      },
+      "candidate_residue_digest": "61971a6cb3073533618ee91913f3f1efc18cc417fd8c1c4162fc34584c429876",
+      "epoch_lineage_id": "e7aca78f34436bc91971c55844464388d936ebbce2289dbe5ebe26a5ad66b3cd",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "2cfba7b4f6cb7c89f7bb30fdedcb04cb5ab39bb3eb8ecb489623cfc0ffe6a5dc",
+      "context_hashes": [
+        "eb71ba01a64916b50abe821f7276b21dd96726047fb3acd826b68a9b0d35012c"
+      ],
+      "profile_hashes": [
+        "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b",
+          "blocking_findings": 0,
+          "candidate_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+          "certifier_digest": "af7e553c1fc7f26435278ba7695b6c0d6135fd95b24d7d2e8da310a9c9bb68da",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n5-falsify-guard-hardening",
+          "raw_evidence_sha256": "e0701d5e744c9d731295bbd8e3ee5260579ab5e73250b98028894995950a2d7a",
+          "resolutions": [],
+          "resolved_profile_hash": "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce",
+          "review_context_hash": "eb71ba01a64916b50abe821f7276b21dd96726047fb3acd826b68a9b0d35012c",
+          "schema_version": 2,
+          "surface": "the release-to-discard-to-sibling-sink matrix re-run against the epoch-3 candidate with the N5-A falsified-state cells (release detached with base_branch 'HEAD', release on the feature branch with base_branch naming the discarded branch, sweep detached with 'HEAD', sweep on an arbitrary lane with base_branch naming that lane), the N5-B race cell (a git shim re-pointing HEAD between staging and commit), both F1 triggers, and the full prior matrix across all four edition copies",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-guard-hardening-fix": {
+          "baseline": "f6077183028ac96d4830a184d8981a591626ffaa",
+          "anchored_ref": "f6077183028ac96d4830a184d8981a591626ffaa",
+          "open_token": "cd28e8e52fb641cf2173ced57c91a042e3c13e1e",
+          "generation": "f6077183028a",
+          "ref": "refs/kaola-workflow/barrier/issue-715/n1-guard-hardening-fix"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

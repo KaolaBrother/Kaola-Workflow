@@ -1,0 +1,42 @@
+{
+  "source_plan_hash": "8c63d6d341c8302eb6a01399a652a05cbf8e1f7d52815c138b01333d8c47659b",
+  "tasks": [
+    {
+      "id": "n1-branch-commit-fix",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-branch-commit-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-code-certify-fix",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-security-certify-fix",
+      "role": "security-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-falsify-branch-commit",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-18T11:51:56.861Z"
+}
