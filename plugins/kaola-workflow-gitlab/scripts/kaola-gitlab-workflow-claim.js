@@ -284,16 +284,33 @@ function inPlaceHead(root) {
   } catch (_) { return ''; }
 }
 
-function treeDirty(root, ownedProjects) {
+function treeDirty(root, ownedProjects, exemptRelPaths) {
   // #557: an UNPROBEABLE tree must fail CLOSED = treated as DIRTY (mirror #496); was catch → return false
   // (fail-OPEN). KAOLA_WORKFLOW_FORCE_STATUS_FAIL=1 is a [TEST ONLY] probe-fault seam.
   // #579: parked-aware — kaola-workflow/<non-owned>/* and .kw/worktrees/<non-owned>/* are ignored.
+  // #715: exemptRelPaths (optional) exempts the EXACT repo-relative paths the caller itself just
+  // created (cmdRelease passes the release's own fresh archive dest — the ACTUAL result.dest, never
+  // a reconstructed plain path, the #700 lesson) so the in-place base restore is not vetoed by the
+  // very archive the release is about to commit. Segment-boundary exact matching; every OTHER dirty
+  // path still blocks. isParkedLanePath semantics untouched (archive/* stays never-parked).
   try {
     if (process.env.KAOLA_WORKFLOW_FORCE_STATUS_FAIL === '1') throw new Error('forced git status probe failure [TEST ONLY]');
-    const status = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER }).trim();
-    if (!status) return false;
     const owned = Array.isArray(ownedProjects) ? ownedProjects : [];
-    return parsePorcelainPaths(status).some(p => !isParkedLanePath(p, owned));
+    const exempt = (Array.isArray(exemptRelPaths) ? exemptRelPaths : [])
+      .map(p => String(p || '').replace(/\\/g, '/').replace(/\/+$/, ''))
+      .filter(Boolean);
+    // #715: only when an exemption is in play, enumerate untracked files individually (-uall):
+    // the default -unormal COLLAPSES a wholly-untracked tree (e.g. a fixture's kaola-workflow/)
+    // into one ancestor entry, which would hide both the exempt dest and any genuinely foreign
+    // file beside it. Without an exemption the command (and today's exact semantics) is unchanged.
+    const statusArgs = ['-C', root, 'status', '--porcelain'].concat(exempt.length ? ['-uall'] : []);
+    const status = execFileSync('git', statusArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER }).trim();
+    if (!status) return false;
+    const isExempt = (p) => {
+      const norm = String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+      return exempt.some(e => norm === e || norm.startsWith(e + '/'));
+    };
+    return parsePorcelainPaths(status).some(p => !isExempt(p) && !isParkedLanePath(p, owned));
   } catch (_) { return true; }
 }
 
@@ -2050,6 +2067,147 @@ function archiveProjectDirSafely(root, project, statusValue, suffix, opts) {
   }
 }
 
+// #715: commit a `.discarded-` archive produced by release / watch-mr. The archive lands at the
+// main root as UNTRACKED residue; the next sink's preflight would refuse it as foreign dirt, so
+// the operator had to hand-commit it before any sink could proceed. Mirrors the sink's
+// archive_commit step (kaola-gitlab-workflow-sink-merge.js): stage the ACTUAL result.dest (never a
+// reconstructed plain path — a collision suffix escapes one, the #700 lesson), skip the commit
+// when nothing staged (diff-quiet guard), then verify the archive landed at HEAD. Local git only:
+// KAOLA_WORKFLOW_OFFLINE must NOT skip it. A failed commit must NEVER strand the release (the live
+// folder is already gone) or throw past the emit — the outcome is returned as
+// { committed: true, branch } or { committed: false, branch, detail } for the caller to record
+// loudly on the emitted JSON.
+// #715 F1: the commit may ONLY bind to the branch that SURVIVES the release (the base branch) —
+// never onto a branch the release itself deletes/discards, never onto an arbitrary current
+// branch. The base-branch guard therefore lives INSIDE this helper (both call sites inherit it):
+// the current branch is resolved from the dest's own toplevel and compared against baseBranch
+// BEFORE staging. Off-base (or unresolvable base) → skip: the archive stays on disk as
+// recoverable residue and the refusal is returned truthfully with the current branch disclosed.
+// `branch` is disclosed on EVERY outcome (success and skip) so the emitted JSON can always name
+// the receiving (or non-receiving) branch.
+// #715 N5-A: string equality is not enough — baseBranch comes from operator-controlled durable
+// state (the tooling never writes these values, so a hand-edit or external corruption is the
+// precondition). Before staging, the guard additionally (a) rejects the detached-HEAD sentinel
+// 'HEAD' as a base outright, (b) verifies base names a REAL local branch ref (argument-array
+// `rev-parse --verify`, never shell interpolation), (c) refuses a base naming the branch the
+// call site is discarding (opts.discardedBranch — release: the feature branch; sweep: the
+// folder's own lane), and (d) when the call site cannot otherwise prove the base survives
+// (opts.defaultBase — the sweep has no restore step, so only the repo's default branch is
+// provably surviving-and-integration there) refuses a base naming any other branch, including
+// the current arbitrary lane. Every refusal happens BEFORE staging: no commit anywhere, the
+// branch disclosed, the archive left as recoverable residue.
+// #715 N5-B: the guard is check-then-act — a concurrent process can re-point HEAD between
+// staging and the commit. After the commit the checkout is RE-RESOLVED and must still equal the
+// guarded base, and the HEAD commit must be reachable from base (`merge-base --is-ancestor`,
+// argument-array). Any mismatch DOWNGRADES to { committed: false } with the ACTUAL receiving
+// branch disclosed — never the stale pre-race base — leaving the off-base commit recoverable.
+function commitDiscardArchive(result, project, baseBranch, opts) {
+  if (!result || !result.dest || !fs.existsSync(result.dest)) {
+    return { committed: false, branch: null, detail: 'no archive dest to commit' };
+  }
+  opts = opts || {};
+  const discardedBranch = String(opts.discardedBranch || '').trim();
+  const defaultBase = String(opts.defaultBase || '').trim();
+  let currentBranch = null;
+  try {
+    const top = execFileSync('git', ['-C', result.dest, 'rev-parse', '--show-toplevel'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const rel = path.relative(top, result.dest).split(path.sep).join('/');
+    if (!rel || rel.startsWith('..')) {
+      return { committed: false, branch: null, detail: 'archive dest is outside its git toplevel: ' + result.dest };
+    }
+    currentBranch = execFileSync('git', ['-C', top, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const base = String(baseBranch || '').trim();
+    if (!base) {
+      return { committed: false, branch: currentBranch,
+        detail: 'no resolvable base branch; refusing to commit the discard archive onto current branch "' +
+          currentBranch + '" — the archive stays uncommitted as recoverable residue' };
+    }
+    // #715 N5-A (a): the 'HEAD' sentinel is what `rev-parse --abbrev-ref HEAD` returns when NO
+    // branch is checked out — it is by definition not a branch. Reject it as a base outright.
+    if (base === 'HEAD') {
+      return { committed: false, branch: currentBranch,
+        detail: 'recorded base branch "HEAD" is the detached-HEAD sentinel, not a real branch; ' +
+          'refusing to commit the discard archive — the archive stays uncommitted as recoverable residue' };
+    }
+    // #715 N5-A (b): base must name a REAL local branch ref (argument-array verify; the
+    // refs/heads/ prefix confines the lookup to the branches namespace).
+    let baseRefExists = false;
+    try {
+      execFileSync('git', ['-C', top, 'rev-parse', '--verify', 'refs/heads/' + base],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      baseRefExists = true;
+    } catch (_) { /* unresolvable → not a real local branch */ }
+    if (!baseRefExists) {
+      return { committed: false, branch: currentBranch,
+        detail: 'recorded base branch "' + base + '" does not name a real local branch; refusing to commit ' +
+          'the discard archive onto current branch "' + currentBranch + '" — the archive stays uncommitted as recoverable residue' };
+    }
+    // #715 N5-A (c): base may not name the branch this call is discarding (release: the feature
+    // branch; sweep: the folder's own lane) — a commit there is orphaned by the natural cleanup.
+    if (discardedBranch && base === discardedBranch) {
+      return { committed: false, branch: currentBranch,
+        detail: 'recorded base branch "' + base + '" names the branch being discarded; refusing to commit ' +
+          'the discard archive onto the discarded branch — the archive stays uncommitted as recoverable residue' };
+    }
+    // #715 N5-A (d): at a call site with no restore step (the sweep), only the repo's default
+    // branch is provably surviving-and-integration — a base naming any other branch (including
+    // the current arbitrary lane) is refused, however the durable base_branch was falsified.
+    if (defaultBase && base !== defaultBase) {
+      return { committed: false, branch: currentBranch,
+        detail: 'recorded base branch "' + base + '" is not the surviving default branch "' + defaultBase +
+          '"; refusing to commit the discard archive onto current branch "' + currentBranch +
+          '" — the archive stays uncommitted as recoverable residue' };
+    }
+    if (currentBranch !== base) {
+      return { committed: false, branch: currentBranch,
+        detail: 'current branch "' + currentBranch + '" is not the surviving base branch "' + base +
+          '"; the discard archive stays uncommitted as recoverable residue' };
+    }
+    try {
+      execFileSync('git', ['-C', top, 'add', '-A', '--', rel], { encoding: 'utf8' });
+    } catch (e) {
+      return { committed: false, branch: currentBranch, detail: 'git add failed for ' + rel + ': ' + (e && e.message ? e.message : String(e)) };
+    }
+    // diff-quiet guard: skip the commit when nothing was staged.
+    let hasStaged = false;
+    try { execFileSync('git', ['-C', top, 'diff', '--cached', '--quiet', '--', rel], { stdio: 'ignore' }); }
+    catch (e) { if (e && e.status === 1) hasStaged = true; /* other status = diff error → do not commit */ }
+    if (hasStaged) {
+      execFileSync('git', ['-C', top, 'commit', '-m', 'chore: discard archive ' + project, '--', rel], { encoding: 'utf8' });
+    }
+    // #715 N5-B: TOCTOU — re-resolve the checkout AFTER the commit and require it to still be
+    // the guarded base, then require the HEAD commit to be reachable from base. A concurrent
+    // re-point downgrades to a truthful committed:false with the ACTUAL receiving branch
+    // disclosed (never the stale pre-race base); the off-base commit stays recoverable there.
+    let branchAfter = currentBranch;
+    try {
+      branchAfter = execFileSync('git', ['-C', top, 'rev-parse', '--abbrev-ref', 'HEAD'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (_) { /* unresolvable → the reachability check below fails closed */ }
+    if (branchAfter !== base) {
+      return { committed: false, branch: branchAfter,
+        detail: 'HEAD moved from "' + base + '" to "' + branchAfter + '" during the discard archive commit; ' +
+          'the commit landed off-base on "' + branchAfter + '" (recoverable there) — not reporting it committed on the surviving base' };
+    }
+    let reachableFromBase = false;
+    try { execFileSync('git', ['-C', top, 'merge-base', '--is-ancestor', 'HEAD', base], { stdio: 'ignore' }); reachableFromBase = true; }
+    catch (_) { /* not an ancestor (or probe failure) → cannot prove reachability → fail closed */ }
+    if (!reachableFromBase) {
+      return { committed: false, branch: branchAfter,
+        detail: 'the discard archive commit at HEAD is not reachable from the surviving base branch "' + base +
+          '" — not reporting it committed; the archive stays recoverable' };
+    }
+    const atHead = execFileSync('git', ['-C', top, 'cat-file', '-t', 'HEAD:' + rel],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (atHead === 'tree') return { committed: true, branch: currentBranch };
+    return { committed: false, branch: currentBranch, detail: 'archive ' + rel + ' is not present at HEAD after the commit attempt' };
+  } catch (e) {
+    return { committed: false, branch: currentBranch, detail: 'discard archive commit failed: ' + (e && e.message ? e.message : String(e)) };
+  }
+}
+
 function archiveEpochLineagePreserved(result) {
   if (!closureContract.archiveSucceeded(result)) return 'failed';
   if (!result.dest) return 'absent';
@@ -2979,16 +3137,26 @@ function cmdRelease() {
   // checkout base/default BEFORE deleting the feature branch (git refuses deleting current branch).
   const featureBranch = folder.branch;
   let restoreNote = '';
+  const releaseBaseBranch = savedBaseBranch || defaultBranch(root);
   if (featureBranch && branchExists(root, featureBranch)) {
     try {
       const cur = inPlaceHead(root);
-      const dirty = treeDirty(root, [folder.project]);
-      const target = savedBaseBranch || defaultBranch(root);
+      // #715 F1: exempt ONLY the exact dest this release just created (the ACTUAL result.dest —
+      // never a reconstructed plain path, the #700 collision-suffix lesson) from the dirty gate.
+      // Without this the fresh archive deterministically vetoes its own restore (archive/* is
+      // never-parked), stranding the archive commit on the discarded feature branch. Every OTHER
+      // dirty path keeps blocking the restore exactly as today.
+      const restoreExempt = [];
+      if (result && result.dest) {
+        const relDest = path.relative(root, result.dest).split(path.sep).join('/');
+        if (relDest && !relDest.startsWith('..')) restoreExempt.push(relDest);
+      }
+      const dirty = treeDirty(root, [folder.project], restoreExempt);
       if (cur === featureBranch) {
         if (dirty) {
           restoreNote = 'tree dirty while on feature branch; skipped base restore + branch delete';
-        } else if (target) {
-          execFileSync('git', ['-C', root, 'checkout', target], { stdio: ['ignore', 'ignore', 'ignore'] });
+        } else if (releaseBaseBranch) {
+          execFileSync('git', ['-C', root, 'checkout', releaseBaseBranch], { stdio: ['ignore', 'ignore', 'ignore'] });
           removeBranch(root, featureBranch);
         } else {
           restoreNote = 'no base_branch and no resolvable default; skipped branch delete';
@@ -2998,6 +3166,21 @@ function cmdRelease() {
       }
     } catch (_) { /* defensive: discard must not throw */ }
   }
+
+  // #715: commit the discard archive so the next sink's preflight does not refuse it as foreign
+  // dirt. Runs AFTER the in-place branch restore so the commit lands on the restored base branch
+  // (committing before the checkout+delete would strand the archive commit on the deleted feature
+  // branch). #715 F1: the helper re-verifies the current checkout IS the surviving base branch
+  // before staging — when the restore was skipped (still dirty / no resolvable base) or the
+  // checkout is any other non-base branch, the commit is SKIPPED, the archive stays on disk as
+  // recoverable residue, and the outcome is reported truthfully with the branch disclosed.
+  // #715 N5-A: the release KNOWS the branch it discards — pass it so the helper can refuse a
+  // falsified base_branch naming the discarded branch (the release's restored base needs no
+  // default-branch constraint: the restore itself established it as surviving).
+  // Local git (OFFLINE must not skip it); never throws — a failure is reported loudly on
+  // the emitted JSON instead of stranding the release (the live folder is already gone).
+  const discardCommit = commitDiscardArchive(result, folder.project, releaseBaseBranch,
+    { discardedBranch: featureBranch || null });
 
   // #396.1: capture the label-clear status (was discarded) — a FAILED remove prints released:true
   // exit 0 with no label field while the "claim cleared" comment lies; surface + warn.
@@ -3018,9 +3201,18 @@ function cmdRelease() {
     releaseWarnings.push('claim label removal status: ' + claimLabelRemoved +
       ' — the workflow:in-progress label may still be on the issue; the next claim could hit user_target_blocked.');
   }
+  // #715: a failed discard-archive commit must not strand the release — surface it loudly.
+  if (!discardCommit.committed) {
+    releaseWarnings.push('discard archive commit failed: ' + discardCommit.detail +
+      ' — the discard archive remains uncommitted at the main root; commit it manually or the next sink preflight will refuse it as foreign dirt.');
+  }
   output(Object.assign(
     { released: true, project: folder.project, claim_label_removed: claimLabelRemoved },
     result,
+    { discard_archive_committed: discardCommit.committed },
+    // #715 F1: always disclose which branch received (or did not receive) the archive commit.
+    { discard_archive_branch: discardCommit.branch },
+    discardCommit.committed ? {} : { discard_archive_commit_detail: discardCommit.detail },
     restoreNote ? { restore_note: restoreNote } : {},
     releaseWarnings.length ? { warnings: releaseWarnings } : {}
   ));
@@ -3392,6 +3584,18 @@ function watchMergeRequests(root, args) {
       }
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     } else if (state === 'closed') {
+      // #715 F1: read base_branch BEFORE archiveProjectDir moves the state file — the sweep has no
+      // restore logic, so the discard-archive commit may only run when the current checkout already
+      // IS the base/surviving branch (the helper enforces the comparison).
+      let sweepBaseBranch = '';
+      try { sweepBaseBranch = field(fs.readFileSync(folder.state_file, 'utf8'), 'base_branch'); } catch (_) {}
+      // #715 N5-A: the sweep has ONLY the pre-read state base (operator-controlled durable state)
+      // and no restore step — the only base it can establish as surviving-and-integration is the
+      // repo's default branch. Pass it as defaultBase so the helper refuses a falsified base
+      // naming the current arbitrary lane (or any other non-default branch), and pass the
+      // folder's own lane as the discarded branch.
+      const sweepDefaultBase = defaultBranch(root);
+      sweepBaseBranch = sweepBaseBranch || sweepDefaultBase;
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
       if (!closureContract.archiveSucceeded(archiveResult)) {
         archiveRefusals.push({ folder: folder.project,
@@ -3399,6 +3603,14 @@ function watchMergeRequests(root, args) {
           detail: archiveResult.detail, missing: archiveResult.missing });
         continue;
       }
+      // #715: commit the discard archive so the next sink's preflight does not refuse it as
+      // foreign dirt. #715 F1: guarded to the base/surviving branch INSIDE the helper — off-base
+      // the commit is skipped, the archive stays on disk as recoverable residue, and the cleanup
+      // entry truthfully reports committed:false with the current branch disclosed. Local git
+      // (OFFLINE must not skip it); never throws — a failure is recorded loudly on the emitted
+      // cleanup entry instead of stranding the sweep.
+      const discardCommit2 = commitDiscardArchive(archiveResult, folder.project, sweepBaseBranch,
+        { discardedBranch: folder.branch || null, defaultBase: sweepDefaultBase });
       let worktreeRemoved = 'failed';
       try {
         const wtResult = removeWorktree(root, folder.project, folder);
@@ -3436,7 +3648,14 @@ function watchMergeRequests(root, args) {
       const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
       checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
-      cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus2, receipt: folderReceipt, closure_invariants: folderInvariants });
+      const cleanupEntry2 = { folder: folder.project, claim_label_removed: claimLabelStatus2,
+        discard_archive_committed: discardCommit2.committed,
+        // #715 F1: disclose the receiving (or non-receiving) branch on BOTH success and skip.
+        discard_archive_branch: discardCommit2.branch };
+      if (!discardCommit2.committed) cleanupEntry2.discard_archive_commit_detail = discardCommit2.detail;
+      cleanupEntry2.receipt = folderReceipt;
+      cleanupEntry2.closure_invariants = folderInvariants;
+      cleanups.push(cleanupEntry2);
     }
   }
   return { watched, warnings, cleanups, probeErrors, archiveRefusals };
@@ -4265,5 +4484,8 @@ module.exports = {
   cmdBarrierRefSweep,
   // #700: terminal archive-metadata writers reused by sink-merge's SOLE-archiver finalize path.
   appendClosureBlock,
-  persistAttestationToSummary
+  persistAttestationToSummary,
+  // #715 F1: exported for direct unit coverage (restore-gate dest exemption + base-branch guard).
+  treeDirty,
+  commitDiscardArchive
 };

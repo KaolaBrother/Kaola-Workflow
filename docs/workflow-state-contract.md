@@ -430,9 +430,25 @@ here for the full contract.
     `SINK_STEPS` entry, the `branch_head`/`published_head` ancestry guard, and worktree/branch
     teardown have all completed — so an earlier crash or refusal never reaches the dispose call
     and the journal survives for resume unchanged. The terminal-success emit gains
-    `journal_disposed: true|false`. A stray journal found on a later "clean and synced" check (an
-    older cycle's residue) must be deleted, never committed. See `docs/api.md` § Sink journal
-    disposal at terminal success.
+    `journal_disposed: true|false`. A journal found on a later "clean and synced" check is not
+    automatically residue: an IN-PROGRESS receipt (any project's, live or archive path) is the
+    owning sink's resume ledger — exempt from foreign-dirt classification since #715 — and must
+    not be deleted or committed mid-cycle (re-running the owning sink resumes, completes, and
+    disposes/commits it); only a TERMINAL stray (post-`status: sinked`, or pre-#653 residue) must
+    be deleted, never committed. See `docs/api.md` § Sink journal disposal at terminal success.
+    The #715 discard-archive commit is bound to the surviving base branch the same way: the
+    in-place posture restores the base checkout BEFORE the commit runs (the restore's dirty-tree
+    gate exempts only the archive's actual dest), and a `watch-pr`/`watch-mr` CLOSED sweep on a
+    non-base checkout skips the commit entirely — truthfully reporting
+    `discard_archive_committed: false` with `discard_archive_branch` disclosing which branch did
+    (or did not) receive it, never a false `true`. The recorded base is validated, not trusted:
+    the detached-HEAD sentinel (`HEAD`) and a falsified `base_branch` (naming the discarded
+    branch, a non-existent ref, or — at the sweep posture — a non-default lane) are refused
+    before staging, and after the commit lands it is re-verified against the surviving base
+    (checkout still on base, commit reachable from it via `merge-base --is-ancestor`). Any
+    violation is the same truthful downgrade — `discard_archive_committed: false` with
+    `discard_archive_branch` disclosing the ACTUAL receiving branch and the residue recoverable —
+    never a claimed-but-unlanded `true`.
 
   - **`claim_ts`** (cross-run staleness detection, #694) — the current run's `## Sink`
     `claim_ts:` (read from `workflow-state.md` — the branch ref first, then the live/plain-archive/

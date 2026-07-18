@@ -183,7 +183,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
   **When provisioning is attempted:** Provisioning occurs unless one of the following holds: `KAOLA_WORKTREE_NATIVE=0`, `KAOLA_WORKFLOW_OFFLINE` is `1`, or the repo has no git history (`git rev-parse HEAD` fails). When `KAOLA_WORKTREE_NATIVE=0` (opted out), provisioning is skipped and `worktree_path` is `''`; however, the scripts then take the in-place branch path described below. When offline or no git history, the claim proceeds as a repo-root run with no branch created and `worktree_path` is `''`.
 
-  **NATIVE=0 in-place branch creation (online + git history + HEAD not detached):** When `KAOLA_WORKTREE_NATIVE=0`, online, and the repo has git history, the claim/startup scripts create and check out the feature branch (`workflow/issue-N` on GitHub, `workflow/gitlab-issue-N` on GitLab, `workflow/gitea-issue-N` on Gitea) directly in the repo root — equivalent to `git checkout -b <branch>` (or `git checkout <branch>` if the branch already exists). The pre-checkout branch is recorded as `base_branch` in the `## Sink` block of `workflow-state.md`. On `discard`/`release`, the scripts restore `base_branch` (or the repo default branch when `base_branch` is absent) and delete the created feature branch.
+  **NATIVE=0 in-place branch creation (online + git history + HEAD not detached):** When `KAOLA_WORKTREE_NATIVE=0`, online, and the repo has git history, the claim/startup scripts create and check out the feature branch (`workflow/issue-N` on GitHub, `workflow/gitlab-issue-N` on GitLab, `workflow/gitea-issue-N` on Gitea) directly in the repo root — equivalent to `git checkout -b <branch>` (or `git checkout <branch>` if the branch already exists). The pre-checkout branch is recorded as `base_branch` in the `## Sink` block of `workflow-state.md`. On `discard`/`release`, the scripts restore `base_branch` (or the repo default branch when `base_branch` is absent) and delete the created feature branch. The release also archives the live folder into a `kaola-workflow/archive/<project>.discarded-<ts>/` destination and, since #715, commits that discard archive locally as part of the release action (after the branch restore, so the commit lands on the restored base branch — a binding the commit helper itself enforces by refusing to stage on any other branch, by validating that the recorded base names a real surviving branch — the detached-HEAD sentinel and a falsified `base_branch` are refused, not trusted — and by re-verifying the landed commit against that base); the emitted JSON carries the commit outcome as `discard_archive_committed: true|false` plus `discard_archive_branch` (the branch that received — or did not receive — the commit) — see the Closure Contract section for the full field contract.
 
   **NATIVE=0 edge cases:**
   - **Dirty working tree** (NATIVE=0 + online + git history + HEAD on a real branch + uncommitted changes): `claim` returns a typed refusal with `status: dirty_tree_refused` and `claim: 'none'`. No project folder and no branch are created. Commit or stash your changes, or use a worktree (`KAOLA_WORKTREE_NATIVE=1`).
@@ -2943,6 +2943,42 @@ fields, and every other result shape stop with the live authority preserved. Suc
 finalize receipts derive `epoch_lineage_preserved` only after this predicate and recursive epoch
 verification both pass.
 
+**Discard-archive commit (issue #715).** Once the archive result passes the predicate, the
+release/discard path (`cmdRelease`) and the `watch-pr`/`watch-mr` CLOSED sweep commit the
+`.discarded-` archive they just produced — staging the archive helper's ACTUAL `dest` (never a
+reconstructed plain path), skipping the commit when the staged diff is quiet, and verifying the
+archive is a tree at HEAD — so a later sink's preflight never refuses the uncommitted discard
+archive as foreign dirt. This is local git only: `KAOLA_WORKFLOW_OFFLINE=1` does NOT skip it. The
+commit is bound to the surviving base branch: `commitDiscardArchive` resolves the current branch
+from the dest's own toplevel and refuses to stage unless it equals the surviving base (defense in
+depth at both call sites). The recorded base is validated, never trusted: `HEAD` — the
+`rev-parse --abbrev-ref HEAD` detached-HEAD sentinel — is rejected outright as a base; the base
+must name a real local branch (`git rev-parse --verify refs/heads/<base>`, argument-array); a
+base naming the branch being discarded is refused (release passes the feature branch, the sweep
+the folder's own lane); and at the sweep posture the base must equal the repo's default branch,
+so a falsified `base_branch` naming the current arbitrary lane is refused — the sweep has no
+restore step, so only the default branch is provably surviving-and-integration (the release's
+restored base carries no default constraint because the restore itself established it). In
+`cmdRelease` the call already runs after the in-place branch
+restore, and the restore's dirty-tree gate now exempts ONLY the archive's actual `dest`
+(segment-boundary exact match), so a just-produced untracked archive can no longer keep the
+release on the discarded feature branch. A `watch-pr`/`watch-mr` CLOSED sweep reads `base_branch`
+BEFORE the archive move and, on a non-base checkout, SKIPS the commit — both ref tips untouched,
+the archive recoverable on disk — rather than committing onto an unrelated branch. After the
+commit lands it is re-verified against the surviving base: the checkout is re-resolved
+(`rev-parse --abbrev-ref HEAD`) and must still equal the guarded base, and the HEAD commit must
+be reachable from it (`git merge-base --is-ancestor HEAD base`); any violation downgrades the
+result to `committed: false` with the ACTUAL receiving branch disclosed (never the stale pre-race
+base), the off-base commit left recoverable there. The
+release emit gains `discard_archive_committed: true|false` (truthfully `false` on an off-base
+skip, a refused base, or a failed post-commit re-verification — never a claimed-but-unlanded
+`true`) and `discard_archive_branch`, disclosing which branch
+received — or, on a skip, did NOT receive — the commit, present on BOTH success and skip; plus
+`discard_archive_commit_detail` and a loud `warnings[]` entry when the commit fails. The watch
+sweep records the same fields on its per-folder `cleanups[]` entry. A failed commit never throws past the emit and never strands
+the release or the sweep — the live folder is already archived, so the failure is reported, not
+rolled back.
+
 ### Closure invariants
 
 For a completed linked issue N:
@@ -3479,9 +3515,26 @@ alongside the unchanged `result`/`status`/`receipt` fields:
 { "result": "ok", "status": "sinked", "journal_disposed": true, "receipt": { "...": "..." } }
 ```
 
-A stray `sink-receipt.json`/`sink-fallback.json` found on a later "clean and synced" check (an
-older cycle's residue, or a receipt from a pre-#653 run) must be deleted, never committed — a
-journal is never part of the deliverable. See `docs/decisions/D-653-01.md`.
+**In-progress receipt vs. terminal stray (issue #715).** A `sink-receipt.json` found on a later
+"clean and synced" check is not automatically residue — distinguish two cases before touching it:
+
+- **IN-PROGRESS receipt** — the exact path `kaola-workflow/<project>/.cache/sink-receipt.json` or
+  `kaola-workflow/archive/<project>/.cache/sink-receipt.json` for ANY project, live or archived.
+  This is sink-owned mid-cycle state: the receipt IS the owning sink's resume ledger. Since #715
+  the sink preflight's receipt exemption matches this exact path regardless of which project the
+  running sink owns, so an interrupted SIBLING sink's receipt is exempt from foreign-dirt
+  classification and no longer refuses a clean sink as bucket-3 dirt. Do NOT manually delete it
+  and do NOT commit it mid-cycle — re-running the owning sink resumes from the receipt, completes,
+  and then disposes (or archive-commits) it through the normal terminal path. The exemption is
+  classification-only: no sink stages, touches, or mutates another project's receipt. It is also
+  exact — `sink-fallback.json`, `sink-receipt.json.tmp`, a nested `x/.cache/sink-receipt.json`,
+  and trailing-slash forms are NOT exempted and stay bucket-3 foreign dirt.
+- **TERMINAL stray** — a receipt left after the owning sink already reached `status: sinked` (its
+  dispose failed or the cycle predates disposal), or residue from a pre-#653 run. This stays
+  delete-never-commit, exactly as before: a journal is never part of the deliverable. The same
+  holds for any stray `sink-fallback.json`.
+
+See `docs/decisions/D-653-01.md`.
 
 ### `audit-labels` and `repair-labels` (issue #163; GitLab port #166, Gitea port #167)
 

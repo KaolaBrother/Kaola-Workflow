@@ -3559,6 +3559,285 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// --- #715 F1: restore-gate dest exemption is scoped to the EXACT dest ---------
+// The release's own fresh archive dest is exempt from the treeDirty restore gate (so the
+// in-place base restore can proceed), but every OTHER dirty path must keep blocking — including
+// a prefix look-alike. isParkedLanePath semantics are unchanged (archive/* stays never-parked,
+// pinned at the #579 block above): the exemption lives in treeDirty's optional exempt-list only.
+{
+  const { treeDirty } = require('./kaola-workflow-claim.js');
+  const { execFileSync } = require('child_process');
+  assert(typeof treeDirty === 'function',
+    '#715 F1: treeDirty must be exported from claim.js for the restore-gate pin');
+  if (typeof treeDirty !== 'function') { failed++; console.error('FAIL: #715 F1 restore-gate pin body skipped (treeDirty not exported)'); }
+  else {
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-715-treedirty-')));
+  try {
+    const gitEnv = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
+    });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+
+    const destRel = 'kaola-workflow/archive/issue-801.discarded-2026-01-01';
+    fs.mkdirSync(path.join(tmpDir, destRel), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, destRel, 'workflow-state.md'), 'state\n');
+
+    // Baseline (pre-existing semantic): with no exemption the fresh archive dest still counts as
+    // dirty — archive/* remains never-parked.
+    assert(treeDirty(tmpDir, ['issue-801']) === true,
+      '#715 F1: without an exemption the fresh archive dest still dirties the tree (archive/* stays never-parked)');
+    // The exact dest (real untracked dir — porcelain reports it with a trailing slash) is exempt.
+    assert(treeDirty(tmpDir, ['issue-801'], [destRel]) === false,
+      '#715 F1: the restore gate exempts the exact dest the release just created');
+    // A sibling dirty path OUTSIDE the dest keeps blocking the restore.
+    fs.writeFileSync(path.join(tmpDir, 'sibling.txt'), 'dirty\n');
+    assert(treeDirty(tmpDir, ['issue-801'], [destRel]) === true,
+      '#715 F1: a sibling dirty path outside the dest still blocks the restore (exemption scoped to the exact dest)');
+    fs.rmSync(path.join(tmpDir, 'sibling.txt'));
+    // A prefix look-alike is NOT exempt (segment-boundary match, never startsWith on the raw string).
+    const lookAlike = 'kaola-workflow/archive/issue-801.discarded-2026-01-01-evil';
+    fs.mkdirSync(path.join(tmpDir, lookAlike), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, lookAlike, 'x.txt'), 'x\n');
+    assert(treeDirty(tmpDir, ['issue-801'], [destRel]) === true,
+      '#715 F1: a dest-prefix look-alike path is NOT exempt (segment-boundary match)');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+  }
+}
+
+// --- #715 F1: commitDiscardArchive refuses to bind to a non-base branch -------
+// The base-branch guard lives INSIDE the helper so both call sites (release, watch-pr sweep)
+// inherit it: off-base → skip + disclose the current branch + leave recoverable residue; on-base
+// → commit + disclose the receiving branch.
+{
+  const { commitDiscardArchive } = require('./kaola-workflow-claim.js');
+  const { execFileSync } = require('child_process');
+  assert(typeof commitDiscardArchive === 'function',
+    '#715 F1: commitDiscardArchive must be exported from claim.js for the base-guard pin');
+  if (typeof commitDiscardArchive !== 'function') { failed++; console.error('FAIL: #715 F1 helper pin body skipped (commitDiscardArchive not exported)'); }
+  else {
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-715-helper-')));
+  try {
+    const gitEnv = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
+    });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+
+    const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-909.discarded-x');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'workflow-state.md'), 'state\n');
+
+    // Off-base checkout → the helper refuses BEFORE staging: tip unchanged, residue on disk.
+    execFileSync('git', ['checkout', '-b', 'workflow/other-lane'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    const tipBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const off = commitDiscardArchive({ archived: true, dest: dest }, 'issue-909', 'main');
+    assert(off && off.committed === false,
+      '#715 F1: the helper refuses to commit the discard archive on a non-base branch, got ' + JSON.stringify(off));
+    assert(off && off.branch === 'workflow/other-lane',
+      '#715 F1: the refusal discloses the current (non-receiving) branch, got ' + JSON.stringify(off));
+    assert(off && typeof off.detail === 'string' && off.detail.includes('main') && off.detail.includes('workflow/other-lane'),
+      '#715 F1: the refusal detail names both the current and the surviving base branch, got ' + JSON.stringify(off));
+    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === tipBefore,
+      '#715 F1: a refused commit leaves the non-base branch tip unchanged');
+    assert(fs.existsSync(dest),
+      '#715 F1: a refused commit leaves the archive on disk as recoverable residue');
+
+    // On-base checkout → the helper commits and discloses the receiving branch.
+    execFileSync('git', ['checkout', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    const on = commitDiscardArchive({ archived: true, dest: dest }, 'issue-909', 'main');
+    assert(on && on.committed === true,
+      '#715 F1: the helper commits the discard archive on the base branch, got ' + JSON.stringify(on));
+    assert(on && on.branch === 'main',
+      '#715 F1: the success path discloses the receiving branch, got ' + JSON.stringify(on));
+    const atHead = execFileSync('git', ['cat-file', '-t', 'HEAD:kaola-workflow/archive/issue-909.discarded-x'],
+      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert(atHead === 'tree',
+      '#715 F1: the committed archive is a tree at the base HEAD, got ' + JSON.stringify(atHead));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+  }
+}
+
+// --- #715 N5-A: the guard rejects falsified non-surviving bases BEFORE staging ---
+// The string-equality guard is not enough: base comes from operator-controlled durable state.
+// The helper must additionally (a) reject the detached-HEAD sentinel 'HEAD' as a base outright,
+// (b) verify base names a REAL local branch ref (argument-array rev-parse --verify), (c) refuse
+// a base naming the branch the call site is discarding (release: featureBranch; sweep: the
+// folder's lane), and (d) at the sweep posture refuse a base naming the current arbitrary lane
+// (the sweep has no restore step, so the only base it can establish as surviving is the repo's
+// default branch). Every refusal happens BEFORE staging: tip unchanged, residue on disk.
+{
+  const { commitDiscardArchive } = require('./kaola-workflow-claim.js');
+  const { execFileSync } = require('child_process');
+  assert(typeof commitDiscardArchive === 'function',
+    '#715 N5-A: commitDiscardArchive must be exported from claim.js for the guard-hardening pins');
+  if (typeof commitDiscardArchive !== 'function') { failed++; console.error('FAIL: #715 N5-A guard pin body skipped (commitDiscardArchive not exported)'); }
+  else {
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-715-guard-')));
+  try {
+    const gitEnv = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
+    });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+
+    const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-910.discarded-x');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'workflow-state.md'), 'state\n');
+
+    // Honest path FIRST (lock pin — green before AND after the fix): on the base, the commit
+    // lands and the post-commit re-resolution + reachability check passes (N5-B green side).
+    const on = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'main',
+      { discardedBranch: 'workflow/issue-910', defaultBase: 'main' });
+    assert(on && on.committed === true && on.branch === 'main',
+      '#715 N5-A/N5-B: the honest on-base path still commits and discloses the receiving branch, got ' + JSON.stringify(on));
+    assert(execFileSync('git', ['cat-file', '-t', 'main:kaola-workflow/archive/issue-910.discarded-x'],
+      { cwd: tmpDir, encoding: 'utf8' }).trim() === 'tree',
+      '#715 N5-B: the honest commit is a tree at the base ref');
+    const anc = require('child_process').spawnSync('git', ['-C', tmpDir, 'merge-base', '--is-ancestor', 'HEAD', 'main']);
+    assert(anc.status === 0,
+      '#715 N5-B: the honest archive commit is reachable from the base ref (merge-base --is-ancestor HEAD main)');
+
+    // (a) Detached checkout + base='HEAD' (the sentinel): refused outright, nothing committed.
+    execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    const detachedTip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const sentinel = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'HEAD');
+    assert(sentinel && sentinel.committed === false,
+      '#715 N5-A: the guard must reject the detached-HEAD sentinel as a base outright, got ' + JSON.stringify(sentinel));
+    assert(sentinel && sentinel.branch === 'HEAD',
+      '#715 N5-A: the sentinel refusal discloses the (non-receiving) detached HEAD, got ' + JSON.stringify(sentinel));
+    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === detachedTip,
+      '#715 N5-A: a sentinel-refused commit leaves the detached HEAD tip unchanged');
+    assert(fs.existsSync(dest),
+      '#715 N5-A: a sentinel-refused commit leaves the archive on disk as recoverable residue');
+
+    // (c-release) Base naming the branch the release discards (call-site-supplied discardedBranch).
+    execFileSync('git', ['checkout', '-b', 'workflow/issue-910'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    const featTip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    const discarded = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'workflow/issue-910',
+      { discardedBranch: 'workflow/issue-910' });
+    assert(discarded && discarded.committed === false,
+      '#715 N5-A: the guard must refuse a base naming the branch being discarded (release posture), got ' + JSON.stringify(discarded));
+    assert(discarded && discarded.branch === 'workflow/issue-910' &&
+      typeof discarded.detail === 'string' && discarded.detail.includes('workflow/issue-910'),
+      '#715 N5-A: the discarded-branch refusal discloses the current branch and names the base, got ' + JSON.stringify(discarded));
+    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === featTip,
+      '#715 N5-A: a discarded-branch refusal happens BEFORE staging (tip unchanged)');
+
+    // (b) Base naming no real local branch (falsified durable state): refused via rev-parse --verify.
+    const ghost = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'workflow/no-such-base');
+    assert(ghost && ghost.committed === false,
+      '#715 N5-A: the guard must refuse a base that names no real local branch, got ' + JSON.stringify(ghost));
+    assert(ghost && ghost.branch === 'workflow/issue-910',
+      '#715 N5-A: the non-existent-base refusal discloses the current branch, got ' + JSON.stringify(ghost));
+
+    // (d-sweep) Base naming the current arbitrary lane with only the default branch provably
+    // surviving (sweep posture): refused even though it is a real branch and equals the checkout.
+    const lane = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'workflow/issue-910',
+      { discardedBranch: 'workflow/issue-909', defaultBase: 'main' });
+    assert(lane && lane.committed === false,
+      '#715 N5-A: the guard must refuse a base naming the current non-default lane at the sweep posture, got ' + JSON.stringify(lane));
+    assert(lane && lane.branch === 'workflow/issue-910',
+      '#715 N5-A: the arbitrary-lane refusal discloses the current (non-receiving) lane, got ' + JSON.stringify(lane));
+    assert(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim() === featTip,
+      '#715 N5-A: an arbitrary-lane refusal happens BEFORE staging (tip unchanged)');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+  }
+}
+
+// --- #715 N5-B: post-commit re-resolution downgrades a HEAD re-point race ---------
+// TOCTOU between the guard and the commit: a concurrent process re-points HEAD after staging.
+// The helper must RE-RESOLVE the checkout after the commit and downgrade to committed:false with
+// the ACTUAL receiving branch disclosed — never the stale pre-race base. Deterministic git shim
+// on PATH interposing at the helper's `add -A -- <rel>` call (no probabilistic racing).
+{
+  const { commitDiscardArchive } = require('./kaola-workflow-claim.js');
+  const { execFileSync } = require('child_process');
+  assert(typeof commitDiscardArchive === 'function',
+    '#715 N5-B: commitDiscardArchive must be exported from claim.js for the race-downgrade pin');
+  if (typeof commitDiscardArchive !== 'function') { failed++; console.error('FAIL: #715 N5-B race pin body skipped (commitDiscardArchive not exported)'); }
+  else {
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-715-race-')));
+  try {
+    const gitEnv = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
+    });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    // Pre-create the race branch at main's tip so the interleave has somewhere to land.
+    execFileSync('git', ['branch', 'race', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    const mainTip = execFileSync('git', ['rev-parse', 'main'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+
+    const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'issue-910.discarded-x');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'workflow-state.md'), 'state\n');
+
+    const shimDir = path.join(tmpDir, 'shim-bin');
+    fs.mkdirSync(shimDir, { recursive: true });
+    fs.writeFileSync(path.join(shimDir, 'git'), [
+      '#!/bin/bash',
+      'if [ "$3" = "add" ] && [ "$4" = "-A" ]; then',
+      '  /usr/bin/git "$@"',
+      '  rc=$?',
+      '  /usr/bin/git -C "$2" symbolic-ref HEAD refs/heads/race',
+      '  /usr/bin/git -C "$2" checkout race 2>/dev/null || true',
+      '  exit $rc',
+      'fi',
+      'exec /usr/bin/git "$@"',
+      ''
+    ].join('\n'));
+    fs.chmodSync(path.join(shimDir, 'git'), 0o755);
+
+    const oldPath = process.env.PATH;
+    let raced;
+    try {
+      process.env.PATH = shimDir + ':' + oldPath;
+      raced = commitDiscardArchive({ archived: true, dest: dest }, 'issue-910', 'main');
+    } finally {
+      process.env.PATH = oldPath;
+    }
+    assert(raced && raced.committed === false,
+      '#715 N5-B: a HEAD re-point during the commit must downgrade to committed:false, got ' + JSON.stringify(raced));
+    assert(raced && raced.branch === 'race',
+      '#715 N5-B: the downgrade discloses the ACTUAL receiving branch (race), never the stale pre-race base, got ' + JSON.stringify(raced));
+    assert(execFileSync('git', ['rev-parse', 'main'], { cwd: tmpDir, encoding: 'utf8' }).trim() === mainTip,
+      '#715 N5-B: the base ref tip is unchanged by the raced commit');
+    const onRace = execFileSync('git', ['cat-file', '-t', 'race:kaola-workflow/archive/issue-910.discarded-x'],
+      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert(onRace === 'tree',
+      '#715 N5-B: the off-base commit stays recoverable on the actual receiving branch, got ' + JSON.stringify(onRace));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

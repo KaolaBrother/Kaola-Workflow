@@ -1172,11 +1172,19 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     }
     // #518: the sink's own receipt file (live OR archive path) is sink-owned — exempt it.
     // It may appear as ?? (untracked) or D  (tracked deletion from a prior loadOrInitReceipt).
-    const sinkReceiptPaths = new Set([
-      'kaola-workflow/' + project + '/.cache/sink-receipt.json',
-      'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json',
-    ]);
-    if (sinkReceiptPaths.has(filePath)) continue;
+    // #715: the exemption is keyed on the EXACT path, not on THIS sink's project — an interrupted
+    // SIBLING sink leaves kaola-workflow/{,archive/}<sibling>/.cache/sink-receipt.json as untracked
+    // residue at the main root, and refusing it as foreign dirt would block this sink on the
+    // sibling's in-progress artifact. The exemption is classification-only: this sink never stages,
+    // touches, or mutates the sibling receipt (the never-touches-another-project invariant is about
+    // mutation; not-refusing is not mutation). Match is EXACT — <seg> is exactly one path segment,
+    // any project live or archived; no prefix or directory exemption: anything else under a sibling
+    // tree (kaola-workflow/archive/<other>/workflow-state.md, sink-receipt.json.tmp, a nested
+    // x/.cache/sink-receipt.json, a trailing-slash form) stays bucket-3 foreign dirt. Unconditional
+    // across porcelain statuses (?? and D  alike, as before). sink-fallback.json is deliberately
+    // NOT exempted.
+    const SINK_RECEIPT_EXEMPT = /^kaola-workflow\/(?:archive\/)?[^/]+\/\.cache\/sink-receipt\.json$/;
+    if (SINK_RECEIPT_EXEMPT.test(filePath)) continue;
     const isWorktreePath = worktreePaths.has(filePath) || Array.from(worktreePaths).some(wt => filePath === wt + '/' || filePath.startsWith(wt + '/'));
     if (isWorktreePath) continue;
     foreignDirt.push(filePath);

@@ -36,6 +36,15 @@
 //       of an evidence-gutted source whose ledger has complete rows can NEVER pass; without the
 //       flag the source-relative contract is unchanged.
 //   (iii — via c/d/e/f) the plan-less singleton / collision-suffixed archive paths stay green.
+//   (k) #715 — a SIBLING project's interrupted-sink archive receipt
+//       (kaola-workflow/archive/<sibling>/.cache/sink-receipt.json, untracked, mid-cycle steps)
+//       must NOT block this sink as foreign dirt: the preflight exemption is an EXACT-path match
+//       across ANY project (live or archived), classification-only — the sink completes and the
+//       sibling receipt is byte-untouched afterward (never staged/touched/mutated).
+//   (l) #715 — over-exemption guard: a sibling NON-receipt file and receipt look-alikes
+//       (sink-receipt.json.tmp, a nested x/.cache/sink-receipt.json, a sink-receipt.json
+//       DIRECTORY) stay bucket-3 foreign dirt and refuse sink_blocked with ZERO mutation.
+//   (m) #715/#518 — regression lock: THIS sink's own live + archive receipts remain exempt.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -845,12 +854,151 @@ function buildBranchlessFixture(project, issue) {
   }
 })();
 
+// --------------------------------------------------------------------------- (k)/(l)/(m) #715
+
+(function testSiblingArchiveReceiptExemptAndUntouched() {
+  console.log('Test (#715 k): a sibling project\'s interrupted-sink archive receipt must NOT block this sink (exact-path exemption) and stays byte-untouched');
+  const project = 'issue-71501';
+  const issue = 71501;
+  const sibling = 'sibling-71591';
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    // Plant the sibling's in-progress receipt at main (untracked, mid-cycle steps) — the exact
+    // residue an interrupted sibling sink leaves behind (#715 repro b).
+    const receiptRel = 'kaola-workflow/archive/' + sibling + '/.cache/sink-receipt.json';
+    const receiptAbs = path.join(fx.tmpRoot, receiptRel);
+    fs.mkdirSync(path.dirname(receiptAbs), { recursive: true });
+    const receiptBody = JSON.stringify({
+      project: sibling, branch: 'workflow/' + sibling, issue_number: 71591, issue_numbers: [71591],
+      resolved_default_branch: 'main', branch_head: '1'.repeat(40),
+      keep_open_requested: false,
+      claim_ts: new Date().toISOString(),
+      started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      stash_ref: null, removed_duplicates: [],
+      steps: { preflight: 'done', push_upstream: 'done', merge: 'pending', finalize: 'pending',
+        stash_restore: 'pending', archive_commit: 'pending', push_main: 'pending', closure: 'pending' },
+    }, null, 2) + '\n';
+    fs.writeFileSync(receiptAbs, receiptBody);
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#715 k: sink must exit 0 (the sibling receipt is exempt, not foreign dirt); got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#715 k: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(!(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(receiptRel)),
+      '#715 k: the sibling receipt must NOT be listed in foreign_dirt; got ' + JSON.stringify(out && out.foreign_dirt));
+    // Classification-only: the sink never stages/touches/mutates the sibling receipt.
+    assert(fs.existsSync(receiptAbs) && fs.readFileSync(receiptAbs, 'utf8') === receiptBody,
+      '#715 k: the sibling receipt must be byte-untouched after the sink');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+(function testSiblingNonReceiptStaysForeignDirt() {
+  console.log('Test (#715 l): over-exemption guard — sibling NON-receipt files and receipt look-alikes stay bucket-3 foreign dirt (sink_blocked, zero mutation)');
+  const project = 'issue-71502';
+  const issue = 71502;
+  const sibling = 'sibling-71592';
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const sibBase = path.join(fx.tmpRoot, 'kaola-workflow', 'archive', sibling);
+    // (1) a genuine sibling NON-receipt file.
+    fs.mkdirSync(sibBase, { recursive: true });
+    fs.writeFileSync(path.join(sibBase, 'workflow-state.md'), 'status: active\n');
+    // (2) look-alike: a receipt name with a suffix.
+    const sibCache = path.join(sibBase, '.cache');
+    fs.mkdirSync(sibCache, { recursive: true });
+    fs.writeFileSync(path.join(sibCache, 'sink-receipt.json.tmp'), '{}\n');
+    // (3) look-alike: a NESTED x/.cache/sink-receipt.json (not the exact one-segment shape).
+    const nested = path.join(sibBase, 'x', '.cache');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'sink-receipt.json'), '{}\n');
+    // (4) look-alike: a DIRECTORY named sink-receipt.json (the trailing-slash form).
+    const dirReceipt = path.join(sibCache, 'sink-receipt.json');
+    fs.mkdirSync(dirReceipt, { recursive: true });
+    fs.writeFileSync(path.join(dirReceipt, 'inner.txt'), 'not a receipt\n');
+
+    const expected = [
+      'kaola-workflow/archive/' + sibling + '/workflow-state.md',
+      'kaola-workflow/archive/' + sibling + '/.cache/sink-receipt.json.tmp',
+      'kaola-workflow/archive/' + sibling + '/x/.cache/sink-receipt.json',
+      'kaola-workflow/archive/' + sibling + '/.cache/sink-receipt.json/inner.txt',
+    ];
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '#715 l: sink must refuse (non-zero exit) on sibling non-receipt dirt; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#715 l: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    for (const rel of expected) {
+      assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(rel),
+        '#715 l: foreign_dirt must list the exact path ' + rel + '; got ' + JSON.stringify(out && out.foreign_dirt));
+    }
+    // ZERO MUTATION: git status must be byte-identical to before.
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#715 l: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+(function testOwnProjectReceiptsRemainExempt() {
+  console.log('Test (#715 m): regression lock for #518 — THIS sink\'s own live + archive receipts remain exempt');
+  const project = 'issue-71503';
+  const issue = 71503;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const receiptBody = JSON.stringify({
+      project, branch: fx.branch, issue_number: issue, issue_numbers: [issue],
+      resolved_default_branch: 'main', branch_head: '2'.repeat(40),
+      keep_open_requested: false,
+      claim_ts: new Date().toISOString(),
+      started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      stash_ref: null, removed_duplicates: [],
+      // All steps pending so the resume actually RUNS the preflight scan (a 'done' preflight
+      // would be skipped and the foreign-dirt classification never exercised).
+      steps: { preflight: 'pending', push_upstream: 'pending', merge: 'pending', finalize: 'pending',
+        stash_restore: 'pending', archive_commit: 'pending', push_main: 'pending', closure: 'pending' },
+    }, null, 2) + '\n';
+    // Own LIVE receipt + own ARCHIVE receipt (both untracked at main).
+    const liveRel = 'kaola-workflow/' + project + '/.cache/sink-receipt.json';
+    const archRel = 'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json';
+    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, liveRel)), { recursive: true });
+    fs.writeFileSync(path.join(fx.tmpRoot, liveRel), receiptBody);
+    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, archRel)), { recursive: true });
+    fs.writeFileSync(path.join(fx.tmpRoot, archRel), receiptBody);
+    // A genuinely-foreign file forces the refusal so the exemption is observable on the listing.
+    const foreignRel = 'kaola-workflow/foreign-71593/workflow-state.md';
+    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, foreignRel)), { recursive: true });
+    fs.writeFileSync(path.join(fx.tmpRoot, foreignRel), 'status: active\n');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '#715 m: sink must refuse on the planted foreign file; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#715 m: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
+      '#715 m: foreign_dirt must list the planted foreign file; got ' + JSON.stringify(out && out.foreign_dirt));
+    assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(liveRel),
+      '#715 m: the own LIVE receipt must remain exempt (#518); got ' + JSON.stringify(out && out.foreign_dirt));
+    assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(archRel),
+      '#715 m: the own ARCHIVE receipt must remain exempt (#518); got ' + JSON.stringify(out && out.foreign_dirt));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707/#711) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707/#711) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

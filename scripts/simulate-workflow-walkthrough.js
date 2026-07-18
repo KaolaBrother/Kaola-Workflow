@@ -6795,7 +6795,7 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
     // post-call filesystem inspection of the now-removed wtPath.
     const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-703', '--reason', 'test'], {
       cwd: wtPath,
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' },
       encoding: 'utf8'
     });
 
@@ -6817,9 +6817,647 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
       releaseJson.archived === true && typeof releaseJson.dest === 'string' && releaseJson.dest.includes('issue-703.discarded-'),
       'release must report archived:true and dest path containing issue-703.discarded-, got: ' + JSON.stringify(releaseJson)
     );
+
+    // #715 (a): release must COMMIT its discard archive — no untracked .discarded- residue may
+    // remain at the main root for the next sink's preflight to refuse as foreign dirt. The commit
+    // is local git, so KAOLA_WORKFLOW_OFFLINE=1 must NOT skip it.
+    assert(
+      releaseJson.discard_archive_committed === true,
+      '#715: release must report discard_archive_committed:true, got: ' + JSON.stringify(releaseJson)
+    );
+    const porcelainAfterRelease = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
+    assert(
+      !porcelainAfterRelease.split('\n').some(l => l.includes('.discarded-')),
+      '#715: no .discarded- path may remain in git status after release; got:\n' + porcelainAfterRelease
+    );
+    const discardRel = path.relative(tmp, releaseJson.dest).split(path.sep).join('/');
+    const discardAtHead = spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'HEAD:' + discardRel], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      discardAtHead === 'tree',
+      '#715: the discarded archive must be committed at HEAD (a tree); got ' + JSON.stringify(discardAtHead) + ' for ' + discardRel
+    );
+
+    // ... and a following sink for ANOTHER project must proceed without manual commits (the
+    // #715 acceptance criterion: it must NOT refuse sink_blocked on the discarded archive).
+    // The gh shim planted above is untracked fixture residue the OFFLINE sink never calls —
+    // remove it so only genuinely workflow-owned paths remain for the preflight to classify.
+    fs.rmSync(path.join(tmp, 'bin'), { recursive: true, force: true });
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-704'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'impl-704.txt'), 'impl\n');
+    spawnSync('git', ['-C', tmp, 'add', 'impl-704.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 704'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    const sinkAfterRelease = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--sink',
+      '--branch', 'workflow/issue-704',
+      '--issue', '704',
+      '--project', 'issue-704',
+      '--json'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    let sinkAfterReleaseJson = null;
+    try { sinkAfterReleaseJson = JSON.parse(sinkAfterRelease.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop()); } catch (_) {}
+    assert(
+      !(sinkAfterReleaseJson && sinkAfterReleaseJson.reason === 'sink_blocked' && JSON.stringify(sinkAfterReleaseJson.foreign_dirt || []).includes('.discarded-')),
+      '#715: the following sink must NOT refuse sink_blocked on the discarded archive; got: ' + JSON.stringify(sinkAfterReleaseJson)
+    );
+    assert(
+      sinkAfterRelease.status === 0 && sinkAfterReleaseJson && sinkAfterReleaseJson.status === 'sinked',
+      '#715: the following sink must complete without manual commits; status=' + sinkAfterRelease.status +
+        ' out=' + JSON.stringify(sinkAfterReleaseJson) + '\nstdout: ' + sinkAfterRelease.stdout + '\nstderr: ' + sinkAfterRelease.stderr
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase() {
+  // #715 F1 (trigger A): an in-place (NATIVE=0) release while the checkout sits ON the feature
+  // branch must still land the discard-archive commit on the SURVIVING base branch. The restore
+  // gate exempts exactly the archive dest this release just created (every other dirty path keeps
+  // blocking), the base checkout + branch delete proceed, and the already-ordered commit lands on
+  // the restored base — never stranded on the discarded feature branch, never orphaned by the
+  // natural cleanup.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-inplace-base-')));
+  try {
+    initGitRepo(tmp);
+    // In-place posture: the run lives on the feature branch in the MAIN checkout.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    plantActiveFolder(tmp, 'issue-801', 801, null);
+
+    const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-801', '--reason', 'test'], {
+      cwd: tmp,
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      'release on the feature branch should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const releaseJson = JSON.parse(result.stdout);
+    assert(releaseJson.released === true, 'release must report released:true, got: ' + JSON.stringify(releaseJson));
+
+    // The in-place base restore must proceed (the release's OWN fresh archive dest is exempt from
+    // the dirty gate) — HEAD moves to the base and the discarded feature branch is deleted.
+    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      headAfter === 'main',
+      '#715 F1: release on the feature branch must restore the base checkout, got HEAD=' + headAfter +
+        ' json=' + JSON.stringify(releaseJson)
+    );
+    const branchList = spawnSync('git', ['-C', tmp, 'branch', '--list', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      branchList === '',
+      '#715 F1: the discarded feature branch must be deleted after the restore, got: ' + JSON.stringify(branchList)
+    );
+
+    // The archive commit lands on the surviving BASE branch, truthfully reported + disclosed.
+    assert(
+      releaseJson.discard_archive_committed === true,
+      '#715 F1: release must report discard_archive_committed:true, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      releaseJson.discard_archive_branch === 'main',
+      '#715 F1: release must disclose the receiving branch (discard_archive_branch === main), got: ' + JSON.stringify(releaseJson)
+    );
+    const discardRel = path.relative(tmp, releaseJson.dest).split(path.sep).join('/');
+    const atBase = spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + discardRel], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      atBase === 'tree',
+      '#715 F1: the discard archive must be a tree at the BASE branch HEAD (main:' + discardRel + '), got ' + JSON.stringify(atBase)
+    );
+    const porcelain = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
+    assert(
+      !porcelain.split('\n').some(l => l.includes('.discarded-')),
+      '#715 F1: no .discarded- residue may remain on base after the commit; got:\n' + porcelain
+    );
+    // Orphan proof inverted: after the (release-performed) checkout+branch-delete cleanup, the
+    // archive stays REACHABLE from the base ref.
+    const revList = spawnSync('git', ['-C', tmp, 'rev-list', 'main', '--', discardRel], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      revList !== '',
+      '#715 F1: the discard archive commit must stay reachable from the base ref (git rev-list main -- ' + discardRel + ')'
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testWatchPrClosedSweepSkipsCommitOffBaseBranch() {
+  // #715 F1 (trigger B): the watch-pr CLOSED sweep has no restore logic, so on a non-base checkout
+  // the discard-archive commit must NOT bind to the arbitrary current branch — it is skipped, the
+  // archive stays on disk as recoverable residue, and the cleanup entry truthfully reports
+  // discard_archive_committed:false with the current branch disclosed.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-offbase-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 909')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":9}\\n'); }",
+      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    // An unrelated non-base branch carrying its own commit, checked out.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/other-lane'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    fs.writeFileSync(path.join(tmp, 'other.txt'), 'other\n');
+    spawnSync('git', ['-C', tmp, 'add', 'other.txt'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'other lane work'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    const otherTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+
+    const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-offbase');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: watch-pr-offbase',
+      'status: active',
+      '',
+      '## Sink',
+      'branch: workflow/issue-909',
+      'issue_number: 909',
+      'sink: pr',
+      'pr_url: https://github.com/test/repo/pull/9',
+      ''
+    ].join('\n'));
+
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(result.watched === 1, 'watch-pr should watch the pr-sink folder, got: ' + JSON.stringify(result));
+    const entry = (result.cleanups || [])[0] || {};
+    assert(
+      entry.discard_archive_committed === false,
+      '#715 F1: an off-base sweep must truthfully report discard_archive_committed:false, got: ' + JSON.stringify(entry)
+    );
+    assert(
+      entry.discard_archive_branch === 'workflow/other-lane',
+      '#715 F1: the cleanup entry must disclose the current (non-receiving) branch, got: ' + JSON.stringify(entry)
+    );
+    // Neither ref moved: no commit was swept onto the unrelated branch, none onto the base.
+    const otherTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      otherTipAfter === otherTipBefore,
+      '#715 F1: the non-base branch tip must be unchanged by the sweep; before=' + otherTipBefore + ' after=' + otherTipAfter
+    );
+    const mainTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      mainTipAfter === mainTipBefore,
+      '#715 F1: the base ref must be unchanged by an off-base sweep; before=' + mainTipBefore + ' after=' + mainTipAfter
+    );
+    // The skipped archive remains on disk as recoverable residue.
+    const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+    const residue = fs.existsSync(archiveRoot) ? fs.readdirSync(archiveRoot).filter(d => d.includes('.discarded-')) : [];
+    assert(
+      residue.length === 1,
+      '#715 F1: the skipped archive must remain on disk as recoverable residue, got: ' + JSON.stringify(residue)
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// #715 N5-A/N5-B fixtures: plant an active folder whose durable state carries an OPERATOR-
+// FALSIFIED base_branch (the tooling never writes these values — claim.js clamps baseBranch for
+// 'HEAD'/self — so a hand-edit or external corruption is the honest precondition). The guard
+// inside commitDiscardArchive must refuse every one of them BEFORE staging.
+function plantActiveFolderWithBase(root, project, issueNumber, branch, baseBranch) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '',
+    '## Project',
+    'name: ' + project,
+    'status: active',
+    '',
+    '## Sink',
+    'branch: ' + branch,
+    'issue_number: ' + issueNumber,
+    'sink: merge',
+    'base_branch: ' + baseBranch,
+    ''
+  ].join('\n'));
+}
+
+function gitLogAllSubjects(root) {
+  return spawnSync('git', ['-C', root, 'log', '--all', '--format=%s'], { encoding: 'utf8' }).stdout;
+}
+
+function testReleaseDetachedHeadLyingBaseSkipsArchiveCommit() {
+  // #715 N5-A (B4a inverted): an in-place release entered on a DETACHED HEAD with the durable
+  // base_branch falsified to the literal sentinel 'HEAD' (what `rev-parse --abbrev-ref HEAD`
+  // returns when no branch is checked out). The guard must reject the sentinel as a base
+  // outright: NO commit anywhere, committed:false with the branch disclosed, the archive left
+  // on disk as recoverable residue, and the main ref tip unchanged.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-detached-lying-base-')));
+  try {
+    initGitRepo(tmp);
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'HEAD');
+    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    spawnSync('git', ['-C', tmp, 'checkout', '--detach', 'HEAD'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    const detachedTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+
+    const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-801', '--reason', 'test'], {
+      cwd: tmp,
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      'release on a detached HEAD should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const releaseJson = JSON.parse(result.stdout);
+    assert(releaseJson.released === true, 'release must report released:true, got: ' + JSON.stringify(releaseJson));
+    assert(
+      releaseJson.discard_archive_committed === false,
+      '#715 N5-A: a detached entry with base_branch falsified to the HEAD sentinel must truthfully report ' +
+        'discard_archive_committed:false, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      releaseJson.discard_archive_branch === 'HEAD',
+      '#715 N5-A: the emit must disclose the (non-receiving) detached HEAD sentinel, got: ' + JSON.stringify(releaseJson)
+    );
+    // No commit anywhere: the detached HEAD tip and the main ref tip are both byte-unchanged,
+    // and no chore commit exists on ANY ref.
+    const detachedTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      detachedTipAfter === detachedTipBefore,
+      '#715 N5-A: the detached HEAD must NOT receive the archive commit; before=' + detachedTipBefore + ' after=' + detachedTipAfter
+    );
+    const mainTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      mainTipAfter === mainTipBefore,
+      '#715 N5-A: the main ref tip must be unchanged; before=' + mainTipBefore + ' after=' + mainTipAfter
+    );
+    assert(
+      !/discard archive/.test(gitLogAllSubjects(tmp)),
+      '#715 N5-A: no chore commit may exist on any ref, got: ' + gitLogAllSubjects(tmp).replace(/\n/g, ' | ')
+    );
+    // The skipped archive stays on disk as recoverable residue — and is manually committable on base.
+    const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+    const residue = fs.existsSync(archiveRoot) ? fs.readdirSync(archiveRoot).filter(d => d.includes('.discarded-')) : [];
+    assert(
+      residue.length === 1,
+      '#715 N5-A: the skipped archive must remain on disk as recoverable residue, got: ' + JSON.stringify(residue)
+    );
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    const rel = 'kaola-workflow/archive/' + residue[0];
+    spawnSync('git', ['-C', tmp, 'add', '-A', '--', rel], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'manual recovery', '--', rel], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    const recovered = spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      recovered === 'tree',
+      '#715 N5-A: the residue must stay manually recoverable on the base branch, got ' + JSON.stringify(recovered)
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testReleaseOnFeatureBranchLyingBaseNamesDiscardedBranchSkips() {
+  // #715 N5-A (B3 inverted): an in-place release while the checkout sits ON the feature branch,
+  // with the durable base_branch falsified to name the DISCARDED feature branch itself. The
+  // guard must refuse a base naming the branch the release itself discards: truthful skip, no
+  // chore commit on any ref, both ref tips unchanged, residue recoverable on disk.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-lying-base-discarded-')));
+  try {
+    initGitRepo(tmp);
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'workflow/issue-801');
+    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const featTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim();
+
+    const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-801', '--reason', 'test'], {
+      cwd: tmp,
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      'release on the feature branch should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const releaseJson = JSON.parse(result.stdout);
+    assert(releaseJson.released === true, 'release must report released:true, got: ' + JSON.stringify(releaseJson));
+    assert(
+      releaseJson.discard_archive_committed === false,
+      '#715 N5-A: a base_branch naming the discarded feature branch must truthfully report ' +
+        'discard_archive_committed:false, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      releaseJson.discard_archive_branch === 'workflow/issue-801',
+      '#715 N5-A: the emit must disclose the current (non-receiving) branch, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      typeof releaseJson.discard_archive_commit_detail === 'string' &&
+        releaseJson.discard_archive_commit_detail.includes('workflow/issue-801') &&
+        /discard/.test(releaseJson.discard_archive_commit_detail),
+      '#715 N5-A: the refusal detail must name the discarded branch, got: ' + JSON.stringify(releaseJson)
+    );
+    // No chore commit on ANY ref: both tips byte-unchanged, nothing in the log, and the archive
+    // is a tree at NEITHER the discarded feature branch nor main.
+    assert(
+      spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore &&
+        spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-801'], { encoding: 'utf8' }).stdout.trim() === featTipBefore,
+      '#715 N5-A: both ref tips must be unchanged (no commit on the discarded branch, none on main)'
+    );
+    assert(
+      !/discard archive/.test(gitLogAllSubjects(tmp)),
+      '#715 N5-A: no chore commit may exist on any ref, got: ' + gitLogAllSubjects(tmp).replace(/\n/g, ' | ')
+    );
+    const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+    const residue = fs.existsSync(archiveRoot) ? fs.readdirSync(archiveRoot).filter(d => d.includes('.discarded-')) : [];
+    assert(
+      residue.length === 1,
+      '#715 N5-A: the skipped archive must remain on disk as recoverable residue, got: ' + JSON.stringify(residue)
+    );
+    const rel = 'kaola-workflow/archive/' + residue[0];
+    assert(
+      spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'workflow/issue-801:' + rel], { encoding: 'utf8' }).status !== 0 &&
+        spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).status !== 0,
+      '#715 N5-A: the archive must be a tree at NEITHER the discarded branch nor main'
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testWatchPrClosedSweepDetachedLyingBaseHeadSkips() {
+  // #715 N5-A (W5 inverted): a watch-pr CLOSED sweep on a DETACHED HEAD with the durable
+  // base_branch falsified to the 'HEAD' sentinel. The guard rejects the sentinel outright:
+  // truthful skip with the sentinel disclosed, the base ref tip unchanged, no chore commit on
+  // any ref, residue recoverable on disk.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-detached-lying-base-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 909')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":9}\\n'); }",
+      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    spawnSync('git', ['-C', tmp, 'checkout', '--detach', 'HEAD'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    const detachedTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+
+    const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-detached-lying-base');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: watch-pr-detached-lying-base',
+      'status: active',
+      '',
+      '## Sink',
+      'branch: workflow/issue-909',
+      'issue_number: 909',
+      'sink: pr',
+      'pr_url: https://github.com/test/repo/pull/9',
+      'base_branch: HEAD',
+      ''
+    ].join('\n'));
+
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(result.watched === 1, 'watch-pr should watch the pr-sink folder, got: ' + JSON.stringify(result));
+    const entry = (result.cleanups || [])[0] || {};
+    assert(
+      entry.discard_archive_committed === false,
+      '#715 N5-A: a detached sweep with base_branch falsified to the HEAD sentinel must truthfully report ' +
+        'discard_archive_committed:false, got: ' + JSON.stringify(entry)
+    );
+    assert(
+      entry.discard_archive_branch === 'HEAD',
+      '#715 N5-A: the cleanup entry must disclose the (non-receiving) detached HEAD sentinel, got: ' + JSON.stringify(entry)
+    );
+    assert(
+      spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim() === detachedTipBefore &&
+        spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore,
+      '#715 N5-A: the detached HEAD and the base ref tip must both be unchanged'
+    );
+    assert(
+      !/discard archive/.test(gitLogAllSubjects(tmp)),
+      '#715 N5-A: no chore commit may exist on any ref, got: ' + gitLogAllSubjects(tmp).replace(/\n/g, ' | ')
+    );
+    const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+    const residue = fs.existsSync(archiveRoot) ? fs.readdirSync(archiveRoot).filter(d => d.includes('.discarded-')) : [];
+    assert(
+      residue.length === 1,
+      '#715 N5-A: the skipped archive must remain on disk as recoverable residue, got: ' + JSON.stringify(residue)
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testWatchPrClosedSweepArbitraryLaneLyingBaseSkips() {
+  // #715 N5-A (W6 inverted): a watch-pr CLOSED sweep on an arbitrary lane with the durable
+  // base_branch falsified to name THAT lane. The sweep has no restore step, so the only base it
+  // can establish as surviving is the repo's default branch — a base naming the current
+  // non-default lane is refused: truthful skip with disclosure, both ref tips unchanged, no
+  // chore commit on any ref, residue recoverable on disk.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-lane-lying-base-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 909')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":9}\\n'); }",
+      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    // An unrelated non-base branch carrying its own commit, checked out.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/other-lane'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    fs.writeFileSync(path.join(tmp, 'other.txt'), 'other\n');
+    spawnSync('git', ['-C', tmp, 'add', 'other.txt'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'other lane work'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    const otherTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim();
+    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+
+    const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-lane-lying-base');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: watch-pr-lane-lying-base',
+      'status: active',
+      '',
+      '## Sink',
+      'branch: workflow/issue-909',
+      'issue_number: 909',
+      'sink: pr',
+      'pr_url: https://github.com/test/repo/pull/9',
+      'base_branch: workflow/other-lane',
+      ''
+    ].join('\n'));
+
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(result.watched === 1, 'watch-pr should watch the pr-sink folder, got: ' + JSON.stringify(result));
+    const entry = (result.cleanups || [])[0] || {};
+    assert(
+      entry.discard_archive_committed === false,
+      '#715 N5-A: a sweep with base_branch falsified to the current arbitrary lane must truthfully report ' +
+        'discard_archive_committed:false, got: ' + JSON.stringify(entry)
+    );
+    assert(
+      entry.discard_archive_branch === 'workflow/other-lane',
+      '#715 N5-A: the cleanup entry must disclose the current (non-receiving) lane, got: ' + JSON.stringify(entry)
+    );
+    assert(
+      spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/other-lane'], { encoding: 'utf8' }).stdout.trim() === otherTipBefore &&
+        spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim() === mainTipBefore,
+      '#715 N5-A: both ref tips must be unchanged (no commit on the arbitrary lane, none on the base)'
+    );
+    assert(
+      !/discard archive/.test(gitLogAllSubjects(tmp)),
+      '#715 N5-A: no chore commit may exist on any ref, got: ' + gitLogAllSubjects(tmp).replace(/\n/g, ' | ')
+    );
+    const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+    const residue = fs.existsSync(archiveRoot) ? fs.readdirSync(archiveRoot).filter(d => d.includes('.discarded-')) : [];
+    assert(
+      residue.length === 1,
+      '#715 N5-A: the skipped archive must remain on disk as recoverable residue, got: ' + JSON.stringify(residue)
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testReleaseHeadRepointRaceDowngradesArchiveCommit() {
+  // #715 N5-B (RC1 inverted): a concurrent process re-points HEAD between the helper's staging
+  // and its commit (deterministic git shim on PATH interposing at `add -A -- <rel>`: real add,
+  // then symbolic-ref HEAD onto a pre-created 'race' branch + checkout). The post-commit
+  // re-resolution must catch the moved checkout: the emit DOWNGRADES to committed:false and
+  // discloses the ACTUAL receiving branch ('race') — never the stale pre-race base ('main') —
+  // while the off-base commit stays recoverable on 'race'.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-head-race-')));
+  const shimDir = tmp + '.shim-bin'; // OUTSIDE the repo — shim files are not workflow-owned dirt
+  try {
+    initGitRepo(tmp);
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-801'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    plantActiveFolderWithBase(tmp, 'issue-801', 801, 'workflow/issue-801', 'main');
+    // Pre-create the race branch at main's tip so the interleave has somewhere to land.
+    spawnSync('git', ['-C', tmp, 'branch', 'race', 'main'], {
+      encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV }
+    });
+    const mainTipBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+
+    // git shim: pass every call through except the helper's `add -A`, after which HEAD is
+    // re-pointed to refs/heads/race (the RC1 interleave, deterministic — no probabilistic racing).
+    fs.mkdirSync(shimDir, { recursive: true });
+    fs.writeFileSync(path.join(shimDir, 'git'), [
+      '#!/bin/bash',
+      'if [ "$3" = "add" ] && [ "$4" = "-A" ]; then',
+      '  /usr/bin/git "$@"',
+      '  rc=$?',
+      '  /usr/bin/git -C "$2" symbolic-ref HEAD refs/heads/race',
+      '  /usr/bin/git -C "$2" checkout race 2>/dev/null || true',
+      '  exit $rc',
+      'fi',
+      'exec /usr/bin/git "$@"',
+      ''
+    ].join('\n'));
+    fs.chmodSync(path.join(shimDir, 'git'), 0o755);
+
+    const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-801', '--reason', 'test'], {
+      cwd: tmp,
+      env: {
+        ...process.env,
+        ...GIT_ISOLATION_ENV,
+        KAOLA_WORKFLOW_OFFLINE: '1',
+        PATH: shimDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+      },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      'release under the HEAD re-point race should exit 0 (never stranded)\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const releaseJson = JSON.parse(result.stdout);
+    assert(releaseJson.released === true, 'release must report released:true, got: ' + JSON.stringify(releaseJson));
+    assert(
+      releaseJson.discard_archive_committed === false,
+      '#715 N5-B: a HEAD re-point during the commit must downgrade the emit to ' +
+        'discard_archive_committed:false, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      releaseJson.discard_archive_branch === 'race',
+      '#715 N5-B: the downgrade must disclose the ACTUAL receiving branch (race), never the stale ' +
+        'pre-race base, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      !JSON.stringify(releaseJson).includes('"discard_archive_branch":"main"'),
+      '#715 N5-B: the emit must never name the stale pre-race branch as the receiver, got: ' + JSON.stringify(releaseJson)
+    );
+    const mainTipAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      mainTipAfter === mainTipBefore,
+      '#715 N5-B: the base ref tip must be unchanged by the raced commit; before=' + mainTipBefore + ' after=' + mainTipAfter
+    );
+    const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+    const residue = fs.existsSync(archiveRoot) ? fs.readdirSync(archiveRoot).filter(d => d.includes('.discarded-')) : [];
+    assert(residue.length === 1, '#715 N5-B: the raced archive must still exist, got: ' + JSON.stringify(residue));
+    const rel = 'kaola-workflow/archive/' + residue[0];
+    assert(
+      spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'main:' + rel], { encoding: 'utf8' }).status !== 0,
+      '#715 N5-B: the archive must NOT be a tree at the base branch'
+    );
+    assert(
+      spawnSync('git', ['-C', tmp, 'cat-file', '-t', 'race:' + rel], { encoding: 'utf8' }).stdout.trim() === 'tree',
+      '#715 N5-B: the off-base commit stays recoverable on the actual receiving branch (race:' + rel + ')'
+    );
+    assert(
+      spawnSync('git', ['-C', tmp, 'log', '-1', '--format=%s', 'race'], { encoding: 'utf8' }).stdout.trim() === 'chore: discard archive issue-801',
+      '#715 N5-B: the raced commit landed on race (recoverable residue), got: ' +
+        spawnSync('git', ['-C', tmp, 'log', '-1', '--format=%s', 'race'], { encoding: 'utf8' }).stdout.trim()
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
   }
 }
 
@@ -15071,6 +15709,89 @@ function testSinkTransactionBlockedByForeignDirt() {
   }
 }
 
+// #715 (b): an interrupted SIBLING sink's untracked archive receipt
+// (kaola-workflow/archive/<sibling>/.cache/sink-receipt.json, mid-cycle steps) must NOT be
+// classified as foreign dirt (exact-path exemption, any project live or archived), while a
+// genuinely-foreign file still is. The refusal stays sink_blocked on the foreign file alone,
+// mutates nothing, and leaves the sibling receipt byte-untouched.
+function testSinkForeignDirtExemptsSiblingReceipt715() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-sibling-receipt-')));
+  try {
+    initGitRepo(tmp);
+
+    // Create a feature branch with an impl commit (same shape as the #429 blocked scenario).
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-7152'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'impl-7152.txt'), 'impl\n');
+    spawnSync('git', ['-C', tmp, 'add', 'impl-7152.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 7152'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    // Plant the sibling's interrupted-sink receipt (untracked, mid-cycle steps).
+    const siblingReceiptRel = 'kaola-workflow/archive/sibling-7159/.cache/sink-receipt.json';
+    const siblingReceiptAbs = path.join(tmp, siblingReceiptRel);
+    fs.mkdirSync(path.dirname(siblingReceiptAbs), { recursive: true });
+    const siblingReceiptBody = JSON.stringify({
+      project: 'sibling-7159', branch: 'workflow/sibling-7159', issue_number: 7159, issue_numbers: [7159],
+      resolved_default_branch: 'main', branch_head: '3'.repeat(40),
+      keep_open_requested: false,
+      claim_ts: new Date().toISOString(),
+      started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      stash_ref: null, removed_duplicates: [],
+      steps: { preflight: 'done', push_upstream: 'done', merge: 'pending', finalize: 'pending',
+        stash_restore: 'pending', archive_commit: 'pending', push_main: 'pending', closure: 'pending' },
+    }, null, 2) + '\n';
+    fs.writeFileSync(siblingReceiptAbs, siblingReceiptBody);
+
+    // Plant genuinely-foreign dirt (must still refuse + be listed).
+    const foreignRel = 'kaola-workflow/other-project/workflow-state.md';
+    const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
+    fs.mkdirSync(foreignDir, { recursive: true });
+    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
+
+    const statusBefore = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--sink',
+      '--branch', 'workflow/issue-7152',
+      '--issue', '7152',
+      '--project', 'issue-7152',
+      '--json'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+
+    assert(result.status !== 0, '#715: --sink must still refuse on the genuinely-foreign file, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    let out;
+    try { out = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop()); }
+    catch (e) { throw new Error('#715: stdout must contain JSON, got: ' + result.stdout + '\nstderr: ' + result.stderr); }
+    assert(out.reason === 'sink_blocked',
+      '#715: reason must be sink_blocked, got: ' + JSON.stringify(out));
+    assert(Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
+      '#715: foreign_dirt must still list the genuinely-foreign file ' + foreignRel + ', got: ' + JSON.stringify(out.foreign_dirt));
+    assert(Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(siblingReceiptRel),
+      '#715: the sibling interrupted-sink receipt must NOT appear in foreign_dirt, got: ' + JSON.stringify(out.foreign_dirt));
+
+    // ZERO MUTATION: git status byte-identical, and the sibling receipt byte-untouched.
+    const statusAfter = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    assert(statusBefore === statusAfter,
+      '#715: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) +
+      '\nafter:  ' + JSON.stringify(statusAfter));
+    assert(fs.existsSync(siblingReceiptAbs) && fs.readFileSync(siblingReceiptAbs, 'utf8') === siblingReceiptBody,
+      '#715: the sibling receipt must be byte-untouched after the refuse (classification-only exemption)');
+
+    console.log('testSinkForeignDirtExemptsSiblingReceipt715: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // (b) #429 Kill-between-merge-and-finalize → re-run completes without double-applying.
 // Runs --sink with KAOLA_WORKFLOW_SINK_ABORT_AFTER=merge env var, expects the receipt
 // to show merge:done but finalize:pending. Then re-runs. Asserts the second run completes
@@ -16502,6 +17223,13 @@ function buildRegistry() {
   add('testWatchPrRoadmapCleanupWarning',                 testWatchPrRoadmapCleanupWarning);
   add('testValidateRemoteOffline',                        testValidateRemoteOffline);
   add('testReleaseFromLinkedWorktreeCleansMainCopy',      testReleaseFromLinkedWorktreeCleansMainCopy);
+  add('testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase', testReleaseInPlaceOnFeatureBranchCommitsArchiveOnBase);
+  add('testWatchPrClosedSweepSkipsCommitOffBaseBranch',   testWatchPrClosedSweepSkipsCommitOffBaseBranch);
+  add('testReleaseDetachedHeadLyingBaseSkipsArchiveCommit', testReleaseDetachedHeadLyingBaseSkipsArchiveCommit);
+  add('testReleaseOnFeatureBranchLyingBaseNamesDiscardedBranchSkips', testReleaseOnFeatureBranchLyingBaseNamesDiscardedBranchSkips);
+  add('testWatchPrClosedSweepDetachedLyingBaseHeadSkips', testWatchPrClosedSweepDetachedLyingBaseHeadSkips);
+  add('testWatchPrClosedSweepArbitraryLaneLyingBaseSkips', testWatchPrClosedSweepArbitraryLaneLyingBaseSkips);
+  add('testReleaseHeadRepointRaceDowngradesArchiveCommit', testReleaseHeadRepointRaceDowngradesArchiveCommit);
   add('testSinkMergeFromLinkedWorktree',                  testSinkMergeFromLinkedWorktree);
   add('testSinkRefusesStaleReceipt',                      testSinkRefusesStaleReceipt);
   add('testStatusShowsClosedIssueDrift',                  testStatusShowsClosedIssueDrift);
@@ -16687,6 +17415,7 @@ function buildRegistry() {
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
   // #429 sink transaction tests
   add('testSinkTransactionBlockedByForeignDirt',          testSinkTransactionBlockedByForeignDirt);
+  add('testSinkForeignDirtExemptsSiblingReceipt715',      testSinkForeignDirtExemptsSiblingReceipt715);
   add('testSinkTransactionCrashResume',                   testSinkTransactionCrashResume);
   add('testSinkTransactionCleanEndToEnd',                 testSinkTransactionCleanEndToEnd);
   add('testTwoLanesInOneCheckout579',                     testTwoLanesInOneCheckout579);
