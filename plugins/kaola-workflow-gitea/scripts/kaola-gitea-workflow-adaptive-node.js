@@ -1968,7 +1968,9 @@ function spliceComplianceRow(content, row) {
 // so the idempotent re-close paths (close-and-open-next / close-node `alreadyAtTarget`, and the
 // reconcile close-direction re-run) would otherwise append a DUPLICATE row on every re-close.
 // Guard the append at the caller with this check. The Requirement cell uniquely identifies the row:
-// for review roles it is the bare role string (code-reviewer / security-reviewer), else `role (id)`.
+// it is always `role (id)` on emission; a BARE role cell (code-reviewer / security-reviewer) only
+// exists in legacy rows emitted before the canonical-cell producer fix, which must still MATCH
+// here so they advance in place instead of duplicating.
 // Match the Requirement cell as the first table column (`| <cell> |`) within the compliance section
 // only — a same-text string elsewhere in the plan must not suppress the append.
 // ---------------------------------------------------------------------------
@@ -1999,6 +2001,10 @@ function complianceRowExists(content, requirementCell, nodeId) {
 
 function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierMarker) {
   const canonicalRequirement = role + ' (' + nodeId + ')';
+  // Legacy bare cells (code-reviewer / security-reviewer, emitted before the canonical-cell
+  // producer fix) remain READ/match-compatible so an already-emitted row still advances in
+  // place — but the append path below NEVER emits a bare cell: the node id is known at close
+  // time, and validateRequiredAgentCompliance requires exactly `role (node-id)` per node.
   const legacyRequirement = (role === 'code-reviewer' || role === 'security-reviewer') ? role : null;
   let evidenceSummary = evidenceContent
     ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
@@ -2037,7 +2043,8 @@ function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierM
     }
   }
 
-  const requirementCell = legacyRequirement || canonicalRequirement;
+  // Append is ALWAYS the canonical `role (node-id)` cell — never the legacy bare role.
+  const requirementCell = canonicalRequirement;
   return spliceComplianceRow(planContent,
     '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
 }
@@ -4615,6 +4622,10 @@ function beginSchema2ReviewAttempt(opts, ctx, review, receipts, reduced) {
         ? priorAttempt.progress.consecutive_nonprogress : 0,
       consumed_repairs: gateAttempts.filter(row => row.outcome === 'fail'
         && row.repair && row.repair.settled === true && row.consumed_by != null).length,
+      // A folded sealed pass carrying the repair-recorded fold marker is a proven folded-pass
+      // boundary (the journal was validated on read): its re-certification may converge on an
+      // unchanged frontier. Mirrors the journal validator's recompute exactly.
+      fold_boundary: !!(priorAttempt && priorAttempt.outcome === 'pass' && priorAttempt.fold),
     })
     : { progress: null, reason: null, stop_reason: null, replan_required: false,
       consecutive_nonprogress: 0, idempotency_key: null,
@@ -7614,6 +7625,27 @@ function runRepairNodeCore(opts) {
   for (const gid of gatesReset) {
     const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete', 'in_progress'] });
     if (s.changed) { planContent = s.content; gatesFolded.push(gid); }
+  }
+
+  // (4a) Record the fold boundary on every folded gate whose latest journal attempt is a
+  // settled PASS: the folding repair's attempt id, its selected writer, and the sealed pass
+  // candidate digest/declared map. The marker lives in the review journal — NEVER in the
+  // purged `.cache/<gate>.md` — so the gate's later reopen synthesizes its repair delta from
+  // the boundary (deriveRepairDelta) instead of wedging on review_repair_delta_unavailable.
+  // Contract-2 attempts only: schema-1 journals have no V2 delta consumer. The fold itself is
+  // unchanged — the stale pass receipt is still purged below (a pass over the pre-repair tree
+  // never certifies the repaired tree), and mid-gate (in_progress) folds carry no sealed pass
+  // attempt to mark. In-memory here; persisted by the settled/consumed journal writes below,
+  // and recomputed idempotently on every resume.
+  if (repairAttempt) {
+    for (const memberId of completedJournalGates) {
+      const sealed = latestJournalAttemptByGate.get(memberId);
+      if (sealed && sealed.contract_version === 2 && sealed.outcome === 'pass'
+        && sealed.lifecycle_settled === true) {
+        sealed.fold = { repair_attempt_id: repairAttempt.attempt_id, selected_writer: nodeId,
+          candidate_digest: sealed.candidate_digest, candidate_declared: sealed.candidate_declared };
+      }
+    }
   }
 
   // (4b) Delete stale barrier-base files for the DOWNSTREAM gates only.

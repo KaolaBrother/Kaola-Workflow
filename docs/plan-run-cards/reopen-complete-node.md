@@ -139,6 +139,66 @@ baseline while `barrier-check` still reads the old one — producing a diff that
 
 ---
 
+## 7. Folded review gates — the fold-boundary marker and its sanctioned recovery (#713)
+
+`repair-node` on a writer folds every downstream review gate on the paths from that writer to
+the sink: the gate's stale pass receipt (`.cache/<gate>.md`) is purged, because a pass sealed
+over the pre-repair tree never certifies the repaired tree. The gate re-runs after the repair
+closes.
+
+**What the fold records.** For every folded gate whose latest review-journal attempt is a
+settled PASS, `repair-node` durably records a fold-boundary marker on that attempt in the
+review journal (never in the purged receipt):
+
+```json
+"fold": {
+  "repair_attempt_id": "<the folding repair's attempt id>",
+  "selected_writer": "<the writer node under repair>",
+  "candidate_digest": "<the sealed pass's candidate digest>",
+  "candidate_declared": { "<path>": "<digest>" }
+}
+```
+
+Contract-2 (schema-2) attempts only — schema-1 journals have no V2 delta consumer. The marker
+is set in memory at fold time, persisted by the journal's existing settled/consumed writes,
+and recomputed idempotently on every resume, so every crash window reconverges with no extra
+journal write. A mid-gate (`in_progress`) fold has no sealed pass attempt and gets no marker.
+
+**How the folded gate's reopen obtains its repair delta.** When the repaired writer closes and
+the gate re-presents, `deriveRepairDelta` accepts the folded-pass lineage as a legitimate
+boundary (alongside the ordinary settled/consumed FAIL) and synthesizes the delta from the
+marker: `repair_attempt_id` = the folding attempt, `selected_writer` = the folding writer,
+before = the sealed pass candidate, after = the current candidate, paths = the declared-blob
+diff. The marker is cross-checked fail-closed against the attempt's own sealed partition — a
+marker that disagrees with the attempt's recorded candidate is treated as tampering and
+refuses. At this proven fold boundary the gate legitimately re-presents an UNCHANGED frontier,
+so frontier-EQUAL + proof-clean + validation-pass counts as convergence; the strict
+frontier-shrink rule is unchanged at every other boundary.
+
+**The remaining wedge — a marker-less sealed pass — and its sanctioned recovery.** A journal
+written by a pre-fix repair-node carries no fold marker. Reopening a gate whose previous
+lineage attempt is such a pass still refuses `review_repair_delta_unavailable`, now with this
+detail, verbatim:
+
+> the gate's previous lineage attempt is a settled pass with no recorded fold boundary (a journal written before fold markers existed); sanctioned recovery: release-and-adopt (claim release, then a fresh adopt-candidate claim) or a replan prepare from a repair_requires_replan refusal
+
+The recovery the refusal names, in order:
+
+1. **Release-and-adopt (primary):** release the run's claim
+   (`node scripts/kaola-workflow-claim.js release --project {project}`), then take a fresh
+   adopt-candidate claim (`node scripts/kaola-workflow-claim.js claim --project {project}`)
+   and resume the run.
+2. **Replan prepare (when a `repair_requires_replan` source exists):** if the wedge surfaced
+   alongside a `repair_requires_replan` refusal, run
+   `node scripts/kaola-workflow-replan.js prepare --project {project} [--source-attempt {attemptId}]`
+   — the prepare path requires the `repair_requires_replan` handoff as its source (the attempt
+   id defaults to that handoff's).
+
+Do NOT hand-edit the review journal to splice a marker in: a fabricated marker fails the
+fail-closed cross-check against the attempt's sealed partition and refuses as tampering.
+
+---
+
 ## Decision tree
 
 ```
@@ -158,4 +218,11 @@ After repair-node:
     +-- barrier refuse -> [repair-routing card]
     |
     +-- successor already complete -> let run to allDone, then repair-node the successor
+
+Folded gate reopen refuses review_repair_delta_unavailable?
+  |
+  +-- detail names "no recorded fold boundary" -> marker-less sealed pass (section 7):
+  |      release-and-adopt, or replan prepare from a repair_requires_replan refusal
+  |
+  +-- any other detail -> [repair-routing card]
 ```

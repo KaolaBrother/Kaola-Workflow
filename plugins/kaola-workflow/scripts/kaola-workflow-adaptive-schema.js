@@ -1982,13 +1982,42 @@ function deriveRepairDelta(input) {
     return { ok: false, reason: 'review_repair_delta_unavailable' };
   }
   const before = effectiveCandidate(previous);
+  // TWO legitimate delta boundaries. (1) The ordinary one: the previous lineage attempt is a
+  // settled, consumed FAIL — the repair the current candidate answers. (2) A FOLDED settled
+  // PASS: repair-node folded this gate while repairing a SIBLING gate's failure and durably
+  // recorded the boundary tuple on this attempt (the fold marker — the folding repair's
+  // attempt id, its selected writer, and this attempt's sealed pass candidate digest/declared
+  // map). The marker is validated fail-closed by the journal validator and cross-checked here
+  // against the attempt's own sealed partition; a marker that disagrees with it is tampering,
+  // never a delta source.
+  const fold = isPlainObject(previous.fold) ? previous.fold : null;
+  let boundary = null;
   const selectedWriter = previous.repair && previous.repair.selected_writer;
-  if (previous.outcome !== 'fail' || previous.lifecycle_settled !== true
-    || !selectedWriter || previous.repair.settled !== true
-    || previous.consumed_by !== selectedWriter
+  if (previous.outcome === 'fail' && previous.lifecycle_settled === true
+    && selectedWriter && previous.repair.settled === true
+    && previous.consumed_by === selectedWriter) {
+    boundary = { repair_attempt_id: String(previous.attempt_id), selected_writer: String(selectedWriter) };
+  } else if (previous.outcome === 'pass' && previous.lifecycle_settled === true && fold
+    && typeof fold.repair_attempt_id === 'string' && fold.repair_attempt_id
+    && typeof fold.selected_writer === 'string' && fold.selected_writer
+    && fold.candidate_digest === before.digest
+    && canonicalJson(fold.candidate_declared) === canonicalJson(before.declared)) {
+    boundary = { repair_attempt_id: fold.repair_attempt_id, selected_writer: fold.selected_writer };
+  }
+  if (!boundary
     || !HEX64_RE.test(String(before.digest || ''))
     || !HEX64_RE.test(String(current.digest || ''))
     || !isCanonicalBlobMap(before.declared) || !isCanonicalBlobMap(current.declared)) {
+    // A sealed pass WITHOUT a fold marker is a journal written before fold markers existed:
+    // still a hard refusal, but name the sanctioned, documented recovery (release-and-adopt or
+    // replan) instead of leaving a bare dead end.
+    if (previous.outcome === 'pass' && previous.lifecycle_settled === true) {
+      return { ok: false, reason: 'review_repair_delta_unavailable',
+        detail: 'the gate\'s previous lineage attempt is a settled pass with no recorded fold boundary '
+          + '(a journal written before fold markers existed); sanctioned recovery: release-and-adopt '
+          + '(claim release, then a fresh adopt-candidate claim) or a replan prepare from a '
+          + 'repair_requires_replan refusal' };
+    }
     return { ok: false, reason: 'review_repair_delta_unavailable' };
   }
   const paths = [];
@@ -1999,8 +2028,8 @@ function deriveRepairDelta(input) {
     if (prior !== after) paths.push({ path, before: prior, after });
   }
   return { ok: true, repair_delta: {
-    repair_attempt_id: String(previous.attempt_id),
-    selected_writer: String(selectedWriter),
+    repair_attempt_id: boundary.repair_attempt_id,
+    selected_writer: boundary.selected_writer,
     before_candidate_digest: String(before.digest).toLowerCase(),
     after_candidate_digest: String(current.digest).toLowerCase(),
     paths,
@@ -2215,7 +2244,16 @@ function assessReviewProgress(input) {
     && (!knownEvidenceDigests || knownEvidenceDigests.has(String(r.evidence_digest).toLowerCase())));
   const allResolved = removed.every(uid => !!resolutionFor(uid));
   const validationPass = value.validation && value.validation.status === 'pass';
-  const progress = !scopeExpanded && current.length < previous.length && allResolved && validationPass;
+  // Fold-boundary steady state: when the caller flags this closure as a folded-pass
+  // re-certification (the previous lineage attempt is a sealed pass carrying a fold marker),
+  // the gate legitimately re-presents an UNCHANGED frontier — its sealed pass had no open
+  // findings to shrink. At that boundary, frontier-EQUAL plus proof-clean plus validation-pass
+  // is convergence: the re-certification of the repaired tree IS the progress. Without the
+  // flag the strict frontier-shrink rule stands unchanged.
+  const foldBoundary = value.fold_boundary === true;
+  const frontierConverged = current.length < previous.length
+    || (foldBoundary && current.length === previous.length);
+  const progress = !scopeExpanded && frontierConverged && allResolved && validationPass;
   const idempotencyMaterial = {
     logical_gate_key: value.logical_gate_key || null,
     scope_lineage_id: value.scope_lineage_id || null,
@@ -2342,6 +2380,14 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
   const ids = new Set();
   const txs = new Set();
   const ordinals = new Map();
+  // Fold-marker cross-reference index (see the attempt.fold check below): a marker may only
+  // name a folding attempt that exists in THIS journal.
+  const attemptsById = new Map();
+  for (const row of journal.attempts) {
+    if (row && typeof row.attempt_id === 'string' && !attemptsById.has(row.attempt_id)) {
+      attemptsById.set(row.attempt_id, row);
+    }
+  }
   // Durable review history is indexed by scope lineage (epoch_lineage_id + scope_lineage_id), NOT by the
   // logical gate key. The gate key hashes member node ids, so renaming/re-planning a gate would otherwise
   // reset an otherwise-identical scope back to discovery; scope_lineage_id deliberately excludes the node
@@ -2611,7 +2657,10 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
           && Number.isInteger(previous.progress.consecutive_nonprogress)
           ? previous.progress.consecutive_nonprogress : 0,
         consumed_repairs: lineage.filter(row => row.outcome === 'fail' && row.repair
-          && row.repair.settled === true && row.consumed_by != null).length });
+          && row.repair.settled === true && row.consumed_by != null).length,
+        // The previous attempt was shape-validated in its own iteration, so a present fold
+        // marker is a proven folded-pass boundary here (mirrors the close-side computation).
+        fold_boundary: previous.outcome === 'pass' && isPlainObject(previous.fold) });
     }
     if (!isPlainObject(attempt.progress) || canonicalJson(attempt.progress) !== canonicalJson(expectedProgress)) {
       return refuseJournal('review_journal_progress_mismatch');
@@ -2640,6 +2689,32 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       || (attempt.consumed_by !== null && attempt.repair.settled !== true)
       || (attempt.outcome === 'pass' && (selectedWriter !== null || attempt.consumed_by !== null || attempt.rebind.length))) {
       return refuseJournal('review_journal_repair_state_malformed');
+    }
+    // The fold boundary marker. repair-node durably records this tuple on a gate attempt it
+    // folds whose latest outcome is a settled PASS, so a later reopen of that gate synthesizes
+    // the repair delta from the boundary (deriveRepairDelta) instead of wedging on
+    // review_repair_delta_unavailable. The marker lives in the journal — never in the purged
+    // `.cache/<gate>.md` receipt, whose fold-time purge stays exactly as conservative. Shape is
+    // fail-closed: exact keys, sealed-pass-only, the captured candidate byte-equal to the
+    // attempt's own sealed partition, and the referenced folding attempt must be a REAL failed
+    // attempt in this journal whose selected writer matches the marker's.
+    if (attempt.fold !== undefined) {
+      const fold = attempt.fold;
+      const folding = isPlainObject(fold) && typeof fold.repair_attempt_id === 'string'
+        ? attemptsById.get(fold.repair_attempt_id) : undefined;
+      if (!isPlainObject(fold)
+        || Object.keys(fold).sort().join(',') !== 'candidate_declared,candidate_digest,repair_attempt_id,selected_writer'
+        || typeof fold.repair_attempt_id !== 'string' || !fold.repair_attempt_id
+        || typeof fold.selected_writer !== 'string' || !fold.selected_writer
+        || !HEX64_RE.test(String(fold.candidate_digest || ''))
+        || !isCanonicalBlobMap(fold.candidate_declared)
+        || attempt.outcome !== 'pass' || attempt.lifecycle_settled !== true
+        || fold.candidate_digest !== attempt.candidate_digest
+        || canonicalJson(fold.candidate_declared) !== canonicalJson(attempt.candidate_declared)
+        || !folding || folding.outcome !== 'fail'
+        || !isPlainObject(folding.repair) || folding.repair.selected_writer !== fold.selected_writer) {
+        return refuseJournal('review_journal_fold_marker_invalid');
+      }
     }
     let expectedBase = selectedWriter && attempt.producer_bindings[selectedWriter]
       ? attempt.producer_bindings[selectedWriter].baseline : null;
@@ -3623,10 +3698,13 @@ const COMPLIANCE_SEPARATOR  = '|-------------|--------|----------|-------------|
 
 // spliceComplianceSection — append a pre-built row to `## Required Agent Compliance`, creating the
 // section below `## Node Ledger` if absent. Fence-aware (via locateSection). Idempotent creation.
+// Whitespace-normalized at the append boundary: table rows stay CONTIGUOUS (a section-trailing
+// blank line before the next heading must never migrate into the table) and exactly ONE blank
+// line separates the table from the following heading (or a single trailing newline at EOF).
 function spliceComplianceSection(content, row) {
   const sec = locateSection(content, 'Required Agent Compliance');
   if (sec.start >= 0) {
-    if (sec.next >= 0) return content.slice(0, sec.next) + '\n' + row + content.slice(sec.next);
+    if (sec.next >= 0) return content.slice(0, sec.next).trimEnd() + '\n' + row + '\n' + content.slice(sec.next);
     return content.trimEnd() + '\n' + row + '\n';
   }
   // Section absent — create it below `## Node Ledger` (or at EOF if no ledger).

@@ -3757,11 +3757,13 @@ function makeState(opts) {
   // Bare role string check: compliance row should have 'code-reviewer' in Requirement cell,
   // NOT 'code-reviewer (review)'
   const complianceSection = writtenPlan.slice(writtenPlan.indexOf('## Required Agent Compliance'));
-  // The row must contain | code-reviewer | (bare, not code-reviewer (review))
-  // It should NOT start the role cell with 'code-reviewer (review)' — that would be wrong.
-  assert(complianceSection.includes('| code-reviewer |'), 'T14b: compliance row uses BARE role string code-reviewer');
-  const wrongFormat = complianceSection.includes('| code-reviewer (review) |');
-  assert(wrongFormat === false, 'T14b: compliance row does NOT use role (id) format for code-reviewer');
+  // #714: the append path must EMIT the canonical `role (node-id)` cell — the node id is known
+  // at close time and validateRequiredAgentCompliance requires exactly one `role (node-id)` row
+  // per node. A bare `code-reviewer` cell is the drift the issue pins (never emitted anymore).
+  assert(complianceSection.includes('| code-reviewer (review) |'),
+    'T14b (#714): appended compliance row uses the canonical role (node-id) cell');
+  const legacyBareFormat = complianceSection.includes('| code-reviewer |');
+  assert(legacyBareFormat === false, 'T14b (#714): appended compliance row is NEVER a bare role cell');
 }
 
 // ---------------------------------------------------------------------------
@@ -6204,7 +6206,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev-a', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
   assert(r.result === 'ok' && r.closed === 'rev-a', 'R5: closed rev-a');
   assert(h.files[RS_PLAN_PATH].includes('| rev-a | complete | |'), 'R5: ledger row complete');
-  assert(/code-reviewer \| subagent-invoked/.test(h.files[RS_PLAN_PATH]), 'R5: compliance row appended (bare role)');
+  assert(/code-reviewer \(rev-a\) \| subagent-invoked/.test(h.files[RS_PLAN_PATH]), 'R5 (#714): compliance row appended with the canonical role (node-id) cell');
   const set = JSON.parse(h.files[RS_SET_PATH]);
   assert(set.nodes.length === 1 && set.nodes[0].id === 'rev-b', 'R5: rev-a removed from running set, rev-b remains');
   assert(Array.isArray(r.newlyReady) && r.newlyReady.some(n => n.id === 'rev-b'), 'R5: newlyReady surfaced');
@@ -7288,12 +7290,12 @@ function rtHarness(initialFiles, opts) {
   const r1 = closeOnce(plan, files);
   assert(r1.result === 'ok' && r1.closed === 'rev', 'S391c: first close ok');
   const after1 = files[RS_PLAN_PATH];
-  const count1 = (after1.match(/\|\s*code-reviewer\s*\|\s*subagent-invoked\s*\|/g) || []).length;
+  const count1 = (after1.match(/\|\s*code-reviewer \(rev\)\s*\|\s*subagent-invoked\s*\|/g) || []).length;
   assert(count1 === 1, 'S391c: exactly ONE code-reviewer compliance row after first close, got ' + count1);
   // Re-close (alreadyAtTarget: row already complete) → no second row.
   const r2 = closeOnce(after1, files);
   assert(r2.result === 'ok', 'S391c: re-close still ok (idempotent)');
-  const count2 = (files[RS_PLAN_PATH].match(/\|\s*code-reviewer\s*\|\s*subagent-invoked\s*\|/g) || []).length;
+  const count2 = (files[RS_PLAN_PATH].match(/\|\s*code-reviewer \(rev\)\s*\|\s*subagent-invoked\s*\|/g) || []).length;
   assert(count2 === 1, 'S391c: STILL exactly ONE compliance row after re-close (idempotent append), got ' + count2);
 }
 
@@ -18328,6 +18330,568 @@ function rtHarness(initialFiles, opts) {
   } finally {
     fs.rmSync(layoutTmp, { recursive: true, force: true });
   }
+}
+
+// ===========================================================================
+// #713 (option b) — folded-pass repair boundary, UNIT pins. When repair-node
+// folds a gate whose latest attempt is a settled PASS, the fold must durably
+// record its boundary tuple ON the folded attempt (the journal survives the
+// `.cache/<gate>.md` purge), and deriveRepairDelta must SYNTHESIZE the delta
+// from that marker instead of refusing review_repair_delta_unavailable. A
+// marker-less sealed pass (a pre-fix journal) stays a hard refusal — but now
+// names the sanctioned recovery (release-and-adopt or replan) in its detail.
+// ===========================================================================
+{
+  const reviewSchema713 = require('./kaola-workflow-adaptive-schema');
+  const sealedPassAttempt = {
+    attempt_id: 'review2-gatea:1', outcome: 'pass', lifecycle_settled: true,
+    candidate_digest: 'a'.repeat(64),
+    candidate_declared: { 'lib/impl.js': '100644 ' + '1'.repeat(40) },
+    repair: { selected_writer: null, settled: null }, consumed_by: null, rebind: [],
+    fold: { repair_attempt_id: 'review2-gateb:1', selected_writer: 'writer',
+      candidate_digest: 'a'.repeat(64),
+      candidate_declared: { 'lib/impl.js': '100644 ' + '1'.repeat(40) } },
+  };
+  const repairedCandidate = { digest: 'b'.repeat(64),
+    declared: { 'lib/impl.js': '100644 ' + '2'.repeat(40) }, residue_digest: 'c'.repeat(64) };
+  const synthesized = reviewSchema713.deriveRepairDelta({
+    previous_attempt: sealedPassAttempt, current_candidate: repairedCandidate });
+  assert(synthesized.ok === true
+    && synthesized.repair_delta.repair_attempt_id === 'review2-gateb:1'
+    && synthesized.repair_delta.selected_writer === 'writer'
+    && synthesized.repair_delta.before_candidate_digest === 'a'.repeat(64)
+    && synthesized.repair_delta.after_candidate_digest === 'b'.repeat(64)
+    && synthesized.repair_delta.paths.length === 1
+    && synthesized.repair_delta.paths[0].path === 'lib/impl.js'
+    && synthesized.repair_delta.paths[0].before === '100644 ' + '1'.repeat(40)
+    && synthesized.repair_delta.paths[0].after === '100644 ' + '2'.repeat(40),
+    '#713: deriveRepairDelta synthesizes the delta from a folded-pass boundary marker '
+    + '(pre-fix refuses review_repair_delta_unavailable), got ' + JSON.stringify(synthesized));
+
+  // Wedge floor (option c): a sealed pass WITHOUT a marker (a journal written before this
+  // fix) still refuses — and the refusal detail names the sanctioned, documented recovery.
+  const wedge = reviewSchema713.deriveRepairDelta({
+    previous_attempt: { ...sealedPassAttempt, fold: undefined },
+    current_candidate: repairedCandidate });
+  assert(wedge.ok === false && wedge.reason === 'review_repair_delta_unavailable'
+    && typeof wedge.detail === 'string' && /release-and-adopt|replan/i.test(wedge.detail),
+    '#713: a marker-less sealed pass refuses with a detail naming the sanctioned recovery '
+    + '(release-and-adopt or replan), got ' + JSON.stringify(wedge));
+
+  // Fail-closed: a marker whose captured candidate disagrees with the sealed attempt is
+  // tampering, never a delta source.
+  const tampered = reviewSchema713.deriveRepairDelta({
+    previous_attempt: { ...sealedPassAttempt,
+      fold: { ...sealedPassAttempt.fold, candidate_digest: 'd'.repeat(64) } },
+    current_candidate: repairedCandidate });
+  assert(tampered.ok === false && tampered.reason === 'review_repair_delta_unavailable',
+    '#713: a fold marker inconsistent with its sealed attempt fails closed, got ' + JSON.stringify(tampered));
+
+  // Fold-boundary steady-state progress: the folded gate's re-certification legitimately
+  // presents an UNCHANGED empty frontier (its sealed pass had no open findings). With the
+  // boundary flagged, a clean frontier + validation pass is convergence, not non-progress.
+  const steadyState = reviewSchema713.assessReviewProgress({
+    previous_open_uids: [], current_open_uids: [], repair_delta_uids: [], resolutions: [],
+    repair_attempt_id: 'review2-gateb:1', candidate_digest: 'b'.repeat(64),
+    validation: { status: 'pass' }, logical_gate_key: 'gatekey', scope_lineage_id: 'scope',
+    before_candidate_digest: 'a'.repeat(64), seen_idempotency_keys: [],
+    previous_consecutive_nonprogress: 0, consumed_repairs: 1, fold_boundary: true });
+  assert(steadyState.progress === true && steadyState.reason === null && steadyState.stop_reason === null,
+    '#713: a folded-pass re-certification with a clean frontier makes progress at the fold '
+    + 'boundary (pre-fix: review_frontier_nonprogress), got ' + JSON.stringify(steadyState));
+  // Regression controls: WITHOUT the boundary flag the identical steady frontier stays
+  // non-progress, and a boundary flag cannot launder a FAILED validation.
+  const noBoundary = reviewSchema713.assessReviewProgress({
+    previous_open_uids: [], current_open_uids: [], repair_delta_uids: [], resolutions: [],
+    repair_attempt_id: 'review2-gateb:1', candidate_digest: 'b'.repeat(64),
+    validation: { status: 'pass' }, logical_gate_key: 'gatekey', scope_lineage_id: 'scope',
+    before_candidate_digest: 'a'.repeat(64), seen_idempotency_keys: [],
+    previous_consecutive_nonprogress: 0, consumed_repairs: 1 });
+  assert(noBoundary.progress === false,
+    '#713: (control) a boundary-less steady frontier stays non-progress');
+  const failedValidation = reviewSchema713.assessReviewProgress({
+    previous_open_uids: [], current_open_uids: [], repair_delta_uids: [], resolutions: [],
+    repair_attempt_id: 'review2-gateb:1', candidate_digest: 'b'.repeat(64),
+    validation: { status: 'fail', reason: 'validation_failed' }, logical_gate_key: 'gatekey',
+    scope_lineage_id: 'scope', before_candidate_digest: 'a'.repeat(64), seen_idempotency_keys: [],
+    previous_consecutive_nonprogress: 0, consumed_repairs: 1, fold_boundary: true });
+  assert(failedValidation.progress === false,
+    '#713: (control) the fold boundary never laundered a failed validation into progress');
+}
+
+// ===========================================================================
+// #714 — `## Required Agent Compliance` producer drift, UNIT pins. The splice
+// must keep table rows contiguous and leave exactly one blank line before the
+// following heading (the blank-before-heading used to migrate INTO the table).
+// ===========================================================================
+{
+  const { spliceComplianceSection: splice714 } = require('./kaola-workflow-adaptive-schema');
+  const baseSection714 = [
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| a | complete |', '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| tdd-guide (a) | subagent-invoked | e1 | |', '',
+    '## Plan Notes', '', 'operator notes', '',
+  ].join('\n');
+  const row714 = '| code-reviewer (b) | subagent-invoked | e2 | |';
+  const spliced714 = splice714(baseSection714, row714);
+  assert(spliced714.includes('| tdd-guide (a) | subagent-invoked | e1 | |\n' + row714 + '\n\n## Plan Notes'),
+    '#714: splice keeps table rows contiguous with exactly one blank line before the next '
+    + 'heading (pre-fix: the blank migrates INTO the table and the new row abuts the heading), got:\n' + spliced714);
+  assert(!spliced714.includes('| tdd-guide (a) | subagent-invoked | e1 | |\n\n' + row714),
+    '#714: no blank line splits the table after the append');
+  // Control (already conforming pre-fix): a section at EOF stays contiguous with one
+  // trailing newline.
+  const atEof714 = [
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| a | complete |', '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| tdd-guide (a) | subagent-invoked | e1 | |', '',
+  ].join('\n');
+  const splicedEof714 = splice714(atEof714, row714);
+  assert(splicedEof714.endsWith('| tdd-guide (a) | subagent-invoked | e1 | |\n' + row714 + '\n'),
+    '#714: (control) splice at EOF keeps rows contiguous with one trailing newline');
+}
+
+// ===========================================================================
+// #714 — the issue's round-trip over the LEGACY append path: run close-node
+// over a 3-node plan (writer, code-reviewer, finalize) through a full
+// open/close cycle, then feed the UNTOUCHED plan file straight into
+// validateRequiredAgentCompliance. Pin the issue's three defects explicitly:
+// (1) no blank line inside the table, (2) every row is `role (node-id)`,
+// (3) exactly one blank line before the following heading.
+// ===========================================================================
+{
+  const planPath714 = '/fake/kaola-workflow/p714/workflow-plan.md';
+  const nodes714 = [
+    '| impl | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| rev | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | rev | — | 1 | sequence |',
+  ];
+  const files714 = {};
+  files714[planPath714] = makePlan(
+    ['| impl | in_progress | |', '| rev | pending | |', '| done | pending | |'], nodes714)
+    + '## Plan Notes\n\noperator notes\n';
+  files714['/fake/kaola-workflow/p714/.cache/impl.md'] = 'evidence-binding: impl implnonce001\nRED: r\nGREEN: g\n';
+  files714['/fake/kaola-workflow/p714/.cache/rev.md'] = 'evidence-binding: rev revnonce0001\nReviewed the changes. LGTM.\n';
+  files714['/fake/kaola-workflow/p714/.cache/done.md'] = 'evidence-binding: done donenonce001\nfinalization bookkeeping complete\n';
+  const close714 = nodeId => runCloseAndOpenNext({
+    planPath: planPath714, statePath: '/fake/kaola-workflow/p714/workflow-state.md',
+    project: 'p714', nodeId,
+    shell: (sp, args) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-commit-node.js' && !(args || []).includes('--start')) {
+        return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId,
+          overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+      }
+      if (base === 'kaola-workflow-commit-node.js') {
+        return { exitCode: 0, result: 'ok', mode: 'per-node-start', overallOk: true };
+      }
+      if (base === 'kaola-workflow-next-action.js') {
+        if (nodeId === 'impl') return { exitCode: 0, result: 'ok', allDone: false,
+          readySet: [{ id: 'rev', role: 'code-reviewer', model: 'sonnet', declared_write_set: '—', dependsOn: ['impl'] }],
+          nextNode: { id: 'rev', role: 'code-reviewer', model: 'sonnet', declared_write_set: '—' } };
+        if (nodeId === 'rev') return { exitCode: 0, result: 'ok', allDone: false,
+          readySet: [{ id: 'done', role: 'finalize', model: 'sonnet', declared_write_set: '—', dependsOn: ['rev'] }],
+          nextNode: { id: 'done', role: 'finalize', model: 'sonnet', declared_write_set: '—' } };
+        return { exitCode: 0, result: 'ok', allDone: true, readyPending: [] };
+      }
+      return { exitCode: 1 };
+    },
+    readFile: fp => { if (fp in files714) return files714[fp]; throw new Error('ENOENT ' + fp); },
+    writeFile: (fp, content) => { files714[fp] = content; },
+    cacheExists: fp => fp in files714,
+  });
+  const w714 = close714('impl');
+  assert(w714.result === 'ok', '#714: writer closes on the legacy append path, got ' + JSON.stringify(w714));
+  const r714 = close714('rev');
+  assert(r714.result === 'ok', '#714: code-reviewer closes on the legacy append path, got ' + JSON.stringify(r714));
+  const f714 = close714('done');
+  assert(f714.result === 'ok', '#714: finalize closes on the legacy append path, got ' + JSON.stringify(f714));
+  const final714 = files714[planPath714];
+
+  // Acceptance: the untouched close-node output passes validateRequiredAgentCompliance.
+  const validation714 = planValidator.validateRequiredAgentCompliance(final714, planValidator.parseNodes(final714));
+  assert(validation714.ok === true,
+    '#714: the untouched close-node output passes validateRequiredAgentCompliance byte-untouched '
+    + '(pre-fix: the bare code-reviewer row refuses), got ' + JSON.stringify(validation714));
+
+  // Defect 2: every appended row carries the canonical `role (node-id)` cell — never bare.
+  assert(final714.includes('| code-reviewer (rev) | subagent-invoked |'),
+    '#714: the appended review row is `code-reviewer (rev)`, never a bare `code-reviewer` cell');
+  assert(!/^\| code-reviewer \|/m.test(final714) && !/^\| security-reviewer \|/m.test(final714),
+    '#714: no bare review-role cell is emitted anywhere in the table');
+
+  // Defect 1: table rows stay contiguous — no blank line inside the table.
+  const sec714 = locateSection(final714, 'Required Agent Compliance');
+  assert(sec714.start >= 0, '#714: the compliance section exists after the cycle');
+  const end714 = sec714.next >= 0 ? sec714.next : final714.length;
+  const bodyLines714 = final714.slice(sec714.start, end714).split('\n');
+  const firstRow714 = bodyLines714.findIndex(line => line.trim().startsWith('|'));
+  const rowCount714 = bodyLines714.filter(line => line.trim().startsWith('|')).length;
+  const tableSpan714 = bodyLines714.slice(firstRow714, firstRow714 + rowCount714);
+  assert(rowCount714 === 5 && tableSpan714.every(line => line.trim() !== ''),
+    '#714: header + separator + 3 node rows are contiguous — no blank line inside the table '
+    + '(pre-fix: the section-trailing blank migrates between rows), got:\n' + tableSpan714.join('\n'));
+
+  // Defect 3: exactly one blank line separates the table from the following heading.
+  assert(/\| \|\n\n## Plan Notes/.test(final714) && !/\| \|\n## Plan Notes/.test(final714)
+    && !/\| \|\n\n\n## Plan Notes/.test(final714),
+    '#714: exactly one blank line separates the table from the following heading, got:\n'
+    + final714.slice(final714.indexOf('## Required Agent Compliance')));
+
+  // #713's regression check folded in: resume-check purity is unaffected by compliance bytes
+  // (the section is outside plan_hash) — the round-trip pins only the table shape above.
+}
+
+// ===========================================================================
+// #714 — legacy bare-cell READ compatibility (regression control, must stay
+// green): an ALREADY-EMITTED bare `code-reviewer` pending row still advances
+// in place (never duplicated, never rewritten) on its close.
+// ===========================================================================
+{
+  const planPath714b = '/fake/kaola-workflow/p714b/workflow-plan.md';
+  const files714b = {};
+  files714b[planPath714b] = makePlan(['| rev | in_progress | |'], [
+    '| rev | code-reviewer | — | — | 1 | sequence |',
+  ]) + [
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| code-reviewer | pending | | |', '',
+  ].join('\n');
+  files714b['/fake/kaola-workflow/p714b/.cache/rev.md'] = 'evidence-binding: rev revnonce714b\nReviewed. LGTM.\n';
+  const close714b = runCloseAndOpenNext({
+    planPath: planPath714b, statePath: '/fake/kaola-workflow/p714b/workflow-state.md',
+    project: 'p714b', nodeId: 'rev',
+    shell: (sp, args) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-commit-node.js') {
+        return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'rev',
+          overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+      }
+      if (base === 'kaola-workflow-next-action.js') {
+        return { exitCode: 0, result: 'ok', allDone: true, readyPending: [] };
+      }
+      return { exitCode: 1 };
+    },
+    readFile: fp => { if (fp in files714b) return files714b[fp]; throw new Error('ENOENT ' + fp); },
+    writeFile: (fp, content) => { files714b[fp] = content; },
+    cacheExists: fp => fp in files714b,
+  });
+  assert(close714b.result === 'ok', '#714: legacy bare-row close stays ok, got ' + JSON.stringify(close714b));
+  const complianceBlock714b = files714b[planPath714b].slice(files714b[planPath714b].indexOf('## Required Agent Compliance'));
+  const bareMatches = complianceBlock714b.match(/^\| code-reviewer \|/gm) || [];
+  assert(bareMatches.length === 1
+    && complianceBlock714b.includes('| code-reviewer | subagent-invoked |'),
+    '#714: an already-emitted legacy bare row still advances IN PLACE (read compatibility), '
+    + 'got:\n' + files714b[planPath714b].slice(files714b[planPath714b].indexOf('## Required Agent Compliance')));
+  assert(!files714b[planPath714b].includes('| code-reviewer (rev) |'),
+    '#714: the legacy bare row is matched, not duplicated under the canonical cell');
+}
+
+// ===========================================================================
+// #713 — the issue's six-step reproduction, driven end-to-end over the REAL
+// CLI in a real git repo (mirrors the walkthrough's review-v2 harness):
+// schema-2 serial writer → gateA (security-reviewer) → gateB (code-reviewer).
+// gateA PASSES, gateB FAILS, repair-node folds gateA (purging its stale
+// sealed-pass receipt), the writer repairs, and the folded-pass gateA must
+// REOPEN (no review_repair_delta_unavailable), re-certify the repaired tree,
+// and the sequence must drive to finalize with the claim intact (no release,
+// no replan). This block doubles as #714's schema-2 pre-seeded-cycle pin:
+// the cycle includes a gate re-close after repair, and the untouched plan
+// must pass validateRequiredAgentCompliance at the end.
+// ===========================================================================
+{
+  const { spawnSync: spawn713 } = require('child_process');
+  const reviewSchema713 = require('./kaola-workflow-adaptive-schema');
+  const runner713 = require('./kaola-workflow-validation-runner');
+  const NODE_CLI_713 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_CLI_713 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const baseEnv713 = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_')));
+  const env713 = { ...baseEnv713, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    KAOLA_WORKFLOW_OFFLINE: '1' };
+  const run713 = (script, args, cwd, input) => spawn713(process.execPath, [script, ...args],
+    { cwd, encoding: 'utf8', env: env713, input, timeout: 120000 });
+  const lastJson713 = result => {
+    const line = String(result.stdout || '').trim().split('\n').filter(row => row.trim().startsWith('{')).pop();
+    return line ? JSON.parse(line) : null;
+  };
+  const gateEvidence713 = (nodeId, nonce, dispatch, domainOutcome, extraRows) => [
+    'evidence-binding: ' + nodeId + ' ' + nonce,
+    'contract_version: 2',
+    'review_context_hash: ' + dispatch.review_context_hash,
+    'behavior_contract_hash: ' + dispatch.behavior_contract_hash,
+    'resolved_profile_hash: ' + dispatch.resolved_profile_hash,
+    'candidate_digest: ' + dispatch.candidate_digest,
+    'domain_outcome: ' + domainOutcome,
+    'gate_claim: ' + dispatch.gate_claim,
+    'gate_surface: ' + dispatch.gate_surface,
+    'gate_aggregation: ' + dispatch.gate_aggregation,
+    ...(extraRows || []), '',
+  ].join('\n');
+
+  const tmp713 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-713-fold-pass-')));
+  try {
+    spawn713('git', ['init', '-b', 'main'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+    spawn713('git', ['config', 'user.email', 'kw@test'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+    spawn713('git', ['config', 'user.name', 'kw'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+    const project713 = 'issue-713-fold';
+    const projectDir713 = path.join(tmp713, 'kaola-workflow', project713);
+    const cacheDir713 = path.join(projectDir713, '.cache');
+    fs.mkdirSync(cacheDir713, { recursive: true });
+    fs.mkdirSync(path.join(tmp713, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp713, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    const planPath713 = path.join(projectDir713, 'workflow-plan.md');
+    fs.writeFileSync(planPath713, [
+      '# Workflow Plan — issue 713', '',
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: enhancement',
+      'code_certifier: gateB',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'validation_command: node --check lib/impl.js',
+      'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
+      '| gateA | security-reviewer | writer | — | 1 | sequence | security review clean | code-tree | sequence | — |',
+      '| gateB | code-reviewer | gateA | — | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize | gateB | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '|---|---|',
+      '| writer | pending |', '| gateA | pending |', '| gateB | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+      '| tdd-guide (writer) | pending | | |', '| security-reviewer (gateA) | pending | | |',
+      '| code-reviewer (gateB) | pending | | |', '| finalize (finalize) | pending | | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir713, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+    const freeze713 = run713(VALIDATOR_CLI_713, [planPath713, '--freeze', '--json'], tmp713);
+    assert(freeze713.status === 0 && lastJson713(freeze713) && lastJson713(freeze713).planHash,
+      '#713: the schema-2 serial two-gate plan freezes: ' + freeze713.stdout + freeze713.stderr);
+    const planHash713 = lastJson713(freeze713).planHash;
+    spawn713('git', ['add', '-A'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+    spawn713('git', ['commit', '-m', 'fixture'], { cwd: tmp713, encoding: 'utf8', env: env713 });
+
+    // Step 1-2: writer ships v1; gateA PASSES (its pass attempt seals).
+    const openWriter713 = run713(NODE_CLI_713, ['open-next', '--project', project713, '--json'], tmp713);
+    assert(openWriter713.status === 0 && lastJson713(openWriter713) && lastJson713(openWriter713).opened
+      && lastJson713(openWriter713).opened.id === 'writer' && lastJson713(openWriter713).nonce,
+      '#713: writer opens: ' + openWriter713.stdout + openWriter713.stderr);
+    fs.writeFileSync(path.join(tmp713, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    let rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'writer',
+      '--stdin', '--json'], tmp713,
+      'evidence-binding: writer ' + lastJson713(openWriter713).nonce
+        + '\nRED: base behavior reproduced\nGREEN: base behavior passes\n');
+    assert(rec713.status === 0, '#713: writer evidence records: ' + rec713.stdout + rec713.stderr);
+    const closeWriter713 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
+      '--node-id', 'writer', '--json'], tmp713);
+    assert(closeWriter713.status === 0 && lastJson713(closeWriter713).opened
+      && lastJson713(closeWriter713).opened.id === 'gateA',
+      '#713: gateA opens after the writer close: ' + closeWriter713.stdout + closeWriter713.stderr);
+    const openA1 = lastJson713(closeWriter713).opened;
+    rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'gateA',
+      '--stdin', '--json'], tmp713,
+      gateEvidence713('gateA', openA1.nonce, openA1.dispatch, 'approved', ['findings_none: true']));
+    assert(rec713.status === 0, '#713: gateA pass evidence records: ' + rec713.stdout + rec713.stderr);
+    const closeA1 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
+      '--node-id', 'gateA', '--json'], tmp713);
+    assert(closeA1.status === 0 && lastJson713(closeA1).closed === 'gateA'
+      && lastJson713(closeA1).opened && lastJson713(closeA1).opened.id === 'gateB',
+      '#713: gateA seals PASS and gateB opens: ' + closeA1.stdout + closeA1.stderr);
+    const openB1 = lastJson713(closeA1).opened;
+
+    // Step 3: gateB FAILS with a legitimate blocking finding.
+    const writerEvidenceDigest713 = reviewSchema713.sha256Hex(
+      fs.readFileSync(path.join(cacheDir713, 'writer.md'), 'utf8'));
+    const blockingFinding713 = {
+      failure_class: 'correctness',
+      trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+        expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+      primary_anchor: { kind: 'evidence_observation',
+        producer_evidence_digest: writerEvidenceDigest713,
+        observation_key: 'writer:issue-713-regression' },
+      secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
+      status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+    };
+    rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'gateB',
+      '--stdin', '--json'], tmp713,
+      gateEvidence713('gateB', openB1.nonce, openB1.dispatch, 'changes_requested',
+        ['finding_json: ' + JSON.stringify(blockingFinding713)]));
+    assert(rec713.status === 0, '#713: gateB blocking evidence records: ' + rec713.stdout + rec713.stderr);
+    const closeB1 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
+      '--node-id', 'gateB', '--json'], tmp713);
+    assert(lastJson713(closeB1) && lastJson713(closeB1).result === 'review_failed'
+      && lastJson713(closeB1).attempt_id,
+      '#713: gateB settles FAIL with a durable attempt: ' + closeB1.stdout + closeB1.stderr);
+    const failedAttemptId713 = lastJson713(closeB1).attempt_id;
+
+    // Step 4: repair-node consumes gateB's failed attempt and folds gateA back to pending,
+    // purging its stale sealed-pass receipt (the fold stays conservative).
+    const repair713 = run713(NODE_CLI_713, ['repair-node', '--project', project713,
+      '--attempt-id', failedAttemptId713, '--node-id', 'writer', '--json'], tmp713);
+    assert(repair713.status === 0 && lastJson713(repair713).result === 'ok'
+      && lastJson713(repair713).baselineReused === true,
+      '#713: repair-node folds the serial chain with the anti-laundering baseline reused: '
+      + repair713.stdout + repair713.stderr);
+    assert(lastJson713(repair713).gatesReset.includes('gateA')
+      && lastJson713(repair713).gatesReset.includes('gateB'),
+      '#713: both post-dominating gates fold: ' + JSON.stringify(lastJson713(repair713).gatesReset));
+    assert((lastJson713(repair713).evidenceRemoved || []).includes('gateA.md')
+      && !fs.existsSync(path.join(cacheDir713, 'gateA.md')),
+      '#713: the fold keeps purging the stale sealed-pass receipt (a pass over the pre-repair '
+      + 'tree never certifies the repaired tree)');
+
+    // THE BOUNDARY MARKER: the folded sealed-pass attempt durably records the fold boundary
+    // tuple in the journal (which survives the evidence purge).
+    const journalAfterRepair713 = JSON.parse(fs.readFileSync(path.join(cacheDir713, 'review-attempts.json'), 'utf8'));
+    const passAttemptA1 = journalAfterRepair713.attempts.find(a =>
+      a.logical_gate && Array.isArray(a.logical_gate.members) && a.logical_gate.members.includes('gateA'));
+    assert(passAttemptA1 && passAttemptA1.outcome === 'pass' && passAttemptA1.lifecycle_settled === true,
+      '#713: setup — gateA\'s sealed pass attempt is durable in the journal');
+    assert(passAttemptA1.fold
+      && passAttemptA1.fold.repair_attempt_id === failedAttemptId713
+      && passAttemptA1.fold.selected_writer === 'writer'
+      && passAttemptA1.fold.candidate_digest === passAttemptA1.candidate_digest
+      && reviewSchema713.canonicalJson(passAttemptA1.fold.candidate_declared)
+        === reviewSchema713.canonicalJson(passAttemptA1.candidate_declared),
+      '#713: the fold durably records its boundary tuple (folding attempt, selected writer, sealed '
+      + 'pass candidate digest/declared) on the folded attempt — pre-fix there is no marker, got '
+      + JSON.stringify(passAttemptA1.fold));
+
+    // Step 5: the writer repairs (v2). Its close must REOPEN the folded-pass gateA — the
+    // issue's wedge step (pre-fix refuses review_repair_delta_unavailable).
+    fs.writeFileSync(path.join(tmp713, 'lib', 'impl.js'), 'module.exports = 2;\n');
+    rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'writer',
+      '--stdin', '--json'], tmp713,
+      'evidence-binding: writer ' + lastJson713(openWriter713).nonce
+        + '\nRED: gate-B regression reproduced\nGREEN: gate-B regression passes\n');
+    assert(rec713.status === 0, '#713: repaired writer evidence records: ' + rec713.stdout + rec713.stderr);
+    const closeWriter2 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
+      '--node-id', 'writer', '--json'], tmp713);
+    assert(closeWriter2.status === 0 && lastJson713(closeWriter2) && lastJson713(closeWriter2).opened
+      && lastJson713(closeWriter2).opened.id === 'gateA',
+      '#713: the folded-pass gateA REOPENS after the repair — no review_repair_delta_unavailable '
+      + 'wedge (pre-fix refuses here), got status=' + closeWriter2.status + ' out='
+      + closeWriter2.stdout + closeWriter2.stderr);
+    const openA2 = (lastJson713(closeWriter2) || {}).opened;
+    assert(openA2 && openA2.dispatch, '#713: gateA reopened with a live v2 dispatch (no wedge)');
+    const contextA2 = openA2 && openA2.dispatch
+      ? JSON.parse(fs.readFileSync(path.join(projectDir713, openA2.dispatch.review_context_path), 'utf8'))
+      : { review_phase: null, repair_delta: null };
+    assert(contextA2.review_phase === 'closure' && contextA2.repair_delta
+      && contextA2.repair_delta.repair_attempt_id === failedAttemptId713
+      && contextA2.repair_delta.selected_writer === 'writer'
+      && contextA2.repair_delta.paths.some(row => row.path === 'lib/impl.js'),
+      '#713: the reopened gateA context synthesizes the repair delta from the fold marker '
+      + '(folding attempt, folding writer, sealed-pass before, repaired after), got '
+      + JSON.stringify(contextA2.repair_delta));
+
+    // gateA re-certifies the repaired tree: approved, no findings, no resolutions (its sealed
+    // pass left an empty frontier — the fold-boundary steady state must converge, not wedge).
+    // Guarded: a wedged reopen (the RED state) fails the assertions above without crashing the suite.
+    if (openA2 && openA2.dispatch) {
+      rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'gateA',
+        '--stdin', '--json'], tmp713,
+        gateEvidence713('gateA', openA2.nonce, openA2.dispatch, 'approved', ['findings_none: true']));
+      assert(rec713.status === 0, '#713: gateA re-certification evidence records: ' + rec713.stdout + rec713.stderr);
+      const closeA2 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
+        '--node-id', 'gateA', '--json'], tmp713);
+      assert(closeA2.status === 0 && lastJson713(closeA2).closed === 'gateA'
+        && lastJson713(closeA2).opened && lastJson713(closeA2).opened.id === 'gateB',
+        '#713: the folded-pass re-certification closes PASS (fold-boundary progress) and advances '
+        + 'to gateB, got ' + closeA2.stdout + closeA2.stderr);
+      const openB2 = lastJson713(closeA2).opened;
+
+      // gateB's normal closure: resolve the prior finding against the repaired candidate.
+      const contextB2 = JSON.parse(fs.readFileSync(path.join(projectDir713, openB2.dispatch.review_context_path), 'utf8'));
+      assert(contextB2.repair_delta && contextB2.repair_delta.repair_attempt_id === failedAttemptId713,
+        '#713: gateB\'s closure context binds the consumed failed attempt (the ordinary fail path)');
+      const priorUid713 = reviewSchema713.normalizeFindingSet([blockingFinding713],
+        { scope_lineage_id: contextB2.scope_lineage_id }).findings[0].uid;
+      const resolvedFinding713 = { ...blockingFinding713, uid: priorUid713, status: 'resolved' };
+      const execIdentity713 = { comparable: true, digest: 'a2'.repeat(32), incomparability_classes: [] };
+      const vector713 = runner713.buildValidationVector({
+        command_id: 'c1'.repeat(32), candidate_digest: openB2.dispatch.candidate_digest,
+        execution_identity: execIdentity713,
+        runs: [{ index: 0, exit_code: 0, signal: null, timed_out: false,
+          pre_candidate_digest: openB2.dispatch.candidate_digest,
+          post_candidate_digest: openB2.dispatch.candidate_digest,
+          execution_identity_digest: execIdentity713.digest, failure_signature_sha256: '0'.repeat(64) }],
+      }, []);
+      const vectorDir713 = path.join(cacheDir713, 'validation-vectors');
+      fs.mkdirSync(vectorDir713, { recursive: true });
+      fs.writeFileSync(path.join(vectorDir713, vector713.vector_id + '.json'),
+        runner713.canonicalJson(vector713) + '\n');
+      const resolution713 = { uid: priorUid713, repair_attempt_id: failedAttemptId713,
+        validation_vector_digest: vector713.vector_id, evidence_digest: vector713.receipt_sha256,
+        candidate_digest: openB2.dispatch.candidate_digest };
+      rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'gateB',
+        '--stdin', '--json'], tmp713,
+        gateEvidence713('gateB', openB2.nonce, openB2.dispatch, 'approved',
+          ['finding_json: ' + JSON.stringify(resolvedFinding713),
+            'resolution_json: ' + JSON.stringify(resolution713)]));
+      assert(rec713.status === 0, '#713: gateB closure evidence records: ' + rec713.stdout + rec713.stderr);
+      const closeB2 = run713(NODE_CLI_713, ['close-and-open-next', '--project', project713,
+        '--node-id', 'gateB', '--json'], tmp713);
+      assert(closeB2.status === 0 && lastJson713(closeB2).closed === 'gateB'
+        && lastJson713(closeB2).opened && lastJson713(closeB2).opened.id === 'finalize',
+        '#713: gateB re-passes and finalize opens: ' + closeB2.stdout + closeB2.stderr);
+
+      // Step 6 (was the dead end): drive to finalize-ready with the claim intact.
+      rec713 = run713(NODE_CLI_713, ['record-evidence', '--project', project713, '--node-id', 'finalize',
+        '--stdin', '--json'], tmp713,
+        'evidence-binding: finalize ' + lastJson713(closeB2).opened.nonce + '\nfinalization bookkeeping complete\n');
+      assert(rec713.status === 0, '#713: finalize evidence records: ' + rec713.stdout + rec713.stderr);
+      const closeFin713 = run713(NODE_CLI_713, ['close-node', '--project', project713,
+        '--node-id', 'finalize', '--json'], tmp713);
+      assert(closeFin713.status === 0 && lastJson713(closeFin713).result === 'ok',
+        '#713: finalize closes — the pass-then-later-fail sequence drives to a finalize-ready '
+        + 'state without releasing the claim: ' + closeFin713.stdout + closeFin713.stderr);
+
+      const finalJournal713 = JSON.parse(fs.readFileSync(path.join(cacheDir713, 'review-attempts.json'), 'utf8'));
+      assert(finalJournal713.attempts.length === 4,
+        '#713: A1 + B1 + A2 + B2 settle exactly four durable attempts, got ' + finalJournal713.attempts.length);
+      const attemptA2 = finalJournal713.attempts.find(a =>
+        a.logical_gate.members.includes('gateA') && a.ordinal === 2);
+      assert(attemptA2 && attemptA2.outcome === 'pass' && attemptA2.lifecycle_settled === true
+        && attemptA2.progress && attemptA2.progress.progress === true,
+        '#713: gateA\'s re-certification attempt settles PASS with fold-boundary progress, got '
+        + JSON.stringify(attemptA2 && attemptA2.progress));
+      assert(reviewSchema713.validateReviewJournal(finalJournal713, planHash713, 2).ok === true,
+        '#713: the fold-marked journal round-trips the strict canonicalJson V2 validator');
+      const resume713 = run713(VALIDATOR_CLI_713, [planPath713, '--resume-check', '--json'], tmp713);
+      assert(resume713.status === 0,
+        '#713: --resume-check passes over the fold-marked journal and advanced plan: '
+        + resume713.stdout + resume713.stderr);
+      const finalPlan713 = fs.readFileSync(planPath713, 'utf8');
+      const ledger713 = finalPlan713.slice(finalPlan713.indexOf('## Node Ledger'));
+      assert(['writer', 'gateA', 'gateB', 'finalize']
+        .every(id => new RegExp('\\| ' + id + ' \\| complete \\|').test(ledger713)),
+        '#713: the full sequence reaches an all-complete ledger with the claim intact (no release, '
+        + 'no replan), got:\n' + ledger713);
+      assert(!fs.existsSync(path.join(cacheDir713, 'replan-source.json')),
+        '#713: no replan escape hatch was needed to unwedge the claim');
+
+      // #714's schema-2 pin on the same cycle (pre-seeded rows + a gate re-close after repair):
+      // the untouched plan validates; re-closes advanced rows in place — never duplicated.
+      const compliance713 = planValidator.validateRequiredAgentCompliance(finalPlan713,
+        planValidator.parseNodes(finalPlan713));
+      assert(compliance713.ok === true && compliance713.rows.length === 4,
+        '#713/#714: the untouched schema-2 plan passes validateRequiredAgentCompliance after the '
+        + 'full repair cycle, got ' + JSON.stringify(compliance713));
+      assert((finalPlan713.match(/\| tdd-guide \(writer\) \|/g) || []).length === 1
+        && (finalPlan713.match(/\| security-reviewer \(gateA\) \|/g) || []).length === 1
+        && (finalPlan713.match(/\| code-reviewer \(gateB\) \|/g) || []).length === 1
+        && (finalPlan713.match(/\| finalize \(finalize\) \|/g) || []).length === 1,
+        '#713/#714: every re-close advanced the pre-seeded row — no duplicate, no drift');
+      assert(!/\| (?:tdd-guide \(writer\)|security-reviewer \(gateA\)|code-reviewer \(gateB\)|finalize \(finalize\)) \| pending \|/.test(finalPlan713),
+        '#713/#714: no pending compliance row survives the completed cycle');
+    }
+  } finally { fs.rmSync(tmp713, { recursive: true, force: true }); }
 }
 
 if (failed > 0) {
