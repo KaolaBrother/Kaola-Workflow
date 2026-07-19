@@ -22,9 +22,9 @@
     {
       "id": "n4-finalize",
       "role": "finalize",
-      "status": "in_progress",
-      "ledger_status": "in_progress"
+      "status": "completed",
+      "ledger_status": "complete"
     }
   ],
-  "last_synced_from_ledger": "2026-07-19T12:12:25.075Z"
+  "last_synced_from_ledger": "2026-07-19T12:32:30.028Z"
 }

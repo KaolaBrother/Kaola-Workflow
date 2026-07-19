@@ -26,3 +26,4 @@
 {"timestamp":"2026-07-19T12:08:44.593Z","event":"open","nodeId":"n3-security-certify","nonce":"ef7db60618c3","by":"adaptive-node"}
 {"timestamp":"2026-07-19T12:12:24.574Z","event":"close","nodeId":"n3-security-certify","nonce":"ef7db60618c3","by":"adaptive-node"}
 {"timestamp":"2026-07-19T12:12:25.021Z","event":"open","nodeId":"n4-finalize","nonce":"5ff03cb9075d","by":"adaptive-node"}
+{"timestamp":"2026-07-19T12:32:29.901Z","event":"close","nodeId":"n4-finalize","nonce":"5ff03cb9075d","by":"adaptive-node"}

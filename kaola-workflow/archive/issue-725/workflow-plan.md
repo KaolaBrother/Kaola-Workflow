@@ -191,7 +191,7 @@ transaction's own bookkeeping.
 | n1-repair | complete |
 | n2-code-certify | complete |
 | n3-security-certify | complete |
-| n4-finalize | in_progress |
+| n4-finalize | complete |
 
 ## Required Agent Compliance
 
@@ -200,4 +200,4 @@ transaction's own bookkeeping.
 | implementer (n1-repair) | subagent-invoked | evidence-binding: n1-repair 5ea5f85f1880 | |
 | code-reviewer (n2-code-certify) | subagent-invoked | evidence-binding: n2-code-certify 83bb71e5fd84 | |
 | security-reviewer (n3-security-certify) | subagent-invoked | evidence-binding: n3-security-certify ef7db60618c3 | |
-| finalize (n4-finalize) | pending | | |
+| finalize (n4-finalize) | main-session-direct | evidence-binding: n4-finalize 5ff03cb9075d | |

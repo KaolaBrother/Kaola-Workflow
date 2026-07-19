@@ -2,29 +2,29 @@
 
 ## Project
 name: issue-725
-status: active
+status: closed
 
 ## Current Position
 phase: adaptive
 phase_name: Adaptive
 workflow_path: adaptive
 runtime: claude
-step: start
-next_command: /kaola-workflow-plan-run issue-725
-next_skill: kaola-workflow-plan-run issue-725
+step: complete
+next_command: none (archived)
+next_skill: none (archived)
 main_session_role: orchestrator
 implementation_owner: N/A
 fix_owner: N/A
 inline_emergency_fallback_authorized: no
 
 ## Pending Gates
-- workflow-plan
+- none
 
 ## Last Evidence
 phase_file: N/A
 cache_file: N/A
-last_command: startup
-last_result: folder_claimed
+last_command: finalize
+last_result: closed_keep_open
 
 ## Planning Evidence
 plan_hash: 7dd4b0472fea7adff2769698c714521a82e1e223244413ad7a4302e863c17e82
@@ -33,7 +33,7 @@ risk: sensitivity=false blast_radius=true uncertain=false reasons=declared write
 first_node_id: n1-repair
 first_node_role: implementer
 ## Last Updated
-2026-07-19T03:47:42.444Z
+2026-07-19T12:40:13.162Z
 
 ## Epoch Lineage
 epoch_schema_version: 2
@@ -65,3 +65,12 @@ main_root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow
 session_marker: s-49705-mrr994nl
 claim_ts: 2026-07-19T03:47:42.417Z
 worktree_path: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-725
+
+## Closure
+archived_at: 2026-07-19T12:40:22.215Z
+issue_disposition: kept-open
+claim_label_removed: removed
+worktree_removed: kept
+closure_invariants: ok
+claim_planner_attested: attested
+finalize_contractor_attested: missing

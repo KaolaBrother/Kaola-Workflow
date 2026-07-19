@@ -33,3 +33,5 @@
 {"node":"n3-security-certify","event":"evidence","ts":"2026-07-19T12:12:22.529Z"}
 {"node":"n3-security-certify","event":"closed","ts":"2026-07-19T12:12:24.573Z"}
 {"node":"n4-finalize","event":"opened","ts":"2026-07-19T12:12:25.021Z"}
+{"node":"n4-finalize","event":"evidence","ts":"2026-07-19T12:32:24.268Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-19T12:32:29.900Z"}
