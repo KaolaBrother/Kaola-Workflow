@@ -1196,6 +1196,288 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Phase B (receipt diet): step decomposition (B0), diff-scoped chain selection (B1),
+// and hoisted-repeat dedup (B2). Unlike T1-T31 (which use --mock-chain single-command
+// chains), these drive REAL chains parsed from a self-host package.json so the step
+// lists come from the package.json source of truth. Each uses a throwaway git repo whose
+// four edition chains are fast, multi-step exit-0 scripts; the caller shapes the diff scope.
+// ---------------------------------------------------------------------------
+
+// Build a self-host repo whose 4 edition chains are FAST, multi-step scripts declared in
+// package.json (the read-only source of truth). `A.js` is shared by all four chains — the
+// hoist candidate. Each step script appends its own name to a per-repo exec-log so a test
+// can count executions. A base commit lands on `main`; the caller then mutates the worktree
+// to shape the diff scope (a non-edition file for claude-only, a plugins/ path for all-four).
+function makeScopeRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-scope-'));
+  const g = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim();
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  const execLog = path.join(dir, 'exec-log.txt');
+  const stepScript = (name) => {
+    fs.writeFileSync(path.join(dir, name),
+      '#!/usr/bin/env node\n\'use strict\';\n'
+      + 'require(\'fs\').appendFileSync(' + JSON.stringify(execLog) + ', ' + JSON.stringify(name) + " + '\\n');\n"
+      + 'process.exit(0);\n', { mode: 0o755 });
+    return 'node ' + name;
+  };
+  const A = stepScript('A.js');   // shared across all four -> the hoist candidate
+  const B = stepScript('B.js'), C = stepScript('C.js'), D = stepScript('D.js'), E = stepScript('E.js');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    scripts: {
+      'test:kaola-workflow:claude': A + ' && ' + B,
+      'test:kaola-workflow:codex': A + ' && ' + C,
+      'test:kaola-workflow:gitlab': A + ' && ' + D,
+      'test:kaola-workflow:gitea': A + ' && ' + E,
+    },
+  }, null, 2) + '\n');
+  // A genuinely non-edition (claude-only) source file: read by NO forge/codex contract validator
+  // and mirrored into no edition tree, so a change to it must scope to the claude chain alone.
+  // (README.md / CLAUDE.md / commands/ / agents/ / .agents/ / docs/ are ROOT cross-edition READ
+  // surfaces the non-claude validators assert on — see T38 — so they are NOT claude-only.)
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 1;\n');
+  g(['add', '-A']);
+  g(['commit', '-q', '-m', 'base']);
+  return { dir, execLog };
+}
+function execCount(execLog, token) {
+  try { return fs.readFileSync(execLog, 'utf8').split('\n').filter(l => l === token).length; } catch (_) { return 0; }
+}
+function projReceipt(dir, proj) { return path.join(dir, 'kaola-workflow', proj, '.cache', 'chain-receipt.json'); }
+function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) : []).join(','); }
+
+// ---------------------------------------------------------------------------
+// T32 (B0): a REAL chain is decomposed into its package.json `&&`-joined steps, and each
+// executed step is recorded as {command, duration_ms, exitCode} in a per-chain steps[]
+// array. The step list + order is parsed READ-ONLY from the package.json script.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    const rp = projReceipt(dir, 'issue-b0');
+    const r = run(dir, ['--chains', 'claude', '--project', 'issue-b0'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial' });
+    assert(r.exitCode === 0, 'T32: real 2-step claude chain exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    const rc = r.receipt;
+    assert(rc && rc.chains && rc.chains.length === 1, 'T32: one chain entry (claude)');
+    const steps = rc && rc.chains && rc.chains[0] && rc.chains[0].steps;
+    assert(Array.isArray(steps) && steps.length === 2, 'T32: chains[0].steps has 2 decomposed step entries; got ' + JSON.stringify(steps));
+    if (Array.isArray(steps) && steps.length === 2) {
+      assert(steps.every(s => typeof s.command === 'string' && typeof s.duration_ms === 'number' && typeof s.exitCode === 'number'),
+        'T32: each step records {command, duration_ms, exitCode}; got ' + JSON.stringify(steps));
+      assert(steps[0].command === 'node A.js' && steps[1].command === 'node B.js',
+        'T32: step commands parsed from package.json in order; got ' + JSON.stringify(steps.map(s => s.command)));
+    }
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T33 (B1): a claude-only diff (no edition-coupling path touched) + finalize context (--project)
+// selects the CLAUDE chain ONLY. The receipt's chains[] holds just the claude entry — the subset
+// receipt shape the adaptive finalize gate already tolerates.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 2;\n');   // a non-edition source file
+    const rp = projReceipt(dir, 'issue-scope-claude');
+    const r = run(dir, ['--project', 'issue-scope-claude'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'T33: claude-only scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    const rc = r.receipt;
+    assert(chainNames(rc) === 'claude', 'T33: a non-edition (claude-only) diff selects the claude chain ONLY; got ' + JSON.stringify(chainNames(rc)));
+    assert(rc && rc.scope && rc.scope.decision === 'claude-only', 'T33: receipt.scope.decision === claude-only; got ' + JSON.stringify(rc && rc.scope));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T34 (B1): a diff touching an edition-coupling path (plugins/) + finalize context selects ALL
+// FOUR chains, and the receipt records the scope decision + the touched-path diff evidence.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    const editionFile = path.join(dir, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'touched.js');
+    fs.mkdirSync(path.dirname(editionFile), { recursive: true });
+    fs.writeFileSync(editionFile, '// touched\n');
+    const rp = projReceipt(dir, 'issue-scope-all');
+    const r = run(dir, ['--project', 'issue-scope-all'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'T34: all-four scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    const rc = r.receipt;
+    assert(chainNames(rc) === 'claude,codex,gitlab,gitea', 'T34: an edition-coupling (plugins/) diff selects ALL FOUR chains; got ' + JSON.stringify(chainNames(rc)));
+    assert(rc && rc.scope && rc.scope.decision === 'all-four', 'T34: receipt.scope.decision === all-four; got ' + JSON.stringify(rc && rc.scope));
+    assert(rc && rc.scope && Array.isArray(rc.scope.touchedEditionPaths) && rc.scope.touchedEditionPaths.some(p => p.indexOf('plugins/') === 0),
+      'T34: scope records the touched edition path(s) as diff evidence; got ' + JSON.stringify(rc && rc.scope && rc.scope.touchedEditionPaths));
+    assert(rc && rc.scope && typeof rc.scope.base === 'string' && rc.scope.base.length > 0, 'T34: scope records the resolved diff base; got ' + JSON.stringify(rc && rc.scope && rc.scope.base));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T35 (B2): a step shared across multiple selected chains is HOISTED — executed EXACTLY ONCE in
+// the combined run (attributed to receipt.preamble) and NOT re-run inside any chain's steps[].
+// The per-chain steps still run once each.
+// ---------------------------------------------------------------------------
+{
+  const { dir, execLog } = makeScopeRepo();
+  try {
+    const editionFile = path.join(dir, 'plugins', 'kaola-workflow-gitea', 'scripts', 'touched.js');
+    fs.mkdirSync(path.dirname(editionFile), { recursive: true });
+    fs.writeFileSync(editionFile, '// touched\n');   // -> all four selected
+    const rp = projReceipt(dir, 'issue-hoist');
+    const r = run(dir, ['--project', 'issue-hoist'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'T35: all-four hoisted run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    assert(execCount(execLog, 'A.js') === 1, 'T35: the hoisted shared step A.js executed EXACTLY once across the combined four-chain run; got ' + execCount(execLog, 'A.js'));
+    assert(['B.js', 'C.js', 'D.js', 'E.js'].every(t => execCount(execLog, t) === 1), 'T35: each per-chain step executed exactly once');
+    const rc = r.receipt;
+    assert(rc && rc.preamble && Array.isArray(rc.preamble.steps) && rc.preamble.steps.filter(s => s.command === 'node A.js').length === 1,
+      'T35: the hoisted step is attributed to receipt.preamble (once); got ' + JSON.stringify(rc && rc.preamble));
+    assert(rc && rc.chains && rc.chains.every(c => (c.steps || []).every(s => s.command !== 'node A.js')),
+      'T35: no individual chain re-runs the hoisted step in its steps[]');
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T36 (B1 release path): a BARE run (no --project / --plan) is the release/default path and does
+// NOT scope-narrow — it produces the FULL four-chain receipt even on a claude-only diff, so the
+// release gate (which reads root/.cache/chain-receipt.json and refuses a subset) is untouched.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 3;\n');   // claude-only diff...
+    const rp = path.join(dir, '.cache', 'chain-receipt.json');
+    const r = run(dir, [], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'T36: bare (release/default) run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    const rc = r.receipt;
+    assert(chainNames(rc) === 'claude,codex,gitlab,gitea',
+      'T36: a bare run (no --project) produces the FULL four-chain receipt even on a claude-only diff (release path untouched); got ' + JSON.stringify(chainNames(rc)));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T37 (B1 fail-closed): when the diff base is UNRESOLVABLE (merge-base fails), the scope selection
+// FAILS CLOSED to ALL FOUR chains rather than silently narrowing to claude.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 4;\n');
+    const rp = projReceipt(dir, 'issue-failclosed');
+    const r = run(dir, ['--project', 'issue-failclosed'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'refs/heads/does-not-exist' });
+    assert(r.exitCode === 0, 'T37: fail-closed run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    const rc = r.receipt;
+    assert(chainNames(rc) === 'claude,codex,gitlab,gitea', 'T37: an UNRESOLVED base fails closed to ALL FOUR chains; got ' + JSON.stringify(chainNames(rc)));
+    assert(rc && rc.scope && rc.scope.decision === 'all-four' && /base/.test(String(rc.scope.reason || '')),
+      'T37: scope records the fail-closed base-unresolved reason; got ' + JSON.stringify(rc && rc.scope));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T38 (B1 fail-open closure): the finalize diff-scope classifier must treat ROOT cross-edition
+// READ surfaces as edition-coupling and force ALL FOUR chains. A root cross-edition read surface is
+// a file a NON-CLAUDE chain's contract validator asserts byte-parity / content on, but which lives
+// OUTSIDE plugins/, package.json, the forge-referenced scripts, and the codex-mirrored scripts/ — a
+// Claude command file cross-checked against the codex/forge SKILLs, the Codex marketplace registry,
+// a Claude agent role definition, a root doc the codex validator content-asserts, or the install/
+// uninstall scripts a forge validator runs/reads. A diff confined to one of these is NOT genuinely
+// claude-only: the codex/forge chain that reads it would go red where a claude-only receipt is
+// falsely green. Fail-closed by construction: any such path forces all four.
+// ---------------------------------------------------------------------------
+{
+  const rootReadSurfaces = [
+    'commands/workflow-init.md',           // codex/forge init SKILL byte-parity template
+    'commands/kaola-workflow-plan-run.md', // codex plan-run SKILL content parity
+    '.agents/plugins/marketplace.json',    // Codex marketplace registry (all three non-claude validators)
+    'agents/workflow-planner.md',          // Claude agent role — forge validators assert its concepts
+    'CLAUDE.md',                           // codex validator: line-count + durable-state concept
+    'README.md',                           // codex validator content assertion
+    'docs/api.md',                         // codex validator: closure-contract concept
+    'docs/workflow-state-contract.md',     // codex validator: durable-state concept
+    'install.sh',                          // gitlab validator runs it
+    'uninstall.sh',                        // gitea validator reads it
+  ];
+  for (const rel of rootReadSurfaces) {
+    const { dir } = makeScopeRepo();
+    try {
+      const abs = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, 'edition-coupling change\n');
+      const proj = 'issue-r1-' + rel.replace(/[^a-z0-9]+/gi, '-');
+      const rp = projReceipt(dir, proj);
+      const r = run(dir, ['--project', proj], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+      assert(r.exitCode === 0, 'T38: scoped run exits 0 for ' + rel + '; stderr=' + (r.stderr || '').slice(0, 200));
+      const rc = r.receipt;
+      assert(chainNames(rc) === 'claude,codex,gitlab,gitea',
+        'T38: a diff touching root cross-edition read surface ' + JSON.stringify(rel) + ' forces ALL FOUR chains; got ' + JSON.stringify(chainNames(rc)));
+      assert(rc && rc.scope && rc.scope.decision === 'all-four' && rc.scope.reason === 'edition_coupling',
+        'T38: ' + rel + ' -> scope.decision=all-four reason=edition_coupling; got ' + JSON.stringify(rc && rc.scope));
+      assert(rc && rc.scope && Array.isArray(rc.scope.touchedEditionPaths) && rc.scope.touchedEditionPaths.indexOf(rel) !== -1,
+        'T38: ' + rel + ' recorded in scope.touchedEditionPaths; got ' + JSON.stringify(rc && rc.scope && rc.scope.touchedEditionPaths));
+    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T38b (B1): the broadened classifier must NOT over-capture — a genuinely claude-only diff (a
+// normal source file, read by no non-claude validator and mirrored into no edition tree) still
+// narrows to the claude chain alone, preserving Phase B's common-case narrowing.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'src', 'feature.js'), 'exports.y = 9;\n');   // untracked claude-only change
+    const rp = projReceipt(dir, 'issue-r1-claudeonly');
+    const r = run(dir, ['--project', 'issue-r1-claudeonly'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'T38b: claude-only scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 200));
+    assert(chainNames(r.receipt) === 'claude' && r.receipt.scope && r.receipt.scope.decision === 'claude-only',
+      'T38b: a genuinely claude-only source diff still selects the claude chain ONLY; got ' + JSON.stringify(chainNames(r.receipt)) + ' scope=' + JSON.stringify(r.receipt && r.receipt.scope));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T39 (per-chain timeout contract): the KAOLA_RUN_CHAINS_TIMEOUT_MS bound is documented as PER
+// CHAIN, not per step. A decomposed multi-step chain whose steps each finish under the timeout but
+// whose CUMULATIVE wall-clock exceeds it is KILLED once the chain's budget is spent (timed_out:
+// true) — never run to completion. Before the fix, every step spawn got the full timeout, so the
+// effective bound was steps x timeout and the chain ran green.
+// ---------------------------------------------------------------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-timeout-'));
+  try {
+    const g = (a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 'test@example.com']);
+    g(['config', 'user.name', 'Test']);
+    const sleepStep = (name, ms) => {
+      fs.writeFileSync(path.join(dir, name),
+        '#!/usr/bin/env node\n\'use strict\';\nsetTimeout(function(){ process.exit(0); }, ' + ms + ');\n', { mode: 0o755 });
+      return 'node ' + name;
+    };
+    // 4 steps x 250ms sleep = ~1s cumulative; per-CHAIN bound 800ms. Each step finishes well under
+    // 800ms alone (so pre-fix, with the full timeout per step, all four run green), but the chain's
+    // cumulative wall-clock passes 800ms mid-run -> the fix kills it and marks it timed out.
+    const s1 = sleepStep('s1.js', 250), s2 = sleepStep('s2.js', 250), s3 = sleepStep('s3.js', 250), s4 = sleepStep('s4.js', 250);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: {
+      'test:kaola-workflow:claude': s1 + ' && ' + s2 + ' && ' + s3 + ' && ' + s4,
+    } }, null, 2) + '\n');
+    g(['add', '-A']); g(['commit', '-q', '-m', 'base']);
+    const rp = path.join(dir, '.cache', 'chain-receipt.json');
+    const r = run(dir, ['--chains', 'claude'], rp,
+      { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '800' });
+    assert(r.exitCode !== 0, 'T39: a chain exceeding its per-chain wall-clock budget stays RED (non-zero exit); stderr=' + (r.stderr || '').slice(0, 200));
+    const rc = r.receipt;
+    assert(rc !== null, 'T39: receipt written on a per-chain timeout');
+    if (rc !== null) {
+      const ch = rc.chains[0];
+      assert(ch.timed_out === true, 'T39: the chain is marked timed_out: true once cumulative wall-clock passes the per-chain bound; got ' + JSON.stringify(ch));
+      assert(ch.exitCode === 1, 'T39: a per-chain-timeout chain records exitCode 1; got ' + JSON.stringify(ch));
+      const greenSteps = (ch.steps || []).filter(s => s.exitCode === 0).length;
+      assert(greenSteps < 4, 'T39: the chain was killed BEFORE completing all 4 steps (per-chain budget, not per-step); green steps=' + greenSteps);
+    }
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

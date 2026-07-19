@@ -154,6 +154,139 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Phase B (receipt diet) — the forge run-chains port carries the same step-decomposition (B0),
+// diff-scoped chain selection (B1), and hoisted-repeat dedup (B2) logic as canonical (it is a
+// rename-normalized copy). These drive the FORGE port on REAL chains parsed from a self-host
+// package.json. Mirrors canonical test-run-chains.js T32/T33/T34.
+// ---------------------------------------------------------------------------
+function makeScopeRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-scope-'));
+  const g = (a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  const stepScript = (name) => {
+    fs.writeFileSync(path.join(dir, name), '#!/usr/bin/env node\n\'use strict\';\nprocess.exit(0);\n', { mode: 0o755 });
+    return 'node ' + name;
+  };
+  const A = stepScript('A.js'), B = stepScript('B.js'), C = stepScript('C.js'), D = stepScript('D.js'), E = stepScript('E.js');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: {
+    'test:kaola-workflow:claude': A + ' && ' + B,
+    'test:kaola-workflow:codex': A + ' && ' + C,
+    'test:kaola-workflow:gitlab': A + ' && ' + D,
+    'test:kaola-workflow:gitea': A + ' && ' + E,
+  } }, null, 2) + '\n');
+  // A genuinely non-edition (claude-only) source file (README.md / CLAUDE.md / commands/ / agents/ /
+  // .agents/ / docs/ are ROOT cross-edition READ surfaces the non-claude validators assert on — G7).
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 1;\n');
+  g(['add', '-A']);
+  g(['commit', '-q', '-m', 'base']);
+  return dir;
+}
+function projReceipt(dir, proj) { return path.join(dir, 'kaola-workflow', proj, '.cache', 'chain-receipt.json'); }
+function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) : []).join(','); }
+
+// G4 (B0): the forge port decomposes a real chain into its package.json steps with per-step timings.
+{
+  const dir = makeScopeRepo();
+  try {
+    const rp = projReceipt(dir, 'issue-b0');
+    const r = run(dir, ['--chains', 'gitea', '--project', 'issue-b0'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial' });
+    assert(r.exitCode === 0, 'G4: real 2-step gitea chain exits 0; stderr=' + (r.stderr || '').slice(0, 200));
+    const steps = r.receipt && r.receipt.chains && r.receipt.chains[0] && r.receipt.chains[0].steps;
+    assert(Array.isArray(steps) && steps.length === 2 && steps.every(s => typeof s.duration_ms === 'number' && typeof s.exitCode === 'number'),
+      'G4: chains[0].steps has 2 decomposed step entries with timings; got ' + JSON.stringify(steps));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// G5 (B1): a claude-only diff + --project selects the claude chain ONLY on the forge port.
+{
+  const dir = makeScopeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 2;\n');
+    const rp = projReceipt(dir, 'issue-scope-claude');
+    const r = run(dir, ['--project', 'issue-scope-claude'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'G5: claude-only scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 200));
+    assert(chainNames(r.receipt) === 'claude' && r.receipt.scope && r.receipt.scope.decision === 'claude-only',
+      'G5: a non-edition diff selects the claude chain only; got ' + JSON.stringify(chainNames(r.receipt)) + ' scope=' + JSON.stringify(r.receipt && r.receipt.scope));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// G6 (B1): a diff touching plugins/ (edition coupling) + --project selects ALL FOUR on the forge port.
+{
+  const dir = makeScopeRepo();
+  try {
+    const f = path.join(dir, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'touched.js');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, '// touched\n');
+    const rp = projReceipt(dir, 'issue-scope-all');
+    const r = run(dir, ['--project', 'issue-scope-all'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'G6: all-four scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 200));
+    assert(chainNames(r.receipt) === 'claude,codex,gitlab,gitea' && r.receipt.scope && r.receipt.scope.decision === 'all-four',
+      'G6: an edition-coupling diff selects all four; got ' + JSON.stringify(chainNames(r.receipt)) + ' scope=' + JSON.stringify(r.receipt && r.receipt.scope));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// G7 (B1 fail-open closure): a diff confined to a ROOT cross-edition READ surface — a file a
+// non-claude contract validator asserts byte-parity / content on, OUTSIDE plugins/, package.json,
+// the forge-referenced scripts, and the codex-mirrored scripts/ — forces ALL FOUR chains on the
+// forge port too. A genuinely claude-only source diff still narrows to claude alone.
+{
+  const rootReadSurfaces = [
+    'commands/workflow-init.md', 'commands/kaola-workflow-plan-run.md',
+    '.agents/plugins/marketplace.json', 'agents/workflow-planner.md',
+    'CLAUDE.md', 'README.md', 'docs/api.md', 'docs/workflow-state-contract.md',
+    'install.sh', 'uninstall.sh',
+  ];
+  for (const rel of rootReadSurfaces) {
+    const dir = makeScopeRepo();
+    try {
+      const abs = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, 'edition-coupling change\n');
+      const proj = 'issue-r1-' + rel.replace(/[^a-z0-9]+/gi, '-');
+      const rp = projReceipt(dir, proj);
+      const r = run(dir, ['--project', proj], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+      assert(chainNames(r.receipt) === 'claude,codex,gitlab,gitea' && r.receipt.scope && r.receipt.scope.decision === 'all-four' && r.receipt.scope.reason === 'edition_coupling',
+        'G7: root cross-edition read surface ' + JSON.stringify(rel) + ' forces all four; got ' + JSON.stringify(chainNames(r.receipt)) + ' scope=' + JSON.stringify(r.receipt && r.receipt.scope));
+    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+  }
+  const dir = makeScopeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, 'src', 'feature.js'), 'exports.y = 9;\n');
+    const rp = projReceipt(dir, 'issue-r1-claudeonly');
+    const r = run(dir, ['--project', 'issue-r1-claudeonly'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(chainNames(r.receipt) === 'claude' && r.receipt.scope && r.receipt.scope.decision === 'claude-only',
+      'G7: a genuinely claude-only source diff still selects the claude chain only; got ' + JSON.stringify(chainNames(r.receipt)));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// G8 (per-chain timeout contract): a decomposed multi-step chain whose steps each finish under the
+// timeout but whose CUMULATIVE wall-clock exceeds it is killed once the per-chain budget is spent
+// (timed_out: true) — the bound is per CHAIN, not per step.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-timeout-'));
+  try {
+    const g = (a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
+    g(['init', '-q', '-b', 'main']); g(['config', 'user.email', 't@e.com']); g(['config', 'user.name', 'T']);
+    const sleepStep = (name, ms) => {
+      fs.writeFileSync(path.join(dir, name), '#!/usr/bin/env node\n\'use strict\';\nsetTimeout(function(){ process.exit(0); }, ' + ms + ');\n', { mode: 0o755 });
+      return 'node ' + name;
+    };
+    const s1 = sleepStep('s1.js', 250), s2 = sleepStep('s2.js', 250), s3 = sleepStep('s3.js', 250), s4 = sleepStep('s4.js', 250);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { 'test:kaola-workflow:gitea': s1 + ' && ' + s2 + ' && ' + s3 + ' && ' + s4 } }, null, 2) + '\n');
+    g(['add', '-A']); g(['commit', '-q', '-m', 'base']);
+    const rp = path.join(dir, '.cache', 'chain-receipt.json');
+    const r = run(dir, ['--chains', 'gitea'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '800' });
+    assert(r.exitCode !== 0, 'G8: a chain exceeding its per-chain wall-clock budget stays RED');
+    const ch = r.receipt && r.receipt.chains && r.receipt.chains[0];
+    assert(ch && ch.timed_out === true && ch.exitCode === 1 && (ch.steps || []).filter(s => s.exitCode === 0).length < 4,
+      'G8: chain killed once cumulative wall-clock passes the per-chain bound (timed_out:true, <4 green steps); got ' + JSON.stringify(ch));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

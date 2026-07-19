@@ -71,6 +71,17 @@
 //                                // by the gate so it computes the identical band; [] when none.>"],
 //     "startedAt": "<ISO timestamp>",
 //     "completedAt": "<ISO timestamp>",
+//     "scope": {                        // #725 (B1): the finalize-scoped chain-selection decision.
+//       "decision": "claude-only",       // claude-only | all-four | explicit | no_narrowing
+//       "reason": "non_edition_diff",    // non_edition_diff | edition_coupling | base_unresolved | ...
+//       "base": "<merge-base sha>",       // the diff base finalize scoped against (null if unresolved)
+//       "touchedEditionPaths": [],        // the changed paths that forced all-four (diff evidence)
+//       "changedFileCount": 3             // # of changed files vs the base
+//     },                                  // AUTO-SET only for a finalize-context run (--project/--plan)
+//                                         // with no --chains/--mock; the bare release path is unscoped.
+//     "preamble": {                      // #725 (B2): steps HOISTED out of >1 chain, run ONCE.
+//       "steps": [ { "command": "...", "duration_ms": 12, "exitCode": 0 } ]
+//     },
 //     "chains": [
 //       {
 //         "name": "claude",
@@ -79,6 +90,11 @@
 //         "duration_ms": 12345,
 //         "accepted_red": false,
 //         "accepted_red_issue": null,
+//         "steps": [                    // #725 (B0): the per-step timing/verdict decomposition (a
+//                                        // hoisted repeat lives in receipt.preamble, not here). A
+//                                        // one-step (mocked) chain carries a single entry.
+//           { "command": "node scripts/...", "duration_ms": 234, "exitCode": 0 }
+//         ],
 //         "attempts": 1,                // #550: how many times this chain ran (>1 == a transient retry)
 //         "retried_transient": false,   // #550: true iff a transient signature triggered a re-run
 //         "timed_out": false,           // #608: true iff the FINAL attempt was killed by the per-chain
@@ -164,27 +180,42 @@ function resolveConcurrency(env, cpuCount, chainCount) {
   return Math.min(n, Math.floor(cores / CORES_PER_CHAIN));
 }
 
-// Resolve a chain name into a dispatch spec (command + waiver disposition). Shared by the
-// serial and concurrent paths so both produce IDENTICAL per-chain result shapes.
-function buildSpec(name, ctx) {
+// #725 (B0): split a chain's package.json script into its `&&`-joined step commands (read-only —
+// package.json stays the single source of truth so each chain remains standalone-runnable via
+// `npm run test:kaola-workflow:<edition>`). The self-host edition scripts carry no `&&` inside a
+// quoted argument, so a bare `&&` split is faithful.
+function parseChainStepList(scriptStr) {
+  return String(scriptStr).split('&&').map((s) => s.trim()).filter(Boolean);
+}
+
+// Resolve a chain name into a step-decomposed dispatch spec (ordered steps + waiver disposition).
+// Shared by the serial and concurrent paths so both produce IDENTICAL per-chain result shapes.
+// A MOCKED chain (or a real chain whose script does not parse) reduces to a SINGLE step — the
+// pre-#725 whole-command behavior — so every mock-based test path is byte-unchanged. A REAL chain
+// decomposes into per-step `sh -c "<step>"` invocations so each step is individually timed and a
+// hoisted repeat can be deduped.
+function resolveChainSteps(name, ctx) {
   const isMocked = Object.prototype.hasOwnProperty.call(ctx.mocks, name);
-  let cmdParts, commandStr;
-  if (isMocked) {
-    cmdParts = [ctx.mocks[name]];
-    commandStr = ctx.mocks[name];
-  } else {
-    commandStr = ctx.resolvedCommands[name];
-    cmdParts = parseCommand(commandStr);
-  }
   const isWaived = Object.prototype.hasOwnProperty.call(ctx.waivers, name);
+  // The receipt records the canonical npm command even for a mocked chain (so a mock run's receipt
+  // reads like a real run); a mock with no canonical mapping records its own script.
+  const canonical = ctx.resolvedCommands[name] || CHAIN_COMMANDS[name] || (isMocked ? ctx.mocks[name] : ('npm run test:kaola-workflow:' + name));
+  let steps;
+  if (isMocked) {
+    steps = [{ command: canonical, cmdParts: [ctx.mocks[name]] }];
+  } else {
+    const stepStrs = parseChainStepList((ctx.scripts && ctx.scripts['test:kaola-workflow:' + name]) || '');
+    steps = stepStrs.length
+      ? stepStrs.map((s) => ({ command: s, cmdParts: ['sh', '-c', s] }))
+      : [{ command: canonical, cmdParts: parseCommand(canonical) }];   // fallback: run the whole npm command as one step
+  }
   return {
     name,
-    cmdParts,
-    // The receipt records the canonical npm command even for a mocked chain (so a mock run's
-    // receipt reads like a real run); a mock with no canonical mapping records its own script.
-    command: isMocked ? (ctx.resolvedCommands[name] || CHAIN_COMMANDS[name] || commandStr) : commandStr,
+    command: canonical,
+    mocked: isMocked,
     accepted_red: isWaived,
     accepted_red_issue: isWaived ? ctx.waivers[name] : null,
+    steps,
   };
 }
 
@@ -265,33 +296,123 @@ function cleanupIsolatedChain(isolation) {
   }
 }
 
-// #550: re-run a SINGLE chain ONLY on a POSITIVE transient-infra signature, up to maxAttempts.
-// `runOne(spec, cwd, timeoutMs)` is either runChainSync (sync) or runChainAsync (Promise); `await`
-// handles both uniformly. Returns the LAST attempt's result, augmented with `attempts` and
-// `retried_transient`. PRECEDENCE #1 (accuracy): a determinate red — exitCode!==0 with NO transient
-// signature in _output — is NEVER retried; a timeout kill (_timedOut) is non-retryable by default.
-// Retry therefore can never flip a determinate red to green; a still-red-after-retry chain stays red.
+// #550: re-run a SINGLE command spec ONLY on a POSITIVE transient-infra signature, up to
+// maxAttempts, WITHOUT creating an isolated TMPDIR (the caller owns isolation — one per chain, so
+// a chain's steps share the chain's private temp root). `runOne(spec, cwd, timeoutMs)` is either
+// runChainSync (sync) or runChainAsync (Promise); `await` handles both uniformly. Returns the LAST
+// attempt's result, augmented with `attempts` and `retried_transient`. PRECEDENCE #1 (accuracy): a
+// determinate red — exitCode!==0 with NO transient signature in _output — is NEVER retried; a
+// timeout kill (_timedOut) is non-retryable by default. Retry therefore can never flip a determinate
+// red to green; a still-red-after-retry spec stays red.
+async function runSpecWithRetry(spec, cwd, timeoutMs, runOne, maxAttempts) {
+  const max = Math.max(1, maxAttempts | 0);
+  let attempt = 0;
+  let result;
+  let retried = false;
+  for (;;) {
+    attempt++;
+    result = await runOne(spec, cwd, timeoutMs);
+    if (result.exitCode === 0) break;                       // green — done
+    const retryable = attempt < max
+      && !result._timedOut                                  // a timeout kill is non-retryable
+      && isTransientFetchStderr(result._output);            // POSITIVE transient signature required
+    if (!retryable) break;                                  // determinate red OR budget exhausted
+    retried = true;
+    await delayMs(retryBackoffMs(attempt));                 // small backoff before re-running THIS spec
+  }
+  result.attempts = attempt;
+  result.retried_transient = retried;
+  return result;
+}
+
+// #550: isolation + retry for a SINGLE command spec — the backward-compatible wrapper (a one-step
+// chain / the hoisted-preamble runner). Creates one private TMPDIR, runs the spec (with transient
+// retry) inside it, cleans up. A multi-step chain uses runChainSteps (below) instead, which owns a
+// single isolation across ALL of the chain's steps.
 async function runChainWithRetry(spec, cwd, timeoutMs, runOne, maxAttempts) {
   const isolation = createIsolatedChainSpec(spec);
   try {
-    const max = Math.max(1, maxAttempts | 0);
-    let attempt = 0;
-    let result;
-    let retried = false;
-    for (;;) {
-      attempt++;
-      result = await runOne(isolation.spec, cwd, timeoutMs);
-      if (result.exitCode === 0) break;                       // green — done
-      const retryable = attempt < max
-        && !result._timedOut                                  // a timeout kill is non-retryable
-        && isTransientFetchStderr(result._output);            // POSITIVE transient signature required
-      if (!retryable) break;                                  // determinate red OR budget exhausted
-      retried = true;
-      await delayMs(retryBackoffMs(attempt));                 // small backoff before re-running THIS spec
+    return await runSpecWithRetry(isolation.spec, cwd, timeoutMs, runOne, maxAttempts);
+  } finally {
+    cleanupIsolatedChain(isolation);
+  }
+}
+
+// #725 (B0): record ONE executed step for the receipt's per-chain steps[] array — the additive
+// per-step timing/verdict decomposition. Promotes the internal _timedOut/_signal markers only when
+// set (a green step carries neither), keeping the entry minimal.
+function stepEntry(command, r) {
+  const e = { command, duration_ms: r.duration_ms, exitCode: r.exitCode };
+  if (r._timedOut) e.timed_out = true;
+  if (r._signal) e.signal = r._signal;
+  return e;
+}
+
+// #725 (B0/B3): run ONE chain as its ORDERED step list inside a SINGLE per-chain isolated TMPDIR
+// (so a chain's steps share one private temp root, and concurrent chains never collide). Steps run
+// sequentially with `&&` short-circuit — a determinate step failure stops the chain. `skip` (a Set
+// of hoisted commands already run in the shared preamble) is neither re-run nor recorded here; the
+// chain inherits those steps' verdicts from the preamble. Returns the aggregated chain result:
+// exitCode (the first failing step, else 0), duration_ms (sum of EXECUTED steps), attempts /
+// retried_transient / _timedOut / _signal promoted from the failing step (or defaults), and a
+// steps[] recording each executed step. A one-step (mocked / whole-npm) chain reduces to exactly the
+// pre-#725 single-spawn shape (one isolation, one step, verdict == that step) — byte-compatible.
+//
+// #725 (R2): the KAOLA_RUN_CHAINS_TIMEOUT_MS bound is PER CHAIN, not per step (as the header
+// documents). Each step spawn is given only the REMAINING per-chain budget — the full timeout minus
+// the chain's cumulative wall-clock so far — so once the chain's wall-clock reaches the bound the
+// running or next step is killed and the chain is marked timed out. Without this, every step got the
+// full timeout and the effective bound was steps x timeout (a false green on a slow multi-step
+// chain). A single-step (mocked) chain still gets effectively the full budget.
+async function runChainSteps(chainSpec, cwd, timeoutMs, runOne, maxAttempts, skip) {
+  const isolation = createIsolatedChainSpec(chainSpec);
+  const chainStart = Date.now();                              // #725 (R2): per-chain wall-clock origin
+  try {
+    const stepEntries = [];
+    let failing = null;
+    let totalMs = 0, maxAttemptsSeen = 1, anyRetried = false;
+    for (const st of chainSpec.steps) {
+      if (skip && skip.has(st.command)) continue;             // hoisted — verified once in the preamble
+      // #725 (R2): the REMAINING per-chain wall-clock budget for this step's spawn. When it is
+      // already spent the chain has reached its per-chain bound: kill HERE (record a synthetic
+      // timed-out step; never grant a fresh full timeout) so the aggregate can never exceed the bound.
+      const remaining = timeoutMs - (Date.now() - chainStart);
+      if (remaining <= 0) {
+        const killed = {
+          name: chainSpec.name, exitCode: 1, duration_ms: 0, attempts: 1, retried_transient: false,
+          _timedOut: true, _signal: 'SIGTERM',
+          _output: 'run-chains: per-chain wall-clock budget (' + timeoutMs + 'ms) exhausted before step "' + st.command + '"',
+        };
+        stepEntries.push(stepEntry(st.command, killed));
+        failing = killed;
+        break;
+      }
+      const stepSpec = {
+        name: chainSpec.name, cmdParts: st.cmdParts, command: st.command,
+        accepted_red: chainSpec.accepted_red, accepted_red_issue: chainSpec.accepted_red_issue,
+        env: isolation.spec.env,
+      };
+      const r = await runSpecWithRetry(stepSpec, cwd, remaining, runOne, maxAttempts);
+      totalMs += r.duration_ms || 0;
+      maxAttemptsSeen = Math.max(maxAttemptsSeen, r.attempts || 1);
+      anyRetried = anyRetried || r.retried_transient === true;
+      stepEntries.push(stepEntry(st.command, r));
+      if (r.exitCode !== 0) { failing = r; break; }            // && short-circuit (incl. a per-chain-budget timeout kill)
     }
-    result.attempts = attempt;
-    result.retried_transient = retried;
-    return result;
+    return {
+      name: chainSpec.name,
+      command: chainSpec.command,
+      accepted_red: chainSpec.accepted_red,
+      accepted_red_issue: chainSpec.accepted_red_issue,
+      exitCode: failing ? failing.exitCode : 0,
+      duration_ms: totalMs,
+      attempts: maxAttemptsSeen,
+      retried_transient: anyRetried,
+      _timedOut: failing ? !!failing._timedOut : false,
+      _signal: failing ? (failing._signal || null) : null,
+      _output: failing ? failing._output : '',
+      steps: stepEntries,
+    };
   } finally {
     cleanupIsolatedChain(isolation);
   }
@@ -358,23 +479,189 @@ function runChainAsync(spec, cwd, timeoutMs) {
   });
 }
 
-// Bounded concurrent pool over `specs`. Each of `concurrency` workers drains a shared
-// index; results are collected out-of-order then RE-SORTED to `specs` order (== the
-// canonical KNOWN_CHAINS-filtered order) so the receipt is deterministic.
-// #550: the worker wraps runChainAsync in runChainWithRetry so a transient retry stays PER-SPEC —
-// a transient on one chain re-runs ONLY that chain, never the other three.
-async function runConcurrent(specs, cwd, timeoutMs, concurrency, maxAttempts) {
+// #725 (B2): run the HOISTED shared preamble ONCE, serially, before any chain dispatch. Each
+// hoisted command (a step that appears in more than one selected real chain — all such steps in the
+// self-host chains are read-only validators, so running once is equivalent to running per chain)
+// executes in its own private TMPDIR with transient retry. Returns the per-command results map (each
+// chain reads its hoisted steps' verdicts here) + the receipt's preamble step entries.
+async function runPreamble(preambleSteps, cwd, timeoutMs, maxAttempts) {
+  const results = new Map();
+  const entries = [];
+  for (const st of preambleSteps) {
+    const spec = { name: 'preamble', cmdParts: st.cmdParts, command: st.command, accepted_red: false, accepted_red_issue: null };
+    const r = await runChainWithRetry(spec, cwd, timeoutMs, runChainSync, maxAttempts);
+    results.set(st.command, r);
+    entries.push(stepEntry(st.command, r));
+  }
+  return { results, entries };
+}
+
+// #725: dispatch ONE chain, honoring the hoisted preamble. When hoisting is active and a hoisted
+// step this chain contains FAILED in the preamble, the chain is red at that step (skip its own
+// steps — in the un-hoisted `&&` order it would have stopped there anyway; the overall run is
+// already red, so running fewer steps only saves work — never a false green). Otherwise the chain's
+// hoisted steps are skipped (verified in the preamble) and its OWN steps run.
+async function dispatchChain(spec, cwd, timeoutMs, runOne, maxAttempts, hoistSet, preambleResults) {
+  if (spec.mocked || !hoistSet || hoistSet.size === 0) {
+    return runChainSteps(spec, cwd, timeoutMs, runOne, maxAttempts, null);
+  }
+  const hoistedForChain = spec.steps.filter((st) => hoistSet.has(st.command));
+  const failed = hoistedForChain.find((st) => { const pr = preambleResults.get(st.command); return pr && pr.exitCode !== 0; });
+  if (failed) {
+    const pr = preambleResults.get(failed.command);
+    return {
+      name: spec.name, command: spec.command, accepted_red: spec.accepted_red, accepted_red_issue: spec.accepted_red_issue,
+      exitCode: pr.exitCode, duration_ms: 0, attempts: 1, retried_transient: false,
+      _timedOut: false, _signal: null, _output: pr._output || '', steps: [], preamble_failed: failed.command,
+    };
+  }
+  const skip = new Set(hoistedForChain.map((st) => st.command));
+  return runChainSteps(spec, cwd, timeoutMs, runOne, maxAttempts, skip);
+}
+
+// Dispatch every selected chain (serial or bounded-concurrent pool). Concurrent results are
+// collected out-of-order then RE-SORTED to `specs` order (== the canonical KNOWN_CHAINS-filtered
+// order) so the receipt is deterministic. #725: each chain runs its ordered, hoist-deduped step
+// list in its own isolated TMPDIR; concurrency (B3) is preserved — the per-chain isolation still
+// holds under step decomposition.
+async function dispatchChains(specs, cwd, timeoutMs, maxAttempts, concurrency, hoistSet, preambleResults) {
+  if (concurrency <= 1) {
+    const out = [];
+    for (const spec of specs) {
+      out.push(await dispatchChain(spec, cwd, timeoutMs, runChainSync, maxAttempts, hoistSet, preambleResults));
+    }
+    return out;
+  }
   const results = new Map();
   let next = 0;
   async function worker() {
     while (next < specs.length) {
       const spec = specs[next++];
-      results.set(spec.name, await runChainWithRetry(spec, cwd, timeoutMs, runChainAsync, maxAttempts));
+      results.set(spec.name, await dispatchChain(spec, cwd, timeoutMs, runChainAsync, maxAttempts, hoistSet, preambleResults));
     }
   }
   const pool = Math.max(1, Math.min(concurrency, specs.length));
   await Promise.all(Array.from({ length: pool }, () => worker()));
   return specs.map((s) => results.get(s.name));   // canonical-order re-sort
+}
+
+// #725 (B1): resolve the diff base finalize scopes against — the KAOLA_FINALIZE_BASE override, else
+// the merge-base of HEAD with the default branch (local symbolic-ref, offline-safe, then common
+// default names). Returns the merge-base sha, or null when UNRESOLVED (a git failure / no default
+// branch) — the caller fails CLOSED to all four on null.
+function resolveDiffBase(cwd, env) {
+  const override = ((env && env.KAOLA_FINALIZE_BASE) || '').trim();
+  const candidates = [];
+  if (override) {
+    candidates.push(override);
+  } else {
+    const ref = spawnSync('git', ['-C', cwd, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { encoding: 'utf8' });
+    if (ref.status === 0 && !ref.error && ref.stdout.trim()) candidates.push(ref.stdout.trim());
+    candidates.push('origin/main', 'main', 'origin/master', 'master');
+  }
+  for (const c of candidates) {
+    const mb = spawnSync('git', ['-C', cwd, 'merge-base', 'HEAD', c], { encoding: 'utf8' });
+    if (mb.status === 0 && !mb.error) {
+      const sha = mb.stdout.trim();
+      if (sha) return sha;
+    }
+  }
+  return null;
+}
+
+// #725 (B1): the changed-file set vs `baseSha` — tracked committed+staged+unstaged (git diff) PLUS
+// untracked new files (fail-closed: a new plugins/ file must count). Returns null on a git failure
+// (the caller fails closed to all four).
+function computeChangedFiles(cwd, baseSha) {
+  const diff = spawnSync('git', ['-C', cwd, 'diff', '--name-only', baseSha], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  if (diff.status !== 0 || diff.error) return null;
+  const tracked = diff.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  const others = spawnSync('git', ['-C', cwd, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  const untracked = (others.status === 0 && !others.error) ? others.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+  return [...new Set([...tracked, ...untracked])];
+}
+
+// #725 (B1): the root scripts/hooks a FORGE (codex/gitlab/gitea) chain executes — extracted from the
+// package.json edition scripts (the SAME read-only source B0 decomposes). A diff touching one of
+// these means a forge chain would be affected, so it forces all four. Returns a Set of
+// forward-slashed path tokens ending in .js/.sh.
+function forgeReferencedScripts(scripts) {
+  const set = new Set();
+  for (const ed of ['codex', 'gitlab', 'gitea']) {
+    const s = scripts && scripts['test:kaola-workflow:' + ed];
+    if (typeof s !== 'string') continue;
+    for (const tok of s.split(/\s+/)) {
+      const t = tok.trim().replace(/^['"]|['"]$/g, '');
+      if (/\.(?:js|sh)$/.test(t)) set.add(t.replace(/\\/g, '/'));
+    }
+  }
+  return set;
+}
+
+// #725 (R1): ROOT cross-edition READ surfaces — files a NON-CLAUDE chain's contract validator reads
+// for byte-parity / content assertion, but which live OUTSIDE the classes recognized below
+// (plugins/, package.json, the forge-referenced scripts, the codex-mirrored scripts/). A diff
+// confined to one of these is NOT genuinely claude-only: the codex/forge chain that asserts on it
+// would go red where a claude-only receipt is falsely green (the B1 fail-open hole). Derived by
+// auditing the root reads of the three non-claude contract validators; each entry over-approximates
+// its CLASS (any path under a listed directory prefix couples) so a newly-added command / agent /
+// doc / marketplace / profile file is covered without editing this list — fail-closed by
+// construction. Self-contained (pure path checks, no cross-script import a forge port could not
+// resolve).
+//   - commands/  : Claude command files, cross-checked byte-for-byte against the codex/forge SKILLs
+//   - agents/    : Claude agent role definitions, asserted against the forge agent profiles
+//   - .agents/   : the Codex marketplace registry + agent profiles (read by all three validators)
+//   - docs/      : root docs the codex validator content-asserts (api / workflow-state-contract / conventions)
+const ROOT_EDITION_READ_PREFIXES = ['.agents/', 'commands/', 'agents/', 'docs/'];
+//   - CLAUDE.md / README.md      : content-asserted by the codex validator
+//   - install.sh / uninstall.sh  : run / read by the gitlab / gitea validators
+const ROOT_EDITION_READ_FILES = new Set(['CLAUDE.md', 'README.md', 'install.sh', 'uninstall.sh']);
+
+// #725 (B1): does this changed path couple to a non-claude edition (so the diff needs all four)? Any
+// path under plugins/ (the codex twin + both forge trees), package.json (the chain definitions), a
+// script a forge chain executes, a root scripts/ file mirrored into the codex tree (a
+// COMMON_SCRIPTS / byte-group / rename-family member — detected by filesystem existence so this stays
+// self-contained with NO cross-script import, which a forge port could not resolve), or a ROOT
+// cross-edition READ surface a non-claude contract validator asserts on (#725 R1 — the constants
+// above). Everything else is claude-exclusive. Fail-closed by construction: unsure -> all four.
+function isEditionCouplingPath(rel, cwd, forgeRefs) {
+  const p = String(rel).replace(/\\/g, '/');
+  if (p.indexOf('plugins/') === 0) return true;             // any edition tree (codex twin + both forges)
+  if (p === 'package.json') return true;                    // the chain-script definitions
+  if (forgeRefs && forgeRefs.has(p)) return true;           // a script a forge chain executes
+  const m = /^scripts\/(.+\.(?:js|sh))$/.exec(p);
+  if (m) {
+    try { if (fs.existsSync(path.join(cwd, 'plugins', 'kaola-workflow', 'scripts', m[1]))) return true; } catch (_) {}
+  }
+  // #725 (R1): a root cross-edition read surface asserted by a codex/forge contract validator.
+  for (const pref of ROOT_EDITION_READ_PREFIXES) if (p.indexOf(pref) === 0) return true;
+  if (ROOT_EDITION_READ_FILES.has(p)) return true;
+  return false;
+}
+
+// #725 (B1): classify the finalize-scoped chain selection for a self-host run. Resolves the diff base
+// and the changed-file set; if ANY changed path couples to a non-claude edition (or the base/diff is
+// UNRESOLVED), selects all four (fail-closed); otherwise the claude chain only (the subset receipt
+// the adaptive finalize gate already tolerates). Returns { decision, reason, base, touchedEditionPaths,
+// changedFileCount, chains } — recorded verbatim in the receipt as scope evidence.
+function classifyScope(cwd, env, availableNames, scripts) {
+  const base = resolveDiffBase(cwd, env);
+  if (!base) {
+    return { decision: 'all-four', reason: 'base_unresolved', base: null, touchedEditionPaths: [], changedFileCount: null, chains: [...availableNames] };
+  }
+  const changed = computeChangedFiles(cwd, base);
+  if (changed == null) {
+    return { decision: 'all-four', reason: 'diff_unresolved', base, touchedEditionPaths: [], changedFileCount: null, chains: [...availableNames] };
+  }
+  const forgeRefs = forgeReferencedScripts(scripts);
+  const touched = changed.filter((rel) => isEditionCouplingPath(rel, cwd, forgeRefs));
+  if (touched.length > 0) {
+    return { decision: 'all-four', reason: 'edition_coupling', base, touchedEditionPaths: touched.slice(0, 50), changedFileCount: changed.length, chains: [...availableNames] };
+  }
+  if (availableNames.includes('claude')) {
+    return { decision: 'claude-only', reason: 'non_edition_diff', base, touchedEditionPaths: [], changedFileCount: changed.length, chains: ['claude'] };
+  }
+  return { decision: 'all-four', reason: 'claude_chain_absent', base, touchedEditionPaths: [], changedFileCount: changed.length, chains: [...availableNames] };
 }
 
 // #546: resolve the git top-level so a --project receipt lands at the SAME absolute path whether
@@ -563,9 +850,30 @@ async function main(argv) {
   const resolvedCommands = resolved.commands || {};
   const availableNames = [...new Set([...(resolved.names || []), ...mockNames])];
   const chainSource = resolved.error ? 'mock' : resolved.source;
+  const pkgScripts = (readJsonOr(path.join(cwd, 'package.json'), null) || {}).scripts || {};
 
-  // Effective chain list: the requested subset (if any) else every resolved chain.
-  const chains = requestedChains != null ? requestedChains : [...availableNames];
+  // #725 (B1): FINALIZE-scoped chain selection. When the caller neither pins --chains nor mocks a
+  // chain, and this is a finalize-context invocation (--project / --plan — the adaptive finalize
+  // path always passes --project; the release/default path uses the bare cwd receipt and is left
+  // UNSCOPED so its all-four receipt is untouched), auto-select the chain set from the diff scope:
+  // a non-edition (claude-only) diff runs the claude chain only; an edition-coupling diff (or an
+  // unresolved base) fails closed to all four. The decision + diff evidence is recorded in the
+  // receipt below. A pinned --chains, a mock run, or a bare (no --project/--plan) run keeps the
+  // pre-#725 behavior (the requested subset, else every resolved chain).
+  let scopeInfo;
+  let chains;
+  const finalizeContext = (pathOpts.project != null || pathOpts.plan != null);
+  if (requestedChains == null && mockNames.length === 0 && !resolved.error && finalizeContext) {
+    scopeInfo = classifyScope(cwd, process.env, availableNames, pkgScripts);
+    chains = scopeInfo.chains;
+  } else {
+    chains = requestedChains != null ? requestedChains : [...availableNames];
+    scopeInfo = {
+      decision: requestedChains != null ? 'explicit' : 'no_narrowing',
+      reason: requestedChains != null ? 'explicit_chains' : (finalizeContext ? 'mock_or_unresolved' : 'no_project_context'),
+      base: null, touchedEditionPaths: [], changedFileCount: null, chains: [...chains],
+    };
+  }
 
   // Refuse an EMPTY effective chain set with NO receipt. Otherwise a zero-chain run would
   // write a `chains: []` receipt, and the name-agnostic finalize-check gate (which only filters
@@ -625,38 +933,48 @@ async function main(argv) {
   const outputDir = path.dirname(outputPath);
   fs.mkdirSync(outputDir, { recursive: true });
 
-  // Build per-chain dispatch specs in canonical (chains == KNOWN_CHAINS-filtered) order.
-  const ctx = { mocks, waivers, resolvedCommands };
-  const specs = chains.map((name) => buildSpec(name, ctx));
+  // Build per-chain step-decomposed dispatch specs in canonical (chains == KNOWN_CHAINS-filtered)
+  // order. #725 (B0): a real chain carries its ordered step list (parsed from package.json); a
+  // mocked chain carries a single step.
+  const ctx = { mocks, waivers, resolvedCommands, scripts: pkgScripts };
+  const specs = chains.map((name) => resolveChainSteps(name, ctx));
   const timeoutMs = resolveTimeoutMs(process.env);
-  // #550: per-chain transient-retry budget (default 2 == one retry). Both dispatch paths wrap their
-  // single-run primitive in runChainWithRetry so a transient-infra fault re-runs ONLY that chain.
+  // #550: per-step transient-retry budget (default 2 == one retry). Each step is wrapped in the
+  // transient-retry loop so a transient-infra fault re-runs ONLY that step of that chain.
   const maxAttempts = resolveChainRetry(process.env);
 
-  // #529: core-count-gated serial-vs-concurrent dispatch. concurrency <= 1 -> the
-  // byte-equivalent serial fallback; > 1 -> a bounded concurrent pool, results re-sorted
-  // to canonical order. Both paths produce identical per-chain result shapes.
-  const concurrency = resolveConcurrency(process.env, os.cpus().length, specs.length);
-
-  let dispatchResults;
-  if (concurrency <= 1) {
-    // Serial: run each chain in canonical order, retrying only the current spec on a transient fault
-    // before advancing (await keeps the sequential ordering of the byte-equivalent serial path).
-    dispatchResults = [];
-    for (const spec of specs) {
-      dispatchResults.push(await runChainWithRetry(spec, cwd, timeoutMs, runChainSync, maxAttempts));
+  // #725 (B2): compute the HOISTED shared preamble — commands appearing in MORE THAN ONE selected
+  // REAL chain (a mocked chain never contributes; its single step is a unique test hook). Every such
+  // repeat in the self-host chains is a read-only validator, so running it ONCE (attributed to the
+  // preamble) and skipping it in the individual chains is equivalent — and cuts the duplicated work
+  // of the all-four run. First-seen order across the real chains.
+  const realSpecs = specs.filter((s) => !s.mocked);
+  const cmdCounts = new Map();
+  for (const s of realSpecs) for (const st of s.steps) cmdCounts.set(st.command, (cmdCounts.get(st.command) || 0) + 1);
+  const hoistSet = new Set([...cmdCounts].filter(([, n]) => n > 1).map(([c]) => c));
+  const preambleSteps = [];
+  {
+    const seen = new Set();
+    for (const s of realSpecs) for (const st of s.steps) {
+      if (hoistSet.has(st.command) && !seen.has(st.command)) { seen.add(st.command); preambleSteps.push(st); }
     }
-  } else {
-    dispatchResults = await runConcurrent(specs, cwd, timeoutMs, concurrency, maxAttempts);
-    // Concurrent runs are not watchable live — surface each FAILED chain's captured output
-    // so a failure is debuggable from the run-chains output alone.
-    for (const ch of dispatchResults) {
-      if (ch.exitCode !== 0 && ch._output) {
-        process.stderr.write(
-          '\n===== chain "' + ch.name + '" failed (exit ' + ch.exitCode +
-          (ch._timedOut ? ', TIMED OUT' : '') + ') =====\n' + ch._output + '\n'
-        );
-      }
+  }
+
+  // #529: core-count-gated serial-vs-concurrent dispatch. concurrency <= 1 -> the serial fallback;
+  // > 1 -> a bounded concurrent pool, results re-sorted to canonical order. Both paths produce
+  // identical per-chain result shapes. #725: the hoisted preamble always runs serially FIRST; then
+  // each chain runs its ordered, hoist-deduped step list (each within its own isolated TMPDIR).
+  const concurrency = resolveConcurrency(process.env, os.cpus().length, specs.length);
+  const preamble = await runPreamble(preambleSteps, cwd, timeoutMs, maxAttempts);
+  const dispatchResults = await dispatchChains(specs, cwd, timeoutMs, maxAttempts, concurrency, hoistSet, preamble.results);
+  // Surface each FAILED chain's captured output so a failure is debuggable from the run-chains
+  // output alone (concurrent runs are not watchable live; a serial run is, but this is harmless).
+  for (const ch of dispatchResults) {
+    if (ch.exitCode !== 0 && ch._output) {
+      process.stderr.write(
+        '\n===== chain "' + ch.name + '" failed (exit ' + ch.exitCode +
+        (ch._timedOut ? ', TIMED OUT' : '') + (ch.preamble_failed ? ', hoisted step "' + ch.preamble_failed + '" failed' : '') + ') =====\n' + ch._output + '\n'
+      );
     }
   }
 
@@ -664,8 +982,9 @@ async function main(argv) {
   // additively records `attempts` (the FINAL attempt's exitCode is the chain verdict) and
   // `retried_transient`. #608: `timed_out` promotes the internal _timedOut marker so a receipt
   // reader (the plan-validator finalize gate, an operator) can distinguish a timeout kill from a
-  // genuine test failure without re-running anything. Readers index by name/exitCode/accepted_red
-  // (plan-validator --finalize-check, #522 schema test), so these are backward-compatible additions.
+  // genuine test failure without re-running anything. #725 (B0): `steps` records the per-step
+  // decomposition. Readers index by name/exitCode/accepted_red (plan-validator --finalize-check,
+  // #522 schema test), so these are backward-compatible additions.
   const chainResults = dispatchResults.map((ch) => ({
     name: ch.name,
     exitCode: ch.exitCode,
@@ -680,6 +999,11 @@ async function main(argv) {
     // null on a normal exit — recorded so a reader can distinguish a signal death from a genuine
     // non-zero test exit without re-running anything.
     signal: (typeof ch._signal === 'string' && ch._signal) ? ch._signal : null,
+    // #725 (B0): the per-step timing/verdict decomposition for this chain (hoisted steps live in
+    // receipt.preamble, not here).
+    steps: Array.isArray(ch.steps) ? ch.steps : [],
+    // #725 (B2): present only when this chain was marked red because a hoisted preamble step failed.
+    ...(ch.preamble_failed ? { preamble_failed: ch.preamble_failed } : {}),
   }));
 
   const completedAt = new Date().toISOString();
@@ -692,6 +1016,10 @@ async function main(argv) {
     startedAt,
     completedAt,
     source: chainSource,
+    // #725 (B1): the finalize-scoped chain-selection decision + diff evidence.
+    scope: scopeInfo,
+    // #725 (B2): the hoisted shared steps, run once across the combined run.
+    preamble: { steps: preamble.entries },
     chains: chainResults,
   };
 
@@ -749,4 +1077,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs, resolveConcurrency, resolveChainRetry, runChainWithRetry, runChainSync, runChainAsync, resolveOutputPath, getGitTopLevel };
+module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs, resolveConcurrency, resolveChainRetry, runChainWithRetry, runChainSync, runChainAsync, resolveOutputPath, getGitTopLevel, parseChainStepList, resolveChainSteps, classifyScope, resolveDiffBase, computeChangedFiles, forgeReferencedScripts, isEditionCouplingPath };
