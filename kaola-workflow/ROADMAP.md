@@ -7,7 +7,13 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| none | No active work | — | — | — |
+| #718 | bug(plan-run): visible task-list mirror can go stale at the role-dispatch seam | deferred — absorbed by #725 Phase D | — | closes with #725 Phase D |
+| #719 | bug(replan/freeze): mid-run replan prepare refuses state_compliance_authority_invalid on a schema-2 plan frozen without the one-row-per-node compliance set | deferred until #725 ships | — | schema-2 replan bundle after #725 (719/720 -> 721 -> 722 -> 724) |
+| #720 | bug(replan): prepare's verifyCandidate compares the schema-2 landable candidate digest against a raw ls-tree digest — replan_source_candidate_changed false positive blocks every schema-2 repair→replan | deferred until #725 ships | — | schema-2 replan bundle after #725 (719/720 -> 721 -> 722 -> 724) |
+| #721 | bug(replan): attestation written before the plan_hash stamp wedges the transaction at child_frozen — no CLI recovery, and the pre-stamp contract is undocumented | deferred until #725 ships | — | schema-2 replan bundle after #725 (719/720 -> 721 -> 722 -> 724) |
+| #722 | bug(replan): after a repair-replan commits, the child epoch's first gate close refuses review_journal_plan_hash_mismatch — the cross-epoch schema-2 journal rotation is missing | deferred until #725 ships | — | schema-2 replan bundle after #725 (719/720 -> 721 -> 722 -> 724) |
+| #724 | bug(plan-validator): whole-plan --barrier-check ignores the epoch lineage — a schema-2 child plan's accumulated candidate refuses write_set_overflow at finalize | deferred until #725 ships | — | schema-2 replan bundle after #725 (719/720 -> 721 -> 722 -> 724) |
+| #725 | epic(adaptive-only): retire fast/full paths, diff-scoped receipt, guard dedup, prompt diet, mega-test prune | open — next up | — | claim via KAOLA_TARGET_ISSUE=725 (Phase A: retire fast/full) |
 
 ## Rules
 
