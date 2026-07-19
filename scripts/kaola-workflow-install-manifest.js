@@ -53,7 +53,6 @@ const repoRoot = findRepoRoot(__dirname);
 // Intentional per-forge exclusions (dev/CI-only — deliberately NOT in this list):
 //   kaola-workflow-edition-sync.js — github edition-sync; dev/CI tool, not a runtime script
 //   kaola-workflow-fixtures-orphan-legality.js — CI-only fixture validator
-//   kaola-workflow-fast-audit.js — CI-only audit tool
 //   kaola-workflow-install-manifest.js (this file) — build-time manifest, not a runtime script
 //   kaola-workflow-release-surface-drift.js — dev/CI release drift checker
 //   validate-workflow-contracts.js + forge siblings — CI-only contract validators
@@ -84,9 +83,6 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-ledger-compare.js',
   'kaola-workflow-gap-sweep.js',
   'kaola-workflow-run-chains.js',
-  'kaola-workflow-fast-advance.js',
-  'kaola-workflow-full-advance.js',
-  'kaola-workflow-phase4-advance.js',
 ]);
 
 // Hooks are forge-neutral (byte-identical across all four trees), so the same list serves

@@ -1,0 +1,230 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "7dd4b0472fea7adff2769698c714521a82e1e223244413ad7a4302e863c17e82",
+  "attempts": [
+    {
+      "attempt_id": "review2-d87f31f07a33da92:1",
+      "ordinal": 1,
+      "plan_hash": "7dd4b0472fea7adff2769698c714521a82e1e223244413ad7a4302e863c17e82",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "fe4e5ced7af1558f0516f307a11d51c1fee44a3d80bf2ae7c9f49d717a94b090",
+        "key": "d87f31f07a33da9276ae79ba4379632ba137dc462ab02413d000e21fc91f4e48",
+        "kind": "sequence",
+        "members": [
+          "n2-code-certify"
+        ],
+        "surface_digests": [
+          "8560f9286ce1b970fc5806a7a24ce15452e5acfe575e71b39bd3ab1344c9128f"
+        ]
+      },
+      "transaction_key": "c1a43a884d79e74d8481ffa4c5fa6a5145166c3621a26b8852367001aaf7f58d",
+      "candidate_digest": "76dbc15d1d085d2697bdbfdfccbfe8a748dee26dc32f15d5835c95fa22bac7ce",
+      "candidate_declared": {
+        "plugins/kaola-workflow-gitea/scripts/test-gitea-sinks.js": "100644 bf3928e3726c5741b67f562daabf18702b39c977",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 7c27a7d44270fcaf4f0ddced31802b9e285daddd",
+        "plugins/kaola-workflow-gitlab/scripts/test-gitlab-sinks.js": "100644 08f4b682e19ac3a94d0a582553574d5c8607649e",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 2808f934c0fbb07c809173569c80c697ae978cad",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 cf61d40514c723543bda1c0a7428e998f2083aac",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 b692337f33f491c77fa8563c2648f342472999bb",
+        "scripts/test-bundle-finalize.js": "100644 5984e59c9a443beed8e5e6cf0236e77370f551df",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 3649fbd21584374495e1c8de2b033bc410c635d0",
+        "scripts/validate-workflow-contracts.js": "100755 cf61d40514c723543bda1c0a7428e998f2083aac"
+      },
+      "candidate_residue_digest": "7534fb898605dd096d4b53bf783104b652812afa561e8f9e71751fe6ae56b89a",
+      "epoch_lineage_id": "43c25ded7e36413c9c1fdb6f1bbdb1ccc19dfae845cf6366230239d986d27997",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "ea50259c572b6fd384ecc142ede7663dea45dec291f49890f5a9f8a62366b703",
+      "context_hashes": [
+        "612442e969b71a33c0d3117405ff2ca1eddd1d048c05c078caa81919ff89e813"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "76dbc15d1d085d2697bdbfdfccbfe8a748dee26dc32f15d5835c95fa22bac7ce",
+          "certifier_digest": "76dbc15d1d085d2697bdbfdfccbfe8a748dee26dc32f15d5835c95fa22bac7ce",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n2-code-certify",
+            "nonce": "83bb71e5fd84"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n2-code-certify",
+          "raw_evidence_sha256": "60785e512e0e91b9740715ae68b3aa4bd9d0faa808a0d68ffa21d561f6928865",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "612442e969b71a33c0d3117405ff2ca1eddd1d048c05c078caa81919ff89e813",
+          "schema_version": 2,
+          "surface": "the full accumulated repair diff vs claim root base 33a1ca57 across all four editions — the three migrated finalize fixtures, the three contract validators with only the CLAUDE.md fast-summary entry removed, and the three finalize SKILL packs with the full-advance shell block replaced by the adaptive_plan_missing refusal — reviewed against the n11-code-certify findings F1/F2/F3 and the four-chain-green plus opencode/kimi-green evidence",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-repair": {
+          "baseline": "5ea5f85f18803facfbe6443a70a2342f9749a157",
+          "anchored_ref": "5ea5f85f18803facfbe6443a70a2342f9749a157",
+          "open_token": "33a1ca57fd96a07ba1fbe87a85ae8d171293a221",
+          "generation": "5ea5f85f1880",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-repair"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-e1adba731b654b01:1",
+      "ordinal": 1,
+      "plan_hash": "7dd4b0472fea7adff2769698c714521a82e1e223244413ad7a4302e863c17e82",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "77eedb51d3dbddcc4a5e6ecd8511df0dad22cfc3510726741f3501827a30f97a",
+        "key": "e1adba731b654b016687ea1c85fcaa38a80edb977cda7bb3ba0240f2028767c6",
+        "kind": "sequence",
+        "members": [
+          "n3-security-certify"
+        ],
+        "surface_digests": [
+          "30ce64145d7733115f053965b9ed7f09b8cf9cffaa8af1dfb512d1d459347255"
+        ]
+      },
+      "transaction_key": "0020797806dd3b4c66a2daa038818feb8bf48100d3fe2d2c5a2c013f972f0df2",
+      "candidate_digest": "76dbc15d1d085d2697bdbfdfccbfe8a748dee26dc32f15d5835c95fa22bac7ce",
+      "candidate_declared": {
+        "plugins/kaola-workflow-gitea/scripts/test-gitea-sinks.js": "100644 bf3928e3726c5741b67f562daabf18702b39c977",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 7c27a7d44270fcaf4f0ddced31802b9e285daddd",
+        "plugins/kaola-workflow-gitlab/scripts/test-gitlab-sinks.js": "100644 08f4b682e19ac3a94d0a582553574d5c8607649e",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 2808f934c0fbb07c809173569c80c697ae978cad",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 cf61d40514c723543bda1c0a7428e998f2083aac",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 b692337f33f491c77fa8563c2648f342472999bb",
+        "scripts/test-bundle-finalize.js": "100644 5984e59c9a443beed8e5e6cf0236e77370f551df",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 3649fbd21584374495e1c8de2b033bc410c635d0",
+        "scripts/validate-workflow-contracts.js": "100755 cf61d40514c723543bda1c0a7428e998f2083aac"
+      },
+      "candidate_residue_digest": "7534fb898605dd096d4b53bf783104b652812afa561e8f9e71751fe6ae56b89a",
+      "epoch_lineage_id": "43c25ded7e36413c9c1fdb6f1bbdb1ccc19dfae845cf6366230239d986d27997",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "e7b76921f5d60c19582ba7f91d32c3a23d1a0709046431becd152b4713038cc6",
+      "context_hashes": [
+        "f21bae9c5ad49637d3a56b77e96d6e398466df97d919d71d010911606d2e41c1"
+      ],
+      "profile_hashes": [
+        "a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "security-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584",
+          "blocking_findings": 0,
+          "candidate_digest": "76dbc15d1d085d2697bdbfdfccbfe8a748dee26dc32f15d5835c95fa22bac7ce",
+          "certifier_digest": "76dbc15d1d085d2697bdbfdfccbfe8a748dee26dc32f15d5835c95fa22bac7ce",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n3-security-certify",
+          "raw_evidence_sha256": "d06d2f5135d5abc7f28a49dcd0b413f3846b31b0dd6f7302ca485de445d998b2",
+          "resolutions": [],
+          "resolved_profile_hash": "a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d",
+          "review_context_hash": "f21bae9c5ad49637d3a56b77e96d6e398466df97d919d71d010911606d2e41c1",
+          "schema_version": 2,
+          "surface": "the full accumulated repair diff vs claim root base 33a1ca57 across all four editions, with emphasis on the three finalize SKILL packs removed shell-execution block and the migrated finalize fixtures, reviewed for any injection, unsafe path, privilege, or secret-exposure regression against the inherited security frontier",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-repair": {
+          "baseline": "5ea5f85f18803facfbe6443a70a2342f9749a157",
+          "anchored_ref": "5ea5f85f18803facfbe6443a70a2342f9749a157",
+          "open_token": "33a1ca57fd96a07ba1fbe87a85ae8d171293a221",
+          "generation": "5ea5f85f1880",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-repair"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

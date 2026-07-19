@@ -17,9 +17,10 @@ delete process.env.KAOLA_WORKFLOW_OFFLINE;
 
 // #531 / #538: hermetic HOME — classifyIssue (called IN-PROCESS) reads parallel_mode from
 // ~/.config/kaola-workflow/config.json (os.homedir()), bypassing classifier when not 'auto'.
-// Also resolveInstalledPaths reads installed_paths from this file (#538). Pin a process-wide
-// sandbox HOME seeded with parallel_mode:'auto' + installed_paths:[] (adaptive-only default)
-// so a dev-local config can't affect these tests. os.homedir() honors process.env.HOME.
+// #725: the classifier still tolerantly reads installed_paths from this file (defaulting to []);
+// only the write side was retired. Pin a process-wide sandbox HOME seeded with parallel_mode:'auto'
+// + installed_paths:[] (adaptive-only) so a dev-local config can't affect these tests. os.homedir()
+// honors process.env.HOME.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
@@ -114,12 +115,78 @@ function writeState(root, project, issueIid, extra) {
   return dir;
 }
 
-function markPlanAbsentFinalizeFixtureFast(root, project) {
-  const stateFile = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
-  const content = fs.readFileSync(stateFile, 'utf8');
-  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
-    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
-    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+// #725: the retired fast N/A gate let a plan-absent finalize succeed by marking the state
+// `workflow_path: fast`. Post-retirement that shortcut is illegal (finalize refuses
+// adaptive_plan_missing), so this fixture seeds the minimum an authored adaptive run leaves behind
+// — a frozen adaptive plan (all nodes complete) + a gate-passing consumer final-validation.md — so
+// finalize's adaptive `--finalize-check` proceeds to the archive/closure behavior the fixture asserts.
+function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
+  const dir = path.join(fixtureRoot, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
+  const nodesTable = paths.length ? [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
+    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
+    '| n4 | finalize | n3 | — | 1 | sequence |',
+  ] : [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |',
+  ];
+  const ledgerRows = paths.length
+    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
+    : ['| n1 | complete |', '| n2 | complete |'];
+  const complianceRows = paths.length ? [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
+    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
+    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
+  ] : [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
+  ];
+  const tasks = paths.length ? [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
+    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ] : [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ];
+  const planBody = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    ...nodesTable, '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledgerRows, '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    ...complianceRows, ''
+  ].join('\n');
+  const planHash = planValidator.computePlanHash(planBody);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + planHash + ' -->\n\n' + planBody);
+  const glVal = (a) => spawnSync(process.execPath, [planValidatorScript, ...a], { cwd: fixtureRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  let finalHash = '';
+  try { finalHash = JSON.parse(glVal([planPath, '--freeze', '--json']).stdout).planHash || ''; } catch (_) {}
+  const sFile = path.join(dir, 'workflow-state.md');
+  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
+    const s = fs.readFileSync(sFile, 'utf8')
+      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
+      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
+      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
+      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
+    fs.writeFileSync(sFile, s);
+    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
+  }
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try { cand = JSON.parse(glVal([planPath, '--candidate-hash', '--json']).stdout).validated_candidate_hash || ''; } catch (_) {}
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
 
 function trustCodexProject(homeRoot, projectRoot) {
@@ -1122,6 +1189,9 @@ withForge({
   const kwRoot = fs.realpathSync(root) + '.kw';
   try {
     initGitRepo(root);
+    // #725: the adaptive finalize gate diffs against the default base branch (`main` when offline),
+    // so name the fixture's default branch `main` before adding the worktrees.
+    spawnSync('git', ['branch', '-M', 'main'], { cwd: root, encoding: 'utf8' });
     const wtRelease = path.join(kwRoot, 'release-project');
     fs.mkdirSync(path.dirname(wtRelease), { recursive: true });
     let result = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-70', '--', wtRelease, 'HEAD'], { cwd: root, encoding: 'utf8' });
@@ -1135,8 +1205,8 @@ withForge({
     assert.strictEqual(result.status, 0, result.stderr);
     writeState(root, 'finalize-project', 71, 'worktree_path: ' + wtFinalize);
     // This fixture validates worktree retention and archive movement, not the
-    // adaptive Phase 4/5 gate, and intentionally jumps directly to finalize.
-    markPlanAbsentFinalizeFixtureFast(root, 'finalize-project');
+    // adaptive gate itself, so it seeds a gate-passing adaptive plan before finalize.
+    seedAdaptiveFinalizeFixture(root, 'finalize-project');
     runNode([claimScript, 'finalize', '--project', 'finalize-project', '--keep-worktree'], root);
     assert(fs.existsSync(wtFinalize), 'GitLab keep-worktree finalize should preserve worktree for final commit');
     assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'finalize-project')), 'GitLab keep-worktree finalize should archive active folder');
@@ -1172,26 +1242,6 @@ withForge({
 });
 
 {
-  const root = tempRoot('kw-gl-repair-');
-  const dir = writeState(root, 'repair-project', 50);
-  // A real phase3-plan carries a resolved Required Agent Compliance table; the
-  // boundary-crossing reconstruction is only allowed when compliance is resolved.
-  fs.writeFileSync(path.join(dir, 'phase3-plan.md'), [
-    '# Phase 3 - Plan', '',
-    '## Required Agent Compliance',
-    '| Requirement | Status | Evidence | Skip Reason |',
-    '|-------------|--------|----------|-------------|',
-    '| code-architect | invoked | .cache/architect.md | |', ''
-  ].join('\n'));
-  const result = repair.repair('repair-project', root);
-  assert.strictEqual(result.repaired, true);
-  const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
-  assert(state.includes('next_skill: kaola-workflow-execute repair-project'));
-  assert(state.includes('## GitLab'));
-  assert(state.includes('## Sink'));
-}
-
-{
   const root = tempRoot('kw-gl-cwd-guard-');
   try {
     initGitRepo(root);
@@ -1206,41 +1256,6 @@ withForge({
     const out = JSON.parse(lines[lines.length - 1]);
     assert.strictEqual(out.released, false, 'cmdRelease should report released: false');
     assert.strictEqual(out.reason, 'refusing to discard current working directory', 'cmdRelease should report the CWD guard reason');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-// issue #208: cmdResume empty-next_command fallback must route a fast project to
-// /kaola-workflow-fast, not /kaola-workflow-phase1. A fast project parses phase
-// as null (parseInt("fast")=NaN), so the legacy phase-numbered fallback emitted
-// /kaola-workflow-phase1; the resumeFallbackCommand helper now reads
-// workflow-state.md to detect fast and route to /kaola-workflow-fast instead.
-{
-  const root = tempRoot('kw-gl-resume-fast-');
-  try {
-    initGitRepo(root);
-    const project = 'fast-resume';
-    const dir = writeState(root, project, 88);
-    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
-      .replace('phase: 1', 'phase: fast')
-      .replace('phase_name: Research', 'phase_name: Fast\nworkflow_path: fast')
-      .replace('next_command: /kaola-workflow-phase1 ' + project + '\n', '');
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText);
-    assert(!/^next_command:/m.test(stateText), 'fixture must leave next_command empty/absent so the fallback fires');
-    const result = spawnSync(process.execPath, [claimScript, 'resume', '--project', project], {
-      cwd: root,
-      encoding: 'utf8',
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_ROOT: root }
-    });
-    assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-    const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.resumed, true, 'cmdResume should resume the fast project');
-    assert.strictEqual(
-      out.next_command,
-      '/kaola-workflow-fast ' + project,
-      'cmdResume empty-next_command fallback should route a fast project to /kaola-workflow-fast'
-    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1501,57 +1516,8 @@ withForge({
   }
 }
 
-// --- Task B: Gap 4 — stateLooksValid ---
-{
-  const root = tempRoot('kw-gl-slv-');
-  try {
-    const dir = writeState(root, 'slv-project', 80);
-    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
-    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
-    assert(repair.stateLooksValid(root, 'slv-project', stateText), 'stateLooksValid should return true for valid state');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  const root = tempRoot('kw-gl-slv-bad-');
-  try {
-    const dir = writeState(root, 'slv-bad-project', 81);
-    const badState = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
-      .replace('next_command: /kaola-workflow-phase1 slv-bad-project', 'next_command: /kaola-workflow-phase9 slv-bad-project')
-      .replace('next_skill: kaola-workflow-research slv-bad-project', 'next_skill: kaola-workflow-phase9 slv-bad-project');
-    assert(!repair.stateLooksValid(root, 'slv-bad-project', badState), 'stateLooksValid should return false for unknown phase');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-// --- Task B: Gap 5 — three-way branch in repair() ---
-{
-  // valid + current (no write)
-  const root = tempRoot('kw-gl-repair-valid-');
-  try {
-    const dir = writeState(root, 'valid-project', 82);
-    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
-    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
-      .replace(/phase: \d+/, 'phase: 4')
-      .replace('phase_name: Research', 'phase_name: Execute')
-      .replace('next_command: /kaola-workflow-phase1 valid-project', 'next_command: /kaola-workflow-phase4 valid-project')
-      .replace('next_skill: kaola-workflow-research valid-project', 'next_skill: kaola-workflow-execute valid-project');
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText);
-    fs.writeFileSync(path.join(dir, 'phase4-progress.md'), '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | open |\n');
-    const statMtime = fs.statSync(path.join(dir, 'workflow-state.md')).mtimeMs;
-    const result = repair.repair('valid-project', root);
-    assert.strictEqual(result.repaired, false);
-    assert.strictEqual(result.valid, true);
-    const newMtime = fs.statSync(path.join(dir, 'workflow-state.md')).mtimeMs;
-    assert.strictEqual(newMtime, statMtime, 'valid+current repair must not rewrite state file');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
+// --- Task B: Gap 5 — repair() terminal-complete detection (numbered-phase forward
+// reconstruction retired with the full path; terminal finalization detection survives) ---
 {
   // valid + complete
   const root = tempRoot('kw-gl-repair-complete-');
@@ -1561,132 +1527,6 @@ withForge({
     const result = repair.repair('complete-project', root);
     assert.strictEqual(result.repaired, false);
     assert.strictEqual(result.complete, true);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  // valid + stale (state says phase1, phase3-plan.md exists so reconstruct routes to phase4)
-  const root = tempRoot('kw-gl-repair-stale-');
-  try {
-    const dir = writeState(root, 'stale-project', 84);
-    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), [
-      '# Phase 3 - Plan', '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-architect | invoked | .cache/architect.md | |', ''
-    ].join('\n'));
-    const result = repair.repair('stale-project', root);
-    assert.strictEqual(result.repaired, true);
-    assert.strictEqual(result.stale, true);
-    const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
-    assert(state.includes('## GitLab'), 'stale repair should preserve ## GitLab section');
-    assert(state.includes('## Sink'), 'stale repair should preserve ## Sink section');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  // audit #4: a phase artifact that crosses a boundary with an UNRESOLVED
-  // compliance row must refuse forward reconstruction even when the state has no
-  // delegation_policy (the no-policy / corruption-recovery path the old
-  // delegation_policy-gated check silently advanced). Mirrors the GitHub edition.
-  const root = tempRoot('kw-gl-repair-compliance-gate-');
-  try {
-    const dir = path.join(root, 'kaola-workflow', 'gate-project');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), [
-      '# Phase 3 - Plan', '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-architect | pending | | |', ''
-    ].join('\n'));
-    const result = repair.repair('gate-project', root);
-    assert.strictEqual(result.repaired, false, 'unresolved compliance must refuse forward reconstruction with no delegation_policy');
-    assert(/unresolved compliance gates/.test(result.reason || ''), 'refusal reason must name unresolved compliance gates, got: ' + result.reason);
-    assert(!fs.existsSync(path.join(dir, 'workflow-state.md')), 'compliance refusal must not write a forward-advanced state file');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  // issue #199: fast-path repair — preserve intact `phase: fast` state, and
-  // reconstruct from fast-summary.md when the state file is lost.
-  const root = tempRoot('kw-gl-repair-fast-');
-  try {
-    const keepDir = path.join(root, 'kaola-workflow', 'fast-keep');
-    fs.mkdirSync(keepDir, { recursive: true });
-    fs.writeFileSync(path.join(keepDir, 'workflow-state.md'), [
-      '# Kaola-Workflow State', '', '## Project', 'name: fast-keep', 'status: active', '',
-      '## Current Position', 'phase: fast', 'phase_name: Fast', 'workflow_path: fast',
-      'next_command: /kaola-workflow-fast fast-keep', 'next_skill: kaola-workflow-fast fast-keep', ''
-    ].join('\n'));
-    fs.writeFileSync(path.join(keepDir, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
-    const keep = repair.repair('fast-keep', root);
-    assert.strictEqual(keep.repaired, false, 'intact fast state must not be rewritten');
-    assert.strictEqual(keep.valid, true, 'intact fast state must be reported valid');
-    assert.strictEqual(keep.phase, 'fast', 'valid fast repair must report phase fast (not NaN)');
-
-    const reconDir = path.join(root, 'kaola-workflow', 'fast-recon');
-    fs.mkdirSync(reconDir, { recursive: true });
-    fs.writeFileSync(path.join(reconDir, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
-    const recon = repair.repair('fast-recon', root);
-    assert.strictEqual(recon.repaired, true, 'lost fast state must be reconstructed from fast-summary.md');
-    assert.strictEqual(recon.phase, 'fast', 'reconstructed fast repair must report phase fast');
-    const reconState = fs.readFileSync(path.join(reconDir, 'workflow-state.md'), 'utf8');
-    assert(/^phase: fast$/m.test(reconState), 'reconstructed state must record phase: fast');
-    assert(/^workflow_path: fast$/m.test(reconState), 'reconstructed state must record workflow_path: fast');
-    assert(/^next_skill: kaola-workflow-fast fast-recon$/m.test(reconState), 'reconstructed state must route to the fast skill');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  // issue #201: no-arg repair-state must DISCOVER a fast-summary-only project
-  // (no workflow-state.md, no numbered phase files) the same way it discovers
-  // numbered phase artifacts, then reconstruct it onto the fast continuation.
-  const root = tempRoot('kw-gl-repair-fast-discover-');
-  try {
-    const projectDir = path.join(root, 'kaola-workflow', 'fast-only');
-    fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
-    const recon = repair.repair(undefined, root);
-    assert.strictEqual(recon.repaired, true, 'no-arg repair must discover and reconstruct a fast-summary-only project');
-    assert.strictEqual(recon.project, 'fast-only', 'no-arg repair must select the single fast-summary-only project');
-    assert.strictEqual(recon.phase, 'fast', 'discovered fast repair must report phase fast');
-    assert.strictEqual(recon.next_skill, 'kaola-workflow-fast fast-only', 'discovered fast repair must report the fast skill');
-    const reconState = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
-    assert(/^phase: fast$/m.test(reconState), 'discovered state must record phase: fast');
-    assert(/^workflow_path: fast$/m.test(reconState), 'discovered state must record workflow_path: fast');
-    assert(/^next_command: \/kaola-workflow-fast fast-only$/m.test(reconState), 'discovered state must record the fast next_command');
-    assert(/^next_skill: kaola-workflow-fast fast-only$/m.test(reconState), 'discovered state must route to the fast skill');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  // issue #201: two fast-summary-only projects with no-arg must remain a safe
-  // ambiguity refusal — never a silent pick, and never a written state file.
-  const root = tempRoot('kw-gl-repair-fast-ambig-');
-  try {
-    const dirA = path.join(root, 'kaola-workflow', 'fast-a');
-    const dirB = path.join(root, 'kaola-workflow', 'fast-b');
-    fs.mkdirSync(dirA, { recursive: true });
-    fs.mkdirSync(dirB, { recursive: true });
-    fs.writeFileSync(path.join(dirA, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
-    fs.writeFileSync(path.join(dirB, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
-    const result = repair.repair(undefined, root);
-    assert.strictEqual(result.repaired, false, 'two fast-summary-only projects with no-arg must refuse');
-    assert(/ambiguous/.test(result.reason || ''), 'no-arg refusal reason must mention ambiguity, got: ' + result.reason);
-    assert(!fs.existsSync(path.join(dirA, 'workflow-state.md')), 'ambiguous refusal must not write state for project A');
-    assert(!fs.existsSync(path.join(dirB, 'workflow-state.md')), 'ambiguous refusal must not write state for project B');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1754,33 +1594,6 @@ withForge({
   assert(idxEvidence >= 0, 'Gap5/position: ## Last Evidence must be present');
   assert(idxOwnership > idxPending, 'Gap5/position: ## Ownership Rules must appear after ## Pending Gates');
   assert(idxOwnership < idxEvidence, 'Gap5/position: ## Ownership Rules must appear before ## Last Evidence');
-}
-
-// Fix 1: repair-state CLI exit code — valid+current must not exit 1
-{
-  const root = tempRoot('kw-gl-repair-exitcode-');
-  try {
-    const dir = writeState(root, 'exitcode-project', 90);
-    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
-    // Set state to phase 4 so reconstruct and state agree (valid+current)
-    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
-      .replace(/phase: \d+/, 'phase: 4')
-      .replace('phase_name: Research', 'phase_name: Execute')
-      .replace('next_command: /kaola-workflow-phase1 exitcode-project', 'next_command: /kaola-workflow-phase4 exitcode-project')
-      .replace('next_skill: kaola-workflow-research exitcode-project', 'next_skill: kaola-workflow-execute exitcode-project');
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText);
-    fs.writeFileSync(path.join(dir, 'phase4-progress.md'), '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | open |\n');
-    const repairScript = path.join(__dirname, 'kaola-gitlab-workflow-repair-state.js');
-    const result = spawnSync(process.execPath, [repairScript, 'exitcode-project'], {
-      cwd: root, encoding: 'utf8', env: process.env
-    });
-    assert.strictEqual(result.status, 0, 'valid+current repair must exit 0, got: ' + result.stdout + result.stderr);
-    const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.repaired, false);
-    assert.strictEqual(out.valid, true);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
 }
 
 // Fix 2a: classifyIssue parallel_mode bypass
@@ -1920,98 +1733,9 @@ withForge({
   }
 }
 
-// Issue #101: KAOLA_PATH=fast startup must write fast-path state
-// #538: seed installed_paths:['fast'] in a hermetic HOME so the legality gate passes.
-{
-  const root = tempRoot('kw-gl-fast-startup-');
-  const fastHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-fast-home-'));
-  try {
-    fs.mkdirSync(path.join(fastHome, '.config', 'kaola-workflow'), { recursive: true });
-    fs.writeFileSync(path.join(fastHome, '.config', 'kaola-workflow', 'config.json'),
-      JSON.stringify({ parallel_mode: 'auto', installed_paths: ['fast'] }, null, 2) + '\n');
-    initGitRepo(root);
-    plantClosureRoadmapSource(root, 7);
-    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '7'], {
-      cwd: root, encoding: 'utf8',
-      env: Object.assign({}, process.env, { KAOLA_PATH: 'fast', KAOLA_WORKFLOW_OFFLINE: '1', HOME: fastHome, USERPROFILE: fastHome })
-    });
-    assert.strictEqual(result.status, 0, 'fast startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.verdict, 'green');
-    assert.strictEqual(out.claim, 'acquired');
-    const stateFile = path.join(root, 'kaola-workflow', out.selected_project || 'issue-7', 'workflow-state.md');
-    const state = fs.readFileSync(stateFile, 'utf8');
-    assert.ok(/^workflow_path: fast$/m.test(state), 'fast startup must write workflow_path: fast');
-    assert.ok(/^phase: fast$/m.test(state), 'fast startup must write phase: fast');
-    assert.ok(/^next_command: \/kaola-workflow-fast /m.test(state), 'fast startup must write /kaola-workflow-fast next_command');
-    assert.ok(/^next_skill: kaola-workflow-fast /m.test(state), 'fast startup must write kaola-workflow-fast next_skill');
-    assert.ok(/^- fast-summary$/m.test(state), 'fast startup must write fast-summary pending gate');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(fastHome, { recursive: true, force: true });
-  }
-}
-
-// Issue #107: reconstruct() must not route to Finalization when phase4-progress.md has open tasks
-// Test 1 — Negative guard (the bug fix):
-{
-  const root = tempRoot('kw-gl-issue107-guard-');
-  try {
-    const dir = writeState(root, 'issue107-guard', 107);
-    fs.writeFileSync(path.join(dir, 'phase4-progress.md'),
-      '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | open |\n');
-    fs.writeFileSync(path.join(dir, 'phase5-review.md'), '# Phase 5\n');
-    const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-guard');
-    assert(!result.nextCommand, 'guard must not route to Finalization when Phase 4 tasks are open');
-    assert(/progress_incomplete/.test(result.reason || ''),
-      'guard must surface the strict Phase 4 point-of-use refusal, got: ' + JSON.stringify(result));
-    repair.repair('issue107-guard', root);
-    const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
-    assert(!/stage: finalization\b/.test(state), 'state file must not advance to Finalization with open Phase 4 tasks');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-// Issue #107: reconstruct() must still route to Finalization when all Phase 4 tasks are complete
-// Test 2 — Positive regression (happy path still works):
-{
-  const root = tempRoot('kw-gl-issue107-allow-');
-  try {
-    const dir = writeState(root, 'issue107-allow', 108);
-    fs.writeFileSync(path.join(dir, 'phase4-progress.md'),
-      '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | complete |\n');
-    // Phase 5 must satisfy the same strict point-of-use contract used at Finalization.
-    const binding = 'evidence-binding: phase5-code-review-1 nonce-issue107-allow';
-    fs.writeFileSync(path.join(dir, 'phase5-review.md'), [
-      '# Phase 5 - Review', '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Binding | Skip Reason |',
-      '|-------------|--------|----------|---------|-------------|',
-      '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | ' + binding + ' |  |',
-      '| security-reviewer | n/a |  | n/a | no security-sensitive files in write set |',
-      '| review-fix executors | n/a |  | n/a | no CRITICAL/HIGH blocking findings |', '',
-      '## Review Status', 'PASSED', ''
-    ].join('\n'));
-    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(dir, '.cache', 'code-reviewer.md'), [
-      binding,
-      'domain_outcome: approved',
-      'verdict: pass',
-      'findings_blocking: 0',
-      'review_summary: no_blocking_findings',
-      'review_attestation: full_review_completed',
-      'No admitted findings.',
-      'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
-      '',
-    ].join('\n'));
-    const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-allow');
-    assert.strictEqual(result.stage, 'finalization', 'happy path must still route to Finalization');
-    assert(/kaola-workflow-finalize/.test(result.nextCommand), 'nextCommand must be finalize');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
+// #725: the Issue #107 phase4-progress → Finalization reconstruction tests are retired with the
+// numbered full path — repair-state no longer forward-reconstructs numbered phases (it reconstructs
+// only adaptive projects from workflow-plan.md, else a clean "no adaptive plan available" refusal).
 
 function testStaleWorktreeCheck() {
   // Helper: initGitRepo adapted for a fresh isolated tmp each sub-case
@@ -5248,30 +4972,9 @@ testGitlabPlanValidatorRefusalMatrix401();
 testForbiddenOnly341();
 testGitlabBoundary2FetchRetry507();
 
-// #543: forge smoke — the gitlab installer copy records the --with-full opt-in into the shared
-// ~/.config/kaola-workflow/config.json installed_paths (the same UNION writer the codex triplet ships,
-// byte-identical). Default install → []; --with-full → ['full']. Uses a FRESH hermetic HOME (not the
-// shared module-top kwSandboxHome) so installed_paths never leaks across the file's other tests.
-function testGitlabInstalledPathsPartition543Smoke() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-543-home-'));
-  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-543-target-'));
-  try {
-    const env = { HOME: home, USERPROFILE: home };
-    runInstallProfiles(target, env);
-    const cfg = JSON.parse(fs.readFileSync(path.join(home, '.config', 'kaola-workflow', 'config.json'), 'utf8'));
-    assert.deepStrictEqual(cfg.installed_paths, [], '#543(gl): default install installed_paths must be []');
-
-    runInstallProfiles(target, env, ['--with-full']);
-    const cfg2 = JSON.parse(fs.readFileSync(path.join(home, '.config', 'kaola-workflow', 'config.json'), 'utf8'));
-    assert.deepStrictEqual(cfg2.installed_paths, ['full'], '#543(gl): --with-full → ["full"]');
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-    fs.rmSync(target, { recursive: true, force: true });
-  }
-  console.log('testGitlabInstalledPathsPartition543Smoke: PASSED');
-}
-
-testGitlabInstalledPathsPartition543Smoke();
+// #725: the #543 installed_paths partition smoke is retired — the fast/full installer opt-ins
+// (`--with-fast`/`--with-full`) and the seedKaolaConfig UNION writer that recorded them are gone;
+// adaptive is the only installed path, so the installer never writes installed_paths.
 
 // #579: forge active-folders liveness-marker fields regression — session_marker/claim_ts/main_root
 // must be parsed from workflow-state.md and surfaced in readActiveFolders items so that

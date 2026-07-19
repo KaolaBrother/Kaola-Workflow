@@ -465,12 +465,13 @@ assert(unk.agent.planner.variant === 'high' && unk.agent.contractor.variant === 
 // installed opencode command surface (the #400 guarantee, for the opencode
 // edition). Mirrors test-route-reachability.js T2, scoped to .opencode/command.
 // ---------------------------------------------------------------------------
+// #725 Phase A: claim.js never emits a non-adaptive route target post-retirement
+// (no isFast branch survives) — the emitted-target set shrinks to the 2 real
+// adaptive targets (mirrors test-route-reachability.js's T1/T2 retirement).
 const stripSlash = c => c.replace(/^\//, '');
 const emittedCommandTargets = [
   stripSlash(schema.PLAN_RUN_COMMAND),
   stripSlash(schema.ADAPT_COMMAND),
-  'kaola-workflow-fast',
-  'kaola-workflow-phase1'
 ];
 const installed = new Set(genCommandFiles.map(f => f.slice(0, -3)));
 for (const target of emittedCommandTargets) {
@@ -527,24 +528,23 @@ for (const target of emittedCommandTargets) {
   assert(has('kaola-workflow-plan-run', '--speculative-consent'),
     'A19: plan-run must contain "--speculative-consent" literal');
 
-  // A20 (mirror T10): fast + finalize carry the fast-compliance-backstop PIN + fast_compliance_unresolved literal (#504).
-  for (const name of ['kaola-workflow-fast', 'kaola-workflow-finalize']) {
+  // A20 (mirror T10): finalize carries the fast-compliance-backstop PIN + fast_compliance_unresolved
+  // literal (#504). #725 Phase A: `kaola-workflow-fast` is retired (n2-deleted from canonical) — the
+  // PIN survives ONLY on finalize now, force-kept alive as dormant legacy prose by the (unowned,
+  // out-of-scope) templates/routing/required-blocks.js `fn-fast-compliance-backstop` manifest entry
+  // (see n1-recon / n6-routing evidence for the discovered write-set gap).
+  for (const name of ['kaola-workflow-finalize']) {
     assert(has(name, '<!-- PIN: fast-compliance-backstop -->'),
       'A20[' + name + ']: must contain <!-- PIN: fast-compliance-backstop --> comment');
     assert(has(name, 'fast_compliance_unresolved'),
       'A20[' + name + ']: must contain "fast_compliance_unresolved" literal');
   }
 
-  // A21 (mirror T11): phase1 + fast carry the adaptive-default-contract PIN + the named-but-not-installed-path
-  // refusal literal. #538 retired `path_requires_explicit_opt_in` -> `path_not_installed` (adaptive is the
-  // unconditional default; reaching fast/full requires an install opt-in, refused at the claim front door with
-  // `path_not_installed`). The generated opencode commands must carry the new literal (#515/#538).
-  for (const name of ['kaola-workflow-phase1', 'kaola-workflow-fast']) {
-    assert(has(name, '<!-- PIN: adaptive-default-contract -->'),
-      'A21[' + name + ']: must contain <!-- PIN: adaptive-default-contract --> comment');
-    assert(has(name, 'path_not_installed'),
-      'A21[' + name + ']: must contain "path_not_installed" literal (n3-adaptive-default-contract, #515/#538)');
-  }
+  // A21 (mirror T11) — DELETED IN FULL. Both surfaces it probed
+  // (`kaola-workflow-phase1`, `kaola-workflow-fast`) are 100% n2-deleted canonical
+  // commands, and a repo-wide sweep confirms the `adaptive-default-contract` PIN
+  // they carried has NO surviving surface post-retirement (it lived only on those
+  // two files). Nothing to lock in; retired alongside its only carriers.
 }
 
 // ---------------------------------------------------------------------------
@@ -822,26 +822,36 @@ if (exists(pluginRel)) {
 }
 
 // ---------------------------------------------------------------------------
-// P1–P5 + A (issue #543): install-time opt-in partition for the opencode edition
-// (--with-fast / --with-full parity with install.sh) AND the folded #544 Claude
-// path-leak fix. Hermetic per sub-case: each provisions its OWN fresh temp HOME
-// + temp --target under os.tmpdir() ($TMPDIR), runs the REAL install-opencode.sh,
-// then inspects the deployed tree + the seeded ~/.config/kaola-workflow/config.json.
-// RED on arrival — the partition is not implemented yet (the installer's header
-// at L22–37 explicitly defers #538 parity: "scoped out for now … This installer
-// deploys the FULL command set") and the leak is pervasive (kaola_script()
-// ships the Claude search path verbatim in every command + contractor +
-// workflow-planner). n5-implementer-opencode owns GREEN.
+// P1 + A (issue #543) + the folded #544 Claude path-leak fix. Hermetic per
+// sub-case: each provisions its OWN fresh temp HOME + temp --target under
+// os.tmpdir() ($TMPDIR), runs the REAL install-opencode.sh, then inspects the
+// deployed tree + the seeded ~/.config/kaola-workflow/config.json.
 //
-// Adaptive-core set per issue #543 (the unconditional default install):
+// #725 Phase A: the fast/full install-time OPT-IN PARTITION itself is retired
+// (canonical no longer ships `kaola-workflow-fast.md` / `kaola-workflow-phase[1-5].md`
+// — n2-deleted, so nothing exists for a --with-fast/--with-full opt-in to deploy).
+// The former P2–P6/U1 opt-in-partition probes (--with-fast deploys fast,
+// --with-full deploys phase1-5, UNION-preserve on reinstall, self-healing prune
+// of orphaned opt-in files) are DELETED IN FULL — same "DELETED IN FULL" pattern
+// n6-routing.js applied to test-route-reachability.js's T10/T11/T18: every
+// surface those probes exercised is gone, so there is nothing left to lock in.
+// install-opencode.sh itself still parses the `--with-fast`/`--with-full` flags
+// (an unowned, deferred write-set gap — n1-recon GAP-3 — out of this node's
+// scope) but they are now inert for command deployment: the adaptive-only
+// surface is the only reachable outcome, which is exactly what P1 below locks in.
+// U1 is RETAINED, narrowed to a pure adaptive-only install → uninstall →
+// reinstall round-trip (drops the --with-fast seeding/assertions; the
+// uninstall-preserves-config / reinstall-restores-adaptive-core behavior it
+// verifies is still real and still exercised without any fast dependency).
+//
+// Adaptive-core set per issue #543 (the unconditional default install, and now
+// the ONLY install outcome):
 //   kaola-workflow-adapt, kaola-workflow-finalize,
 //   kaola-workflow-plan-run, workflow-init, workflow-next.
-// Opt-in sets: --with-fast ⇒ {kaola-workflow-fast}; --with-full ⇒ {phase1..phase5}.
-// installed_paths canonical order mirrors install.sh L730: [p for p in ("fast","full") if p in paths].
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
-  const { mkdtempSync, existsSync, readFileSync, writeFileSync, readdirSync, rmSync } = require('fs');
+  const { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync } = require('fs');
   const os = require('os');
 
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
@@ -849,20 +859,14 @@ if (exists(pluginRel)) {
     'kaola-workflow-adapt', 'kaola-workflow-finalize',
     'kaola-workflow-plan-run', 'workflow-init', 'workflow-next',
   ];
-  const FAST_ONLY = ['kaola-workflow-fast'];
-  const FULL_ONLY = [
-    'kaola-workflow-phase1', 'kaola-workflow-phase2', 'kaola-workflow-phase3',
-    'kaola-workflow-phase4', 'kaola-workflow-phase5',
-  ];
 
-  // F5: partition exhaustiveness — the canonical command set must be EXACTLY adaptive-core ∪ fast ∪
-  // full. Adding a 13th canonical command without assigning it to a partition fails HERE (and the
-  // installer now also fails CLOSED on an unrecognized command, so it cannot silently widen the default).
+  // F5: partition exhaustiveness — the canonical command set must be EXACTLY adaptive-core (the
+  // fast/full opt-in partitions are retired; adding a new canonical command without accounting
+  // for it here fails HERE, and the installer still fails CLOSED on an unrecognized command).
   {
     const canon = sync.listCanonCommands().map(f => f.replace(/\.md$/, '')).sort();
-    const partitioned = [...ADAPTIVE_CORE, ...FAST_ONLY, ...FULL_ONLY].sort();
-    assert(JSON.stringify(canon) === JSON.stringify(partitioned),
-      'F5: canonical commands == adaptive-core ∪ fast ∪ full (assign any new command to a partition) — canon=' + JSON.stringify(canon));
+    assert(JSON.stringify(canon) === JSON.stringify([...ADAPTIVE_CORE].sort()),
+      'F5: canonical commands == adaptive-core exactly (fast/full opt-in partitions retired) — canon=' + JSON.stringify(canon));
   }
 
   // Hermetic single-shot installer run. Each call gets its OWN fresh HOME (so
@@ -900,9 +904,8 @@ if (exists(pluginRel)) {
     try { rmSync(r.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   };
 
-  // P1 — default install deploys adaptive-core ONLY (no fast, no phase1-5) and
-  // seeds installed_paths:[]. Today RED: install-opencode.sh always deploys the
-  // FULL command set (12 files incl. fast + phase1-5).
+  // P1 — default (and now ONLY) install deploys adaptive-core, exactly, and
+  // seeds installed_paths:[].
   {
     const r = runInstaller([]);
     assert(r.ok,
@@ -911,15 +914,7 @@ if (exists(pluginRel)) {
       assert(hasCmd(r.dest, name),
         'P1[' + name + ']: default install deploys the adaptive-core command');
     }
-    for (const name of FAST_ONLY) {
-      assert(!hasCmd(r.dest, name),
-        'P1[' + name + ']: default install does NOT deploy the fast-only command (it is the --with-fast opt-in)');
-    }
-    for (const name of FULL_ONLY) {
-      assert(!hasCmd(r.dest, name),
-        'P1[' + name + ']: default install does NOT deploy the full-only phase command (it is the --with-full opt-in)');
-    }
-    // P1 (#F5): exact-set-equality (over-deploy guard) — the dest command dir holds EXACTLY the 6
+    // P1 (#F5): exact-set-equality (over-deploy guard) — the dest command dir holds EXACTLY the
     // adaptive-core commands, nothing else (catches a future stray/unpartitioned command leaking in).
     const deployed = readdirSync(cmdDir(r.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
     assert(JSON.stringify(deployed) === JSON.stringify([...ADAPTIVE_CORE].sort()),
@@ -947,92 +942,10 @@ if (exists(pluginRel)) {
     clean(r);
   }
 
-  // P2 — --with-fast deploys fast (+ adaptive-core) and writes installed_paths:["fast"].
-  // Today RED: --with-fast is an unknown arg → exit 2, nothing deployed.
-  {
-    const r = runInstaller(['--with-fast']);
-    assert(r.ok,
-      'P2: --with-fast install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
-    for (const name of ADAPTIVE_CORE) {
-      assert(hasCmd(r.dest, name),
-        'P2[' + name + ']: --with-fast install still deploys adaptive-core');
-    }
-    for (const name of FAST_ONLY) {
-      assert(hasCmd(r.dest, name),
-        'P2[' + name + ']: --with-fast install deploys the fast-only command');
-    }
-    for (const name of FULL_ONLY) {
-      assert(!hasCmd(r.dest, name),
-        'P2[' + name + ']: --with-fast does NOT deploy the full-only phase commands');
-    }
-    const cfg = readConfig(r.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast"]',
-      'P2: --with-fast installed_paths deep-equals ["fast"] — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    clean(r);
-  }
-
-  // P3 — --with-full deploys phase1-5 (+ adaptive-core) and writes installed_paths:["full"].
-  // Today RED: --with-full is an unknown arg → exit 2.
-  {
-    const r = runInstaller(['--with-full']);
-    assert(r.ok,
-      'P3: --with-full install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
-    for (const name of ADAPTIVE_CORE) {
-      assert(hasCmd(r.dest, name),
-        'P3[' + name + ']: --with-full install still deploys adaptive-core');
-    }
-    for (const name of FULL_ONLY) {
-      assert(hasCmd(r.dest, name),
-        'P3[' + name + ']: --with-full install deploys the full-only phase command');
-    }
-    for (const name of FAST_ONLY) {
-      assert(!hasCmd(r.dest, name),
-        'P3[' + name + ']: --with-full does NOT deploy the fast-only command');
-    }
-    const cfg = readConfig(r.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '["full"]',
-      'P3: --with-full installed_paths deep-equals ["full"] — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    clean(r);
-  }
-
-  // P4 — --with-fast --with-full deploys BOTH (adaptive-core ∪ fast ∪ full) and
-  // writes installed_paths:["fast","full"] in that canonical order.
-  {
-    const r = runInstaller(['--with-fast', '--with-full']);
-    assert(r.ok,
-      'P4: --with-fast --with-full install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
-    for (const name of ADAPTIVE_CORE.concat(FAST_ONLY, FULL_ONLY)) {
-      assert(hasCmd(r.dest, name),
-        'P4[' + name + ']: --with-fast --with-full deploys every command (adaptive-core ∪ fast ∪ full)');
-    }
-    const cfg = readConfig(r.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast","full"]',
-      'P4: --with-fast --with-full installed_paths deep-equals ["fast","full"] in canonical order — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    clean(r);
-  }
-
-  // P5 — UNION never removes: install --with-fast once, then BARE re-install
-  // (no opt-in flags) into the SAME dest/HOME must PRESERVE installed_paths:["fast"]
-  // and the fast command file. Mirrors install.sh EFFECTIVE_FAST/EFFECTIVE_FULL
-  // (L215–216: existing opt-ins stay effective across re-installs).
-  {
-    const r1 = runInstaller(['--with-fast']);
-    assert(r1.ok, 'P5: first --with-fast install exits 0');
-    // Re-run into the SAME home + dest with NO opt-in flags.
-    const r2 = spawnSync('bash',
-      [INSTALLER, '--target', r1.dest, '--yes', '--no-scripts'],
-      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
-    assert(r2.status === 0,
-      'P5: bare re-install into the same dest/HOME exits 0 (got status ' + r2.status + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
-    const cfg = readConfig(r1.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast"]',
-      'P5: bare re-install PRESERVES installed_paths:["fast"] (UNION never removes) — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    for (const name of FAST_ONLY) {
-      assert(hasCmd(r1.dest, name),
-        'P5[' + name + ']: fast command still deployed after bare re-install (UNION preserves prior opt-ins)');
-    }
-    clean(r1);
-  }
+  // P2–P5 (former --with-fast / --with-full / union-preserve opt-in-partition probes)
+  // — DELETED IN FULL. #725 Phase A retires the fast/full opt-in partition itself;
+  // every surface these probed (kaola-workflow-fast.md, kaola-workflow-phase[1-5].md)
+  // is n2-deleted from canonical, so there is nothing left to opt into or lock in.
 
   // -------------------------------------------------------------------------
   // G1 (#F1) — the --global install deploys DIRECTLY under the config root
@@ -1063,10 +976,6 @@ if (exists(pluginRel)) {
     for (const name of ADAPTIVE_CORE) {
       assert(existsSync(path.join(r.cfg, 'command', name + '.md')),
         'G1[' + name + ']: --global deploys adaptive-core command at <config>/command/ (un-nested)');
-    }
-    for (const name of FAST_ONLY.concat(FULL_ONLY)) {
-      assert(!existsSync(path.join(r.cfg, 'command', name + '.md')),
-        'G1[' + name + ']: --global default does NOT deploy the opt-in command');
     }
     for (const a of sync.listCanonAgents()) {
       assert(existsSync(path.join(r.cfg, 'agent', a + '.md')),
@@ -1131,57 +1040,27 @@ if (exists(pluginRel)) {
     try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
   }
 
-  // -------------------------------------------------------------------------
-  // P6 (#F2) — reinstall is SELF-HEALING: after a --with-fast --with-full
-  // install, narrowing installed_paths to [] then a BARE reinstall PRUNES the
-  // orphaned fast/phase command files (copy_tree was additive-only before).
-  // This is the "reset to adaptive-only" half P5 (the UNION-preserve half)
-  // does not cover.
-  // -------------------------------------------------------------------------
-  {
-    const r1 = runInstaller(['--with-fast', '--with-full']);
-    assert(r1.ok, 'P6: --with-fast --with-full install exits 0');
-    for (const name of ADAPTIVE_CORE.concat(FAST_ONLY, FULL_ONLY)) {
-      assert(hasCmd(r1.dest, name), 'P6[' + name + ']: opt-in install deploys every command');
-    }
-    // Narrow the shared config back to adaptive-only (simulates an opt-out / a reset).
-    const cfg = readConfig(r1.configPath);
-    cfg.installed_paths = [];
-    writeFileSync(r1.configPath, JSON.stringify(cfg, null, 2) + '\n');
-    // Bare reinstall (no opt-in flags) into the SAME home + dest.
-    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
-    assert(r2.ok, 'P6: bare reinstall after narrowing installed_paths exits 0');
-    for (const name of ADAPTIVE_CORE) {
-      assert(hasCmd(r1.dest, name), 'P6[' + name + ']: adaptive-core SURVIVES the reset reinstall');
-    }
-    for (const name of FAST_ONLY.concat(FULL_ONLY)) {
-      assert(!hasCmd(r1.dest, name),
-        'P6[' + name + '] (#F2): orphaned opt-in command PRUNED by the reset reinstall (copy_tree self-heals)');
-    }
-    const after = readdirSync(cmdDir(r1.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-    assert(JSON.stringify(after) === JSON.stringify([...ADAPTIVE_CORE].sort()),
-      'P6 (#F2): reset reinstall converges to EXACTLY the 6 adaptive-core commands — got ' + JSON.stringify(after));
-    const cfg2 = readConfig(r1.configPath);
-    assert(cfg2 && JSON.stringify(cfg2.installed_paths) === '[]',
-      'P6: installed_paths stays [] after the reset reinstall');
-    clean(r1);
-  }
+  // P6 (former self-healing-prune-of-orphaned-opt-in-files probe) — DELETED IN
+  // FULL alongside P2–P5: the fast/full opt-in partition it exercised is retired,
+  // so there is no opt-in scenario left to narrow-then-prune.
 
   // -------------------------------------------------------------------------
-  // U1 (#F4) — --uninstall removes the kaola-deployed surface, preserves the
-  // user-owned opencode.json, and resets installed_paths:[]; a subsequent bare
-  // install returns EXACTLY the 6 adaptive-core commands (round-trip).
+  // U1 (#F4) — RETAINED, narrowed to adaptive-only: --uninstall removes the
+  // kaola-deployed surface, preserves the user-owned opencode.json, and resets
+  // installed_paths:[]; a subsequent bare install returns EXACTLY the
+  // adaptive-core commands (round-trip). Drops the former --with-fast seeding —
+  // the underlying uninstall/reinstall contract this locks in is unrelated to
+  // the retired opt-in partition.
   // -------------------------------------------------------------------------
   {
-    const r1 = runInstaller(['--with-fast']);
-    assert(r1.ok, 'U1: seed install (--with-fast) exits 0');
-    assert(hasCmd(r1.dest, 'kaola-workflow-fast'), 'U1: fast command present before uninstall');
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'U1: seed install exits 0');
     assert(existsSync(path.join(r1.dest, 'opencode.json')), 'U1: opencode.json present before uninstall');
     // Uninstall the same scope.
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
     assert(ru.status === 0, 'U1: --uninstall exits 0 (got ' + ru.status + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
-    for (const name of ADAPTIVE_CORE.concat(FAST_ONLY)) {
+    for (const name of ADAPTIVE_CORE) {
       assert(!hasCmd(r1.dest, name), 'U1[' + name + ']: command removed by --uninstall');
     }
     for (const a of sync.listCanonAgents()) {
@@ -1200,7 +1079,7 @@ if (exists(pluginRel)) {
     assert(r2.ok, 'U1: reinstall after uninstall exits 0');
     const back = readdirSync(cmdDir(r1.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
     assert(JSON.stringify(back) === JSON.stringify([...ADAPTIVE_CORE].sort()),
-      'U1 (#F4): uninstall→reinstall returns EXACTLY the 6 adaptive-core commands — got ' + JSON.stringify(back));
+      'U1 (#F4): uninstall→reinstall returns EXACTLY the adaptive-core commands — got ' + JSON.stringify(back));
     clean(r1);
   }
 

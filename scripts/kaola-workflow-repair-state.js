@@ -10,22 +10,6 @@ const { spawnSync } = require('child_process');
 const planValidator = require('./kaola-workflow-plan-validator');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // #234: durable consent-halt reader (toggle-agnostic; never reads the switch)
 
-const PHASES = {
-  1: 'Research',
-  2: 'Ideation',
-  3: 'Plan',
-  4: 'Execute',
-  5: 'Review',
-  6: 'Finalize'
-};
-const SKILLS = {
-  1: 'kaola-workflow-research',
-  2: 'kaola-workflow-ideation',
-  3: 'kaola-workflow-plan',
-  4: 'kaola-workflow-execute',
-  5: 'kaola-workflow-review',
-  6: 'kaola-workflow-finalize'
-};
 const WORKFLOW_DIR = 'kaola-workflow';
 const LEGACY_WORKFLOW_DIRS = ['claude-workflow'];
 const DELEGATION_POLICIES = new Set(['delegate', 'local-authorized', 'tool-unavailable']);
@@ -91,23 +75,9 @@ function field(content, name) {
   return match ? match[1].trim() : '';
 }
 
-// Fast-path state is keyed on `phase: fast` / `workflow_path: fast` instead of a
-// numbered phase. Recognized here so intact fast state is preserved (not treated
-// as invalid and discarded by the numbered-phase logic below).
-function isFastWorkflowState(content) {
-  return field(content, 'phase') === 'fast' || field(content, 'workflow_path') === 'fast';
-}
-
-function fastStateValid(project, content) {
-  if (!/^status:\s*active\s*$/m.test(content)) return false;
-  const safeProject = project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp('^/kaola-workflow-fast\\s+' + safeProject + '$').test(field(content, 'next_command')) ||
-    new RegExp('^kaola-workflow-fast\\s+' + safeProject + '$').test(field(content, 'next_skill'));
-}
-
-// Adaptive-path state is keyed on `workflow_path: adaptive` (symmetric to
-// isFastWorkflowState). Toggle-agnostic: recognized regardless of the switch so an
-// in-flight frozen plan resumes after the switch is flipped OFF.
+// Adaptive-path state is keyed on `workflow_path: adaptive`. Toggle-agnostic:
+// recognized regardless of the switch so an in-flight frozen plan resumes after the
+// switch is flipped OFF.
 function isAdaptiveWorkflowState(content) {
   return field(content, 'workflow_path') === 'adaptive';
 }
@@ -127,17 +97,8 @@ function projectHasPhaseArtifacts(projectDir) {
   return fs.readdirSync(projectDir).some(file => /^phase\d.+\.md$/.test(file));
 }
 
-// Fast-path discovery: a fast project's only durable artifact is fast-summary.md
-// (no numbered phase files). Recognized here so no-argument repair-state finds it,
-// symmetric with numbered phase-artifact discovery (issue #201). reconstruct()
-// already routes fast-summary.md -> routeFast().
-function projectHasFastSummary(projectDir) {
-  return exists(path.join(projectDir, 'fast-summary.md'));
-}
-
-// Adaptive-path discovery: an adaptive project's spine is a frozen workflow-plan.md
-// (no numbered phase files, no fast-summary.md). reconstruct() routes it via
-// routeAdaptive() ahead of the numbered ladder.
+// Adaptive-path discovery: an adaptive project's spine is a frozen workflow-plan.md.
+// reconstruct() routes it via routeAdaptive().
 function projectHasAdaptivePlan(projectDir) {
   return exists(path.join(projectDir, 'workflow-plan.md'));
 }
@@ -146,17 +107,7 @@ function projectHasActiveState(projectDir) {
   const stateFile = path.join(projectDir, 'workflow-state.md');
   if (!exists(stateFile)) return false;
   const content = readFile(stateFile);
-  if (isAdaptiveWorkflowState(content)) return adaptiveStateValid(path.basename(projectDir), content);
-  if (isFastWorkflowState(content)) return fastStateValid(path.basename(projectDir), content);
-  const phase = Number(field(content, 'phase'));
-  const nextCommand = field(content, 'next_command');
-  const nextSkill = field(content, 'next_skill');
-  return /^status:\s*active\s*$/m.test(content) &&
-    PHASES[phase] &&
-    (
-      /^\/kaola-workflow-phase[1-6]\b/.test(nextCommand) ||
-      new RegExp('^' + SKILLS[phase] + '\\b').test(nextSkill)
-    );
+  return isAdaptiveWorkflowState(content) && adaptiveStateValid(path.basename(projectDir), content);
 }
 
 function activeProjects(workflowDir) {
@@ -167,7 +118,7 @@ function activeProjects(workflowDir) {
     .filter(entry => entry.name !== 'archive')
     .filter(entry => {
       const projectDir = path.join(workflowDir, entry.name);
-      return projectHasPhaseArtifacts(projectDir) || projectHasActiveState(projectDir) || projectHasFastSummary(projectDir) || projectHasAdaptivePlan(projectDir);
+      return projectHasPhaseArtifacts(projectDir) || projectHasActiveState(projectDir) || projectHasAdaptivePlan(projectDir);
     })
     .map(entry => entry.name)
     .sort();
@@ -353,82 +304,6 @@ function unresolvedCompliance(content, stateContent = '') {
   return unresolved;
 }
 
-function phase4TaskRows(content) {
-  const source = String(content || '');
-  if ((source.match(/^## Tasks\s*$/gm) || []).length !== 1) return { valid: false, rows: [] };
-  const start = source.search(/^## Tasks\s*$/m);
-  if (start === -1) return { valid: false, rows: [] };
-  const sectionLines = [];
-  for (const line of source.slice(start).split(/\r?\n/).slice(1)) {
-    if (/^##\s+/.test(line)) break;
-    sectionLines.push(line);
-  }
-  while (sectionLines.length > 0 && sectionLines[0].trim() === '') sectionLines.shift();
-  const parseRow = line => {
-    const trimmed = line.trim();
-    if (!/^\|.*\|$/.test(trimmed)) return null;
-    return trimmed.split('|').slice(1, -1).map(cell => cell.trim());
-  };
-  const header = sectionLines.length > 0 ? parseRow(sectionLines[0]) : null;
-  if (!header || header.length === 0) return { valid: false, rows: [] };
-  const statusColumns = header
-    .map((cell, index) => (/^status$/i.test(cell) ? index : -1))
-    .filter(index => index !== -1);
-  if (statusColumns.length !== 1) return { valid: false, rows: [] };
-  const statusColumn = statusColumns[0];
-  const separator = sectionLines.length > 1 ? parseRow(sectionLines[1]) : null;
-  if (!separator || separator.length !== header.length
-      || separator.some(cell => !/^:?-{3,}:?$/.test(cell))) {
-    return { valid: false, rows: [] };
-  }
-  const rows = [];
-  let tableEnded = false;
-  for (const line of sectionLines.slice(2)) {
-    if (line.trim() === '') {
-      tableEnded = true;
-      continue;
-    }
-    if (tableEnded) return { valid: false, rows: [] };
-    const columns = parseRow(line);
-    if (!columns || columns.length !== header.length || !columns[0] || !columns[statusColumn]) {
-      return { valid: false, rows: [] };
-    }
-    rows.push({ id: columns[0], status: columns[statusColumn].toLowerCase() });
-  }
-  return { valid: true, rows };
-}
-
-function allPhase4TasksComplete(content) {
-  const parsed = phase4TaskRows(content);
-  return parsed.valid && parsed.rows.length > 0
-    && parsed.rows.every(task => task.status === 'complete');
-}
-
-function firstOpenPhase4Task(content) {
-  const parsed = phase4TaskRows(content);
-  const task = parsed.valid ? parsed.rows.find(row => row.status !== 'complete') : null;
-  return task ? task.id : 'N/A';
-}
-
-function verifyPhase5AtPointOfUse(root, project) {
-  const verifier = path.join(__dirname,
-    path.basename(__filename).replace(/repair-state\.js$/, 'full-advance.js'));
-  if (!exists(verifier)) return { ok: false, reason: 'full-path verifier unavailable' };
-  const result = spawnSync(process.execPath, [
-    verifier, 'phase5-verify', '--root', root, '--project', project, '--json',
-  ], { cwd: root, encoding: 'utf8' });
-  let packet = null;
-  try {
-    packet = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop());
-  } catch (_) {}
-  if (result.status === 0 && packet && packet.result === 'ok') return { ok: true, packet };
-  return {
-    ok: false,
-    reason: packet && packet.reason ? packet.reason : 'phase5 verification failed',
-    detail: packet && packet.detail ? packet.detail : String(result.stderr || '').trim(),
-  };
-}
-
 function artifact(projectDir, file) {
   const fullPath = path.join(projectDir, file);
   return exists(fullPath) ? fullPath : null;
@@ -436,160 +311,18 @@ function artifact(projectDir, file) {
 
 function reconstruct(root, workflowDir, project) {
   const projectDir = path.join(workflowDir, project);
-  const phase4 = artifact(projectDir, 'phase4-progress.md');
 
   if (artifact(projectDir, 'finalization-summary.md')) {
     return { complete: true, reason: 'finalization-summary.md exists; workflow is complete' };
   }
 
-  // issue #227: an adaptive project's spine is a frozen workflow-plan.md, not the
-  // phaseN ladder. Caught AHEAD of the numbered logic (the ladder must not run for
-  // an adaptive project). Toggle-agnostic.
+  // issue #227: an adaptive project's spine is a frozen workflow-plan.md, traversed by
+  // the kaola-workflow-plan-run executor. Toggle-agnostic.
   if (artifact(projectDir, 'workflow-plan.md')) {
     return routeAdaptive(root, workflowDir, project);
   }
 
-  if (artifact(projectDir, 'phase5-review.md')) {
-    const verification = verifyPhase5AtPointOfUse(root, project);
-    if (!verification.ok) return {
-      reason: 'phase5-review.md failed point-of-use verification: ' + verification.reason
-        + (verification.detail ? ' (' + verification.detail + ')' : '')
-    };
-    return routeFinalization(root, workflowDir, project, 'phase5-review.md');
-  }
-
-  if (phase4) {
-    const content = readFile(phase4);
-    if (allPhase4TasksComplete(content)) {
-      return route(root, workflowDir, project, 5, 'phase4-progress.md', true);
-    }
-    return route(root, workflowDir, project, 4, 'phase4-progress.md', false, firstOpenPhase4Task(content));
-  }
-
-  if (artifact(projectDir, 'phase3-plan.md')) return route(root, workflowDir, project, 4, 'phase3-plan.md', true);
-  if (artifact(projectDir, 'phase2-ideation.md')) return route(root, workflowDir, project, 3, 'phase2-ideation.md', true);
-  if (artifact(projectDir, 'phase1-research.md')) return route(root, workflowDir, project, 2, 'phase1-research.md', true);
-  const fastSummaryPath = artifact(projectDir, 'fast-summary.md');
-  if (fastSummaryPath) {
-    if (fastSummaryStatus(readFile(fastSummaryPath)) === 'ESCALATED') {
-      return routeEscalatedToFull(root, workflowDir, project);
-    }
-    return routeFast(root, workflowDir, project);
-  }
-
-  return { reason: 'no phase artifacts available for repair' };
-}
-
-function route(root, workflowDir, project, phase, phaseFileName, crossesBoundary, task = 'N/A') {
-  const projectDir = path.join(workflowDir, project);
-  const phaseFile = path.join(projectDir, phaseFileName);
-  const content = readFile(phaseFile);
-  const stateFile = path.join(projectDir, 'workflow-state.md');
-  const stateContent = exists(stateFile) ? readFile(stateFile) : '';
-  const unresolved = unresolvedCompliance(content, stateContent);
-
-  if (crossesBoundary && unresolved.length > 0) {
-    return {
-      reason: `unresolved compliance gates in ${phaseFileName}: ${unresolved.map(row => row.requirement).join(', ')}`
-    };
-  }
-
-  return {
-    project,
-    phase,
-    phaseName: PHASES[phase],
-    step: 'router-reconstructed',
-    task,
-    nextCommand: `/kaola-workflow-phase${phase} ${project}`,
-    nextSkill: `${SKILLS[phase]} ${project}`,
-    phaseFile,
-    pendingGates: unresolved
-  };
-}
-
-// issue #283: Terminal-routine reconstruction — the shared Finalization step reached from any
-// full-path route (phase5-review.md complete → Finalization). Emits the route-neutral
-// finalization surface (stage: finalization / stage_name: Finalization /
-// next_command: /kaola-workflow-finalize) instead of the legacy phase: 6 / phase_name: Finalize /
-// next_command: /kaola-workflow-phase6. The crossesBoundary compliance gate is preserved.
-function routeFinalization(root, workflowDir, project, phaseFileName) {
-  const projectDir = path.join(workflowDir, project);
-  const phaseFile = path.join(projectDir, phaseFileName);
-  const content = readFile(phaseFile);
-  const stateFile = path.join(projectDir, 'workflow-state.md');
-  const stateContent = exists(stateFile) ? readFile(stateFile) : '';
-  const unresolved = unresolvedCompliance(content, stateContent);
-
-  if (unresolved.length > 0) {
-    return {
-      reason: `unresolved compliance gates in ${phaseFileName}: ${unresolved.map(row => row.requirement).join(', ')}`
-    };
-  }
-
-  return {
-    project,
-    stage: 'finalization',
-    stageName: 'Finalization',
-    step: 'router-reconstructed',
-    task: 'N/A',
-    nextCommand: `/kaola-workflow-finalize ${project}`,
-    nextSkill: `kaola-workflow-finalize ${project}`,
-    phaseFile,
-    pendingGates: unresolved,
-    isFinalization: true
-  };
-}
-
-// Escalated-fast reconstruction: fast-summary.md exists with status ESCALATED.
-// The fast skill already stopped and the project must resume on the full workflow
-// at Phase 1, not re-enter the fast skill (which would ENOENT on phase1-research.md
-// when crossing phase boundaries). Status is read from the ## Status section body
-// (first non-blank line), matching how kaola-workflow-fast-audit.js parses it.
-function fastSummaryStatus(content) {
-  const match = content.match(/^##\s+Status\s*$\n+([\s\S]*?)(?=\n##\s|$)/m);
-  if (!match) return '';
-  const lines = match[1].split('\n');
-  for (const line of lines) {
-    const t = line.trim();
-    if (t) return t.toUpperCase();
-  }
-  return '';
-}
-
-function routeEscalatedToFull(root, workflowDir, project) {
-  return {
-    root,
-    project,
-    phase: 1,
-    phaseName: PHASES[1],
-    workflowPath: 'full',
-    step: 'router-reconstructed',
-    task: 'N/A',
-    nextCommand: `/kaola-workflow-phase1 ${project}`,
-    nextSkill: `kaola-workflow-research ${project}`,
-    phaseFile: path.join(workflowDir, project, 'fast-summary.md'),
-    pendingGates: []
-  };
-}
-
-// Fast-path reconstruction: a fast project produces fast-summary.md, not numbered
-// phase artifacts. Recover it to the fast continuation without routing through the
-// numbered route() pipeline. The fast skill itself re-reads fast-summary.md and
-// routes onward (to kaola-workflow-finalize once PASSED).
-function routeFast(root, workflowDir, project) {
-  return {
-    root,
-    project,
-    phase: 'fast',
-    phaseName: 'Fast',
-    workflowPath: 'fast',
-    step: 'router-reconstructed',
-    task: 'N/A',
-    nextCommand: `/kaola-workflow-fast ${project}`,
-    nextSkill: `kaola-workflow-fast ${project}`,
-    phaseFile: path.join(workflowDir, project, 'fast-summary.md'),
-    pendingGates: []
-  };
+  return { reason: 'no adaptive plan available for repair' };
 }
 
 // Adaptive-path reconstruction (issue #227): the spine is a frozen workflow-plan.md
@@ -669,23 +402,7 @@ function routeAdaptive(root, workflowDir, project) {
 }
 
 function stateLooksValid(root, project, content) {
-  if (isAdaptiveWorkflowState(content)) return adaptiveStateValid(project, content);
-  if (isFastWorkflowState(content)) return fastStateValid(project, content);
-  const phase = Number(field(content, 'phase'));
-  const nextCommand = field(content, 'next_command');
-  const nextSkill = field(content, 'next_skill');
-  const phaseFile = field(content, 'phase_file');
-
-  if (!PHASES[phase]) return false;
-  const safeProject = project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const commandOk = new RegExp(`^/kaola-workflow-phase${phase}\\s+${safeProject}$`).test(nextCommand);
-  const skillOk = new RegExp(`^${SKILLS[phase]}\\s+${safeProject}$`).test(nextSkill);
-  if (!commandOk && !skillOk) {
-    return false;
-  }
-  if (phaseFile && phaseFile !== 'N/A' && !exists(path.join(root, phaseFile))) return false;
-
-  return /^status:\s*active\s*$/m.test(content);
+  return isAdaptiveWorkflowState(content) && adaptiveStateValid(project, content);
 }
 
 function pendingGateLines(rows) {
@@ -911,9 +628,6 @@ if (require.main === module) {
 module.exports = {
   complianceRows,
   delegationPolicyCompliance,
-  phase4TaskRows,
-  allPhase4TasksComplete,
-  verifyPhase5AtPointOfUse,
   reconstruct,
   repairStateContent: stateContent,
   stateContent,

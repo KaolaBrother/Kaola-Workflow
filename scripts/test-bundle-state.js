@@ -29,7 +29,7 @@ const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'))
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto' }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
@@ -109,7 +109,7 @@ const BUNDLE_STATE = [
   'closure_policy: all_or_nothing',
   'branch: workflow/bundle-42-47-53',
   'sink: merge',
-  'next_command: /kaola-workflow-phase2',
+  'next_command: /kaola-workflow-plan-run',
   ''
 ].join('\n');
 
@@ -121,7 +121,7 @@ const SINGLE_ISSUE_STATE = [
   'issue_number: 99',
   'branch: workflow/issue-99',
   'sink: merge',
-  'next_command: /kaola-workflow-phase3',
+  'next_command: /kaola-workflow-plan-run',
   ''
 ].join('\n');
 
@@ -277,7 +277,7 @@ function runOrient(tmpRoot, project) {
       'closure_policy: all_or_nothing',
       'branch: workflow/bundle-42-47-53',
       'sink: merge',
-      'next_command: /kaola-workflow-phase2',
+      'next_command: /kaola-workflow-plan-run',
       ''
     ].join('\n');
     writeProject(tmpRoot, project, stateContent);
@@ -320,7 +320,7 @@ function runOrient(tmpRoot, project) {
       'closure_policy: all_or_nothing',
       'branch: workflow/bundle-42-47-53',
       'sink: merge',
-      'next_command: /kaola-workflow-phase2',
+      'next_command: /kaola-workflow-plan-run',
       ''
     ].join('\n');
     writeProject(tmpRoot, project, stateContent);

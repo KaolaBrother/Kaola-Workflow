@@ -9,7 +9,8 @@
 //   node scripts/test-kimi-edition.js
 //
 // The kimi edition is delivered the Kimi-native way: directory-form Skills
-// under `.kimi/skills/<name>/SKILL.md` (11 command skills + 16 kaola-role-*
+// under `.kimi/skills/<name>/SKILL.md` (5 command skills — adaptive-only, the
+// fast/full command skills are #725-retired — + 16 kaola-role-*
 // role-contract skills) plus `.kimi/hooks/` (3 byte-copied shell hooks + the
 // generated `kimi-hooks.toml` fragment the installer merges into the global
 // config.toml). ONE model tier: every subagent inherits the session model (the
@@ -75,13 +76,13 @@ function generatedTreeFiles() {
 }
 
 const canonCommands = sync.listCanonCommands();                    // ['kaola-workflow-adapt.md', ...]
-const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // 11 command basenames
+const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // 5 command basenames (adaptive-only, #725)
 const canonAgents = sync.listCanonAgents();                        // 16 roles (top-level agents/*.md only)
 const roleDirNames = canonAgents.map(a => 'kaola-role-' + a);
 const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 
 // ---------------------------------------------------------------------------
-// K1: count/structure parity — exactly 11 command Skill dirs + 16 kaola-role-*
+// K1: count/structure parity — exactly 5 command Skill dirs + 16 kaola-role-*
 // Skill dirs, set-equal to the canonical commands/*.md + top-level agents/*.md
 // inventories (agents/profiles/higher/ is skipped by the generator's
 // construction — it never matches listCanonAgents). Every SKILL.md carries a
@@ -95,7 +96,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
   assert(entries.length === expected.length && entries.every(e => e.isDirectory()),
     'K1: .kimi/skills/ holds exactly ' + expected.length + ' entries, all directories (no stray files)');
   assert(JSON.stringify(dirNames) === JSON.stringify(expected),
-    'K1: .kimi/skills/ dir set == 11 canonical commands + 16 kaola-role-* roles — got ' + JSON.stringify(dirNames));
+    'K1: .kimi/skills/ dir set == 5 canonical commands + 16 kaola-role-* roles — got ' + JSON.stringify(dirNames));
   const roleSet = dirNames.filter(d => d.startsWith('kaola-role-'));
   assert(roleSet.length === canonAgents.length,
     'K1: kaola-role-* skill count matches canonical agent count (' + canonAgents.length + ')');
@@ -426,12 +427,13 @@ for (const script of sync.HOOK_SCRIPTS) {
 // preceded by a path char, so only genuine slash-command mentions match.
 // ---------------------------------------------------------------------------
 {
+  // #725 Phase A: claim.js never emits a non-adaptive route target post-retirement
+  // (no isFast branch survives) — the emitted-target set shrinks to the 2 real
+  // adaptive targets (mirrors test-opencode-edition.js's A9 retirement).
   const stripSlash = c => c.replace(/^\//, '');
   const emittedCommandTargets = [
     stripSlash(schema.PLAN_RUN_COMMAND),
     stripSlash(schema.ADAPT_COMMAND),
-    'kaola-workflow-fast',
-    'kaola-workflow-phase1'
   ];
   const installed = new Set(
     fs.readdirSync(path.join(REPO, '.kimi', 'skills'), { withFileTypes: true })
@@ -455,16 +457,28 @@ for (const script of sync.HOOK_SCRIPTS) {
 }
 
 // ---------------------------------------------------------------------------
-// P1–P4 / U1 / A1: install-kimi.sh contract — the install-time COMMAND-skill
-// partition (adaptive-core 5 + --with-fast + --with-full, all 16 kaola-role-*
-// always), re-install idempotency (exactly ONE managed hooks block in
-// config.toml), --uninstall zero-residue, and zero Claude-path leaks across
-// the deployed tree. HERMETIC per sub-case: each run gets its OWN fresh temp
-// HOME (seed_kaola_config writes only under $TMPDIR), its OWN temp
-// KIMI_CODE_HOME (skills/support scripts/config.toml land only under $TMPDIR —
-// the real ~/.kimi-code is never touched), and its OWN temp --target. The REAL
-// installer runs (support scripts + hooks merge included; `kimi doctor config`
-// validates the merged config on machines with a kimi binary).
+// P1 / P4 / U1 / A1: install-kimi.sh contract — the install-time COMMAND-skill
+// deploy (adaptive-core 5, all 16 kaola-role-* always), re-install idempotency
+// (exactly ONE managed hooks block in config.toml), --uninstall zero-residue,
+// and zero Claude-path leaks across the deployed tree. HERMETIC per sub-case:
+// each run gets its OWN fresh temp HOME (seed_kaola_config writes only under
+// $TMPDIR), its OWN temp KIMI_CODE_HOME (skills/support scripts/config.toml
+// land only under $TMPDIR — the real ~/.kimi-code is never touched), and its
+// OWN temp --target. The REAL installer runs (support scripts + hooks merge
+// included; `kimi doctor config` validates the merged config on machines with
+// a kimi binary).
+//
+// #725 Phase A: the fast/full install-time OPT-IN PARTITION itself is retired
+// (canonical no longer ships `kaola-workflow-fast.md` / `kaola-workflow-phase[1-5].md`
+// — n2-deleted, so nothing exists for a --with-fast/--with-full opt-in to
+// deploy). The former P2/P3 opt-in-partition probes (--with-fast deploys the
+// fast skill + installed_paths:["fast"], --with-full deploys phase1-5 +
+// installed_paths:["full"]) are DELETED IN FULL — mirrors
+// test-opencode-edition.js's P2–P6 retirement. install-kimi.sh itself still
+// parses the `--with-fast`/`--with-full` flags (an unowned, deferred write-set
+// gap — n1-recon GAP-3 — out of this node's scope) but they are now inert for
+// skill deployment: the adaptive-only surface is the only reachable outcome,
+// which is exactly what P1 below locks in.
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
@@ -476,20 +490,15 @@ for (const script of sync.HOOK_SCRIPTS) {
     'kaola-workflow-adapt', 'kaola-workflow-finalize',
     'kaola-workflow-plan-run', 'workflow-init', 'workflow-next',
   ];
-  const FAST_ONLY = ['kaola-workflow-fast'];
-  const FULL_ONLY = [
-    'kaola-workflow-phase1', 'kaola-workflow-phase2', 'kaola-workflow-phase3',
-    'kaola-workflow-phase4', 'kaola-workflow-phase5',
-  ];
 
   // Partition exhaustiveness (mirror of the opencode F5): the canonical command
-  // set must be EXACTLY adaptive-core ∪ fast ∪ full — a new canonical command
-  // unassigned to a partition fails HERE (the installer also fails closed on it).
+  // set must be EXACTLY adaptive-core (the fast/full opt-in partitions are
+  // retired) — a new canonical command left unaccounted-for fails HERE (the
+  // installer also fails closed on it).
   {
     const canon = [...canonCommandNames].sort();
-    const partitioned = [...ADAPTIVE_CORE, ...FAST_ONLY, ...FULL_ONLY].sort();
-    assert(JSON.stringify(canon) === JSON.stringify(partitioned),
-      'P0: canonical commands == adaptive-core ∪ fast ∪ full (assign any new command to a partition) — canon=' + JSON.stringify(canon));
+    assert(JSON.stringify(canon) === JSON.stringify([...ADAPTIVE_CORE].sort()),
+      'P0: canonical commands == adaptive-core exactly (fast/full opt-in partitions retired) — canon=' + JSON.stringify(canon));
   }
 
   function runInstaller(extraArgs, opts) {
@@ -533,9 +542,9 @@ for (const script of sync.HOOK_SCRIPTS) {
   };
   const firstStderrLine = r => String(r.stderr).split('\n')[0];
 
-  // P1 — default install deploys adaptive-core commands + all role skills ONLY
-  // (no fast, no phase1-5), lands support scripts + hook scripts under the kimi
-  // home, merges EXACTLY ONE managed hooks block into config.toml, and seeds
+  // P1 — default (and now ONLY) install deploys adaptive-core commands + all
+  // role skills, lands support scripts + hook scripts under the kimi home,
+  // merges EXACTLY ONE managed hooks block into config.toml, and seeds
   // installed_paths:[].
   {
     const r = runInstaller([]);
@@ -544,10 +553,6 @@ for (const script of sync.HOOK_SCRIPTS) {
     for (const name of ADAPTIVE_CORE) {
       assert(existsSync(path.join(skillsDir(r), name, 'SKILL.md')),
         'P1[' + name + ']: default install deploys the adaptive-core command skill');
-    }
-    for (const name of FAST_ONLY.concat(FULL_ONLY)) {
-      assert(!existsSync(path.join(skillsDir(r), name)),
-        'P1[' + name + ']: default install does NOT deploy the opt-in command skill');
     }
     for (const role of roleDirNames) {
       assert(existsSync(path.join(skillsDir(r), role, 'SKILL.md')),
@@ -579,39 +584,10 @@ for (const script of sync.HOOK_SCRIPTS) {
     clean(r);
   }
 
-  // P2 — --with-fast adds the fast command (+ adaptive-core + roles) and writes
-  // installed_paths:["fast"]; the full-phase commands stay undeployed.
-  {
-    const r = runInstaller(['--with-fast']);
-    assert(r.ok,
-      'P2: --with-fast install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
-    expectDeployed(r, ADAPTIVE_CORE.concat(FAST_ONLY), 'P2 (exact-set)');
-    for (const name of FULL_ONLY) {
-      assert(!existsSync(path.join(skillsDir(r), name)),
-        'P2[' + name + ']: --with-fast does NOT deploy the full-only phase commands');
-    }
-    const cfg = readConfig(r.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast"]',
-      'P2: --with-fast installed_paths deep-equals ["fast"] — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    clean(r);
-  }
-
-  // P3 — --with-full adds phase1-5 (+ adaptive-core + roles) and writes
-  // installed_paths:["full"]; the fast command stays undeployed.
-  {
-    const r = runInstaller(['--with-full']);
-    assert(r.ok,
-      'P3: --with-full install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
-    expectDeployed(r, ADAPTIVE_CORE.concat(FULL_ONLY), 'P3 (exact-set)');
-    for (const name of FAST_ONLY) {
-      assert(!existsSync(path.join(skillsDir(r), name)),
-        'P3[' + name + ']: --with-full does NOT deploy the fast-only command');
-    }
-    const cfg = readConfig(r.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '["full"]',
-      'P3: --with-full installed_paths deep-equals ["full"] — got ' + JSON.stringify(cfg && cfg.installed_paths));
-    clean(r);
-  }
+  // P2/P3 (former --with-fast / --with-full opt-in-partition probes) — DELETED
+  // IN FULL. #725 Phase A retires the fast/full opt-in partition itself; every
+  // surface these probed (kaola-workflow-fast, kaola-workflow-phase[1-5]) is
+  // n2-deleted from canonical, so there is nothing left to opt into or lock in.
 
   // P4 — idempotency: a default install run TWICE into the same
   // HOME/KIMI_CODE_HOME/target leaves EXACTLY ONE managed hooks block in

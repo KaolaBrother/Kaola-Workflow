@@ -15,6 +15,8 @@ delete process.env.KAOLA_WORKFLOW_OFFLINE;
 const forge = require('./kaola-gitlab-forge');
 const sinkMr = require('./kaola-gitlab-workflow-sink-mr');
 const sinkMerge = require('./kaola-gitlab-workflow-sink-merge');
+const planValidator = require('./kaola-gitlab-workflow-plan-validator');
+const planValidatorScript = path.join(__dirname, 'kaola-gitlab-workflow-plan-validator.js');
 
 function withForge(stubs, fn) {
   const originals = {};
@@ -33,12 +35,81 @@ function tempRoot(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), name));
 }
 
-function markPlanAbsentFinalizeFixtureFast(root, project) {
-  const stateFile = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
-  const content = fs.readFileSync(stateFile, 'utf8');
-  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
-    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
-    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+// A finalize with NO frozen workflow-plan.md now refuses adaptive_plan_missing (adaptive is
+// the only workflow path). This fixture jumps straight from a hand-rolled state to finalize to
+// exercise closure/archive-rename behavior — not an authored adaptive run — so seed a minimal
+// FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation gate, letting
+// finalize's adaptive --finalize-check proceed. Mirrors the proven
+// scripts/simulate-workflow-walkthrough.js seedAdaptiveFinalizeFixture helper (and this repo's
+// own test-gitlab-workflow-scripts.js copy). Seed LAST, after every other fixture file is in
+// place, so the recorded validated_candidate_hash matches the tree finalize recomputes over.
+function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
+  const dir = path.join(fixtureRoot, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
+  const nodesTable = paths.length ? [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
+    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
+    '| n4 | finalize | n3 | — | 1 | sequence |',
+  ] : [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |',
+  ];
+  const ledgerRows = paths.length
+    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
+    : ['| n1 | complete |', '| n2 | complete |'];
+  const complianceRows = paths.length ? [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
+    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
+    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
+  ] : [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
+  ];
+  const tasks = paths.length ? [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
+    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ] : [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ];
+  const planBody = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    ...nodesTable, '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledgerRows, '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    ...complianceRows, ''
+  ].join('\n');
+  const planHash = planValidator.computePlanHash(planBody);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + planHash + ' -->\n\n' + planBody);
+  const glVal = (a) => spawnSync(process.execPath, [planValidatorScript, ...a], { cwd: fixtureRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  let finalHash = '';
+  try { finalHash = JSON.parse(glVal([planPath, '--freeze', '--json']).stdout).planHash || ''; } catch (_) {}
+  const sFile = path.join(dir, 'workflow-state.md');
+  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
+    const s = fs.readFileSync(sFile, 'utf8')
+      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
+      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
+      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
+      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
+    fs.writeFileSync(sFile, s);
+    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
+  }
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try { cand = JSON.parse(glVal([planPath, '--candidate-hash', '--json']).stdout).validated_candidate_hash || ''; } catch (_) {}
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
 
 function setupRealRepo(name, project) {
@@ -807,14 +878,14 @@ withForge({
       '## Sink', 'branch: workflow/test-kw-proj', 'issue_number: 1', 'sink: merge',
       'worktree_path: ' + wtPath, ''
     ].join('\n'));
-    markPlanAbsentFinalizeFixtureFast(wtPath, 'test-kw-proj');
+    seedAdaptiveFinalizeFixture(wtPath, 'test-kw-proj');
     execFileSync('git', ['add', 'kaola-workflow/'], { cwd: wtPath, encoding: 'utf8' });
     execFileSync('git', ['commit', '-m', 'chore: finalize test-kw-proj'], { cwd: wtPath, encoding: 'utf8' });
     // Also set up main worktree with the live folder (mirrors cmdWorktreeFinalize copy)
     const mainProjDir = path.join(mainRoot, 'kaola-workflow', 'test-kw-proj');
     fs.mkdirSync(mainProjDir, { recursive: true });
     fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), fs.readFileSync(path.join(projDir, 'workflow-state.md'), 'utf8'));
-    markPlanAbsentFinalizeFixtureFast(mainRoot, 'test-kw-proj');
+    seedAdaptiveFinalizeFixture(mainRoot, 'test-kw-proj');
     git('add', 'kaola-workflow/');
     git('commit', '-m', 'mirror: test-kw-proj live folder on main');
     // Run finalize --keep-worktree from linked worktree

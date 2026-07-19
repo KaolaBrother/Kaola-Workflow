@@ -21,7 +21,7 @@ const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'))
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto' }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
@@ -837,9 +837,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.mkdirSync(proj63, { recursive: true });
   fs.mkdirSync(proj65, { recursive: true });
   fs.writeFileSync(path.join(proj63, 'workflow-state.md'),
-    'name: issue-63\nissue_number: 63\nstatus: in_progress\nphase: 2\nnext_command: /kaola-workflow-phase2 issue-63\n');
+    'name: issue-63\nissue_number: 63\nstatus: in_progress\nphase: 2\nnext_command: /kaola-workflow-plan-run issue-63\n');
   fs.writeFileSync(path.join(proj65, 'workflow-state.md'),
-    'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-phase3 issue-65\n');
+    'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-plan-run issue-65\n');
 
   // Scenario A (ambiguous): two active folders + no --project → must refuse with reason: resume_ambiguous.
   const rAmb = runResume([], repo503);
@@ -867,7 +867,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   // Scenario C (explicit --project): two folders restored, explicit --project must still work.
   fs.mkdirSync(proj65, { recursive: true });
   fs.writeFileSync(path.join(proj65, 'workflow-state.md'),
-    'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-phase3 issue-65\n');
+    'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-plan-run issue-65\n');
   const rExplicit = runResume(['--project', 'issue-65'], repo503);
   assert(rExplicit.code === 0,
     '#503(C): explicit --project must exit 0 (got code=' + rExplicit.code + ', json=' + JSON.stringify(rExplicit.json) + ')');
@@ -877,26 +877,20 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(repo503, { recursive: true, force: true });
 }
 
-// --- #538: path-legality gate (adaptive default + installed_paths opt-in) -------
-// REPLACES the retired #515 `path_requires_explicit_opt_in` guard. Under #538 there is no on/off
-// switch: adaptive is the unconditional default and is ALWAYS legal; fast/full are legal ONLY when
-// recorded in `installed_paths` in ~/.config/kaola-workflow/config.json. A named-but-not-installed
-// path is a TYPED `path_not_installed` refusal (NEVER a silent adaptive substitution).
+// --- #538: path-legality gate (adaptive is the only path) -----------------------
+// Under #538 there is no on/off switch: adaptive is the unconditional default and the ONLY legal
+// workflow path — the fast/full paths were retired. A KAOLA_PATH/--workflow-path naming any
+// non-adaptive path is a TYPED `path_not_installed` refusal (NEVER a silent adaptive substitution),
+// and the retired `--with-fast`/`--with-full` install flags are unknown flags at the claim surface.
+// A stale `installed_paths` config field is tolerated on read but no longer confers legality.
 //
-// Legality is driven by the HERMETIC HOME config (the sandbox seeded at the top of this file), NOT
-// by env and NOT by any repo-local .config (claimProject reads os.homedir()). Each sub-test rewrites
-// that HOME config via setHomeInstalled(...) before the spawn. KAOLA_ENABLE_ADAPTIVE is retired —
-// no env lever survives. Distinct target-issue numbers avoid the `owned` early-return false-green.
+// Legality is schema-driven (claimProject calls adaptiveSchema.isLegalWorkflowPath), not config- or
+// env-driven; the hermetic HOME (seeded parallel_mode:'auto' at the top of this file) only feeds the
+// classifier. KAOLA_ENABLE_ADAPTIVE is retired — no env lever survives. Distinct target-issue numbers
+// avoid the `owned` early-return false-green.
 {
   const { execFileSync: execFS538 } = require('child_process');
   const CLAIM538 = path.join(__dirname, 'kaola-workflow-claim.js');
-  const homeCfg538 = path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json');
-
-  // Rewrite the hermetic HOME config to record exactly `installedPaths` as installed (adaptive is
-  // implicit-always and never listed). Restored to [] at the end so later blocks see the default.
-  function setHomeInstalled(installedPaths) {
-    fs.writeFileSync(homeCfg538, JSON.stringify({ parallel_mode: 'auto', installed_paths: installedPaths }, null, 2) + '\n');
-  }
 
   function runClaim538(argv, extraEnv, cwd) {
     const e = Object.assign({}, process.env, {
@@ -940,9 +934,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     try { fs.rmSync(path.join(repo538, 'kaola-workflow', 'issue-' + issueN), { recursive: true, force: true }); } catch (_) {}
   }
 
-  // (a) DEFAULT (no --workflow-path, no KAOLA_PATH) under installed_paths:[] → ACQUIRED (adaptive default).
+  // (a) DEFAULT (no --workflow-path, no KAOLA_PATH) → ACQUIRED (adaptive default).
   {
-    setHomeInstalled([]);
     const r = runClaim538(
       ['startup', '--target-issue', '5380'],
       { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
@@ -953,9 +946,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#538(a): default (no path) must be acquired via adaptive (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (b) KAOLA_PATH=fast under installed_paths:[] → REFUSE path_not_installed (fast not installed).
+  // (b) KAOLA_PATH=fast → REFUSE path_not_installed (fast was retired; never legal).
   {
-    setHomeInstalled([]);
     const r = runClaim538(
       ['startup', '--target-issue', '5381'],
       { KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
@@ -963,27 +955,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     );
     rmProj538('5381'); // guard REFUSES so no project dir is created; rmProj is defensive
     assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
-      '#538(b): fast under installed_paths:[] must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
+      '#538(b): retired fast path must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
     assert(r.json && r.json.claim === 'none',
       '#538(b): path_not_installed must have claim:none (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (c) KAOLA_PATH=fast under installed_paths:['fast'] → ACQUIRED (installed → legal).
+  // (d) --workflow-path full → REFUSE path_not_installed (full was retired; never legal).
   {
-    setHomeInstalled(['fast']);
-    const r = runClaim538(
-      ['startup', '--target-issue', '5382'],
-      { KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
-      repo538
-    );
-    rmProj538('5382');
-    assert(r.json && r.json.status === 'acquired',
-      '#538(c): fast under installed_paths:[\'fast\'] must be acquired (got ' + JSON.stringify(r.json) + ')');
-  }
-
-  // (d) --workflow-path full under installed_paths:[] → REFUSE path_not_installed (full not installed).
-  {
-    setHomeInstalled([]);
     const r = runClaim538(
       ['startup', '--target-issue', '5383', '--workflow-path', 'full'],
       { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
@@ -991,25 +969,11 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     );
     rmProj538('5383');
     assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
-      '#538(d): full under installed_paths:[] must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
+      '#538(d): retired full path must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (e) --workflow-path full under installed_paths:['full'] → ACQUIRED (installed → legal).
+  // (f) explicit KAOLA_PATH=adaptive → ACQUIRED (adaptive is the only legal path).
   {
-    setHomeInstalled(['full']);
-    const r = runClaim538(
-      ['startup', '--target-issue', '5384', '--workflow-path', 'full'],
-      { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
-      repo538
-    );
-    rmProj538('5384');
-    assert(r.json && r.json.status === 'acquired',
-      '#538(e): full under installed_paths:[\'full\'] must be acquired (got ' + JSON.stringify(r.json) + ')');
-  }
-
-  // (f) explicit KAOLA_PATH=adaptive under installed_paths:[] → ACQUIRED (adaptive ALWAYS legal).
-  {
-    setHomeInstalled([]);
     const r = runClaim538(
       ['startup', '--target-issue', '5385'],
       { KAOLA_PATH: 'adaptive', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
@@ -1017,12 +981,11 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     );
     rmProj538('5385');
     assert(r.json && r.json.status === 'acquired',
-      '#538(f): explicit adaptive under installed_paths:[] must be acquired (got ' + JSON.stringify(r.json) + ')');
+      '#538(f): explicit adaptive must be acquired (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (g) authoring-allowed is UNCONDITIONAL (no switch) — always allowed, even under installed_paths:[].
+  // (g) authoring-allowed is UNCONDITIONAL (no switch) — always allowed.
   {
-    setHomeInstalled([]);
     const r = runClaim538(
       ['authoring-allowed', '--project', 'issue-5386'],
       { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
@@ -1032,16 +995,29 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#538(g): authoring-allowed must be unconditionally allowed (got ' + JSON.stringify(r.json) + ')');
   }
 
+  // (retirement) the retired install opt-in flags are UNKNOWN flags at the claim surface — a claim
+  // that receives `--with-fast`/`--with-full` refuses with a typed unknown_flag (never silently
+  // accepted as a path opt-in), proving the flags no longer confer any fast/full behavior.
+  for (const retiredFlag of ['--with-fast', '--with-full']) {
+    const r = runClaim538(
+      ['startup', '--target-issue', '5388', retiredFlag, '--json'],
+      { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
+    );
+    rmProj538('5388');
+    assert(r.code === 1 && r.json && r.json.reason === 'unknown_flag' && (r.json.unknownFlags || []).includes(retiredFlag),
+      '#725: retired ' + retiredFlag + ' must refuse unknown_flag at the claim surface (got ' + JSON.stringify(r.json) + ')');
+  }
+
   // (h) #550 OFFLINE-DETERMINISM REGRESSION GUARD — the path_not_installed refusal must make ZERO gh
-  // invocations. The path-legality gate (claim.js claimProject ~:851) returns path_not_installed
-  // BEFORE probeIssueState (~:866, the only gh-touching call in this flow), so a non-installed path
-  // never reaches gh. This guard runs the #538(b) scenario WITHOUT KAOLA_WORKFLOW_OFFLINE (so ghExec
-  // would actually shell the mock if the probe were reached) and points KAOLA_GH_MOCK_SCRIPT at a
-  // mock that DROPS A SENTINEL FILE + EXITS NON-ZERO IF INVOKED. We assert (1) the result is still
-  // path_not_installed/refuse and (2) the sentinel was never written — proving zero gh round-trips.
-  // A regression that reorders the gate to probe-before-legality would fire the mock and fail here.
+  // invocations. The path-legality gate (claim.js claimProject) returns path_not_installed BEFORE
+  // probeIssueState (the only gh-touching call in this flow), so a retired path never reaches gh.
+  // This guard runs the #538(b) scenario WITHOUT KAOLA_WORKFLOW_OFFLINE (so ghExec would actually
+  // shell the mock if the probe were reached) and points KAOLA_GH_MOCK_SCRIPT at a mock that DROPS
+  // A SENTINEL FILE + EXITS NON-ZERO IF INVOKED. We assert (1) the result is still path_not_installed/
+  // refuse and (2) the sentinel was never written — proving zero gh round-trips. A regression that
+  // reorders the gate to probe-before-legality would fire the mock and fail here.
   {
-    setHomeInstalled([]);
     const sentinel538 = path.join(tmpDir538, 'gh-invoked.sentinel');
     try { fs.rmSync(sentinel538, { force: true }); } catch (_) {}
     const ghBoomMock538 = path.join(tmpDir538, 'gh-boom.js');
@@ -1058,14 +1034,12 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     );
     rmProj538('5387'); // guard REFUSES so no project dir is created; rmProj is defensive
     assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
-      '#550(h): a non-installed path still refuses path_not_installed even with no OFFLINE flag (got ' + JSON.stringify(r.json) + ')');
+      '#550(h): a retired path still refuses path_not_installed even with no OFFLINE flag (got ' + JSON.stringify(r.json) + ')');
     assert(!fs.existsSync(sentinel538),
       '#550(h): ZERO gh invocations — the gh mock (exits non-zero if called) was never invoked; path-legality short-circuits before probeIssueState');
     try { fs.rmSync(sentinel538, { force: true }); } catch (_) {}
   }
 
-  // Restore the hermetic HOME to the default-install shape so subsequent test blocks see adaptive-only.
-  setHomeInstalled([]);
   fs.rmSync(repo538, { recursive: true, force: true });
   fs.rmSync(tmpDir538, { recursive: true, force: true });
 }
@@ -1077,7 +1051,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 //
 // Scenario A (RED): self-host repo, adaptive plan, --keep-worktree, NO chain-receipt → must refuse.
 // Scenario B (GREEN-gate): self-host repo, valid chain-receipt seeded → must pass (exit 0).
-// Scenario C (N/A gate): explicit fast + no workflow-plan.md → gate skipped, finalize succeeds.
+// Scenario C (retirement): a plan-absent finalize now REFUSES adaptive_plan_missing (fast/full retired).
 {
   const { execFileSync: execFS522, spawnSync: spawnS522 } = require('child_process');
   const CLAIM522 = path.join(__dirname, 'kaola-workflow-claim.js');
@@ -1378,7 +1352,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     }
   }
 
-  // --- #522 Scenario C: explicit fast + no workflow-plan.md → gate is N/A, finalize succeeds ---
+  // --- #522 Scenario C: a plan-absent finalize now REFUSES adaptive_plan_missing (fast/full retired) ---
   {
     const tmpC = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522c-')));
     const project = 'issue-522c';
@@ -1402,7 +1376,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       execFS522('git', ['-C', tmpC, 'commit', '-m', 'init'],
         { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
 
-      // Project folder with NO workflow-plan.md (non-adaptive run).
+      // Project folder with NO workflow-plan.md and a stale legacy `workflow_path: fast` field.
+      // Under retirement a plan-absent finalize collapses to a typed adaptive_plan_missing refusal
+      // regardless of the stale field — never the retired fast N/A pass, never a retired-verifier shell.
       const projDir = path.join(tmpC, 'kaola-workflow', project);
       fs.mkdirSync(projDir, { recursive: true });
       fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
@@ -1424,8 +1400,14 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
           })
         });
 
-      assert(r.status === 0,
-        '#522(C): explicit fast finalize with NO workflow-plan.md must succeed (gate N/A), got ' + r.status + '\nstderr: ' + (r.stderr || '').slice(0, 200));
+      let jsonC = null;
+      try { jsonC = JSON.parse(String(r.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+      assert(r.status !== 0 && jsonC && jsonC.reason === 'finalize_gate_unverified'
+          && jsonC.inner_reason === 'adaptive_plan_missing',
+        '#522(C): a plan-absent finalize (stale fast field) must refuse adaptive_plan_missing, got status='
+          + r.status + ' output=' + JSON.stringify(jsonC));
+      assert(fs.existsSync(projDir),
+        '#522(C): the refused plan-absent finalize must leave the live project folder in place');
 
     } finally {
       try { fs.rmSync(tmpC, { recursive: true, force: true }); } catch (_) {}
@@ -3166,13 +3148,13 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
-// A full-path run has no adaptive workflow-plan.md, so Finalization must not treat
-// plan absence as a universal gate exemption. Invoke cmdFinalize directly (the
-// bypass seam) with malformed and stale Phase 5 reviewer evidence and prove that
-// neither the live folder nor its roadmap closure source is mutated.
+// Adaptive is the only workflow path: a finalize with NO frozen workflow-plan.md present is an
+// unconditional typed adaptive_plan_missing refusal (the fast/full paths and their Phase 5 verifier
+// were retired). Invoke cmdFinalize directly (the bypass seam) across all four editions with varied
+// stale workflow_path fields and prove the refusal never mutates the live folder or its roadmap
+// closure source. state_missing / state_invalid_type refuse earlier (before the plan/path branch).
 {
   const { spawnSync } = require('child_process');
-  const { reviewComplianceTable } = require('./kaola-workflow-full-advance.js');
   const claimScripts = [
     { edition: 'claude', file: path.join(__dirname, 'kaola-workflow-claim.js') },
     { edition: 'codex', file: path.join(__dirname, '..', 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js') },
@@ -3192,10 +3174,12 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
 
   function runPlanAbsentFinalize(edition, claimScript, caseName, reviewContent, evidenceContent, options) {
     const opts = options || {};
-    const workflowPath = opts.workflowPath || 'full';
+    const workflowPath = opts.workflowPath || 'adaptive';
     const stateMode = opts.stateMode || 'file';
-    const expectBlocked = opts.expectBlocked !== false;
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-finalize-gate-')));
+    // Every plan-absent path case collapses to adaptive_plan_missing; the state-mode cases refuse
+    // earlier (state_missing / state_invalid_type) and pass their own expectedInnerReason.
+    const expectedInnerReason = opts.expectedInnerReason || 'adaptive_plan_missing';
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-plan-absent-finalize-')));
     const project = 'issue-720-' + caseName;
     const projectPath = path.join(root, 'kaola-workflow', project);
     const roadmapSource = path.join(root, 'kaola-workflow', '.roadmap', 'issue-720.md');
@@ -3223,18 +3207,12 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
     ].join('\n');
     if (stateMode === 'file') fs.writeFileSync(statePath, stateContent);
     else if (stateMode === 'directory') fs.mkdirSync(statePath);
+    // The review/progress fixtures are written but never consulted — under retirement a plan-absent
+    // finalize refuses BEFORE any Phase 5 evidence is read (the fast/full verifier was retired).
     fs.writeFileSync(path.join(projectPath, 'phase4-progress.md'), progress.replace(/issue-1/g, project));
     fs.writeFileSync(path.join(projectPath, 'phase5-review.md'), reviewContent);
     fs.writeFileSync(evidencePath, evidenceContent);
     fs.writeFileSync(roadmapSource, '# Issue 720\n');
-
-    // Keep the stale case deterministic: reviewer evidence must be strictly
-    // newer than Phase 4 progress at the point-of-use verifier.
-    const staleTime = new Date(opts.freshEvidence
-      ? '2026-01-03T00:00:00.000Z' : '2026-01-01T00:00:00.000Z');
-    const progressTime = new Date('2026-01-02T00:00:00.000Z');
-    fs.utimesSync(evidencePath, staleTime, staleTime);
-    fs.utimesSync(path.join(projectPath, 'phase4-progress.md'), progressTime, progressTime);
 
     const result = spawnSync(process.execPath,
       [claimScript, 'finalize', '--project', project], {
@@ -3250,51 +3228,36 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
     try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
     const activeSurvived = fs.existsSync(projectPath);
     const archiveExists = fs.existsSync(path.join(root, 'kaola-workflow', 'archive'));
-    if (expectBlocked) {
-      assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
-          && (!opts.expectedInnerReason || json.inner_reason === opts.expectedInnerReason),
-        edition + ' full finalize bypass (' + caseName + ') must refuse through finalize_gate_unverified; got status='
-          + result.status + ' output=' + JSON.stringify(json));
-      assert(activeSurvived,
-        edition + ' full finalize bypass (' + caseName + ') must leave the active project folder in place');
-      assert(!archiveExists,
-        edition + ' full finalize bypass (' + caseName + ') must create no archive');
-      assert(fs.existsSync(roadmapSource),
-        edition + ' full finalize bypass (' + caseName + ') must retain the roadmap closure source');
-      if (stateMode === 'file') {
-        const stateAfter = activeSurvived ? fs.readFileSync(statePath, 'utf8') : '';
-        assert(activeSurvived && /^status: active$/m.test(stateAfter) && !/^status: closed$/m.test(stateAfter),
-          edition + ' full finalize bypass (' + caseName + ') must leave closure state active');
-      } else if (stateMode === 'missing') {
-        assert(activeSurvived && !fs.existsSync(statePath),
-          edition + ' full finalize bypass (' + caseName + ') must not fabricate missing workflow state');
-      } else {
-        let stateIsDirectory = false;
-        try { stateIsDirectory = fs.lstatSync(statePath).isDirectory(); } catch (_) {}
-        assert(activeSurvived && stateIsDirectory,
-          edition + ' full finalize bypass (' + caseName + ') must preserve wrong-type workflow state');
-      }
+    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
+        && json.inner_reason === expectedInnerReason,
+      edition + ' plan-absent finalize (' + caseName + ') must refuse finalize_gate_unverified/'
+        + expectedInnerReason + '; got status=' + result.status + ' output=' + JSON.stringify(json));
+    assert(activeSurvived,
+      edition + ' plan-absent finalize (' + caseName + ') must leave the active project folder in place');
+    assert(!archiveExists,
+      edition + ' plan-absent finalize (' + caseName + ') must create no archive');
+    assert(fs.existsSync(roadmapSource),
+      edition + ' plan-absent finalize (' + caseName + ') must retain the roadmap closure source');
+    if (stateMode === 'file') {
+      const stateAfter = activeSurvived ? fs.readFileSync(statePath, 'utf8') : '';
+      assert(activeSurvived && /^status: active$/m.test(stateAfter) && !/^status: closed$/m.test(stateAfter),
+        edition + ' plan-absent finalize (' + caseName + ') must leave closure state active');
+    } else if (stateMode === 'missing') {
+      assert(activeSurvived && !fs.existsSync(statePath),
+        edition + ' plan-absent finalize (' + caseName + ') must not fabricate missing workflow state');
     } else {
-      assert(result.status === 0 && json && json.status === 'closed',
-        edition + ' plan-absent finalize (' + caseName + ') must preserve the allowed path; got status='
-          + result.status + ' output=' + JSON.stringify(json));
-      assert(!activeSurvived && archiveExists,
-        edition + ' plan-absent finalize (' + caseName + ') must archive the completed live project');
-      assert(!fs.existsSync(roadmapSource),
-        edition + ' plan-absent finalize (' + caseName + ') must retain existing closure semantics');
+      let stateIsDirectory = false;
+      try { stateIsDirectory = fs.lstatSync(statePath).isDirectory(); } catch (_) {}
+      assert(activeSurvived && stateIsDirectory,
+        edition + ' plan-absent finalize (' + caseName + ') must preserve wrong-type workflow state');
     }
     fs.rmSync(root, { recursive: true, force: true });
   }
 
+  // Plain reviewer fixture — under retirement it is never consulted (the plan-absent finalize
+  // refuses before any Phase 5 evidence is read), so it carries no reviewComplianceTable dependency.
   const canonicalReview = [
     '# Phase 5 - Review: issue-720-stale',
-    '',
-    '## Required Agent Compliance',
-    reviewComplianceTable([
-      { requirement: 'code-reviewer', status: 'subagent-invoked', evidence: '.cache/code-reviewer.md', binding, skip_reason: '' },
-      { requirement: 'security-reviewer', status: 'n/a', evidence: '', binding: 'n/a', skip_reason: 'no security-sensitive files in write set' },
-      { requirement: 'review-fix executors', status: 'n/a', evidence: '', binding: 'n/a', skip_reason: 'no blocking findings' },
-    ]),
     '',
     '## Review Status',
     'PASSED',
@@ -3323,17 +3286,25 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
     '',
   ].join('\n');
   for (const editionClaim of claimScripts) {
+    // A stale non-adaptive workflow_path field (full / fast / a typo) and an absent field all
+    // collapse to adaptive_plan_missing — proving the TRAP-4 collapse across all four editions.
     runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale', canonicalReview, staleEvidence);
     runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'malformed', malformedReview,
       binding + '\ndomain_outcome: approved\nverdict: pass\n');
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'absent-default', malformedReview,
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'absent-field', malformedReview,
       binding + '\ndomain_outcome: approved\nverdict: pass\n', { omitWorkflowPath: true });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'adaptive-plan-missing', malformedReview,
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-adaptive', malformedReview,
       binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { workflowPath: 'adaptive', expectedInnerReason: 'adaptive_plan_missing' });
-    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'unknown-path', malformedReview,
+      { workflowPath: 'adaptive' });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-full', malformedReview,
       binding + '\ndomain_outcome: approved\nverdict: pass\n',
-      { workflowPath: 'typo', expectedInnerReason: 'invalid_workflow_path' });
+      { workflowPath: 'full' });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-fast', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n',
+      { workflowPath: 'fast' });
+    runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'stale-typo', malformedReview,
+      binding + '\ndomain_outcome: approved\nverdict: pass\n',
+      { workflowPath: 'typo' });
     runPlanAbsentFinalize(editionClaim.edition, editionClaim.file, 'state-missing', malformedReview,
       binding + '\ndomain_outcome: approved\nverdict: pass\n',
       { stateMode: 'missing', expectedInnerReason: 'state_missing' });
@@ -3341,11 +3312,6 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
       binding + '\ndomain_outcome: approved\nverdict: pass\n',
       { stateMode: 'directory', expectedInnerReason: 'state_invalid_type' });
   }
-  runPlanAbsentFinalize('claude', claimScripts[0].file, 'valid-full', canonicalReview, staleEvidence,
-    { freshEvidence: true, expectBlocked: false });
-  runPlanAbsentFinalize('claude', claimScripts[0].file, 'fast-unchanged', malformedReview,
-    binding + '\ndomain_outcome: approved\nverdict: pass\n',
-    { workflowPath: 'fast', expectBlocked: false });
 
   // A manual move is not a crash receipt. Source-missing Finalization may trust an
   // archive only after archiveProjectDir has already terminal-stamped it closed;
@@ -3505,15 +3471,16 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
     fs.rmSync(root, { recursive: true, force: true });
   }
 
-  // A genuine archive crash-resume has no live state, but archiveProjectDir already
-  // stamped it terminal closed and preserved canonical Phase 5 evidence. Reverify
-  // that archived evidence, then allow the remaining idempotent closure work.
+  // A legacy (fast/full) archive crash-resume has no frozen workflow-plan.md, so under retirement it
+  // can no longer resume-finalize through the removed Phase 5 verifier — a plan-absent archive is an
+  // adaptive_plan_missing refusal that leaves the terminal archive untouched. (A genuine ADAPTIVE
+  // crash-resume archive carries a workflow-plan.md and takes the --finalize-check path instead.)
   {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-full-finalize-resume-')));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-plan-absent-finalize-resume-')));
     const project = 'issue-720-resume';
     const archivePath = path.join(root, 'kaola-workflow', 'archive', project);
     fs.mkdirSync(archivePath, { recursive: true });
-    fs.writeFileSync(path.join(archivePath, 'workflow-state.md'), [
+    const archivedState = [
       '# Kaola-Workflow State',
       '## Project',
       'name: ' + project,
@@ -3527,16 +3494,8 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
       'issue_number: 720',
       'sink: merge',
       '',
-    ].join('\n'));
-    const archivedEvidencePath = path.join(archivePath, '.cache', 'code-reviewer.md');
-    fs.mkdirSync(path.dirname(archivedEvidencePath), { recursive: true });
-    fs.writeFileSync(path.join(archivePath, 'phase4-progress.md'), progress.replace(/issue-1/g, project));
-    fs.writeFileSync(path.join(archivePath, 'phase5-review.md'), canonicalReview.replace(/issue-720-stale/g, project));
-    fs.writeFileSync(archivedEvidencePath, staleEvidence);
-    const progressTime = new Date('2026-01-02T00:00:00.000Z');
-    const evidenceTime = new Date('2026-01-03T00:00:00.000Z');
-    fs.utimesSync(path.join(archivePath, 'phase4-progress.md'), progressTime, progressTime);
-    fs.utimesSync(archivedEvidencePath, evidenceTime, evidenceTime);
+    ].join('\n');
+    fs.writeFileSync(path.join(archivePath, 'workflow-state.md'), archivedState);
     const result = spawnSync(process.execPath,
       [claimScripts[0].file, 'finalize', '--project', project], {
         cwd: root,
@@ -3549,12 +3508,12 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
       });
     let json = null;
     try { json = JSON.parse(String(result.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
-    assert(result.status === 0 && json && json.status === 'closed',
-      'full finalize archive crash-resume must remain idempotent; got status=' + result.status
+    assert(result.status !== 0 && json && json.reason === 'finalize_gate_unverified'
+        && json.inner_reason === 'adaptive_plan_missing',
+      'a plan-absent legacy archive crash-resume must refuse adaptive_plan_missing; got status=' + result.status
         + ' output=' + JSON.stringify(json));
-    const archivedState = fs.readFileSync(path.join(archivePath, 'workflow-state.md'), 'utf8');
-    assert(/^status: closed$/m.test(archivedState),
-      'full finalize archive crash-resume must preserve its terminal state');
+    assert(fs.readFileSync(path.join(archivePath, 'workflow-state.md'), 'utf8') === archivedState,
+      'a plan-absent legacy archive crash-resume refusal must preserve the terminal archive state');
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

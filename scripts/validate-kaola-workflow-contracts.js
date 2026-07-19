@@ -76,13 +76,7 @@ assert(entry && entry.source && entry.source.path === './plugins/kaola-workflow'
 const skills = [
   'kaola-workflow-init',
   'kaola-workflow-next',
-  'kaola-workflow-research',
-  'kaola-workflow-ideation',
-  'kaola-workflow-plan',
-  'kaola-workflow-execute',
-  'kaola-workflow-review',
   'kaola-workflow-finalize',
-  'kaola-workflow-fast',
   'kaola-workflow-adapt',
   'kaola-workflow-plan-run'
 ];
@@ -123,41 +117,16 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--projec
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Startup Step 0a-1');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Branch: {branch from Sink block');
-// #538: the status-report `Workflow path:` line now leads with adaptive-by-default (fast|full only
-// on an explicit escape) — the old `{fast|full` menu framing retired with the path switch.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {adaptive by default');
+// #725: the status-report `Workflow path:` line reports adaptive as the ONLY workflow path (a
+// non-adaptive KAOLA_PATH is refused by the claim's path_not_installed).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {adaptive — the only workflow path');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Parallel decision: {green|yellow|red');
-// issue #203 (#201 regression lock): Codex reconstruction ladder fast-summary rung (drift-guard)
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'fast-summary.md exists -> kaola-workflow-fast');
-// issue #198: fast-path widening — Codex skill parity
-const fastSkill198 = `${pluginRoot}/skills/kaola-workflow-fast/SKILL.md`;
-assertIncludes(fastSkill198, 'mechanical');
-assertIncludes(fastSkill198, '≤ 5');
-assertIncludes(fastSkill198, 'design choice');
-assertIncludes(fastSkill198, 'approach_ambiguity');
-assertIncludes(fastSkill198, 'declared write set');
-assertIncludes(fastSkill198, 'absolute backstop of 6');
-assertIncludes(fastSkill198, '`code-reviewer` is mandatory');
-assertNotIncludes(fastSkill198, '(≤ 2)');
-assertNotIncludes(fastSkill198, '> 2 files');
-// issue #207: fast-overlap parity (Codex) — Scope declares a `- Write Set:` line
-// and the classifier reads that fast-summary.md Scope section.
-assertIncludes(fastSkill198, '- Write Set:');
+// issue #207: fast-overlap parity (Codex) — trap-2 tolerant keep. The fast/full SKILLs are retired,
+// but the Codex classifier port RETAINS its defensive fast-summary.md `## Scope` reader (readers
+// ignore the now-legacy artifact; only the write side was removed). Pin the retained reader.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'fast-summary.md');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'sectionBody(');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, "'Scope'");
-// issue #222: fast-path mid-flight escalation routing fix — Codex skill parity
-assertIncludes(fastSkill198, 'workflow_path: full');
-assertIncludes(fastSkill198, 'next_command: /kaola-workflow-phase1 {project}');
-assertIncludes(fastSkill198, 'next_skill: kaola-workflow-research {project}');
-assertIncludes(fastSkill198, 'status `ESCALATED` → escalation already committed');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
-const nextSkill198 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
-// #538: the fast-path eligibility rubric (`mechanical` / `≤ 5` / `design choice`) was Branch-A
-// content of the next SKILL and is DELETED with Branch A (adaptive is the unconditional default).
-// The rubric concept stays machine-enforced on its correct surface — the fast SKILL (L129-131) — so
-// dropping the next-SKILL pins loses zero coverage; the negative-assert below stays.
-assertNotIncludes(nextSkill198, '≤ 2 closely related files');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
@@ -168,12 +137,6 @@ assert(
   !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(initSkill)),
   initSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
 );
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-execute/SKILL.md`, 'Required Agent Compliance');
-const reviewSkill = `${pluginRoot}/skills/kaola-workflow-review/SKILL.md`;
-assertIncludes(reviewSkill, '`code-reviewer` is always required');
-assertIncludes(reviewSkill, '<!-- PIN: full-review-fix-loop-parity -->');
-assert(!read(reviewSkill).includes('or `codex review`'),
-  reviewSkill + ' must not bypass the named generated reviewer profile');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
 // #475: pin the consumer (non-npm) finalize gate prose so the dual-mode concept cannot drift out of the SKILL.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'final-validation.md');
@@ -202,43 +165,22 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'merge-s
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'local-fallback-tool-unavailable');
 
-// Issue #77: typed-acknowledgement delegation gate — remove ungated fallback language
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-research/SKILL.md`, 'when subagents are available; otherwise perform the same read-only research');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-ideation/SKILL.md`, 'when subagents are available; otherwise perform the same strategy analysis');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan/SKILL.md`, 'when subagents are available; otherwise produce the same blueprint');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-execute/SKILL.md`, 'when subagents are available');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-execute/SKILL.md`, 'Use the current Codex session as the fallback executor');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'otherwise perform a review stance locally');
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'or perform the same security review locally');
+// Issue #77: typed-acknowledgement delegation gate — remove ungated fallback language (the
+// research/ideation/plan/execute/review/fast SKILLs are retired; only surviving gate SKILLs remain).
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'subagents are available; otherwise update docs');
 
-// #459: contractor-free routing enforcement (Codex github edition). The fast (#456) and full
-// Phase 1-5 + Phase 4 (#457/#458) mechanical transitions are script-owned (ADR 0004); only
-// Finalization stays contractor-owned. The migrated research/ideation/plan/review/execute SKILLs
-// must be fully contractor-free; the fast SKILL keeps a finalize-exception boundary note, so we
-// forbid only the handoff phrasing there (not the bare word).
-for (const sk of ['research', 'ideation', 'plan', 'review', 'execute']) {
-  assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-${sk}/SKILL.md`, 'contractor');
-}
-assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-fast/SKILL.md`, 'delegated to the contractor');
-
-// Issue #77: typed-acknowledgement delegation gate — require new status vocabulary in all phase skills + next
+// Issue #77: typed-acknowledgement delegation gate — require new status vocabulary in the surviving
+// delegation SKILLs (finalize + next).
 const delegationSkills = [
-  'kaola-workflow-research',
-  'kaola-workflow-ideation',
-  'kaola-workflow-plan',
-  'kaola-workflow-execute',
-  'kaola-workflow-review',
   'kaola-workflow-finalize',
   'kaola-workflow-next',
-  'kaola-workflow-fast',
 ];
 for (const skill of delegationSkills) {
   assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'subagent-invoked');
   assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'local-fallback-explicit');
   assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'local-fallback-tool-unavailable');
 }
-for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
+for (const skill of ['kaola-workflow-finalize']) {
   assertIncludes(
     `${pluginRoot}/skills/${skill}/SKILL.md`,
     'Plain `invoked` is intentional for non-Codex-role workflow gates'
@@ -353,7 +295,6 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'if (require.mai
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'mainRootFromCoord');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "stdio: ['ignore', 'ignore', 'ignore']");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "'workflow_path: ' + workflowPath");
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '/kaola-workflow-fast ');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'removeLegacyStateBlocks');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readActiveFolders');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'kw:claim\\s+(project|sess)=');
@@ -383,7 +324,6 @@ assertConcept('CLAUDE.md', 'compact durable state contract', [
   'do not purge',
   'kaola-workflow/{project}/',
   'workflow-state.md',
-  'fast-summary.md',
   '.cache/'
 ]);
 assertConcept(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Codex init durable state contract', [
@@ -970,14 +910,12 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
 // skill reds the chain with the unreachable target named.
 {
   const schema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-  // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constants +
-  // the static fast/full fallbacks. Values are emitted as `<skill> {project}`; reachability is the
-  // bare skill name. (Commands are the Claude-edition surface, asserted in validate-workflow-contracts.)
+  // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constants.
+  // Values are emitted as `<skill> {project}`; reachability is the bare skill name. (Commands are
+  // the Claude-edition surface, asserted in validate-workflow-contracts.)
   const emittedSkillTargets = [
     schema.PLAN_RUN_SKILL,
-    schema.ADAPT_SKILL,
-    'kaola-workflow-fast',      // isFast fallback (claim.js:520)
-    'kaola-workflow-research'   // full fallback (claim.js:520)
+    schema.ADAPT_SKILL
   ];
   const installedSkills = new Set(
     fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })

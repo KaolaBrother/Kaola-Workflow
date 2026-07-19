@@ -92,12 +92,92 @@ function statePath(root, project) {
   return path.join(root, 'kaola-workflow', project, 'workflow-state.md');
 }
 
-function markPlanAbsentFinalizeFixtureFast(root, project) {
-  const file = statePath(root, project);
-  const content = read(file);
-  fs.writeFileSync(file, /^workflow_path:.*$/m.test(content)
-    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
-    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+// Retirement of the fast/full paths: a finalize with NO frozen workflow-plan.md now
+// refuses adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump
+// straight from claim to finalize to exercise terminal archive/closure normalization — not
+// an adaptive run — so they seed a minimal FROZEN adaptive workflow-plan.md plus a passing
+// consumer-mode final-validation gate, letting finalize's adaptive --finalize-check proceed
+// to the archive/closure behavior each fixture asserts. (Historically this marked the state
+// `workflow_path: fast` so the retired fast N/A gate skipped verification.)
+function seedAdaptiveFinalizeFixture(root, project, writeSet) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
+  // When the fixture commits real production files on the feature branch, the finalize
+  // attribution sweep requires them covered by a `complete` node's declared write set — so
+  // build a code-explorer -> tdd-guide(writes) -> code-reviewer -> finalize plan. Otherwise a
+  // minimal code-explorer -> finalize plan suffices for the archive/closure behavior under test.
+  const nodesTable = paths.length ? [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
+    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
+    '| n4 | finalize | n3 | — | 1 | sequence |',
+  ] : [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |',
+  ];
+  const ledgerRows = paths.length
+    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
+    : ['| n1 | complete |', '| n2 | complete |'];
+  const complianceRows = paths.length ? [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
+    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
+    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
+  ] : [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
+  ];
+  const tasks = paths.length ? [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
+    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ] : [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ];
+  fs.writeFileSync(planPath, [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    ...nodesTable, '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledgerRows, '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    ...complianceRows, ''
+  ].join('\n'));
+  stampVerifiedLegacyPlan(planPath);
+  let finalHash = '';
+  try { finalHash = JSON.parse(runNode(planValidatorScript, [planPath, '--freeze', '--json'], root).stdout).planHash || ''; } catch (_) {}
+  // A startup-authored state carries the schema-2 epoch envelope (active_plan_hash: none →
+  // planless authority). Seeding a plan makes that planless authority invalid, so bind the
+  // state to the frozen plan (active_plan_hash / plan_hash / first node) and seed the task
+  // mirror, exactly as an authored adaptive run would. A pre-epoch (legacy) plantActiveFolder
+  // state carries no envelope and is accepted as-is (the plan file is ignored by that path).
+  const sFile = statePath(root, project);
+  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(read(sFile))) {
+    let s = read(sFile)
+      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
+      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
+      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
+      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
+    fs.writeFileSync(sFile, s);
+    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({
+      source_plan_hash: finalHash,
+      tasks,
+    }) + '\n');
+  }
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try {
+    cand = JSON.parse(runNode(planValidatorScript, [planPath, '--candidate-hash', '--json'], root).stdout).validated_candidate_hash || '';
+  } catch (_) { cand = ''; }
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
 
 function read(file) {
@@ -151,10 +231,9 @@ function testClaimStatusRelease(tmp) {
 function testFinalize(tmp) {
   plantRoadmapIssue(tmp, 164, '');
   json(runNode(claimScript, ['startup', '--target-issue', '164', '--runtime', 'claude'], tmp));
-  // This fixture exercises terminal archive normalization directly rather than
-  // an adaptive run. Mark that shortcut explicitly fast so a missing adaptive
-  // workflow-plan.md is not mistaken for valid completion.
-  markPlanAbsentFinalizeFixtureFast(tmp, 'issue-164');
+  // This fixture exercises terminal archive normalization directly rather than an
+  // authored adaptive run, so it seeds a minimal frozen adaptive plan + passing gate.
+  seedAdaptiveFinalizeFixture(tmp, 'issue-164');
   const retiredBlock = '## ' + 'Lease';
   const retiredSessionField = 'sess' + 'ion_id:';
   const retiredHeartbeatField = 'last_' + 'heart' + 'beat:';
@@ -170,9 +249,10 @@ function testFinalize(tmp) {
   // archive must not see a merged/closed run as still "READY FOR FINAL GIT GATE").
   fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-164', 'finalization-summary.md'),
     '# Finalization Summary\n\n## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
-  // #324 AC3: seed a false-absolute validation claim in the cache evidence.
-  fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-164', '.cache'), { recursive: true });
-  fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-164', '.cache', 'final-validation.md'),
+  // #324 AC3: append a false-absolute validation claim below the gate-passing verdict the
+  // fixture seed already wrote, so the finalize gate still passes AND the claim is present to
+  // be neutralized in the archived copy.
+  fs.appendFileSync(path.join(tmp, 'kaola-workflow', 'issue-164', '.cache', 'final-validation.md'),
     'All four edition test chains run during n16.\nNo files changed after those runs.\n');
   const result = json(runNode(claimScript, ['finalize', '--project', 'issue-164'], tmp));
   assert(result.status === 'closed', 'finalize should report closed');
@@ -372,177 +452,6 @@ function testManualArchiveBackstop() {
   }
 }
 
-function testRepair(tmp) {
-  writeProject(tmp, 'repair-demo', {
-    'phase1-research.md': [
-      '# Phase 1 - Research: repair-demo',
-      '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-explorer | invoked | .cache/code-explorer.md | |',
-      ''
-    ].join('\n')
-  });
-  const result = runNode(repairScript, ['repair-demo'], tmp);
-  assert(result.status === 0, 'repair should exit 0');
-  const state = read(statePath(tmp, 'repair-demo'));
-  assert(state.includes('next_command: /kaola-workflow-phase2 repair-demo'), 'repair should route to phase 2');
-  assert(!state.includes('## ' + 'Lease'), 'repair should not preserve or write retired ownership blocks');
-}
-
-function testRepairFastPath(tmp) {
-  // issue #199: repair-state must understand `phase: fast` / `workflow_path: fast`.
-  // Preserve: an intact fast workflow-state must be recognized as valid and kept,
-  // not discarded as an invalid numbered phase and rebuilt.
-  writeProject(tmp, 'fast-preserve', {
-    'workflow-state.md': [
-      '# Kaola-Workflow State',
-      '',
-      '## Project',
-      'name: fast-preserve',
-      'status: active',
-      '',
-      '## Current Position',
-      'phase: fast',
-      'phase_name: Fast',
-      'workflow_path: fast',
-      'next_command: /kaola-workflow-fast fast-preserve',
-      'next_skill: kaola-workflow-fast fast-preserve',
-      ''
-    ].join('\n'),
-    'fast-summary.md': '# Fast Summary: fast-preserve\n\n## Status\nPASSED\n'
-  });
-  const preserve = runNode(repairScript, ['fast-preserve'], tmp);
-  assert(preserve.status === 0, 'repair should exit 0 for valid fast state');
-  assert(preserve.stdout.includes('existing state valid'), 'intact fast state should be reported valid, not reconstructed');
-  const preserved = read(statePath(tmp, 'fast-preserve'));
-  assert(preserved.includes('phase: fast'), 'repair must not clobber intact fast state');
-  assert(preserved.includes('next_skill: kaola-workflow-fast fast-preserve'), 'fast next_skill must be preserved');
-
-  // Reconstruct: when workflow-state.md is lost but fast-summary.md survives, the
-  // fast project must be rebuilt (phase: fast, workflow_path: fast) and routed to
-  // the fast skill — not restarted at research.
-  writeProject(tmp, 'fast-recon', {
-    'fast-summary.md': '# Fast Summary: fast-recon\n\n## Status\nPASSED\n'
-  });
-  const recon = runNode(repairScript, ['fast-recon'], tmp);
-  assert(recon.status === 0, 'repair should exit 0 when reconstructing from fast-summary.md');
-  const reconState = read(statePath(tmp, 'fast-recon'));
-  assert(reconState.includes('phase: fast'), 'reconstructed fast state must record phase: fast');
-  assert(reconState.includes('workflow_path: fast'), 'reconstructed fast state must record workflow_path: fast so Phase 6 stays on the fast path');
-  assert(reconState.includes('next_skill: kaola-workflow-fast fast-recon'), 'reconstructed fast state must route to the fast skill');
-}
-
-function testRepairFastEscalation(tmp) {
-  // issue #222: repair-state must route an ESCALATED fast project to Phase 1 (full
-  // workflow), not back to the fast skill which would ENOENT on phase1-research.md.
-
-  // --- Assertion 1: ESCALATED fast → full/Phase1 ---
-  writeProject(tmp, 'fast-escalated', {
-    'workflow-state.md': [
-      '# Kaola-Workflow State',
-      '',
-      '## Project',
-      'name: fast-escalated',
-      'status: active',
-      '',
-      '## Current Position',
-      'phase: fast',
-      'phase_name: Fast',
-      'workflow_path: fast',
-      'next_command: /kaola-workflow-fast fast-escalated',
-      'next_skill: kaola-workflow-fast fast-escalated',
-      '',
-      '## Sink',
-      'branch: workflow/fast-escalated',
-      'sink: pr',
-      ''
-    ].join('\n'),
-    'fast-summary.md': '# Fast Summary: fast-escalated\n\n## Status\nESCALATED\n\n## Escalation\nescalated_to_full: approach_ambiguity — multiple viable approaches\n'
-  });
-  const escalated = runNode(repairScript, ['fast-escalated'], tmp);
-  assert(escalated.status === 0, 'repair should exit 0 for ESCALATED fast project, got: ' + escalated.status + ' stderr: ' + escalated.stderr);
-  const escalatedState = read(statePath(tmp, 'fast-escalated'));
-  assert(escalatedState.includes('workflow_path: full'), 'ESCALATED fast project must be rewritten to workflow_path: full');
-  assert(escalatedState.includes('next_command: /kaola-workflow-phase1 fast-escalated'), 'ESCALATED fast project must route to /kaola-workflow-phase1');
-  assert(escalatedState.includes('next_skill: kaola-workflow-research fast-escalated'), 'ESCALATED fast project must set next_skill to kaola-workflow-research');
-  assert(!escalatedState.includes('workflow_path: fast'), 'rewritten state must not retain workflow_path: fast');
-  assert(!escalatedState.includes('next_command: /kaola-workflow-fast'), 'rewritten state must not retain /kaola-workflow-fast command');
-
-  // --- Assertion 2 (negative control): non-ESCALATED fast → stays on /kaola-workflow-fast ---
-  writeProject(tmp, 'fast-inprogress', {
-    'fast-summary.md': '# Fast Summary: fast-inprogress\n\n## Status\nIN_PROGRESS\n'
-  });
-  const inProgress = runNode(repairScript, ['fast-inprogress'], tmp);
-  assert(inProgress.status === 0, 'repair should exit 0 for IN_PROGRESS fast project');
-  const inProgressState = read(statePath(tmp, 'fast-inprogress'));
-  assert(inProgressState.includes('next_command: /kaola-workflow-fast fast-inprogress'), 'IN_PROGRESS fast project must still route to /kaola-workflow-fast');
-  assert(!inProgressState.includes('workflow_path: full'), 'IN_PROGRESS fast project must not be redirected to full');
-
-  // --- Assertion 3 (precedence): phase1-research.md + ESCALATED fast-summary → phase2 wins ---
-  // phase1-research.md has priority over fast-summary.md in reconstruct() ordering.
-  // Provide a satisfied compliance table so route() crosses the phase boundary cleanly.
-  writeProject(tmp, 'fast-escalated-with-p1', {
-    'phase1-research.md': [
-      '# Phase 1 Research',
-      '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Skip Reason |',
-      '|-------------|--------|----------|-------------|',
-      '| code-explorer | invoked | .cache/code-explorer.md | |',
-      ''
-    ].join('\n'),
-    'fast-summary.md': '# Fast Summary: fast-escalated-with-p1\n\n## Status\nESCALATED\n'
-  });
-  const withP1 = runNode(repairScript, ['fast-escalated-with-p1'], tmp);
-  assert(withP1.status === 0, 'repair should exit 0 when phase1-research.md and ESCALATED fast-summary coexist');
-  const withP1State = read(statePath(tmp, 'fast-escalated-with-p1'));
-  assert(withP1State.includes('next_command: /kaola-workflow-phase2 fast-escalated-with-p1'), 'phase1-research.md must take priority over ESCALATED fast-summary (monotonic recovery)');
-}
-
-function testRepairFastNoArgSingle() {
-  // issue #201: no-argument repair-state must DISCOVER a project whose only active
-  // artifact is fast-summary.md (no workflow-state.md, no numbered phase files) —
-  // symmetric with numbered phase-artifact discovery. Uses its own temp root so the
-  // single-project invariant holds (shared roots already contain other projects).
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-fast-noarg-one-'));
-  try {
-    writeProject(tmp, 'oneproj', {
-      'fast-summary.md': '# Fast Summary: oneproj\n\n## Status\nPASSED\n'
-    });
-    const result = runNode(repairScript, [], tmp);
-    assert(result.status === 0, 'no-arg repair should exit 0 with one fast-summary-only project, got ' + result.status);
-    assert(result.stdout.includes('/kaola-workflow-fast oneproj'),
-      'no-arg repair must discover the fast-summary-only project and route to the fast skill, got: ' + result.stdout);
-    const state = read(statePath(tmp, 'oneproj'));
-    assert(state.includes('phase: fast'), 'discovered fast state must record phase: fast');
-    assert(state.includes('workflow_path: fast'), 'discovered fast state must record workflow_path: fast');
-    assert(state.includes('next_command: /kaola-workflow-fast oneproj'), 'discovered fast state must set the fast next_command');
-    assert(state.includes('next_skill: kaola-workflow-fast oneproj'), 'discovered fast state must route to the fast skill');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-function testRepairFastNoArgAmbiguous() {
-  // issue #201: two fast-summary-only projects in one root with NO argument must
-  // stay a safe ambiguity refusal — never a silent pick — and write no state.
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-fast-noarg-multi-'));
-  try {
-    writeProject(tmp, 'alpha', { 'fast-summary.md': '# Fast Summary: alpha\n\n## Status\nPASSED\n' });
-    writeProject(tmp, 'beta', { 'fast-summary.md': '# Fast Summary: beta\n\n## Status\nPASSED\n' });
-    const result = runNode(repairScript, [], tmp);
-    assert(result.status === 0, 'no-arg repair should exit 0 on ambiguity, got ' + result.status);
-    assert(/ambiguous/i.test(result.stdout),
-      'two fast-summary-only projects with no argument must refuse with an ambiguity reason, got: ' + result.stdout);
-    assert(!fs.existsSync(statePath(tmp, 'alpha')), 'ambiguous no-arg repair must not write state for alpha');
-    assert(!fs.existsSync(statePath(tmp, 'beta')), 'ambiguous no-arg repair must not write state for beta');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
 // issue #283: repair-state must use finalization-summary.md (not phase6-summary.md) as the
 // completion signal, emit stage: finalization / stage_name: Finalization / next_command:
 // /kaola-workflow-finalize for the terminal routine, and the one-way migration must convert
@@ -570,60 +479,7 @@ function testRepairFinalizationRoute() {
     assert(legacyComplete.complete !== true,
       'R2: phase6-summary.md alone must NOT be the completion signal (hard-removed), got: ' + JSON.stringify(legacyComplete));
 
-    // --- R3: point-of-use-verified phase5-review.md → finalization names ---
-    const binding = 'evidence-binding: phase5-code-review-1 nonce-fin-route-1';
-    const phase5Content = [
-      '# Phase 5 - Review: fin-route',
-      '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Binding | Skip Reason |',
-      '|-------------|--------|----------|---------|-------------|',
-      '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | ' + binding + ' |  |',
-      '| security-reviewer | n/a |  | n/a | no security-sensitive files in write set |',
-      '| review-fix executors | n/a |  | n/a | no CRITICAL/HIGH blocking findings |',
-      '',
-      '## Review Status',
-      'PASSED',
-      ''
-    ].join('\n');
-    writeProject(tmp, 'fin-route', {
-      'phase5-review.md': phase5Content,
-      'phase4-progress.md': [
-        '# Phase 4',
-        '## Tasks',
-        '| # | Task | Status |',
-        '|---|------|--------|',
-        '| 1 | done | complete |',
-        ''
-      ].join('\n')
-    });
-    const finRouteCache = path.join(workflowDir, 'fin-route', '.cache');
-    fs.mkdirSync(finRouteCache, { recursive: true });
-    fs.writeFileSync(path.join(finRouteCache, 'code-reviewer.md'), [
-      binding,
-      'domain_outcome: approved',
-      'verdict: pass',
-      'findings_blocking: 0',
-      'review_summary: no_blocking_findings',
-      'review_attestation: full_review_completed',
-      'No admitted findings.',
-      'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
-      '',
-    ].join('\n'));
-    runNode(repairScript, ['fin-route'], tmp);
-    const finRouteState = read(statePath(tmp, 'fin-route'));
-    assert(finRouteState.includes('stage: finalization'),
-      'R3: repair must emit stage: finalization for terminal routine, got state:\n' + finRouteState);
-    assert(finRouteState.includes('stage_name: Finalization'),
-      'R3: repair must emit stage_name: Finalization for terminal routine, got state:\n' + finRouteState);
-    assert(finRouteState.includes('next_command: /kaola-workflow-finalize fin-route'),
-      'R3: repair must emit next_command: /kaola-workflow-finalize, got state:\n' + finRouteState);
-    assert(!finRouteState.includes('phase: 6'),
-      'R3: repair must NOT emit phase: 6, got state:\n' + finRouteState);
-    assert(!finRouteState.includes('next_command: /kaola-workflow-phase6'),
-      'R3: repair must NOT emit /kaola-workflow-phase6, got state:\n' + finRouteState);
-
-    // --- R4: one-way migration converts legacy active folder ---
+    // --- R3: one-way migration converts legacy active folder ---
     writeProject(tmp, 'legacy-active', {
       'phase6-summary.md': '# Phase 6 Summary\nLegacy content\n',
       'workflow-state.md': [
@@ -4944,29 +4800,15 @@ function testAdaptiveCheapWinFixes() {
 function testAdaptiveAuditCoverage() {
   const tmp = adaptiveTmp('audit-coverage');
   try {
-    // I4: resolveInstalledPaths contract (#538 — replaces retired resolveEnableAdaptive).
-    // Returns a frozen subset of {fast, full}; adaptive is implicit-always (never in the array).
+    // I4: adaptive is the ONLY legal workflow path (the fast/full opt-ins were retired).
+    // WORKFLOW_PATHS collapses to ['adaptive']; isLegalWorkflowPath accepts adaptive
+    // unconditionally and rejects every other token.
     const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-    const eql = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
-    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['fast'] }), ['fast']),
-      'I4: installed_paths:[fast] => [fast]');
-    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['full'] }), ['full']),
-      'I4: installed_paths:[full] => [full]');
-    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['fast', 'full'] }), ['fast', 'full']),
-      'I4: installed_paths:[fast,full] => [fast,full]');
-    assert(eql(schema.resolveInstalledPaths({ installed_paths: [] }), []),
-      'I4: installed_paths:[] => []');
-    assert(eql(schema.resolveInstalledPaths({}), []),
-      'I4: absent field => []');
-    assert(eql(schema.resolveInstalledPaths(null), []),
-      'I4: null config => []');
-    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['adaptive', 'garbage'] }), []),
-      'I4: junk tokens (adaptive, garbage) must be dropped — adaptive never in array, garbage unknown');
-    // isLegalWorkflowPath: adaptive always legal; fast/full require membership in installed array
-    assert(schema.isLegalWorkflowPath('adaptive', []), 'I4: adaptive always legal even with empty installed');
-    assert(schema.isLegalWorkflowPath('fast', ['fast']), 'I4: fast legal when installed');
-    assert(!schema.isLegalWorkflowPath('fast', []), 'I4: fast illegal when not installed');
-    assert(!schema.isLegalWorkflowPath('wizard', ['fast', 'full']), 'I4: bogus path always illegal');
+    assert(JSON.stringify(schema.WORKFLOW_PATHS) === JSON.stringify(['adaptive']),
+      'I4: WORKFLOW_PATHS must be adaptive-only after retirement, got: ' + JSON.stringify(schema.WORKFLOW_PATHS));
+    assert(schema.isLegalWorkflowPath('adaptive', []), 'I4: adaptive always legal');
+    assert(!schema.isLegalWorkflowPath('fast'), 'I4: fast is a retired path — illegal');
+    assert(!schema.isLegalWorkflowPath('wizard', []), 'I4: bogus path always illegal');
 
     // I5: the --resume-check CLI flag end-to-end (not just the library).
     const resumePlan = path.join(tmp, 'resume-plan.md');
@@ -6409,60 +6251,6 @@ function testWorktreeAdaptiveSuppressed() {
   }
 }
 
-function testFastStartupState() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-startup-'));
-  // #538: fast is an install-time opt-in; seed installed_paths:['fast'] in a hermetic HOME
-  // so the legality gate (resolveInstalledPaths) considers fast installed for this test.
-  const fastHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-home-'));
-  try {
-    initGitRepo(tmp);
-    fs.mkdirSync(path.join(fastHome, '.config', 'kaola-workflow'), { recursive: true });
-    fs.writeFileSync(
-      path.join(fastHome, '.config', 'kaola-workflow', 'config.json'),
-      JSON.stringify({ parallel_mode: 'auto', installed_paths: ['fast'] }, null, 2) + '\n'
-    );
-    plantRoadmapIssue(tmp, 503, '');
-    const result = json(runNode(claimScript, ['startup', '--target-issue', '503'], tmp,
-      { KAOLA_PATH: 'fast', HOME: fastHome, USERPROFILE: fastHome }));
-    assert(result.claim === 'acquired', 'fast startup should acquire explicit issue');
-    const state = read(statePath(tmp, 'issue-503'));
-    assert(state.includes('workflow_path: fast'), 'fast startup should write workflow_path: fast');
-    assert(state.includes('phase: fast'), 'fast startup should write phase: fast');
-    assert(state.includes('next_command: /kaola-workflow-fast issue-503'), 'fast startup should route to fast command');
-    assert(state.includes('next_skill: kaola-workflow-fast issue-503'), 'fast startup should route to fast skill');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(fastHome, { recursive: true, force: true });
-  }
-}
-
-// issue #208: a fast project with workflow_path:fast and an EMPTY next_command
-// must resume to /kaola-workflow-fast, not /kaola-workflow-phase1. Pre-fix the
-// fallback hard-codes /kaola-workflow-phase + (folder.phase||1); folder.phase is
-// null for a fast project (parseInt('fast')=NaN), so it wrongly emits phase1.
-function testResumeFastEmptyNextCommand() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-resume-fast-empty-'));
-  try {
-    writeProject(tmp, 'issue-208', {
-      'workflow-state.md': [
-        'name: issue-208',
-        'issue_number: 208',
-        'status: active',
-        'phase: fast',
-        'workflow_path: fast',
-        'next_command:',
-        ''
-      ].join('\n')
-    });
-    const result = json(runNode(claimScript, ['resume'], tmp));
-    assert(result.resumed === true, 'fast resume should succeed');
-    assert(result.next_command === '/kaola-workflow-fast issue-208',
-      'fast project with empty next_command must resume to the fast skill, got: ' + result.next_command);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
 function testClassifierCurrentClaimMarkerBlocks() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-current-claim-'));
   try {
@@ -6580,7 +6368,7 @@ function testFinalizeReleaseCleansWorktree() {
     assert(s601.claim === 'acquired', 'startup 601 should acquire');
     const wt601 = s601.worktree_path;
     assert(fs.existsSync(wt601), 'worktree 601 should exist after startup');
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-601');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-601');
     runClaimOnline(['finalize', '--project', 'issue-601'], tmp, binDir);
     assert(!fs.existsSync(wt601), 'worktree 601 should be gone after finalize');
     const s602 = runClaimOnline(['startup', '--target-issue', '602'], tmp, binDir);
@@ -6593,7 +6381,7 @@ function testFinalizeReleaseCleansWorktree() {
     assert(s603.claim === 'acquired', 'startup 603 should acquire');
     const wt603 = s603.worktree_path;
     assert(fs.existsSync(wt603), 'worktree 603 should exist after startup');
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-603');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-603');
     runClaimOnline(['finalize', '--project', 'issue-603', '--keep-worktree'], tmp, binDir);
     assert(fs.existsSync(wt603), 'keep-worktree finalize should preserve worktree for final commit');
     assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-603')), 'keep-worktree finalize should still archive active folder');
@@ -6630,8 +6418,8 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
 
     // Plant active folder inside the linked worktree (mirrors main copy)
     plantActiveFolder(wtPath, 'issue-701', 701, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-701');
-    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-701');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-701');
+    seedAdaptiveFinalizeFixture(wtPath, 'issue-701');
 
     // Use --keep-worktree so the linked worktree directory is not removed after archiving;
     // this lets us assert that the archive exists inside the linked worktree.
@@ -6683,8 +6471,8 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
     });
     // Mirror active folder in linked worktree
     plantActiveFolder(wtPath, 'issue-701', 701, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-701');
-    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-701');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-701');
+    seedAdaptiveFinalizeFixture(wtPath, 'issue-701');
     // Plant a stray UNTRACKED foreign archive dir+file before finalize
     const foreignDir = path.join(wtPath, 'kaola-workflow', 'archive', 'issue-999');
     fs.mkdirSync(foreignDir, { recursive: true });
@@ -6737,11 +6525,13 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
 function testFinalizeFromMainRootNoSpuriousRemoval() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-main-noop-')));
   try {
-    // No git repo — getCoordRoot falls back to tmp/.git (fake path),
-    // mainRootFromCoord returns tmp, realpathSync(tmp) === realpathSync(root),
-    // so the cleanup block is a no-op. Archive rename still happens normally.
+    // Main root with no linked worktree: mainRootFromCoord returns tmp,
+    // realpathSync(tmp) === realpathSync(root), so the cleanup block is a no-op and
+    // the archive rename still happens normally. A real git repo (on main) is needed
+    // for the adaptive finalize gate's candidate-hash + attribution sweep.
+    initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-702', 702, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-702');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-702');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-702'], {
       cwd: tmp,
@@ -8735,7 +8525,6 @@ function testE2EGitHubMergeFullChain() {
     // Step 1: startup
     const s850 = runClaimOnline(['startup', '--target-issue', '850'], tmp, binDir);
     assert(s850.claim === 'acquired', 'startup 850 should acquire, got: ' + JSON.stringify(s850));
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-850');
     const wt850 = s850.worktree_path;
     assert(fs.existsSync(wt850), 'worktree dir must exist after startup');
 
@@ -8763,6 +8552,10 @@ function testE2EGitHubMergeFullChain() {
       'second worktree-finalize must not create a commit (no-diff branch); HEAD count was ' +
       headCountBefore + ', now ' + headCountAfter);
 
+    // Seed the finalize authority in the linked worktree (where finalize runs): a frozen
+    // adaptive plan whose tdd-guide node attributes the committed feature file, plus a passing
+    // gate, so the adaptive --finalize-check proceeds.
+    seedAdaptiveFinalizeFixture(wt850, 'issue-850', ['feature-850.txt']);
     // Step 4: finalize --keep-worktree (cwd=wt850, cleans main worktree copy, preserves linked worktree)
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
@@ -9402,113 +9195,6 @@ function testSinkMergeBareRemoteDeleteOrder() {
   }
 }
 
-function testFastE2EMergeFullChain() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-')));
-  const kwRoot = tmp + '.kw';
-  // #538: seed installed_paths:['fast'] in a hermetic HOME so claim.js sees fast as installed.
-  const fastHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-home-'));
-  fs.mkdirSync(path.join(fastHome, '.config', 'kaola-workflow'), { recursive: true });
-  fs.writeFileSync(
-    path.join(fastHome, '.config', 'kaola-workflow', 'config.json'),
-    JSON.stringify({ parallel_mode: 'auto', installed_paths: ['fast'] }, null, 2) + '\n'
-  );
-  const fastEnv = { HOME: fastHome, USERPROFILE: fastHome };
-  try {
-    initGitRepo(tmp);
-    const binDir = path.join(tmp, 'bin');
-    writeGhShimForStartup(binDir);
-
-    // Step 1: startup with KAOLA_PATH=fast (installed_paths:['fast'] in hermetic HOME)
-    const s851 = runClaimOnline(['startup', '--target-issue', '851'], tmp, binDir,
-      { KAOLA_PATH: 'fast', ...fastEnv });
-    assert(s851.claim === 'acquired', 'startup 851 should acquire, got: ' + JSON.stringify(s851));
-    const wt851 = s851.worktree_path;
-    assert(fs.existsSync(wt851), 'worktree dir must exist after startup');
-
-    // Step 2: write fast-summary.md to the main repo's active project folder
-    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-851', 'fast-summary.md'), 'fast summary\n');
-
-    // Step 3: feature commit on linked worktree branch
-    fs.writeFileSync(path.join(wt851, 'feature-851.txt'), 'feature\n');
-    spawnSync('git', ['add', 'feature-851.txt'], { cwd: wt851 });
-    spawnSync('git', ['commit', '-m', 'feat: issue 851'], { cwd: wt851 });
-
-    // Step 4: worktree-finalize (cwd=tmp, reads worktree_path from main active folder)
-    const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-851'], tmp, binDir);
-    assert(wfResult.finalized === true, 'worktree-finalize should succeed');
-    assert(
-      fs.existsSync(path.join(wt851, 'kaola-workflow', 'issue-851', 'workflow-state.md')),
-      'workflow-state.md must exist in linked worktree after worktree-finalize'
-    );
-
-    // Step 5: finalize --keep-worktree (cwd=wt851, cleans main worktree copy, preserves linked worktree)
-    const finResult = spawnSync(process.execPath, [
-      claimScript, 'finalize', '--project', 'issue-851', '--keep-worktree'
-    ], { cwd: wt851, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
-    assert(finResult.status === 0, 'finalize --keep-worktree should exit 0\nstderr: ' + finResult.stderr);
-    assert(
-      fs.existsSync(path.join(wt851, 'kaola-workflow', 'archive', 'issue-851')),
-      'archive must exist in linked worktree after finalize --keep-worktree'
-    );
-    assert(
-      !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-851')),
-      'main active folder must be removed after finalize from linked worktree'
-    );
-    assert(fs.existsSync(wt851), 'linked worktree must survive --keep-worktree finalize');
-
-    // Verify that finalize --keep-worktree committed the archive to the feature branch
-    const liveInTree = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/issue-851/workflow-state.md'],
-      { cwd: wt851, encoding: 'utf8' });
-    assert(liveInTree.status !== 0,
-      'live workflow-state.md must NOT be in feature branch HEAD after finalize --keep-worktree');
-    const archiveInTree = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/archive/issue-851'],
-      { cwd: wt851, encoding: 'utf8' });
-    assert(archiveInTree.status === 0,
-      'kaola-workflow/archive/issue-851 must exist in feature branch HEAD after finalize --keep-worktree');
-
-    // Capture feature HEAD before sink-merge removes the worktree
-    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-851'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
-
-    // Step 6: sink-merge (cwd=wt851, OFFLINE)
-    const smResult = spawnSync(process.execPath, [
-      sinkMergeScript, '--project', 'issue-851', '--branch', 'workflow/issue-851', '--issue', '851'
-    ], { cwd: wt851, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
-    assert(smResult.status === 0,
-      'sink-merge should exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
-
-    const mainAfter = spawnSync('git', ['rev-parse', 'main'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
-    assert(mainAfter === featureHead,
-      'main must advance to feature HEAD after sink-merge, got: ' + mainAfter);
-    const branchList = spawnSync('git', ['branch', '--list', 'workflow/issue-851'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
-    assert(branchList === '', 'workflow/issue-851 branch must be deleted after sink-merge');
-    assert(!fs.existsSync(wt851), 'linked worktree must be removed by sink-merge');
-    const gitStatus = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'],
-      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
-    assert(gitStatus === '', 'main worktree must be clean after sink-merge, got: ' + gitStatus);
-    assert(
-      !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-851')),
-      'live workflow folder must be absent from main after sink-merge'
-    );
-    assert(
-      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-851')),
-      'archive folder must be present in main after sink-merge'
-    );
-    assert(
-      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-851', 'fast-summary.md')),
-      'fast-summary.md must be preserved in archive after sink-merge'
-    );
-
-    console.log('testFastE2EMergeFullChain: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(fastHome, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
-  }
-}
-
 function testE2EGitHubPrFullChain() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-pr-')));
   const kwRoot = tmp + '.kw';
@@ -9615,7 +9301,6 @@ function testParallelIssueIndependence() {
     // Step 1: startup both issues from main worktree
     const s870 = runClaimOnline(['startup', '--target-issue', '870'], tmp, binDir);
     assert(s870.claim === 'acquired', 'startup 870 should acquire, got: ' + JSON.stringify(s870));
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-870');
     const wt870 = s870.worktree_path;
     assert(fs.existsSync(wt870), 'wt870 must exist after startup');
 
@@ -9634,6 +9319,9 @@ function testParallelIssueIndependence() {
     const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-870'], tmp, binDir);
     assert(wfResult.finalized === true, 'worktree-finalize 870 should succeed');
 
+    // Seed the finalize authority in wt870 (where finalize runs): a frozen adaptive plan whose
+    // tdd-guide node attributes the committed feature file, plus a passing gate.
+    seedAdaptiveFinalizeFixture(wt870, 'issue-870', ['feature-870.txt']);
     // Step 4: finalize --keep-worktree 870 (cwd=wt870)
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-870', '--keep-worktree'
@@ -9688,7 +9376,7 @@ function testFinalizeCleansRoadmapEntry() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-910', 910, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-910');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-910');
     plantRoadmapIssue(tmp, 910, '');
     // Generate ROADMAP.md so we can assert it lists #910 before finalize
     const genResult = runNode(roadmapScript, ['generate'], tmp);
@@ -9768,7 +9456,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
     });
     // Active folder lives only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-911', 911, null);
-    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-911');
+    seedAdaptiveFinalizeFixture(wtPath, 'issue-911');
     // Finalize from linked worktree with --keep-worktree (so archive commit is made on feature branch)
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-911', '--keep-worktree'], {
       cwd: wtPath,
@@ -9851,7 +9539,7 @@ function testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource() {
     });
     // Plant the active folder only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-921', 921, null);
-    markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-921');
+    seedAdaptiveFinalizeFixture(wtPath, 'issue-921');
     // THEN create kaola-workflow/.roadmap/issue-921.md in the MAIN tree and
     // `git add` it WITHOUT committing — reproducing adaptive-handoff Step 5.
     plantRoadmapIssue(tmp, 921, '');
@@ -9901,7 +9589,7 @@ function testFinalizeRoadmapCleanupFailureReceipt() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-912', 912, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-912');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-912');
     plantRoadmapIssue(tmp, 912, '');
     // Replace .roadmap/issue-912.md with a directory of the same name
     // so fs.unlinkSync throws EISDIR/EPERM (not ENOENT = absent; it's a real failure)
@@ -10280,7 +9968,6 @@ function testFinalizeRemovesClaimLabel() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-914', 914, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-914');
     plantRoadmapIssue(tmp, 914, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10297,6 +9984,9 @@ function testFinalizeRemovesClaimLabel() {
       "  process.stdout.write('{}\\n');",
       "}"
     ]);
+    // Seed LAST (after every code-band write) so the candidate-hash the fixture records
+    // matches the code tree finalize re-derives.
+    seedAdaptiveFinalizeFixture(tmp, 'issue-914');
     const result = runClaimOnline(['finalize', '--project', 'issue-914'], tmp, binDir);
     assert(
       result.claim_label_removed === 'removed',
@@ -10324,7 +10014,6 @@ function testFinalizeNullFolderFallbackReadsArchive() {
     initGitRepo(tmp);
     // Plant active folder (sink: merge default) — issue-915 will appear closed to shim
     plantActiveFolder(tmp, 'issue-915', 915, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-915');
     plantRoadmapIssue(tmp, 915, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10342,6 +10031,7 @@ function testFinalizeNullFolderFallbackReadsArchive() {
       "  process.stdout.write('{}\\n');",
       "}"
     ]);
+    seedAdaptiveFinalizeFixture(tmp, 'issue-915');
     const result = runClaimOnline(['finalize', '--project', 'issue-915'], tmp, binDir);
     // null-folder fallback reads issue_number from archive workflow-state.md
     assert(
@@ -10368,7 +10058,7 @@ function testFinalizeOfflineSkipsLabelInvariant() {
     initGitRepo(tmp);
     // No roadmap entry — avoids roadmap-source-absent and roadmap-mirror-clean violations
     plantActiveFolder(tmp, 'issue-916', 916, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-916');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-916');
     // Run spawnSync directly — runClaimOnline overrides OFFLINE to '0'
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-916'], {
       cwd: tmp,
@@ -10563,7 +10253,6 @@ function testFinalizeClaimLabelFailedTriggersInvariant() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-918', 918, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-918');
     plantRoadmapIssue(tmp, 918, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10577,6 +10266,7 @@ function testFinalizeClaimLabelFailedTriggersInvariant() {
       "  process.stdout.write('{}\\n');",
       "}"
     ]);
+    seedAdaptiveFinalizeFixture(tmp, 'issue-918');
     const result = runClaimOnline(['finalize', '--project', 'issue-918'], tmp, binDir);
     assert(
       result.claim_label_removed === 'failed',
@@ -10609,7 +10299,6 @@ function testClearAdvisoryClaimDeletesMarkerComment() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-920', 920, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-920');
     plantRoadmapIssue(tmp, 920, '');
     fs.mkdirSync(binDir, { recursive: true });
     // Shim: --method DELETE branch MUST come before the bare list branch (both contain "comments")
@@ -10634,6 +10323,7 @@ function testClearAdvisoryClaimDeletesMarkerComment() {
       "  process.stdout.write('{}\\n');",
       "}"
     ]);
+    seedAdaptiveFinalizeFixture(tmp, 'issue-920');
     runClaimOnline(['finalize', '--project', 'issue-920'], tmp, binDir);
     assert(
       fs.existsSync(listCalledMarker),
@@ -10658,7 +10348,6 @@ function testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-921', 921, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-921');
     plantRoadmapIssue(tmp, 921, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10682,6 +10371,7 @@ function testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker() {
       "  process.stdout.write('{}\\n');",
       "}"
     ]);
+    seedAdaptiveFinalizeFixture(tmp, 'issue-921');
     runClaimOnline(['finalize', '--project', 'issue-921'], tmp, binDir);
     assert(
       fs.existsSync(listCalledMarker),
@@ -10706,7 +10396,6 @@ function testClearAdvisoryClaimOfflineSkipsDelete() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-922', 922, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-922');
     // No roadmap entry — offline finalize skips roadmap ops
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -10722,6 +10411,7 @@ function testClearAdvisoryClaimOfflineSkipsDelete() {
       "  process.stdout.write('{}\\n');",
       "}"
     ]);
+    seedAdaptiveFinalizeFixture(tmp, 'issue-922');
     // Use spawnSync directly (not runClaimOnline) to set OFFLINE=1
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-922'], {
       cwd: tmp,
@@ -10938,7 +10628,7 @@ function testFinalizeOfflineClosureReceiptSkipped() {
     initGitRepo(tmp);
     // Do NOT plant a roadmap issue — avoids roadmap-source-absent violation.
     plantActiveFolder(tmp, 'issue-164f', 164, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-164f');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-164f');
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-164f'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -11491,7 +11181,7 @@ function testBundleFinalizeAllOpenCloseIsPending() {
     const stateLines = [
       '# Kaola-Workflow State', '',
       '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: fast', 'workflow_path: fast',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
       'step: complete', 'next_command: /kaola-workflow-finalize ' + project, '',
       '## Pending Gates', '- none', '',
       '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
@@ -11512,6 +11202,8 @@ function testBundleFinalizeAllOpenCloseIsPending() {
     // gh mock: both members probe as OPEN (not closed yet — close deferred to sink-merge).
     writeBundleGhMockScript(binDir, { logFile, openIssues: [61, 62] });
 
+    // Seed a minimal frozen adaptive plan + passing gate (finalize refuses a plan-absent run).
+    seedAdaptiveFinalizeFixture(tmp, project);
     // Run finalize WITH --keep-worktree (merge-lane: sink-merge handles closing).
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
       cwd: tmp,
@@ -16065,9 +15757,6 @@ function testAxiomBlockByteIdentity() {
 async function runSharedTmpGroup(tmp) {
   testClaimStatusRelease(tmp);
   testFinalize(tmp);
-  testRepair(tmp);
-  testRepairFastPath(tmp);
-  testRepairFastEscalation(tmp);
   testHookSingleProjectGuard(tmp);
   testRoadmapGenerateMissingSourceGuard(tmp);
   testRoadmapGenerateCloseLastIssue(tmp);
@@ -16085,9 +15774,6 @@ async function runSharedTmpGroup(tmp) {
 const SHARED_TMP_NAMES = [
   'testClaimStatusRelease',
   'testFinalize',
-  'testRepair',
-  'testRepairFastPath',
-  'testRepairFastEscalation',
   'testHookSingleProjectGuard',
   'testRoadmapGenerateMissingSourceGuard',
   'testRoadmapGenerateCloseLastIssue',
@@ -16314,9 +16000,9 @@ function testPlanlessAndPlannedInitialAuthority699() {
     });
 
     exercisePlanlessCaller('finalize', 69922, (root, callerProject) => {
-      // The authority tuple remains planless; explicitly select the fast path
-      // for this direct-finalize fixture so path gating is not under test here.
-      markPlanAbsentFinalizeFixtureFast(root, callerProject);
+      // A finalize requires an authored adaptive plan (plan-absent finalize refuses),
+      // so bind a minimal frozen plan + passing gate onto the canonical epoch-1 authority.
+      seedAdaptiveFinalizeFixture(root, callerProject);
       const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', callerProject], {
         cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
           KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' }
@@ -17157,8 +16843,6 @@ function buildRegistry() {
   add('testAxiomBlockByteIdentity',                       testAxiomBlockByteIdentity);
   add('testKeepOpenArchiveStamp',                         testKeepOpenArchiveStamp);
   add('testManualArchiveBackstop',                        testManualArchiveBackstop);
-  add('testRepairFastNoArgSingle',                        testRepairFastNoArgSingle);
-  add('testRepairFastNoArgAmbiguous',                     testRepairFastNoArgAmbiguous);
   add('testRepairFinalizationRoute',                      testRepairFinalizationRoute);
   add('testSinkPrUsesFinalizationSummary',                testSinkPrUsesFinalizationSummary);
   add('testHookGitDashCCommitGuard',                      testHookGitDashCCommitGuard);
@@ -17207,8 +16891,6 @@ function buildRegistry() {
   add('testWorktreeNativeOfflineWins',                    testWorktreeNativeOfflineWins);
   add('testWorktreeNativeSurfacesProvisionFailure',       testWorktreeNativeSurfacesProvisionFailure);
   add('testWorktreeAdaptiveProvisioned',                  testWorktreeAdaptiveProvisioned);
-  add('testFastStartupState',                             testFastStartupState);
-  add('testResumeFastEmptyNextCommand',                   testResumeFastEmptyNextCommand);
   add('testClassifierCurrentClaimMarkerBlocks',           testClassifierCurrentClaimMarkerBlocks);
   add('testWatchPrArchivesClosedIssuePrFolder',           testWatchPrArchivesClosedIssuePrFolder);
   add('testSinkFallbackSkipsArchivedProject',             testSinkFallbackSkipsArchivedProject);
@@ -17261,7 +16943,6 @@ function buildRegistry() {
   add('testSinkMergeReRebasesOnFfRace',                   testSinkMergeReRebasesOnFfRace);
   add('testSinkMergeConsumerRepoSkipsNpmTestGate',        testSinkMergeConsumerRepoSkipsNpmTestGate);
   add('testSinkMergeBareRemoteDeleteOrder',               testSinkMergeBareRemoteDeleteOrder);
-  add('testFastE2EMergeFullChain',                        testFastE2EMergeFullChain);
   add('testE2EGitHubPrFullChain',                         testE2EGitHubPrFullChain);
   add('testParallelIssueIndependence',                    testParallelIssueIndependence);
   add('testClassifierFailClosedOnRemoteError',            testClassifierFailClosedOnRemoteError);
@@ -17532,9 +17213,9 @@ function testAttestationWarningPersistence() {
     const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653101'], tmp, binDir);
     assert(sResult.claim === 'acquired', 'attestation persistence: startup must acquire');
     const project = sResult.selected_project || 'issue-653101';
-    // This persistence fixture jumps directly from claim to finalize; it does
-    // not author an adaptive plan, so declare the intended planless path.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    // This persistence fixture jumps directly from claim to finalize without an
+    // authored run, so seed a minimal frozen adaptive plan + passing gate.
+    seedAdaptiveFinalizeFixture(tmp, project);
 
     // Seed dispatch-log with ONLY a contractor entry (no workflow-planner) — the inline-bypass
     // scenario the ATTESTATION WARNING exists to catch.
@@ -17589,7 +17270,7 @@ function testSelectionEvidenceDocking() {
     const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '653201'], tmp, binDir);
     assert(sResult.claim === 'acquired', 'selection-evidence: startup must acquire');
     const project = sResult.selected_project || 'issue-653201';
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
 
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -17612,7 +17293,7 @@ function testSelectionEvidenceDocking() {
     const sResult2 = runClaimOnlineLastJson(['startup', '--target-issue', '653202'], tmp, binDir);
     assert(sResult2.claim === 'acquired', 'selection-evidence: second startup must acquire');
     const project2 = sResult2.selected_project || 'issue-653202';
-    markPlanAbsentFinalizeFixtureFast(tmp, project2);
+    seedAdaptiveFinalizeFixture(tmp, project2);
 
     const finResult2 = runClaimOnlineLastJson(['finalize', '--project', project2], tmp, binDir);
     assert(finResult2.status === 'closed',
@@ -17652,7 +17333,7 @@ function testPlannerAttestFlagBackfillsDispatchLog() {
     const project = sResult.selected_project || 'issue-280001';
     // This fixture exercises dispatch attestation and sink receipts, not the adaptive
     // plan/Phase-5 gate. Declare the established plan-absent fast exemption explicitly.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
 
     // The back-fill must have written to .cache/dispatch-log.jsonl
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
@@ -17749,7 +17430,7 @@ function testPlannerAttestFlagAbsentStaysMissing() {
     const project = sResult.selected_project || 'issue-280002';
     // This receipt-attestation negative does not exercise adaptive planning or
     // Phase 5. Declare the canonical plan-absent fast exemption explicitly.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
 
     // No dispatch-log must be written (no flag, no hook in test env)
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
@@ -18015,7 +17696,7 @@ function testContractorAttestFlagBackfills338() {
     const project = sResult.selected_project || 'issue-338001';
     // This attestation fixture exercises finalize directly and never authors an
     // adaptive plan, so declare its intended planless path before finalization.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
 
     // No dispatch-log yet (no flag at claim, no hook in test env).
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
@@ -18063,7 +17744,7 @@ function testContractorAttestAbsentWarnsNonBlocking338() {
     assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
     const project = sResult.selected_project || 'issue-338002';
     // Like T4, this attestation-only fixture never authors an adaptive plan.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
     const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
     assert(fs.existsSync(dispatchLog), '#338 T5: planner back-fill must create a dispatch-log');
 
@@ -18233,10 +17914,31 @@ function testFinalizeIncompleteWorktreeReentryFix() {
       'name: ' + project,
       'issue_number: 296',
       'status: closed',
-      'workflow_path: fast',
+      'workflow_path: adaptive',
       'step: complete',
       ''
     ].join('\n'));
+    // A real crash archives the whole project folder, so the frozen plan + passing gate live in
+    // the archive. Seed them so the re-entry's adaptive --finalize-check proceeds (a plan-absent
+    // finalize refuses adaptive_plan_missing).
+    const archivePlan = path.join(archiveDir, 'workflow-plan.md');
+    fs.writeFileSync(archivePlan, [
+      '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| n1 | code-explorer | — | — | 1 | sequence |',
+      '| n2 | finalize | n1 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | complete |', '| n2 | complete |', ''
+    ].join('\n'));
+    stampVerifiedLegacyPlan(archivePlan);
+    runNode(planValidatorScript, [archivePlan, '--freeze', '--json'], wtPath);
+    fs.mkdirSync(path.join(archiveDir, '.cache'), { recursive: true });
+    let cand296 = '';
+    try { cand296 = JSON.parse(runNode(planValidatorScript, [archivePlan, '--candidate-hash', '--json'], wtPath).stdout).validated_candidate_hash || ''; } catch (_) {}
+    fs.writeFileSync(path.join(archiveDir, '.cache', 'final-validation.md'),
+      'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand296 + '\n');
     // Verify archive is untracked in the worktree (crash state).
     const dirtyBefore = spawnSync('git', ['status', '--porcelain'],
       { cwd: wtPath, encoding: 'utf8' });
@@ -18563,9 +18265,6 @@ function testBundleFinalizeRoadmapCleanup() {
       'sink: merge', 'run_posture: in-place', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
-    // This bundle fixture isolates roadmap/receipt cleanup and intentionally
-    // omits adaptive planning, so declare the planless finalize path.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
 
     // Plant roadmap sources for all three members
     plantRoadmapIssue(tmp, 42, '');
@@ -18587,6 +18286,9 @@ function testBundleFinalizeRoadmapCleanup() {
     // Mock gh: all three members are closed
     writeBundleGhMockScript(binDir, { closedIssues: [42, 47, 53] });
 
+    // Seed the frozen adaptive plan + passing gate LAST (after every code-band write) so the
+    // recorded candidate hash matches the tree finalize re-derives.
+    seedAdaptiveFinalizeFixture(tmp, project);
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
       cwd: tmp,
       encoding: 'utf8',
@@ -18987,7 +18689,7 @@ function testFinalizeClosesIssueBundleMembers() {
       'sink: merge', 'run_posture: in-place', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
     plantRoadmapIssue(tmp, 42, '');
     plantRoadmapIssue(tmp, 47, '');
 
@@ -19046,7 +18748,7 @@ function testFinalizeRoadmapResidueDetection() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-428r', 428, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428r');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-428r');
     plantRoadmapIssue(tmp, 428, '');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428r'], {
@@ -19705,7 +19407,7 @@ function testRunProgressMirror605() {
     try {
       initGitRepo(tmp);
       plantActiveFolder(tmp, 'issue-605c', 605, null);
-      markPlanAbsentFinalizeFixtureFast(tmp, 'issue-605c');
+      seedAdaptiveFinalizeFixture(tmp, 'issue-605c');
       const mainCache = path.join(tmp, 'kaola-workflow', 'issue-605c', '.cache');
       fs.mkdirSync(mainCache, { recursive: true });
       fs.writeFileSync(path.join(mainCache, 'run-progress.json'), JSON.stringify({ plan_hash: 'x', op: 'close-node', node_ledger: [], in_progress: [], all_done: false }) + '\n');
@@ -19713,7 +19415,7 @@ function testRunProgressMirror605() {
       fs.mkdirSync(kwRoot, { recursive: true });
       spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605c', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
       plantActiveFolder(wtPath, 'issue-605c', 605, null);
-      markPlanAbsentFinalizeFixtureFast(wtPath, 'issue-605c');
+      seedAdaptiveFinalizeFixture(wtPath, 'issue-605c');
       const fin = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-605c', '--keep-worktree'], {
         cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
       assert(fin.status === 0, '#605 (c): finalize from linked worktree should exit 0\nstderr: ' + fin.stderr);

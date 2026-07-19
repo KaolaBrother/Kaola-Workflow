@@ -44,18 +44,12 @@ MERGE_SETTINGS=1
 # Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
 # Pass --profile=common to install the Sonnet assignments for those three agents.
 PROFILE=higher
-# Adaptive is the unconditional default (#538): no on/off switch. Opt-in paths are installed
-# by passing --with-fast (fast path) or --with-full (full 6-phase path). Re-install preserves
-# (UNION) what is already installed. Reset = uninstall -> reinstall (back to adaptive-only).
-# Config writes installed_paths:[] (default) into ~/.config/kaola-workflow/config.json.
-WITH_FAST=0
-WITH_FULL=0
+# Adaptive is the unconditional default: no on/off switch and no path opt-ins. The install seeds
+# ~/.config/kaola-workflow/config.json with parallel_mode only — adaptive is the sole workflow path.
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common] [--with-fast] [--with-full]"
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common]"
   echo "  --profile defaults to 'higher' (Opus reviewers); use --profile=common for Sonnet."
-  echo "  --with-fast   install the fast path (opt-in; adaptive is always installed by default)."
-  echo "  --with-full   install the full 6-phase path (opt-in; adaptive is always installed by default)."
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -100,12 +94,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --enable-adaptive|--enable-adaptive=*)
       echo "warning: --enable-adaptive is retired (#538); adaptive is the unconditional default and is always installed. Ignoring." >&2
-      shift ;;
-    --with-fast)
-      WITH_FAST=1
-      shift ;;
-    --with-full)
-      WITH_FULL=1
       shift ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -212,13 +200,6 @@ if command -v claude >/dev/null 2>&1; then
   fi
 fi
 
-
-# #538 R1: Compute the effective opt-in set ONCE, up front (before the stale loop and before
-# D4 writes the config). EFFECTIVE_* = path already installed OR explicitly requested this run.
-# This ensures a bare reinstall spares AND refreshes a previously-installed path's files.
-EXISTING_PATHS="$(node -e 'try{const c=require(process.env.HOME+"/.config/kaola-workflow/config.json");const p=Array.isArray(c.installed_paths)?c.installed_paths:[];process.stdout.write(p.join(" "))}catch(e){}' 2>/dev/null || true)"
-case " $EXISTING_PATHS " in *" fast "*) EFFECTIVE_FAST=1 ;; *) EFFECTIVE_FAST=$WITH_FAST ;; esac
-case " $EXISTING_PATHS " in *" full "*) EFFECTIVE_FULL=1 ;; *) EFFECTIVE_FULL=$WITH_FULL ;; esac
 
 # Remove stale kaola-workflow command files before installing fresh ones.
 # Outdated user-level commands in ~/.claude/commands/ take precedence over
@@ -603,14 +584,6 @@ for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
     continue
   fi
 
-  # #538 D2: gate fast/full files on the effective opt-in set; adaptive files always install.
-  case "$(basename "$command_file")" in
-    kaola-workflow-fast.md)
-      [[ "$EFFECTIVE_FAST" -eq 1 ]] || continue ;;
-    kaola-workflow-phase[1-5].md)
-      [[ "$EFFECTIVE_FULL" -eq 1 ]] || continue ;;
-  esac
-
   dest="$COMMANDS_DIR/$(basename "$command_file")"
   render_command_file "$command_file" "$dest"
   echo "Installed: $dest"
@@ -810,19 +783,17 @@ PY
   fi
 fi
 
-# #538 D4: write installed_paths into ~/.config/kaola-workflow/config.json via UNION read-modify-write.
-# Adaptive is the unconditional default (implicit-always, never in installed_paths).
-# Re-install unions existing installed_paths with the newly-requested opt-ins (never removes).
-# Migrates away any stale enable_adaptive field from old installs.
+# Seed ~/.config/kaola-workflow/config.json with the default parallel_mode. Adaptive is the
+# unconditional default and the sole workflow path — fast/full are retired, so the install NEVER
+# writes installed_paths. A stale installed_paths (or enable_adaptive) from an older install is
+# tolerated on read and stripped here on any touched config (read-modify-write preserves user fields).
 KAOLA_CONFIG_DIR="$HOME/.config/kaola-workflow"
 KAOLA_CONFIG_FILE="$KAOLA_CONFIG_DIR/config.json"
 if command -v python3 >/dev/null 2>&1; then
   mkdir -p "$KAOLA_CONFIG_DIR"
-  if python3 - "$KAOLA_CONFIG_FILE" "$EFFECTIVE_FAST" "$EFFECTIVE_FULL" <<'PY'; then
+  if python3 - "$KAOLA_CONFIG_FILE" <<'PY'; then
 import json, os, sys
 path = sys.argv[1]
-with_fast = sys.argv[2] == '1'
-with_full = sys.argv[3] == '1'
 config = {}
 if os.path.exists(path):
     try:
@@ -832,21 +803,17 @@ if os.path.exists(path):
     if not isinstance(config, dict):
         print(f"warning: {path} is not a JSON object; leaving it untouched.", file=sys.stderr); sys.exit(2)
 config.setdefault("parallel_mode", "auto")
-existing = config.get("installed_paths")
-paths = set(existing) if isinstance(existing, list) else set()
-if with_fast: paths.add("fast")
-if with_full: paths.add("full")
-config["installed_paths"] = [p for p in ("fast", "full") if p in paths]   # canonical order, {fast,full} only
+config.pop("installed_paths", None)   # retired: install never writes it; strip any stale value
 config.pop("enable_adaptive", None)   # migrate away the retired field on any touched config
 with open(path, "w") as f: json.dump(config, f, indent=2); f.write("\n")
-print(f"Installed paths (adaptive always; opt-ins: {config['installed_paths']}) in: {path}")
+print(f"Seeded {path} (parallel_mode={config['parallel_mode']}; adaptive is the only workflow path)")
 PY
     :
   else
-    echo "warning: failed to write $KAOLA_CONFIG_FILE; set installed_paths by hand: {\"parallel_mode\":\"auto\",\"installed_paths\":[]}" >&2
+    echo "warning: failed to write $KAOLA_CONFIG_FILE; add {\"parallel_mode\":\"auto\"} by hand." >&2
   fi
 else
-  echo "warning: python3 not found; cannot write $KAOLA_CONFIG_FILE. Add installed_paths:[] by hand." >&2
+  echo "warning: python3 not found; cannot write $KAOLA_CONFIG_FILE. Add {\"parallel_mode\":\"auto\"} by hand." >&2
 fi
 
 verify_installed_file() {
@@ -905,13 +872,6 @@ PY
 verification_failed=0
 for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
   [[ -f "$command_file" ]] || continue
-  # #538 D2: skip verification of fast/full files unless the effective opt-in is set.
-  case "$(basename "$command_file")" in
-    kaola-workflow-fast.md)
-      [[ "$EFFECTIVE_FAST" -eq 1 ]] || continue ;;
-    kaola-workflow-phase[1-5].md)
-      [[ "$EFFECTIVE_FULL" -eq 1 ]] || continue ;;
-  esac
   verify_installed_file "$COMMANDS_DIR/$(basename "$command_file")" "command" || verification_failed=1
 done
 

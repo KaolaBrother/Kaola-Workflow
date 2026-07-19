@@ -32,17 +32,18 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// #531/#538: hermetic HOME. The claim's path-legality gate reads installed_paths from
-// ~/.config/kaola-workflow/config.json (os.homedir()), and the classifier reads parallel_mode from
-// the same file. Pin a sandbox HOME seeded with the DEFAULT-install shape (parallel_mode:'auto',
-// installed_paths:[] = adaptive-only) so a dev-local config can't change legality/verdict and turn
-// these assertions spurious. The bundle lane is adaptive-only and adaptive is always legal, so [] is
-// the correct seed (a fast/full claim under [] is a path_not_installed refusal — the intended default).
+// #531/#538: hermetic HOME. The classifier reads parallel_mode from
+// ~/.config/kaola-workflow/config.json (os.homedir()), and the claim's path-legality gate keys on
+// the schema (adaptive is the only legal path — the fast/full paths were retired). Pin a sandbox
+// HOME seeded with the DEFAULT-install shape (parallel_mode:'auto') so a dev-local config can't
+// change verdict and turn these assertions spurious. The bundle lane is adaptive-only and adaptive
+// is always legal; a non-adaptive workflow_path is a bundle_requires_adaptive refusal (the intended
+// default). A stale installed_paths field is tolerated on read but is no longer written.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto' }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
@@ -201,9 +202,9 @@ function runClaim(args, cwd, binDir, extraEnv) {
     env: Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '0',
       KAOLA_WORKTREE_NATIVE: '1',  // use worktrees (git repos initialised in $TMPDIR)
-      // #538: adaptive is the unconditional default and always legal — the bundle lane needs no
-      // switch. The lane-only-accepts-adaptive guard fires on workflow_path != adaptive, before any
-      // config read, so no installed_paths/switch env is required here.
+      // #538: adaptive is the unconditional default and the only legal path — the bundle lane needs
+      // no switch. The lane-only-accepts-adaptive guard fires on workflow_path != adaptive, before
+      // any config read, so no config/switch env is required here.
     }, mockEnv, extraEnv || {})
   });
   return result;
@@ -485,8 +486,9 @@ function readState(tmpRoot, project) {
     initGitRepo(tmpRoot);
     writeGhMockScript(binDir, { openIssues: [42, 47] });
 
-    // #538: the bundle lane is adaptive-only. A non-adaptive workflow_path is refused by the lane
-    // guard BEFORE any config read, so no installed_paths/switch env is needed to exercise it.
+    // #538: the bundle lane is adaptive-only (adaptive is the only workflow path). A non-adaptive
+    // workflow_path — here the retired `full` — is refused by the lane guard BEFORE any config read,
+    // so no config/switch env is needed to exercise it.
     const result = runClaim(
       ['startup', '--target-issues', '42,47', '--workflow-path', 'full'],
       tmpRoot, binDir

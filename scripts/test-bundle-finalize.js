@@ -36,6 +36,7 @@ const { spawnSync } = require('child_process');
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
 const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
+const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js');
 
 let passed = 0;
 let failed = 0;
@@ -105,6 +106,50 @@ function writeRoadmapMirror(tmpRoot, issueNums) {
   fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'), content);
 }
 
+// Same pattern as simulate-workflow-walkthrough.js's seedAdaptiveFinalizeFixture (proven
+// elsewhere, used dozens of times): a finalize with NO frozen workflow-plan.md now refuses
+// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight
+// from a hand-rolled state to finalize to exercise terminal archive/closure normalization —
+// not an authored adaptive run — so seed a minimal FROZEN adaptive workflow-plan.md plus a
+// passing consumer-mode final-validation gate, letting finalize's adaptive --finalize-check
+// proceed to the archive/closure behavior each fixture actually asserts.
+function stampVerifiedFinalizePlan(planPath) {
+  const content = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)) return;
+  const validator = require(planValidatorScript);
+  const hash = validator.computePlanHash(content);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
+}
+
+function seedAdaptiveFinalizeFixture(tmpRoot, project) {
+  const dir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  fs.writeFileSync(planPath, [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| n1 | complete |', '| n2 | complete |', '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |', ''
+  ].join('\n'));
+  stampVerifiedFinalizePlan(planPath);
+  try { JSON.parse(spawnSync(process.execPath, [planValidatorScript, planPath, '--freeze', '--json'], { cwd: tmpRoot, encoding: 'utf8' }).stdout); } catch (_) {}
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try {
+    cand = JSON.parse(spawnSync(process.execPath, [planValidatorScript, planPath, '--candidate-hash', '--json'], { cwd: tmpRoot, encoding: 'utf8' }).stdout).validated_candidate_hash || '';
+  } catch (_) { cand = ''; }
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
+}
+
 // Write a bundle workflow-state.md file for a given project/members.
 function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts) {
   opts = opts || {};
@@ -121,12 +166,13 @@ function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts
     'status: active',
     '',
     '## Current Position',
-    // These fixtures exercise bundle closure, sink, and archive behavior rather
-    // than adaptive-plan or full-path Phase 5 gates. Declare the only canonical
-    // plan-absent posture explicitly so Finalization does not infer gate evidence.
-    'phase: fast',
-    'phase_name: Fast',
-    'workflow_path: fast',
+    // These fixtures exercise bundle closure, sink, and archive behavior rather than the
+    // node-by-node adaptive lifecycle itself; a minimal frozen adaptive plan is seeded
+    // alongside (seedAdaptiveFinalizeFixture below) so Finalization's adaptive
+    // --finalize-check gate passes and the archive/closure behavior under test can run.
+    'phase: adaptive',
+    'phase_name: Adaptive',
+    'workflow_path: adaptive',
     'runtime: claude',
     'step: complete',
     'next_command: /kaola-workflow-finalize ' + project,
@@ -160,7 +206,7 @@ function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts
   fs.writeFileSync(path.join(dir, 'workflow-state.md'), lines.join('\n') + '\n');
 }
 
-// Write a single-issue fast-path state for closure-only Finalization fixtures.
+// Write a single-issue adaptive state for closure-only Finalization fixtures.
 function writeSingleStateFile(tmpRoot, project, issueNumber) {
   const dir = path.join(tmpRoot, 'kaola-workflow', project);
   fs.mkdirSync(dir, { recursive: true });
@@ -172,9 +218,9 @@ function writeSingleStateFile(tmpRoot, project, issueNumber) {
     'status: active',
     '',
     '## Current Position',
-    'phase: fast',
-    'phase_name: Fast',
-    'workflow_path: fast',
+    'phase: adaptive',
+    'phase_name: Adaptive',
+    'workflow_path: adaptive',
     'runtime: claude',
     'step: complete',
     'next_command: /kaola-workflow-finalize ' + project,
@@ -203,6 +249,7 @@ function writeSingleStateFile(tmpRoot, project, issueNumber) {
     'run_posture: in-place'
   ];
   fs.writeFileSync(path.join(dir, 'workflow-state.md'), lines.join('\n') + '\n');
+  seedAdaptiveFinalizeFixture(tmpRoot, project);
 }
 
 // Write a mock gh script. Behaviour:
@@ -367,6 +414,9 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       logFile,
       closedIssues: [42, 47, 53],
     });
+    // Seed LAST, after every fixture file (gh mock, roadmap) is in place, so the
+    // recorded validated_candidate_hash matches the tree finalize will recompute over.
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
 
     const result = runFinalize(
       ['finalize', '--project', project],
@@ -468,6 +518,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       closedIssues: [42, 53],
       throwOnIssueView: 47,
     });
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
 
     const result = runFinalize(
       ['finalize', '--project', project],
@@ -530,6 +581,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     writeRoadmapMirror(tmpRoot, [42, 47, 53]);
     // 42 + 53 closed; 47 returns state:open (not in closedIssues, no throw).
     writeGhMockScript(binDir, { closedIssues: [42, 53] });
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
 
     // #427: merge-lane finalize uses --keep-worktree (sink-merge closes members later).
     // Without --keep-worktree, #427's closeIssueIdempotent would close 47 here.
@@ -609,6 +661,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     writeGhMockScript(binDir, {
       closedIssues: [99],
     });
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
 
     const result = runFinalize(
       ['finalize', '--project', project],
@@ -928,6 +981,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53]);
     writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
     writeGhMockScript(binDir, { logFile, closedIssues: [42, 47, 53] });
+    seedAdaptiveFinalizeFixture(tmpRoot, 'bundle-42-47-53');
 
     // First finalize: closes + archives the bundle.
     const first = runFinalize(['finalize', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
@@ -957,6 +1011,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53]);
     writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
     writeGhMockScript(binDir, { closedIssues: [42, 47, 53] });
+    seedAdaptiveFinalizeFixture(tmpRoot, 'bundle-42-47-53');
     runFinalize(['finalize', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
     const kwDir = path.join(tmpRoot, '.kw', 'worktrees');
     const hasWorktrees = fs.existsSync(kwDir) && fs.readdirSync(kwDir).length > 0;
@@ -1055,6 +1110,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     ].join('\n');
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(path.join(binDir, 'gh.js'), customScript);
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
 
     const result = runFinalize(
       ['finalize', '--project', project, '--keep-worktree'],
@@ -1241,6 +1297,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     writeRoadmapMirror(tmpRoot, [61701]);
     // Issue starts OPEN (never pre-closed) — a genuine close attempt is the observable bug.
     writeGhMockScript(binDir, { logFile });
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
 
     const result = runFinalize(['finalize', '--project', project], tmpRoot, binDir);
     const out = parseOutput(result);

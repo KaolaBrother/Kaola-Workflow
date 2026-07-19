@@ -1,14 +1,14 @@
 # Kaola-Workflow — Claude Code Instructions
 
 ## Project Overview
-Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, GitHub-issue-driven workflow for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler (the `fast` and `full` six-phase paths are install-time opt-ins). The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
+Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, GitHub-issue-driven workflow for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler. Adaptive is the only workflow path — the prior `fast` and `full` six-phase paths were retired (see `docs/decisions/D-725-01.md`). The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
 
 ## Durable State Contract
 
 - `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `.roadmap/_rules.md` appended under `### Project rules`); do not hand-edit the mirror.
 - Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
-- Active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and per-node `.cache/{node-id}.md` evidence; the `fast` path's optional `fast-summary.md` is an install-time opt-in.
+- Active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and per-node `.cache/{node-id}.md` evidence.
 
 ## First Principles
 
@@ -53,14 +53,13 @@ Minimize **synergy** (coupling to systems the workflow does not own); maximize *
 - **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
 - **Accuracy still comes from inside** — this does not weaken axiom 1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*.
 
-### Adaptive Is the Default; Don't Make the Agent Pick a Path
+### Adaptive Is the Only Path
 
-The orchestrator should not spend tokens or wall-clock deciding between adaptive / fast / full on every run. Adaptive just runs.
+The orchestrator does not spend tokens or wall-clock deciding between paths — there is only one to run.
 
-- **Adaptive is the unconditional default.** No on/off switch; nothing to deliberate. A default install has no path-selection step.
-- **`fast` and `full` are install-time opt-ins** (`--with-fast` / `--with-full`), not installed by default. Once installed they fire only on an explicit user keyword ("fast path" / "full review").
-- **No automatic fallback between paths.** Adaptive never silently downgrades to fast or full. When it can't proceed: bounded planner repair → discard+restart → stop+ask. The only fallbacks are *inside* adaptive (repair, in-place posture).
-- **Switch axis flips:** retire `enable_adaptive`; the only switch is which extra paths are installed. Re-install preserves what's installed; uninstall→reinstall is the reset to adaptive-only.
+- **Adaptive is the unconditional, exclusive path.** No on/off switch, no install-time opt-in axis, nothing to deliberate. Every install ships adaptive only.
+- **`fast` and `full` are retired**, not merely uninstalled by default: their commands, skills, and transaction scripts are deleted (see `docs/decisions/D-725-01.md`, which supersedes `D-538-01`/`D-543-01`). A non-adaptive `KAOLA_PATH` / `--workflow-path` request is refused with a typed `path_not_installed` — never a silent fallback. A stale `installed_paths` field from a pre-retirement install is tolerated on read and never re-written.
+- **No automatic fallback — adaptive has nowhere left to fall back to.** When it can't proceed: bounded planner repair → discard+restart → stop+ask. The only fallbacks are *inside* adaptive (repair, in-place posture).
 
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper

@@ -208,33 +208,13 @@ fi
 On any failure stop with a **typed refusal** (do not proceed): `Adaptive plan failed
 the script-enforced barrier. Run /kaola-workflow-plan-run first.`
 
-If `workflow_path: full` (or absent), run the read-only Phase 5 point-of-use
-verifier before any Finalization side effect. It revalidates strict Phase 4
-completion, the canonical five-column review compliance table, exact seeded
-evidence bindings and substantive bodies, evidence freshness, fix decisions,
-and project-path authority. Freshly re-resolve the exact active plugin tuple in
-this shell so the verifier does not depend on variables from an earlier shell:
+If `workflow-plan.md` is absent, `cmdFinalize` refuses unconditionally — before any
+archive/close side effect — with the typed `finalize_gate_unverified` /
+`adaptive_plan_missing` refusal (there is no retired fast/full verifier to shell and no
+N/A pass):
 
-```bash
-if ! KAOLA_CODEX_PLUGIN_LIST_OUT="$(codex plugin list --json 2>&1)"; then
-  printf 'profile_preflight_refused: plugin metadata unavailable: %s\n' "$KAOLA_CODEX_PLUGIN_LIST_OUT" >&2; exit 1
-fi
-if ! KAOLA_CODEX_PLUGIN_META="$(node -e 'const v=JSON.parse(process.argv[1]);const a=new Set(["kaola-workflow","kaola-workflow-gitlab","kaola-workflow-gitea"]);const r=(v.installed||[]).filter(x=>x&&x.installed===true&&x.enabled===true&&a.has(x.name));if(r.length!==1)throw Error("active edition count");const x=r[0];for(const y of [x.marketplaceName,x.name,x.version])if(typeof y!=="string"||y==="."||y===".."||!/^[A-Za-z0-9._-]+$/.test(y))throw Error("unsafe tuple");if(x.pluginId!==`${x.name}@${x.marketplaceName}`)throw Error("identity mismatch");process.stdout.write([x.marketplaceName,x.name,x.version].join("\t"))' "$KAOLA_CODEX_PLUGIN_LIST_OUT" 2>&1)"; then
-  printf 'profile_preflight_refused: invalid plugin metadata: %s\n' "$KAOLA_CODEX_PLUGIN_META" >&2; exit 1
-fi
-IFS=$'\t' read -r KAOLA_CODEX_MARKETPLACE KAOLA_CODEX_PLUGIN_NAME KAOLA_CODEX_PLUGIN_VERSION <<< "$KAOLA_CODEX_PLUGIN_META"
-KAOLA_CODEX_CACHE_ROOT="$HOME/.codex/plugins/cache"
-case "$KAOLA_CODEX_PLUGIN_NAME" in
-  kaola-workflow) KAOLA_FULL_ADVANCE_NAME="kaola-workflow-full-advance.js" ;;
-  kaola-workflow-gitlab) KAOLA_FULL_ADVANCE_NAME="kaola-gitlab-workflow-full-advance.js" ;;
-  kaola-workflow-gitea) KAOLA_FULL_ADVANCE_NAME="kaola-gitea-workflow-full-advance.js" ;;
-  *) printf 'profile_preflight_refused: active Kaola edition is invalid\n' >&2; exit 1 ;;
-esac
-KAOLA_FULL_ADVANCE="$KAOLA_CODEX_CACHE_ROOT/$KAOLA_CODEX_MARKETPLACE/$KAOLA_CODEX_PLUGIN_NAME/$KAOLA_CODEX_PLUGIN_VERSION/scripts/$KAOLA_FULL_ADVANCE_NAME"
-node -e 'const fs=require("fs"),path=require("path");const [home,base,market,name,version,file]=process.argv.slice(1),h=path.resolve(home),b=path.resolve(base);if(b!==path.join(h,".codex","plugins","cache"))process.exit(1);let p=h,s=fs.lstatSync(p);if(s.isSymbolicLink()||!s.isDirectory())process.exit(1);for(const [i,x] of [".codex","plugins","cache",market,name,version,"scripts",file].entries()){p=path.join(p,x);s=fs.lstatSync(p);if(s.isSymbolicLink()||(i<7&&!s.isDirectory())||(i===7&&!s.isFile()))process.exit(1)}' "$HOME" "$KAOLA_CODEX_CACHE_ROOT" "$KAOLA_CODEX_MARKETPLACE" "$KAOLA_CODEX_PLUGIN_NAME" "$KAOLA_CODEX_PLUGIN_VERSION" "$KAOLA_FULL_ADVANCE_NAME" \
-  || { printf 'profile_preflight_refused: exact active full-path verifier unavailable\n' >&2; exit 1; }
-node "$KAOLA_FULL_ADVANCE" phase5-verify --root "$PWD" --project {project} --json \
-  || { printf 'phase5_point_of_use_failed: run kaola-workflow-review {project} first\n' >&2; exit 1; }
+```text
+BLOCKED: finalize_gate_unverified (adaptive_plan_missing) — restore the frozen workflow-plan.md before Finalization.
 ```
 
 ### Chain-Receipt Gate

@@ -160,13 +160,7 @@ const retired = [
 ];
 
 const phaseCommands = [
-  'commands/kaola-workflow-phase1.md',
-  'commands/kaola-workflow-phase2.md',
-  'commands/kaola-workflow-phase3.md',
-  'commands/kaola-workflow-phase4.md',
-  'commands/kaola-workflow-phase5.md',
   'commands/kaola-workflow-finalize.md',
-  'commands/kaola-workflow-fast.md',
   'commands/kaola-workflow-adapt.md',
   'commands/kaola-workflow-plan-run.md'
 ];
@@ -204,14 +198,8 @@ for (const file of adaptSurfaces486) {
 
 // issue-152: routed-fix Agent blocks must carry explicit model placeholders
 const routedFixFiles = [
-  'commands/kaola-workflow-phase4.md',
-  'commands/kaola-workflow-phase5.md',
   'commands/kaola-workflow-finalize.md',
-  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase4.md',
-  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase5.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
-  'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase4.md',
-  'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase5.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
 ];
 for (const file of routedFixFiles) {
@@ -229,10 +217,10 @@ assertIncludes('commands/workflow-next.md', 'active folders');
 assertIncludes('commands/workflow-next.md', 'watch-pr');
 assertIncludes('commands/workflow-next.md', '--target-issue');
 assertIncludes('commands/workflow-next.md', '## Co-active Folders');
-// issue #203: Select Project active-folder definition must include fast-summary.md (drift-guard A)
+// issue #203: Select Project active-folder definition must include fast-summary.md (drift-guard A;
+// the classifier's trap-2 tolerant fast-summary.md read survives retirement, so the router's
+// active-folder detection still recognizes a legacy fast-summary.md marker).
 assertIncludes('commands/workflow-next.md', '`fast-summary.md` file, or a `workflow-state.md`');
-// issue #203 (#201 regression lock): reconstruction ladder fast-summary rung (drift-guard B)
-assertIncludes('commands/workflow-next.md', 'fast-summary.md exists -> /kaola-workflow-fast');
 // #380: the issue-scout auto-bundle entry must stay REACHABLE — Step 0 branches on whether the
 // user named an issue, and the no-issue-named branch dispatches the scout (regression-locks the
 // #380 unreachable-entry defect). Pin the branch marker + the env-wiring contract.
@@ -244,43 +232,13 @@ for (const token of retired) assertNotIncludes('commands/workflow-next.md', toke
 // bullet lived here, inside the byte-locked KW-CLAUDE-TEMPLATE region).
 for (const token of retired) assertNotIncludes('commands/workflow-init.md', token);
 
-// issue #198: fast-path widening — eligibility/hatch/review contract
-const fastFile198 = 'commands/kaola-workflow-fast.md';
-assertIncludes(fastFile198, 'mechanical');
-assertIncludes(fastFile198, '≤ 5');
-assertIncludes(fastFile198, 'design choice');
-assertIncludes(fastFile198, 'approach_ambiguity');
-assertIncludes(fastFile198, 'declared write set');
-assertIncludes(fastFile198, 'absolute backstop of 6');
-assertIncludes(fastFile198, '`code-reviewer` is mandatory');
-assertNotIncludes(fastFile198, 'two closely related files');
-assertNotIncludes(fastFile198, '≤ 2');
-const nextFile198 = 'commands/workflow-next.md';
-// #538: the fast-path eligibility rubric (the `mechanical` / `≤ 5` / `design choice` tokens) was
-// Branch-A content of workflow-next.md and is DELETED with Branch A (adaptive is the unconditional
-// default; the router no longer inline-decides fast eligibility). The rubric concept is still
-// machine-enforced on its correct surface — commands/kaola-workflow-fast.md (L238-240 above) — so
-// dropping the workflow-next.md pins loses zero coverage; the negative-assert below stays.
-assertNotIncludes(nextFile198, '≤ 2 closely related files');
-
-// issue #207: fast-overlap parity. The fast-summary.md `## Scope` must declare a
-// machine-readable `- Write Set:` line, and the classifier must read that
-// fast-summary.md Scope section, so a claimed fast project's in-flight files
-// participate in parallel-overlap detection at parity with full projects. Both
-// sides are locked so the template↔classifier coupling cannot silently drift.
-assertIncludes(fastFile198, '- Write Set:');
+// issue #207: fast-overlap parity — trap-2 tolerant keep. The fast/full command surfaces are
+// retired, but the classifier RETAINS its defensive fast-summary.md `## Scope` reader (readers
+// ignore the now-legacy artifact; only the write side was removed). Pin the retained reader so the
+// intentional keep cannot silently drift away.
 assertIncludes('scripts/kaola-workflow-classifier.js', 'fast-summary.md');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'sectionBody(');
 assertIncludes('scripts/kaola-workflow-classifier.js', "'Scope'");
-
-// issue #222: fast-path mid-flight escalation routing fix
-// Fast command must rewrite state on escalation and provide a forward route from Resume Detection.
-assertIncludes(fastFile198, 'workflow_path: full');
-assertIncludes(fastFile198, 'next_command: /kaola-workflow-phase1 {project}');
-assertIncludes(fastFile198, 'next_skill: kaola-workflow-research {project}');
-assertIncludes(fastFile198, 'status `ESCALATED` → escalation already committed');
-// workflow-next reconstruction ladder must have escalation rung above the fast rung.
-assertBefore(nextFile198, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
 
 assert(exists('scripts/kaola-workflow-active-folders.js'), 'active folder reader is missing');
 assert(exists('scripts/kaola-workflow-claim.js'), 'claim script is missing');
@@ -298,7 +256,6 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'worktree_path');
 assertIncludes('scripts/kaola-workflow-claim.js', 'mainRootFromCoord');
 assertIncludes('scripts/kaola-workflow-claim.js', "stdio: ['ignore', 'ignore', 'ignore']");
 assertIncludes('scripts/kaola-workflow-claim.js', "'workflow_path: ' + workflowPath");
-assertIncludes('scripts/kaola-workflow-claim.js', '/kaola-workflow-fast ');
 assertIncludes('scripts/kaola-workflow-claim.js', 'removeLegacyStateBlocks');
 assertIncludes('scripts/kaola-workflow-active-folders.js', 'excludeClosedIssues');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'readActiveFolders');
@@ -363,7 +320,6 @@ assertConcept('CLAUDE.md', 'compact durable state contract', [
   'do not purge',
   'kaola-workflow/{project}/',
   'workflow-state.md',
-  'fast-summary.md',
   '.cache/'
 ]);
 assertConcept('commands/workflow-init.md', 'generated CLAUDE durable state contract', [
@@ -443,7 +399,6 @@ assertConcept('scripts/simulate-workflow-walkthrough.js', 'roadmap concurrency r
 ]);
 assertConcept('scripts/simulate-workflow-walkthrough.js', 'startup and cleanup hardening regressions', [
   'testStartupJsonAndSiblingWorktrees',
-  'testFastStartupState',
   'testClassifierCurrentClaimMarkerBlocks',
   'finalize should remove legacy lease blocks before archive'
 ]);
@@ -501,30 +456,6 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata cap
 // agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
 assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
 
-// #459: contractor-free routing enforcement. The fast path (#456) and the full path's
-// Phase 1-5 + Phase 4 mechanical transitions (#457/#458) are script-owned (ADR 0004); the
-// `contractor` must NOT return to those migrated command surfaces. Finalization (asserted
-// positively just above + agents/contractor.md) remains the SOLE contractor-owned transition.
-// We forbid the contractor DISPATCH (`subagent_type="contractor"`), not the bare word, so a
-// legitimate finalize-exception prose mention (e.g. fast.md's "the final transition still owned
-// by `contractor`, handled by /kaola-workflow-finalize") is deliberately allowed. Scoped to the
-// explicit migrated file list — never a repo-wide grep — so finalize.md / contractor.md /
-// historical references are untouched. The forge command mirrors and the Codex SKILL packs are
-// pinned by the per-edition contract validators (validate-kaola-workflow-{,gitlab,gitea}-contracts.js).
-for (const cmd of ['fast', 'phase1', 'phase2', 'phase3', 'phase4', 'phase5']) {
-  assertNotIncludes('commands/kaola-workflow-' + cmd + '.md', 'subagent_type="contractor"');
-}
-// Registration coverage: every full/fast transaction script (+ its forge-renamed ports) must
-// be emitted by the install manifest, or a manual (non-plugin) install omits it and the
-// migrated mechanics fall back to a now-nonexistent contractor handoff. Fails with the missing
-// script name.
-assertManifestScript('kaola-workflow-fast-advance.js');
-assertManifestScript('kaola-workflow-full-advance.js');
-assertManifestScript('kaola-gitlab-workflow-full-advance.js');
-assertManifestScript('kaola-gitea-workflow-full-advance.js');
-assertManifestScript('kaola-workflow-phase4-advance.js');
-assertManifestScript('kaola-gitlab-workflow-phase4-advance.js');
-assertManifestScript('kaola-gitea-workflow-phase4-advance.js');
 // #336: keep-open partial-close sink lane — pin the durable field, the sink-merge flag, and the
 // merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard is shell prose no walkthrough
 // executes, so this pin is its only mechanical enforcement).
@@ -800,12 +731,10 @@ assertIncludes('agents/implementer.md', 'verification_tier');
 assertIncludes('agents/implementer.md', 'smoke-integration');
 assertIncludes('agents/tdd-guide.md', 'evidence block contains BOTH literal tokens');
 assertManifestScript('kaola-workflow-plan-validator.js');   // #407: was install.sh literal
-// #538: the per-session adaptive switch retired — installer opt-ins are `--with-fast` / `--with-full`
-// (adaptive is the unconditional default, always installed). The legacy `--enable-adaptive` flag is
-// warn-ignored (accepted for back-compat, sets nothing). Pin the two new flags + the deprecation
-// notice so a regression that drops the opt-ins or silently re-honors the retired flag reds the chain.
-assertIncludes('install.sh', '--with-fast');
-assertIncludes('install.sh', '--with-full');
+// #725: adaptive is the unconditional default and the ONLY installed path — the fast/full opt-ins
+// (`--with-fast` / `--with-full`) are retired. The legacy `--enable-adaptive` flag stays warn-ignored
+// (accepted for back-compat, sets nothing). Pin the deprecation notice so a regression that silently
+// re-honors the retired switch reds the chain.
 assertIncludes('install.sh', '--enable-adaptive is retired (#538)');
 // #255: the adaptive-handoff script must be in the install allowlist (now the #407 manifest) for
 // every edition, or a manual (non-plugin) install omits it and the planner's `--project` handoff
@@ -900,15 +829,13 @@ assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + gover
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'disjointWriteSets');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'readPlanNodes');
-// #538: claim legality guard resolves the installed opt-in paths (legality = {adaptive} ∪
-// installed_paths) and refuses a named-but-not-installed path with the typed `path_not_installed`
-// (renamed from `workflow_path_refused`); both resume surfaces emit the adaptive executor.
-assertIncludes('scripts/kaola-workflow-claim.js', 'resolveInstalledPaths');
+// #725: adaptive is the ONLY installed path — the `installed_paths` union / `resolveInstalledPaths`
+// resolver are retired. The claim legality guard still refuses a named-but-not-adaptive path with
+// the typed `path_not_installed` refusal, and both resume surfaces emit the adaptive executor.
 assertIncludes('scripts/kaola-workflow-claim.js', 'path_not_installed');
 assertIncludes('scripts/kaola-workflow-claim.js', 'PLAN_RUN_COMMAND');
-// the adaptive executor command literal + path legality resolver live in the shared schema anchor
+// the adaptive executor command literal lives in the shared schema anchor
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', '/kaola-workflow-plan-run');
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'resolveInstalledPaths');
 // repair-state recognizes + routes adaptive ahead of the phaseN ladder
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'routeAdaptive');
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'isAdaptiveWorkflowState');
@@ -1134,9 +1061,7 @@ for (const file of [...codexJoinProtocolSurfaces611, ...claudeJoinProtocolSurfac
   const stripSlash = c => c.replace(/^\//, '');
   const emittedCommandTargets = [
     stripSlash(schema.PLAN_RUN_COMMAND),
-    stripSlash(schema.ADAPT_COMMAND),
-    'kaola-workflow-fast',      // isFast fallback (claim.js next_command)
-    'kaola-workflow-phase1'     // full fallback (claim.js next_command)
+    stripSlash(schema.ADAPT_COMMAND)
   ];
   const claudeCommandDirs = [
     'commands',

@@ -17,11 +17,11 @@
 // reject cross-edition leaks and parent-dir requires).
 // ---------------------------------------------------------------------------
 
-// The three legal workflow path NAMES (the closed universe). Adaptive is the
-// unconditional default and is ALWAYS legal; `fast`/`full` are install-time opt-ins
-// (`installed_paths`) — `claimProject` admits a path iff it is `adaptive` or recorded
-// as installed.
-const WORKFLOW_PATHS = Object.freeze(['fast', 'full', 'adaptive']);
+// The legal workflow path NAMES (the closed universe). Adaptive is the unconditional
+// default and the ONLY legal path — `claimProject` admits a path iff it is `adaptive`.
+// A stale `installed_paths` field from a pre-retirement config is tolerated on read
+// (ignored) and never written.
+const WORKFLOW_PATHS = Object.freeze(['adaptive']);
 const ADAPTIVE_PATH = 'adaptive';
 
 // The adaptive executor command + skill the two resume surfaces emit (never
@@ -3262,13 +3262,11 @@ function isCuratedRoot(p) { return CURATED_ROOT_LC.has(String(p || '').toLowerCa
 // canonical candidate `Dockerfile` and the curated overlap fails open. Mirrors extractCuratedRootPaths.
 function canonicalCuratedRoot(p) { return CURATED_ROOT_LC.get(String(p || '').toLowerCase()) || null; }
 
-// The single shared global config file (one path, no per-edition namespace) + the
-// list-valued opt-in field. `installed_paths` is the install-time record of which EXTRA
-// paths ({fast, full}) the installer wrote; adaptive is implicit-always and NEVER appears
-// in it. Default `[]` (adaptive-only) when the field is absent/malformed. NO env override —
+// The single shared global config file (one path, no per-edition namespace). A stale
+// `installed_paths` field may linger in a pre-retirement config.json; it is TOLERATED on
+// read (ignored) and NEVER written — adaptive is the only legal path. NO env override —
 // "installed" is an on-disk fact, not a per-run toggle (#538 retired KAOLA_ENABLE_ADAPTIVE).
 const CONFIG_REL_PATH = ['.config', 'kaola-workflow', 'config.json'];
-const INSTALLED_PATHS_FIELD = 'installed_paths';
 const FANOUT_CAP_ENV = 'KAOLA_FANOUT_CAP';
 const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // #364: KAOLA_BATCH_CWD_ENFORCED + resolveBatchCwdEnforced were RETIRED with the write-role
@@ -3285,17 +3283,6 @@ const LANE_CONTAINMENT_ENV = 'KAOLA_LANE_CONTAINMENT';
 
 // #542: the env name for the parallel-writes DEFAULT-ON opt-OUT. See parallelWritesDefaultOn.
 const PARALLEL_WRITES_ENV = 'KAOLA_PARALLEL_WRITES';
-
-// Resolve the installed opt-in paths from config. Adaptive is implicit-always and is NEVER in this
-// array (legality short-circuits adaptive in isLegalWorkflowPath). No env override: the per-session
-// KAOLA_ENABLE_ADAPTIVE switch is retired (#538) — "installed" is an install-time fact, not a per-run
-// toggle. Returns a frozen, de-duplicated subset of {fast, full}; any unknown token in config is
-// dropped, so a hand-edited junk value cannot make a bogus path legal.
-function resolveInstalledPaths(config) {
-  const raw = (config && Array.isArray(config[INSTALLED_PATHS_FIELD])) ? config[INSTALLED_PATHS_FIELD] : [];
-  const optIn = WORKFLOW_PATHS.filter(p => p !== ADAPTIVE_PATH); // ['fast','full'] — the only opt-ins
-  return Object.freeze(optIn.filter(p => raw.includes(p)));
-}
 
 // Resolve the fan-out cap (env override, else default), clamped to a sane minimum.
 function resolveFanoutCap(env) {
@@ -3911,12 +3898,10 @@ module.exports = {
   isCuratedRoot,
   canonicalCuratedRoot,
   CONFIG_REL_PATH,
-  INSTALLED_PATHS_FIELD,
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
   LANE_CONTAINMENT_ENV,
   PARALLEL_WRITES_ENV,
-  resolveInstalledPaths,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   resolveLaneContainment,

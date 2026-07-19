@@ -179,7 +179,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
 ### Worktree Provisioning
 
-- **`KAOLA_WORKTREE_NATIVE`** (ON by default; set to `0` to disable) — By default the claim/startup scripts (all three editions: GitHub, GitLab, Gitea) provision a per-issue repo-local Git worktree at `<repo-root>/.kw/worktrees/<project>/` and record the absolute path as `worktree_path` in the active folder's Sink block. Set `KAOLA_WORKTREE_NATIVE=0` to opt out of worktrees; when opted out and online with git history, the scripts instead create and check out the feature branch in-place in the repo root (see below). Worktree provisioning applies to **all** workflow paths (full, fast, and adaptive); the adaptive path no longer exempts itself (#264).
+- **`KAOLA_WORKTREE_NATIVE`** (ON by default; set to `0` to disable) — By default the claim/startup scripts (all three editions: GitHub, GitLab, Gitea) provision a per-issue repo-local Git worktree at `<repo-root>/.kw/worktrees/<project>/` and record the absolute path as `worktree_path` in the active folder's Sink block. Set `KAOLA_WORKTREE_NATIVE=0` to opt out of worktrees; when opted out and online with git history, the scripts instead create and check out the feature branch in-place in the repo root (see below). Worktree provisioning applies on **every claim** — adaptive is the only workflow path and does not exempt itself (#264).
 
   **When provisioning is attempted:** Provisioning occurs unless one of the following holds: `KAOLA_WORKTREE_NATIVE=0`, `KAOLA_WORKFLOW_OFFLINE` is `1`, or the repo has no git history (`git rev-parse HEAD` fails). When `KAOLA_WORKTREE_NATIVE=0` (opted out), provisioning is skipped and `worktree_path` is `''`; however, the scripts then take the in-place branch path described below. When offline or no git history, the claim proceeds as a repo-root run with no branch created and `worktree_path` is `''`.
 
@@ -1275,15 +1275,14 @@ Configuration files control workflow behavior and issue sorting.
 {
   "parallel_mode": "auto",
   "pr_auto_merge": false,
-  "mr_auto_merge": false,
-  "installed_paths": []
+  "mr_auto_merge": false
 }
 ```
 
 - `parallel_mode` — Parallel-work classification strategy (`auto` or other); see README § Classifier configuration
 - `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
-- `installed_paths` — List of install-time opt-in paths (`"fast"` and/or `"full"`); default `[]` (adaptive-only). Adaptive is implicit-always and never appears in this array. Written by `install.sh --with-fast` / `--with-full` (read-modify-write UNION, preserving other fields; never removes). Resolved by `resolveInstalledPaths(config)` in `kaola-workflow-adaptive-schema.js`. No env override. See `docs/workflow-state-contract.md` § Adaptive Path — `installed_paths` Config Field
+- `installed_paths` — **Retired (#725).** No installer writes this field anymore; `resolveInstalledPaths()` and `INSTALLED_PATHS_FIELD` are removed from `kaola-workflow-adaptive-schema.js`. A stale value left over from a pre-retirement install is tolerated on read (never dereferenced for path legality) and is stripped, not preserved, the next time `install.sh`/`install-codex-agent-profiles.js` write this config file. See `docs/workflow-state-contract.md` § Adaptive Path — the only workflow path, and `docs/decisions/D-725-01.md`.
 - `KAOLA_LANE_CONTAINMENT` (#376) — fail-closed env flag (default false; only `1`/`true`/`yes` enables) that arms rules (a)/(b) — the lane-containment arm — of the write-lane PreToolUse hook (`hooks/kaola-workflow-write-lane.sh`). When ON and a `kaola-workflow/<project>/.cache/running-set.json` manifest of open write-nodes exists, the hook DENIES (exit 2) an out-of-lane `Write`/`Edit` — inside a member worktree outside its declared lane, or in the parent worktree matching an open node's lane. Fail-open (exit 0) on a missing flag/manifest, malformed stdin, or non-git cwd; dormant until the #377 scheduler produces the manifest. Successor of the retired #320 `KAOLA_BATCH_CWD_ENFORCED`.
 - `KAOLA_GATE_WINDOW_FENCE` (#607) — a SECOND, independent switch on the SAME write-lane hook, arming rule (c) — the gate-window fence — evaluated FIRST, ahead of the `KAOLA_LANE_CONTAINMENT` rules above (so it fires regardless of that flag's setting). DEFAULT-ON: only `0`/`false`/`no` disables it; any other value, including unset, keeps it ON. While any node in `running-set.json` carries `kind:'gate'` (an open `main-session-gate` — see `docs/workflow-state-contract.md` § `kind: 'gate'` member), the hook DENIES (exit 2) an in-worktree, out-of-band `Write`/`Edit` landing outside the workflow bands (`kaola-workflow/`, any `.cache/`), UNLESS it is under the `.kw/` band (member worktrees / per-node legs / co-open speculative work), inside a member worktree (governed by rules (a)/(b) instead), or under a live co-open writer's own declared lane (so a #596 speculative write co-opened behind the same gate is unaffected). Every existing fail-open exit is unchanged when no gate is open: a missing manifest, an unparseable stdin payload, or a non-git cwd all still exit 0. See `docs/decisions/D-607-01.md`.
 
@@ -1895,79 +1894,54 @@ When a `selector_source` node completes, the contractor reads `selectorCheck` fr
 
 On resume, the `## Node Ledger` n/a rows are already written (durable). `next-action` re-reads the ledger and treats those arms as TERMINAL — no re-routing step is needed.
 
-## Fast / Full Transaction Scripts (issues #456 / #457 / #458)
+## Fast / Full Transaction Scripts — retired (#725)
 
-The fast path and the full path's per-phase mechanical transitions are owned by typed transaction scripts the main session runs directly (ADR 0004), not by the `contractor`. Each requires `--json`, emits a single JSON object on stdout, and mutates durable files in crash-safe order; refusals are typed (`{ "result": "refuse", "reason": "...", "operator_hint": "..." }`, exit 1) with zero mutation. The main session owns ALL judgment and hands the script the verbatim content; the script never dispatches a role, judges, routes, or asks. Each is idempotent/resume-safe and preserves an existing `## Sink` block byte-for-byte.
+`kaola-workflow-fast-advance.js` (#456), `kaola-workflow-full-advance.js` (#457), and
+`kaola-workflow-phase4-advance.js` (#458) — the typed transaction scripts that used to own the
+`fast` path's `fast-summary.md` lifecycle and the `full` path's numbered Phase 1/2/3/4/5 checkpoints
+— are deleted, along with the `fast`/`full` commands and Codex skill packs that shelled them (#725;
+see `docs/decisions/D-725-01.md`). The **adaptive per-node lifecycle** (`kaola-workflow-adaptive-
+node.js`, #272, documented under § Adaptive Executor Aggregators above) is the one live script-owned
+mechanical transition outside Finalization.
 
-- **`kaola-workflow-fast-advance.js` (#456)** — `orient` (read-only), `plan-setup`, `plan-capture --stdin`, `execute-setup`, `acceptance-run`, `acceptance-consequence --decision proceed|escalate`, `summary-write --verdict PASSED|ESCALATED --stdin`. Owns `fast-summary.md` + its `## Status` lifecycle.
-- **`kaola-workflow-full-advance.js` (#457)** — `orient` (read-only), `phase1-complete`
-  (checkpoint; refuses if `phase1-research.md` is absent — never authors it),
-  `phase2-finalize` / `phase3-finalize` / `phase5-finalize` (each `--stdin`: author the phase
-  file from the orchestrator's packet + advance the pointer), and `phase5-verify` (read-only
-  point-of-use recheck before Finalization). Authors `phase{2,3,5}-*.md` with a RESOLVED
-  `## Required Agent Compliance` table and **self-validates each rendered phase file against the
-  real `repair-state.unresolvedCompliance(content, stateContent)` boundary gate before writing**
-  (fails closed with `unresolved_compliance`). Phase 5 has stricter prerequisites:
+**`cmdFinalize`'s plan-absent case (was the `full-advance phase5-verify` N/A pass).** Before #725, a
+Finalization run with no frozen `workflow-plan.md` present shelled `*-full-advance.js phase5-verify`
+as a verifier-N/A pass. That branch is now an **unconditional typed refusal**, placed before any
+archive/close side effect (`scripts/kaola-workflow-claim.js`, verified against the landed code):
 
-  - `phase4-progress.md` must contain one structurally valid, nonempty `## Tasks` table with an
-    exact Status column and every data row equal to `complete`; missing pipes, columns, separators,
-    statuses, or closing delimiters are `progress_incomplete`, never filtered into a vacuous pass.
-  - The packet and persisted review must have exactly one `code-reviewer` row, exactly one
-    `security-reviewer` invoked-or-file-risk-N/A row, and exactly one `review-fix executors`
-    invoked-or-no-blocking-findings-N/A row (N/A requires that no review-fix artifact exists).
-    Invoked evidence uses only canonical
-    `.cache/code-reviewer.md`, `.cache/security-reviewer.md`, or
-    `.cache/review-fix-{n}.md` regular files and must reproduce the exact seeded
-    `evidence-binding:` line above a structured approval body with exactly one column-zero
-    `domain_outcome: approved`, `verdict: pass`, `findings_blocking: 0`, and
-    `review_summary: no_blocking_findings`, plus exactly one column-zero
-    `review_attestation: full_review_completed`. Approval evidence must end with exactly one
-    column-zero `review_conclusion: <substantive prose>` as its final nonempty line. The attestation
-    and conclusion may be emitted only after the full review, and conclusion text after the prefix
-    must have at least 24 Unicode letter/number characters and four word tokens. The entire durable
-    body rejects control, format, Unicode line/paragraph separator, and default-ignorable code
-    points. Reserved labels and finding gate keys reject recognized compatibility/confusable and
-    single-Damerau-edit near-spoofs, while ordinary Unicode prose remains non-authoritative.
-    Canonical finding tokens require a lowercase ASCII key, ASCII `=`, and a non-whitespace value;
-    any noncanonical line carrying all three assignment-shaped gate keys, or a finding-like label
-    followed by all three alternating key/value pairs, refuses. Receipt rows
-    are the only mechanical
-    outcome authority; canonical `finding:` rows are the only mechanical finding authority.
-    Malformed, Unicode-obfuscated, duplicate, unknown-vocabulary, or canonical in-scope/open/fix rows refuse.
-    Conclusion presence, position, and minimum shape are mechanical, but its prose content is
-    retained only as orchestrator context and is not mechanically classified. Seed-only,
-    compact-summary-only, empty, traversal, absolute, wrong-name, directory, and symlink evidence
-    refuses as `reviewer_prerequisite` or `project_path_unsafe`.
-  - Reviewer evidence must be at least as new as `phase4-progress.md` and every regular
-    `.cache/review-fix-*.md`; invoked fix evidence must itself be current to Phase 4. A new fix
-    therefore makes the prior quality/security receipts stale and forces re-review.
-  - The transaction never grades findings: the main session decides whether CRITICAL/HIGH items
-    remain and supplies only `PASSED` or `PASSED WITH FOLLOW-UPS`. It escapes packet-supplied copies
-    of the reserved compliance heading and round-trips the one canonical five-column table before
-    writing.
+```json
+{
+  "result": "refuse",
+  "reason": "finalize_gate_unverified",
+  "gate": "workflow_path",
+  "inner_reason": "adaptive_plan_missing",
+  "workflow_path": "<stale field value, reported for diagnostics only>",
+  "operator_hint": "Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.",
+  "errors": ["adaptive_plan_missing"]
+}
+```
 
-  Every subcommand also validates the real project authority. `kaola-workflow/<project>`, `.cache`,
-  state/progress/review files, named reviewer receipts, and review-fix artifacts must remain regular
-  non-symlink paths under the direct root/project boundary. The check runs before reads and again
-  immediately before transaction writes; violations are `project_path_unsafe` with no intentional
-  outside mutation. Other phases retain the `delegation_policy`-aware default compliance status
-  (`delegate`→`subagent-invoked`, `local-authorized`→`local-fallback-explicit`,
-  `tool-unavailable`→`local-fallback-tool-unavailable`, else `invoked`).
-- **`kaola-workflow-phase4-advance.js` (#458)** — `orient` (read-only), `init-progress` (stamp `phase4-progress.md` from `phase3-plan.md` `### Task N:` blocks; create-only), `open-task --task N`, `record-failure --task N --stdin` (append a Failure Routing Ledger row; deduped), `close-task --task N --stdin` (mark the task complete + flip its `tdd-guide executor task N` compliance row to a policy-aware resolved status + advance; on the last close it self-validates the whole table at the phase-4→5 boundary gate). Every table-cell value is sanitized (`|`→fullwidth `｜`) so an orchestrator-supplied name/path cannot shift columns and corrupt the table.
+There is no retired fast/full verifier left to shell and no N/A pass — Finalization with no frozen
+plan is always a refusal now. The pre-existing `finalize_gate_unverified` reason and `--finalize-
+check` gate machinery are unchanged; only the plan-absent branch's inner behavior changed.
 
-Editions: each is rename-normalized per edition (the lone `require` of `repair-state` carries the forge prefix; command/skill route names stay edition-neutral via the KW-split). Registered in `kaola-workflow-install-manifest.js` `SUPPORT_SCRIPTS` + `validate-script-sync.js` (`COMMON_SCRIPTS` + `RENAME_NORMALIZED_FAMILIES`); the #459 contract validators pin both the registration and the absence of a contractor dispatch on every migrated command/SKILL surface.
+## Contractor Agent (issue #242 Part B; scope is Finalization-only)
 
-## Contractor Agent (issue #242 Part B; narrowed to Finalization-only by #456/#457/#458)
+The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the
+bookkeeper half of the lean-orchestrator design. **Its scope is Finalization only.** The fast-path
+mechanical transitions (#456) and the full-path per-phase checkpoint/bookkeeping transitions
+(#457/#458) that used to also run main-session-direct are retired along with the `fast`/`full` paths
+themselves (#725) — the adaptive per-node loop (`kaola-workflow-adaptive-node.js`, #272) is the only
+other main-session-direct mechanical transition family. The contractor is dispatched at exactly one
+seam:
 
-The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. **Its scope is now Finalization only.** The fast-path mechanical transitions (#456), the full-path Phase 1/2/3/5 checkpoint + phase-file authoring (#457), and the full-path Phase 4 progress/task/failure-ledger bookkeeping (#458) are now owned by typed transaction scripts (`kaola-workflow-fast-advance.js`, `kaola-workflow-full-advance.js`, `kaola-workflow-phase4-advance.js`) the main session runs directly — exactly like the adaptive per-node loop (`kaola-workflow-adaptive-node.js`, #272). After this migration the contractor is dispatched at exactly one seam:
+- **Finalization** (Stage C): Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance. This is the **SOLE remaining contractor-owned transition** (ADR 0004 keeps Finalization contractor-owned as a temporary exception, pending a dedicated finalization transaction script).
 
-- **Finalization** (Stage C): Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance. This is the **SOLE remaining contractor-owned transition** (ADR 0004 keeps Phase 6 contractor-owned as a temporary exception, pending a dedicated finalization transaction script).
-
-Phase 1 (research) checkpoints — the `workflow-state.md` write and the per-issue roadmap `init-issue` staging — are now part of the script-owned full path (#457): `kaola-workflow-full-advance.js phase1-complete` writes the checkpoint and the command prose runs `init-issue` directly; Opus still owns the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch cut. The per-node executor loop and the fast/full phase transitions do **not** go through the contractor — see § Adaptive Executor Aggregators above and the fast/full transaction scripts.
+The per-node executor loop does **not** go through the contractor — see § Adaptive Executor Aggregators above.
 
 ### Role
 
-The contractor runs the Finalization workflow scripts, parses the `.cache` evidence and verdicts the Opus orchestrator hands it, and **authors the durable finalization bookkeeping**: the archive, the roadmap-mirror regen, and the `chore: finalize` staging commit. It returns a compact summary. It is deterministic plumbing, not a decision-maker. (Phase files, phase-state checkpoints, and `fast-summary.md` authoring are now script-owned, not contractor work.)
+The contractor runs the Finalization workflow scripts, parses the `.cache` evidence and verdicts the Opus orchestrator hands it, and **authors the durable finalization bookkeeping**: the archive, the roadmap-mirror regen, and the `chore: finalize` staging commit. It returns a compact summary. It is deterministic plumbing, not a decision-maker.
 
 ### Hard boundary — never dispatch, never judge, never gate
 
@@ -2024,7 +1998,7 @@ The agent runs these steps in order, then returns:
 
 1. **Claim** — `node kaola-workflow-claim.js startup --workflow-path adaptive --target-issue <N>`,
    which writes `workflow-state.md`, stamps `workflow_path: adaptive`, and provisions a worktree at
-   `.kw/worktrees/<project>/` (same as full/fast paths; see Worktree Provisioning above). The planner
+   `.kw/worktrees/<project>/` (worktree provisioning is unified across every claim; see Worktree Provisioning above). The planner
    authors the plan at repo-root; the executor (`/kaola-workflow-plan-run`) operates inside the
    provisioned worktree so implementation lands on `workflow/issue-N`.
    (`claim.js` needs no code change: `--workflow-path` is parsed by the generic kebab→camel handler,
@@ -2357,7 +2331,7 @@ The six transport/role fields are present on every live or cache scope; for `plu
 
 Installs the Codex-native role profiles. Ships in the **3 plugin trees only** (codex/gitlab/gitea), byte-identical (enforced by `validate-script-sync.js`). Run by the Codex `kaola-workflow-init` skill (NOT by `install.sh`).
 
-**`--global` flag (#571):** sets `projectRoot = os.homedir()` regardless of `cwd` or argument order (position-robust, like `--with-fast`/`--with-full`). Installs profiles into `~/.codex/agents/kaola-workflow/`, writes the managed block into `~/.codex/config.toml`, and refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. The positional `projectRoot` form (`"$PWD"` / `"$HOME"`) remains a supported project-local override. `--global` composes with `--with-fast`/`--with-full` (independent flags). Use `--global` for the documented default install and upgrade flow.
+**`--global` flag (#571):** sets `projectRoot = os.homedir()` regardless of `cwd` or argument order (position-robust). Installs profiles into `~/.codex/agents/kaola-workflow/`, writes the managed block into `~/.codex/config.toml`, and refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. The positional `projectRoot` form (`"$PWD"` / `"$HOME"`) remains a supported project-local override. The `--with-fast`/`--with-full` argv parsing this flag used to compose with is retired (#725) — `seedKaolaConfig` now takes a single `homeDir` argument. Use `--global` for the documented default install and upgrade flow.
 
 Default-on validate → authority check → install → prune → manifest → post-verify (no install flags):
 

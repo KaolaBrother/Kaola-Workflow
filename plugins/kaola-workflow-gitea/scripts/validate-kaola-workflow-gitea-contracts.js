@@ -169,9 +169,10 @@ for (const file of [
   assertNoForbidden(file);
 }
 
-assert(commandFiles.length === 11, 'expected 11 Gitea command files, got ' + commandFiles.length);
-// #400: 9 base skills + kaola-workflow-adapt + kaola-workflow-plan-run (adaptive SKILL pack) = 11.
-assert(skillFiles.length === 11, 'expected 11 Gitea skill files, got ' + skillFiles.length);
+// #725: fast/full retired — the 6 fast/phase command+skill surfaces are deleted. Surviving surfaces
+// are workflow-init + workflow-next + kaola-workflow-{finalize,adapt,plan-run} = 5.
+assert(commandFiles.length === 5, 'expected 5 Gitea command files, got ' + commandFiles.length);
+assert(skillFiles.length === 5, 'expected 5 Gitea skill files, got ' + skillFiles.length);
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
@@ -321,29 +322,9 @@ assert(
   read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('subagent_type="contractor"'),
   'Gitea Finalization command must dispatch the mechanical finalization to the contractor subagent'
 );
-// #459: contractor-free routing enforcement (Gitea edition). The fast path (#456) and the full
-// path's Phase 1-5 + Phase 4 mechanical transitions (#457/#458) are script-owned (ADR 0004); the
-// contractor DISPATCH must not return to those migrated command surfaces. We forbid the dispatch
-// (`subagent_type="contractor"`), not the bare word, so the allowed finalize-exception prose note
-// is untouched. Finalization (asserted just above) stays the SOLE contractor-owned transition.
-for (const cmd of ['fast', 'phase1', 'phase2', 'phase3', 'phase4', 'phase5']) {
-  assert(
-    !read(pluginRoot + '/commands/kaola-workflow-' + cmd + '.md').includes('subagent_type="contractor"'),
-    'Gitea ' + cmd + ' command must not dispatch the contractor for migrated mechanics (script-owned per #456/#457/#458)'
-  );
-}
-// Migrated Codex SKILLs: research/ideation/plan/review/execute must be fully contractor-free; the
-// fast SKILL keeps a finalize-exception boundary note, so forbid only the handoff phrasing there.
-for (const sk of ['research', 'ideation', 'plan', 'review', 'execute']) {
-  assert(
-    !read(pluginRoot + '/skills/kaola-workflow-' + sk + '/SKILL.md').includes('contractor'),
-    'Gitea ' + sk + ' skill must be contractor-free (script-owned per #457/#458)'
-  );
-}
-assert(
-  !read(pluginRoot + '/skills/kaola-workflow-fast/SKILL.md').includes('delegated to the contractor'),
-  'Gitea fast skill must not delegate mechanics to the contractor (script-owned per #456)'
-);
+// #725: the fast/full command + SKILL surfaces (#456/#457/#458 migrated mechanics) are retired, so
+// the #459 contractor-free guards over those deleted surfaces are removed. Finalization (asserted
+// just above) stays the SOLE contractor-owned transition.
 assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
   'Gitea finalize skill must dispatch canonical pr sink (mr|pr) case)'
@@ -430,28 +411,17 @@ for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKI
 
 // Delegation policy checks
 const giteaSkillsBase = `${pluginRoot}/skills`;
+// #725: the research/ideation/plan/execute/review/fast SKILLs are retired; only surviving gate
+// SKILLs remain in the ungated-fallback sweep.
 const delegationNegativeChecks = [
-  [`${giteaSkillsBase}/kaola-workflow-research/SKILL.md`, 'when subagents are available; otherwise perform the same read-only research'],
-  [`${giteaSkillsBase}/kaola-workflow-ideation/SKILL.md`, 'when subagents are available; otherwise perform the same strategy analysis'],
-  [`${giteaSkillsBase}/kaola-workflow-plan/SKILL.md`, 'when subagents are available; otherwise produce the same blueprint'],
-  [`${giteaSkillsBase}/kaola-workflow-execute/SKILL.md`, 'when subagents are available'],
-  [`${giteaSkillsBase}/kaola-workflow-execute/SKILL.md`, 'Use the current Codex session as the fallback executor'],
-  [`${giteaSkillsBase}/kaola-workflow-review/SKILL.md`, 'otherwise perform a review stance locally'],
-  [`${giteaSkillsBase}/kaola-workflow-review/SKILL.md`, 'or perform the same security review locally'],
   [`${giteaSkillsBase}/kaola-workflow-finalize/SKILL.md`, 'subagents are available; otherwise update docs'],
 ];
 for (const [file, needle] of delegationNegativeChecks) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 const giteaDelegationSkills = [
-  'kaola-workflow-research',
-  'kaola-workflow-ideation',
-  'kaola-workflow-plan',
-  'kaola-workflow-execute',
-  'kaola-workflow-review',
   'kaola-workflow-finalize',
   'kaola-workflow-next',
-  'kaola-workflow-fast',
 ];
 for (const skill of giteaDelegationSkills) {
   const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
@@ -489,11 +459,11 @@ assertBefore(giteaNextSkill, '### Co-active Folders Advisory', '## Routing');
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(giteaNextSkill, 'Startup Step 0a-1');
 assertIncludes(giteaNextSkill, 'Branch: {branch from Sink block');
-// #538: the status-report `Workflow path:` line now leads with adaptive-by-default (fast|full only
-// on an explicit escape) — the old `{fast|full` menu framing retired with the path switch.
-assertIncludes(giteaNextSkill, 'Workflow path: {adaptive by default');
+// #725: the status-report `Workflow path:` line reports adaptive as the ONLY workflow path (a
+// non-adaptive KAOLA_PATH is refused by the claim's path_not_installed).
+assertIncludes(giteaNextSkill, 'Workflow path: {adaptive — the only workflow path');
 assertIncludes(giteaNextSkill, 'Parallel decision: {green|yellow|red');
-for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
+for (const skill of ['kaola-workflow-finalize']) {
   const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
   assert(
     read(skillFile).includes('Plain `invoked` is intentional for non-Codex-role workflow gates'),
@@ -648,58 +618,18 @@ assertConcept(pluginRoot + '/scripts/test-gitea-workflow-scripts.js', 'Gitea sta
   'dry_run'
 ]);
 
-// issue #198: fast-path widening — eligibility/hatch/review contract parity
-const giteaFastCmd198 = pluginRoot + '/commands/kaola-workflow-fast.md';
-const giteaFastSkill198 = pluginRoot + '/skills/kaola-workflow-fast/SKILL.md';
-for (const fastFile of [giteaFastCmd198, giteaFastSkill198]) {
-  assertIncludes(fastFile, 'mechanical');
-  assertIncludes(fastFile, '≤ 5');
-  assertIncludes(fastFile, 'design choice');
-  assertIncludes(fastFile, 'approach_ambiguity');
-  assertIncludes(fastFile, 'declared write set');
-  assertIncludes(fastFile, 'absolute backstop of 6');
-  assertIncludes(fastFile, '`code-reviewer` is mandatory');
-}
-assertNotIncludes(giteaFastCmd198, 'two closely related files');
-assertNotIncludes(giteaFastCmd198, '≤ 2');
-assertNotIncludes(giteaFastSkill198, '(≤ 2)');
-assertNotIncludes(giteaFastSkill198, '> 2 files');
-// issue #207: fast-overlap parity (Gitea) — Scope declares a `- Write Set:` line
-// and the classifier reads that fast-summary.md Scope section.
-for (const fastFile207 of [giteaFastCmd198, giteaFastSkill198]) assertIncludes(fastFile207, '- Write Set:');
+// issue #207: fast-overlap parity (Gitea) — trap-2 tolerant keep. The fast/full command + SKILL
+// surfaces are retired, but the Gitea classifier port RETAINS its defensive fast-summary.md
+// `## Scope` reader (readers ignore the now-legacy artifact; only the write side was removed).
 const giteaClassifier207 = pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js';
 assertIncludes(giteaClassifier207, 'fast-summary.md');
 assertIncludes(giteaClassifier207, 'sectionBody(');
 assertIncludes(giteaClassifier207, "'Scope'");
-const giteaNextCmd198 = pluginRoot + '/commands/workflow-next.md';
-const giteaNextSkill198 = pluginRoot + '/skills/kaola-workflow-next/SKILL.md';
-for (const nextFile of [giteaNextCmd198, giteaNextSkill198]) {
-  // #538: the fast-path eligibility rubric (`mechanical` / `≤ 5` / `design choice`) was Branch-A
-  // content of the next router and is DELETED with Branch A (adaptive is the unconditional default).
-  // The rubric concept stays machine-enforced on its correct surface — the fast cmd + SKILL (L595-597
-  // above) — so dropping the next-router pins loses zero coverage; the negative-assert stays.
-  assertNotIncludes(nextFile, '≤ 2 closely related files');
-}
 
-// #203: Select Project active-folder definition must include fast-summary.md (follow-up to #201).
+// #203: Select Project active-folder definition still lists fast-summary.md (the classifier's
+// tolerant read survives retirement, so the router recognizes a legacy fast-summary.md marker).
 const giteaNextCmd203 = pluginRoot + '/commands/workflow-next.md';
-// Assertion A (Select Project drift-guard): the Startup Step 3 active-folder
-// list must include fast-summary.md. Use the Select-Project-specific substring
-// — a bare "fast-summary" already appears in the #201 reconstruction ladder.
 assertIncludes(giteaNextCmd203, '`fast-summary.md` file, or a `workflow-state.md`');
-// Assertion B (ladder drift-guard, regression lock for #201): keep the
-// reconstruction-ladder fast-path entry present.
-assertIncludes(giteaNextCmd203, 'fast-summary.md exists -> /kaola-workflow-fast');
-
-// issue #222: fast-path mid-flight escalation routing fix — Gitea parity
-for (const fastFile222 of [giteaFastCmd198, giteaFastSkill198]) {
-  assertIncludes(fastFile222, 'workflow_path: full');
-  assertIncludes(fastFile222, 'next_command: /kaola-workflow-phase1 {project}');
-  assertIncludes(fastFile222, 'next_skill: kaola-workflow-research {project}');
-  assertIncludes(fastFile222, 'status `ESCALATED` → escalation already committed');
-}
-assertBefore(giteaNextCmd203, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
-assertIncludes(giteaNextSkill198, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
 
 // issue #227: adaptive-path contract (Gitea fork command prose + renamed scripts).
 assert(exists(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'), 'Gitea adaptive plan validator missing');
@@ -1046,9 +976,7 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   const schema = require('./kaola-workflow-adaptive-schema.js');
   const emittedSkillTargets = [
     schema.PLAN_RUN_SKILL,
-    schema.ADAPT_SKILL,
-    'kaola-workflow-fast',
-    'kaola-workflow-research'
+    schema.ADAPT_SKILL
   ];
   const installedSkills = new Set(
     fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })

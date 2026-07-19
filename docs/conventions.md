@@ -29,8 +29,9 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 - `local-fallback-tool-unavailable` — only valid when subagent tooling is genuinely unavailable (runtime detection, not a silent config-drift shortcut).
 - `local-fallback-explicit` — only valid when the user explicitly set `delegation_policy: local-authorized`.
 
-All ten dispatch-capable Codex skills (`adapt`, `execute`, `fast`, `finalize`, `ideation`, `next`,
-`plan`, `plan-run`, `research`, and `review`) carry one byte-identical
+All four dispatch-capable Codex skills (`adapt`, `finalize`, `next`, and `plan-run` — the sibling
+`init` skill does not dispatch subagents; the `execute`/`fast`/`ideation`/`plan`/`research`/`review`
+skills were retired alongside the `fast`/`full` paths, #725) carry one byte-identical
 `<!-- PIN: codex-profile-preflight -->` entry/resume gate. The gate runs normal preflight with
 `--no-autofix --json` before any probe, retry, re-plan, or spawn and accepts only exit 0 plus parsed
 `status:"ok"`; a frozen plan is supplied through `KAOLA_CODEX_PREFLIGHT_PLAN`. The gate parses
@@ -54,44 +55,19 @@ must not be described as proof of those per-process settings.
 
 See `docs/api.md` § Codex Harness Scripts for the preflight CLI and typed-refusal shapes.
 
-## Full-Path Review/Fix/Re-Review Contract
+## Full-Path Review/Fix/Re-Review Contract — retired (#725)
 
-Claude commands, Codex skills, and the generated opencode command use the same bounded Phase 5
-semantics:
-
-1. Treat `phase4-progress.md` as a strict ledger. Its `## Tasks` table must be structurally valid,
-   nonempty, and exactly complete row-by-row; a truncated or malformed row is not ignored.
-2. Run the named `code-reviewer`. Run `security-reviewer` when the file-risk scan calls for it, or
-   record exactly one N/A security decision with the reason.
-3. Route admitted CRITICAL/HIGH fixes to the appropriate fix role, write each full result to the
-   seeded `.cache/review-fix-{n}.md`, and run the narrow validation that proves the fix.
-4. Re-run every affected reviewer after the newest fix. Reviewer receipts must preserve their
-   seeded binding, contain the exact approval receipt plus `review_summary: no_blocking_findings`
-   and `review_attestation: full_review_completed`, and end with exactly one column-zero
-   `review_conclusion: <substantive prose>` as the final nonempty line. Emit the attestation and
-   conclusion only after completing the full review; conclusion text after the prefix must contain
-   at least 24 Unicode letter/number characters and four word tokens. The entire durable body
-   rejects control, format, Unicode line/paragraph separator, and default-ignorable code points.
-   Reserved labels and finding gate keys reject recognized compatibility/confusable and
-   single-Damerau-edit near-spoofs, while ordinary Unicode prose remains non-authoritative.
-   Canonical finding tokens require a lowercase ASCII key, ASCII `=`, and a non-whitespace value;
-   any noncanonical line carrying all three assignment-shaped gate keys, or a finding-like label
-   followed by all three alternating key/value pairs, refuses. Receipt rows
-   remain the only mechanical outcome
-   authority, and canonical structured `finding:` rows remain the only mechanical finding
-   authority. Conclusion presence, position, and minimum shape are mechanical, while its prose
-   content is retained only for orchestration context. Reviewer evidence must be at least as new as
-   Phase 4 progress and all review-fix evidence. A new fix invalidates the prior receipt mechanically.
-5. The main session judges severity and may finalize only after no CRITICAL/HIGH finding remains.
-   Stop for operator direction after three non-converging fix-and-re-review cycles.
-
-`phase5-finalize` and Finalization's `phase5-verify` require exactly one point-of-use decision for
-`code-reviewer`, `security-reviewer`, and `review-fix executors`. Their canonical evidence files and
-the project/cache/state/progress/review paths must be regular non-symlink paths inside
-`kaola-workflow/<project>`; fix N/A is valid only when no `.cache/review-fix-*.md` artifact exists.
-Unsafe authority is `project_path_unsafe`. The transaction proves local
-file shape, binding, containment, and freshness. It does not cryptographically prove which model
-process authored those bytes, and the script never grades finding severity.
+The bounded Phase 5 review/fix/re-review contract described in earlier revisions of this document
+belonged to the numbered `full` path's `kaola-workflow-full-advance.js phase5-finalize`/
+`phase5-verify` point-of-use boundary. That script, the `phase4-progress.md` ledger it gated on,
+and the Claude/Codex/opencode surfaces that shelled it are all retired along with the `full` path
+(#725; see `docs/decisions/D-725-01.md`). The **adaptive** path's own reviewer contract — the
+schema-2 `code-reviewer`/`security-reviewer` post-dominance gates, the review-attempt journal, and
+the bounded repair loop — is the one live review mechanism and is documented in `docs/api.md`
+(reviewer contract v2, decisions D-693-01 through D-698-01) and in this file's Reviewer Contract
+sections below. The legacy compatibility literal `review_attestation: full_review_completed` that
+`code-reviewer`/`security-reviewer` still emit for a schema-1 legacy block is unrelated vocabulary
+(a fixed token name, not a reference to the retired `full` path) and remains live.
 
 ## Codex Join Protocol — wait budgets, escalation, and writer kill-safety (issue #611)
 
@@ -260,41 +236,45 @@ candidate-bound local transaction tests, all relevant edition validators/walkthr
 reviews, or frozen falsification nodes. The workflow owns its verdict locally even when a hosted
 pipeline also exists.
 
-## Adaptive is the Default; Fast/Full are Install-Time Opt-ins (issue #538)
+## Adaptive Is the Only Workflow Path (issue #227; `fast`/`full` retired #725)
 
-Adaptive is the unconditional default path — there is no on/off switch and no path-selection step.
-`fast` and `full` are install-time opt-ins (`--with-fast` / `--with-full`) that become explicit
-routing escapes once installed.
+Adaptive is the **only** workflow path — there is no on/off switch, no path-selection step, and no
+install-time opt-in axis. `fast` and `full` (formerly install-time opt-ins under #538/#543) are
+retired: their commands, skills, and transaction scripts are deleted.
 
-**Path legality.** `claimProject` resolves `resolveInstalledPaths(readAdaptiveConfig())` and passes
-the result to `isLegalWorkflowPath(requestedPath, installedPaths)`. Adaptive is legal
-unconditionally; `fast`/`full` require membership in `installed_paths`. A `KAOLA_PATH` naming a
-non-installed path returns a typed `path_not_installed` refusal (`result: refuse`) — never a silent
-substitution and never a crash (#44).
+**Path legality.** `claimProject` validates the requested `workflow_path` against `WORKFLOW_PATHS`
+(`kaola-workflow-adaptive-schema.js`, now `['adaptive']`) via `isLegalWorkflowPath(requestedPath,
+installedPaths)`. Only `adaptive` can ever pass. A `KAOLA_PATH` naming any other value — including a
+stale `fast`/`full` request from before the retirement — returns a typed `path_not_installed`
+refusal (`result: refuse`) — never a silent substitution and never a crash (#44).
 
-**Router is unconditional.** The router (`workflow-next.md` Step 0a-1) contains no Branch A /
-Branch B fork. A path-name keyword (`"fast path"` / `"full review"`) or explicit `KAOLA_PATH`
-exports the named path and hands it to the claim; the claim's `path_not_installed` is the single
-authority. The router does not read `installed_paths` or perform a soft fall-through to adaptive.
+**Router is unconditional.** The router (`workflow-next.md` Step 0a-1) unconditionally exports
+`KAOLA_PATH=adaptive` and proceeds — there is no path-name keyword escape (`"fast path"` / `"full
+review"`) left to honor. If a non-adaptive `KAOLA_PATH` is already exported from residual
+environment state, the router hands it through verbatim and lets the claim's `path_not_installed`
+refusal be the authority — never a silent router-side fallback to adaptive.
 
 **`authoring-allowed` always allows.** `cmdAuthoringAllowed` (the #235 guard called by
-`/kaola-workflow-adapt` before authoring a plan) now unconditionally returns
+`/kaola-workflow-adapt` before authoring a plan) unconditionally returns
 `{ "status": "authoring_allowed", "allowed": true }`. Adaptive authoring is never refused — there
-is no switch to be OFF.
+is no switch to be OFF and no other path to prefer.
 
-**No automatic fallback between paths.** Adaptive never silently downgrades to `fast` or `full`.
-Before the first freeze, invalid authoring uses the existing bounded planner-only repair loop. After
-freeze, a settled `repair_requires_replan` routes through the claim-preserving planner-owned epoch
-transaction: the parent stays immutable, the claim/branch/worktree/candidate survive, and only
-`workflow-planner` authors a child. Automatic review-driven replacements are claim-budgeted; budget
-exhaustion consent-halts. There is no hidden discard/restart fallback and no main-authored DAG repair.
+**No automatic fallback — adaptive has nowhere left to fall back to.** Before the first freeze,
+invalid authoring uses the existing bounded planner-only repair loop. After freeze, a settled
+`repair_requires_replan` routes through the claim-preserving planner-owned epoch transaction: the
+parent stays immutable, the claim/branch/worktree/candidate survive, and only `workflow-planner`
+authors a child. Automatic review-driven replacements are claim-budgeted; budget exhaustion
+consent-halts. There is no hidden discard/restart fallback and no main-authored DAG repair.
 
 **Bundle lane.** The bundle lane is adaptive-only; a bundle claim on any other path returns
-`bundle_requires_adaptive` (`result: refuse`).
+`bundle_requires_adaptive` (`result: refuse`) — trivially true now that adaptive is the only legal
+path, but the refusal path itself is unchanged.
 
-See `docs/decisions/D-538-01.md` for the full decision record (switch-axis flip, legality model,
-union re-install, no-fallback, dead-code removal). Supersedes
-`docs/decisions/0007-adaptive-default-under-switch-on.md`.
+See `docs/decisions/D-725-01.md` for the retirement decision record. It supersedes
+`docs/decisions/D-538-01.md` (the original switch-axis flip that made `fast`/`full` install-time
+opt-ins) and `docs/decisions/D-543-01.md` (the Codex/opencode port of that opt-in partition); both
+superseded records remain in place as historical context (`docs/decisions/0007-adaptive-default-
+under-switch-on.md`, superseded in turn by `D-538-01`, is unaffected by this second supersession).
 
 ## Bundle Lane — Cross-Edition Requirement (issue #328)
 

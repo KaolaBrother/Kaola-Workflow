@@ -373,46 +373,29 @@ agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Before the Startup transaction, pick the workflow path. The agent owns this judgment;
-scripts do not auto-pick. Adaptive is the unconditional default — it just runs. `fast`
-and `full` fire ONLY on an explicit path-name keyword or an explicit `KAOLA_PATH`;
-nothing to resolve and nothing to deliberate.
+Adaptive is the unconditional default and the only installable workflow path —
+there is nothing to resolve and nothing to deliberate. `export KAOLA_PATH=adaptive`
+and proceed to the Adaptive front-end entry section. The export is the action (it
+makes the Startup transaction skip and the adaptive front end fire). Adaptive just
+runs.
 
-1. **Explicit `KAOLA_PATH`.** If already exported, honor it verbatim: `adaptive`
-   always; for `fast` | `full`, simply EXPORT the named value and hand it to the claim —
-   do NOT re-derive a rubric and do NOT check whether the path is installed. The claim's
-   `path_not_installed` typed refusal is the single authority: if the named path isn't
-   installed the run surfaces that refusal (a hard stop), it does NOT silently fall to
-   adaptive.
-2. **Explicit path-name verbal escapes** (case-insensitive) — the ONLY keyword escapes:
-   - "fast path" / "fast mode" → `export KAOLA_PATH=fast`
-   - "full path" / "full mode" / "full review" / "all phases" → `export KAOLA_PATH=full`
-   Just export the named path and hand it to the claim (same as point 1 — no install
-   check here either; the claim's `path_not_installed` refusal is the authority). Task
-   descriptors ("typo", "one-line", "trivial", "quick fix", "rename", "small change",
-   "thorough", "carefully", "deep dive") are NOT path-name escapes; they hit the default
-   → adaptive (the planner sizes the task).
-3. **Default → adaptive.** No matching path-name keyword and no explicit `KAOLA_PATH` →
-   `export KAOLA_PATH=adaptive` and proceed to the Adaptive front-end entry section. The
-   export is the action (it makes the Startup transaction skip and the adaptive front end
-   fire). Adaptive just runs. There is NO automatic fallback to fast/full. For a normal
-   fresh-start draft that never froze, the recourse stays inside adaptive (bounded planner
-   repair → discard+restart a fresh adaptive run → stop+ask), per the
-   `kaola-workflow-adapt` skill. This startup fallback is forbidden while
-   `replan_in_progress`; the re-plan fence permits only the edition-local
-   `resume --project {project} --json` mutation.
+If `KAOLA_PATH` is somehow already exported to a non-adaptive value (residual
+environment state, a direct script invocation, or similar), honor it verbatim and
+hand it to the claim — do NOT re-derive a rubric and do NOT check whether the path
+is installed. The claim's `path_not_installed` typed refusal is the single
+authority: if the named path isn't installed the run surfaces that refusal (a hard
+stop), it does NOT silently fall to adaptive. There is no automatic fallback. For a
+normal fresh-start draft that never froze, the recourse stays inside adaptive
+(bounded planner repair → discard+restart a fresh adaptive run → stop+ask), per the
+`kaola-workflow-adapt` skill. This startup fallback is forbidden while
+`replan_in_progress`; the re-plan fence permits only the edition-local
+`resume --project {project} --json` mutation.
 
-State the chosen path and one-line reason aloud before the Startup transaction:
+State the chosen path aloud before the Startup transaction:
 
 ```text
 Path: adaptive (default)
-Path: fast (explicit "fast path" escape)
-Path: full (explicit "full review" escape)
 ```
-
-Bias toward full when in doubt. Fast false positives escalate cleanly via the
-Fast Eligibility and Mid-Flight Escalation sections of `plugins/kaola-workflow-gitlab/commands/kaola-workflow-fast.md`; false
-negatives only cost ceremony.
 
 ## Startup — Adaptive front-end entry (path = adaptive only)
 
@@ -596,17 +579,8 @@ Manual reconstruction order:
 
 ```text
 finalization-summary.md exists -> workflow complete
-workflow-plan.md exists -> kaola-workflow-plan-run   (adaptive; ahead of the phaseN ladder, toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a phaseN fallback)
-phase5-review.md exists -> kaola-workflow-finalize
-fast-summary.md status ESCALATED -> kaola-workflow-research
-fast-summary.md exists -> kaola-workflow-fast
-phase4-progress.md exists:
-  open tasks -> kaola-workflow-execute
-  all complete -> kaola-workflow-review
-phase3-plan.md exists -> kaola-workflow-execute
-phase2-ideation.md exists -> kaola-workflow-plan
-phase1-research.md exists -> kaola-workflow-ideation
-no phase file -> kaola-workflow-research
+workflow-plan.md exists -> kaola-workflow-plan-run   (adaptive; toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a silent fallback)
+no workflow-plan.md and no finalization-summary.md -> kaola-workflow-adapt
 ```
 
 ## Required Output
@@ -619,7 +593,7 @@ Current phase: {phase or unknown}
 Current step: {step}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {adaptive by default; fast|full only on an explicit path-name keyword or KAOLA_PATH — from KAOLA_PATH or Step 0a-1 judgment}
+Workflow path: {adaptive — the only workflow path; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next skill: {next_skill}
 ```

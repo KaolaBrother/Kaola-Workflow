@@ -12,9 +12,9 @@ const { spawnSync } = require('child_process');
 
 // #531 / #538: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from
 // ~/.config/kaola-workflow/config.json and bypasses to verdict:'green' when not 'auto'.
-// Also resolveInstalledPaths reads installed_paths from this file (#538). Pin a process-wide
-// sandbox HOME seeded with parallel_mode:'auto' + installed_paths:[] (adaptive-only default)
-// so a dev-local config can't affect these tests. os.homedir() honors process.env.HOME.
+// Adaptive is the only workflow path (the fast/full opt-ins were retired); a stale installed_paths
+// field is tolerated on read but never written. Pin a process-wide sandbox HOME seeded with
+// parallel_mode:'auto' so a dev-local config can't affect these tests. os.homedir() honors HOME.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
@@ -34,12 +34,77 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function markPlanAbsentFinalizeFixtureFast(root, project) {
-  const file = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
-  const content = fs.readFileSync(file, 'utf8');
-  fs.writeFileSync(file, /^workflow_path:.*$/m.test(content)
-    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
-    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+// Retirement of the fast/full paths: a finalize with NO frozen workflow-plan.md now refuses
+// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight from
+// claim to finalize to exercise terminal archive/closure normalization — not an adaptive run — so
+// they seed a minimal FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation
+// gate. When the fixture commits real production files on the feature branch, pass those paths so a
+// tdd-guide node's declared write set attributes them for the finalize sweep. (Historically this
+// marked the state `workflow_path: fast` so the retired fast N/A gate skipped verification.)
+function seedAdaptiveFinalizeFixture(root, project, writeSet) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
+  const nodesTable = paths.length ? [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
+    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
+    '| n4 | finalize | n3 | — | 1 | sequence |',
+  ] : [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |',
+  ];
+  const ledgerRows = paths.length
+    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
+    : ['| n1 | complete |', '| n2 | complete |'];
+  const complianceRows = paths.length ? [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
+    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
+    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
+  ] : [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
+  ];
+  const tasks = paths.length ? [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
+    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ] : [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ];
+  fs.writeFileSync(planPath, [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    ...nodesTable, '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledgerRows, '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    ...complianceRows, ''
+  ].join('\n'));
+  let finalHash = '';
+  try { finalHash = JSON.parse(runVal([planPath, '--freeze', '--json'], root).stdout).planHash || ''; } catch (_) {}
+  const sFile = path.join(dir, 'workflow-state.md');
+  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
+    const s = fs.readFileSync(sFile, 'utf8')
+      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
+      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
+      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
+      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
+    fs.writeFileSync(sFile, s);
+    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
+  }
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try { cand = JSON.parse(runVal([planPath, '--candidate-hash', '--json'], root).stdout).validated_candidate_hash || ''; } catch (_) {}
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
 
 function trustCodexProject(homeRoot, projectRoot) {
@@ -255,7 +320,7 @@ function testAC3AttestationSeeded() {
     // Claim (startup) to create the project state.
     const acquired = runClaim(['startup', '--target-issue', '284', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired.claim === 'acquired', 'AC3 setup: startup must acquire issue-284, got: ' + JSON.stringify(acquired));
-    markPlanAbsentFinalizeFixtureFast(root, 'issue-284');
+    seedAdaptiveFinalizeFixture(root, 'issue-284');
 
     // Seed the dispatch-log BEFORE finalize.  finalize archives the folder (moves it), then
     // checkDispatchAttestations checks archive-first — so seeding the live cache is correct.
@@ -312,7 +377,7 @@ function testAttestationWarningPersistenceCodex() {
     );
     const acquired = runClaim(['startup', '--target-issue', '653102', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired.claim === 'acquired', 'attestation persistence (codex): startup must acquire issue-653102, got: ' + JSON.stringify(acquired));
-    markPlanAbsentFinalizeFixtureFast(root, 'issue-653102');
+    seedAdaptiveFinalizeFixture(root, 'issue-653102');
 
     // Seed dispatch-log with ONLY a contractor entry (no workflow-planner).
     const cacheDir = path.join(root, 'kaola-workflow', 'issue-653102', '.cache');
@@ -368,7 +433,7 @@ function testSelectionEvidenceDockingCodex() {
     );
     const acquired = runClaim(['startup', '--target-issue', '653203', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired.claim === 'acquired', 'selection-evidence (codex): startup must acquire issue-653203, got: ' + JSON.stringify(acquired));
-    markPlanAbsentFinalizeFixtureFast(root, 'issue-653203');
+    seedAdaptiveFinalizeFixture(root, 'issue-653203');
 
     const cacheDir = path.join(root, 'kaola-workflow', 'issue-653203', '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -398,7 +463,7 @@ function testSelectionEvidenceDockingCodex() {
     );
     const acquired2 = runClaim(['startup', '--target-issue', '653204', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired2.claim === 'acquired', 'selection-evidence (codex): second startup must acquire issue-653204, got: ' + JSON.stringify(acquired2));
-    markPlanAbsentFinalizeFixtureFast(root, 'issue-653204');
+    seedAdaptiveFinalizeFixture(root, 'issue-653204');
 
     plantRoadmap(root, 653204, '');
 
@@ -420,6 +485,7 @@ function testSelectionEvidenceDockingCodex() {
 function testKeepOpenArchiveStamp333() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-333-keepopen-'));
   try {
+    initGitRepo(root);
     const projDir = path.join(root, 'kaola-workflow', 'issue-333');
     fs.mkdirSync(projDir, { recursive: true });
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
@@ -434,7 +500,7 @@ function testKeepOpenArchiveStamp333() {
       '## Last Updated', '2020-01-01T00:00:00.000Z', '',
       '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
     ].join('\n'));
-    markPlanAbsentFinalizeFixtureFast(root, 'issue-333');
+    seedAdaptiveFinalizeFixture(root, 'issue-333');
     plantRoadmap(root, 333, '');
     const result = runClaim(['finalize', '--project', 'issue-333', '--keep-open'], root);
     assert(result.status === 'closed', '#333: keep-open finalize should report closed');
@@ -2130,7 +2196,7 @@ function main() {
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
     // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-163');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-163');
     plantRoadmap(tmp, 163, '');
     const finalizeResult = runClaim(['finalize', '--project', 'issue-163'], tmp);
     assert(finalizeResult.status === 'closed', 'M2 (#277): Codex finalize must return status:closed');
@@ -2192,7 +2258,6 @@ function main() {
     testCodexFinalizeRoadmapResidueDetection();       // #428
     testCodexBundleStateIncoherent();                 // #430
     testCodexBundle424432433NodeSeeding();            // #424/#432/#433 n9-walkthrough
-    testCodexInstalledPathsPartition543();            // #543 --with-fast/--with-full opt-in partition
     testCodexReplanEditionContract699();
 
     console.log('Kaola-Workflow walkthrough simulation passed');
@@ -2271,7 +2336,7 @@ function testCodexFinalizeClosesIssueBundleMembers() {
     const dir = path.join(tmp, 'kaola-workflow', project);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateLines);
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
     plantRoadmap(tmp, 42, '');
     plantRoadmap(tmp, 47, '');
 
@@ -2331,7 +2396,6 @@ function testCodexBundleFinalizeAllOpenCloseIsPending() {
     const dir = path.join(tmp, 'kaola-workflow', project);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateLines);
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
     plantRoadmap(tmp, 71, '');
     plantRoadmap(tmp, 72, '');
 
@@ -2347,6 +2411,8 @@ function testCodexBundleFinalizeAllOpenCloseIsPending() {
     ].join('\n');
     fs.writeFileSync(path.join(binDir, 'g' + 'h.js'), ghMockScript);
 
+    // Seed the frozen adaptive plan + passing gate LAST (after every code-band write).
+    seedAdaptiveFinalizeFixture(tmp, project);
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,
       env: Object.assign({}, process.env, {
@@ -2388,7 +2454,7 @@ function testCodexFinalizeRoadmapResidueDetection() {
   try {
     initGitRepo(tmp);
     plantFolder(tmp, 'issue-428cx', 428, null);
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428cx');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-428cx');
     plantRoadmap(tmp, 428, '');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428cx'], {
@@ -2627,168 +2693,6 @@ function testCodexBundle424432433NodeSeeding() {
   }
 
   console.log('testCodexBundle424432433NodeSeeding: PASSED');
-}
-
-// #543: the Codex installer --with-fast/--with-full opt-in partition. Adaptive is the unconditional
-// default; fast/full are install-time opt-ins recorded via UNION into ~/.config/kaola-workflow/config.json
-// installed_paths (the field the runtime legality gate reads via adaptive-schema resolveInstalledPaths).
-// Each sub-case uses a FRESH mkdtempSync HOME (NOT the shared module-top kwSandboxHome, which is seeded
-// once and would leak installed_paths across sub-cases). Mirrors install.sh D4 + install-opencode.sh
-// seed_kaola_config byte-semantically (node-native port).
-function testCodexInstalledPathsPartition543() {
-  const cfgPath = home => path.join(home, '.config', 'kaola-workflow', 'config.json');
-  const readCfg = home => JSON.parse(fs.readFileSync(cfgPath(home), 'utf8'));
-  // This file's assert(cond, msg) is hand-rolled (no node assert module), so compare arrays via
-  // JSON.stringify and include the actual value in the failure message.
-  const eqArr = (actual, expected, msg) =>
-    assert(JSON.stringify(actual) === JSON.stringify(expected),
-      msg + ' (got ' + JSON.stringify(actual) + ', expected ' + JSON.stringify(expected) + ')');
-  const freshHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kw-543-home-'));
-  const freshTarget = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kw-543-target-'));
-  const homeEnv = home => ({ HOME: home, USERPROFILE: home });
-  const rm = (...dirs) => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); };
-
-  // (a) default install → installed_paths:[] (adaptive-only; fast/full unreachable until opted in).
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      const r = runInstallProfiles(target, homeEnv(home));
-      assert(r.status === 0, '#543(a): default install must exit 0');
-      const cfg = readCfg(home);
-      eqArr(cfg.installed_paths, [], '#543(a): default install installed_paths must be []');
-      assert(cfg.parallel_mode === 'auto', '#543(a): parallel_mode setdefault auto');
-    } finally { rm(home, target); }
-  }
-
-  // (b) --with-fast → installed_paths:["fast"].
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      runInstallProfiles(target, homeEnv(home), ['--with-fast']);
-      eqArr(readCfg(home).installed_paths, ['fast'], '#543(b): --with-fast → ["fast"]');
-    } finally { rm(home, target); }
-  }
-
-  // (c) --with-full → installed_paths:["full"].
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      runInstallProfiles(target, homeEnv(home), ['--with-full']);
-      eqArr(readCfg(home).installed_paths, ['full'], '#543(c): --with-full → ["full"]');
-    } finally { rm(home, target); }
-  }
-
-  // (d) both flags → installed_paths:["fast","full"] in canonical order.
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      runInstallProfiles(target, homeEnv(home), ['--with-full', '--with-fast']);
-      eqArr(readCfg(home).installed_paths, ['fast', 'full'],
-        '#543(d): both flags → ["fast","full"] canonical order (regardless of arg order)');
-    } finally { rm(home, target); }
-  }
-
-  // (e) UNION never removes: --with-fast then a bare re-install (no flags) PRESERVES fast.
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      runInstallProfiles(target, homeEnv(home), ['--with-fast']);
-      eqArr(readCfg(home).installed_paths, ['fast'], '#543(e) seed: ["fast"]');
-      runInstallProfiles(target, homeEnv(home));  // bare re-install
-      eqArr(readCfg(home).installed_paths, ['fast'],
-        '#543(e): UNION never removes — bare re-install must preserve prior ["fast"]');
-    } finally { rm(home, target); }
-  }
-
-  // (f) reinstall-after-uninstall resets to [] (simulate uninstall by deleting the config dir, then
-  // a bare reinstall → adaptive-only []). Proves reset = uninstall→reinstall (#538).
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      runInstallProfiles(target, homeEnv(home), ['--with-fast']);
-      eqArr(readCfg(home).installed_paths, ['fast'], '#543(f) seed: ["fast"]');
-      // uninstall removes the shared config (mirrors uninstall.sh).
-      fs.rmSync(path.dirname(cfgPath(home)), { recursive: true, force: true });
-      runInstallProfiles(target, homeEnv(home));  // bare reinstall after uninstall
-      eqArr(readCfg(home).installed_paths, [],
-        '#543(f): reinstall-after-uninstall must reset installed_paths to []');
-    } finally { rm(home, target); }
-  }
-
-  // (g) enable_adaptive migration: a pre-seeded {enable_adaptive:true} is migrated away + installed_paths [].
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
-      fs.writeFileSync(cfgPath(home), JSON.stringify({ enable_adaptive: true, parallel_mode: 'auto' }) + '\n');
-      runInstallProfiles(target, homeEnv(home));
-      const cfg = readCfg(home);
-      assert(cfg.enable_adaptive === undefined, '#543(g): enable_adaptive must be migrated away (absent)');
-      eqArr(cfg.installed_paths, [], '#543(g): installed_paths must be []');
-    } finally { rm(home, target); }
-  }
-
-  // (h) corrupt JSON → WARN-first: exit 0, file left UNTOUCHED (byte-identical).
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      const corrupt = 'not valid json {{{\n';
-      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
-      fs.writeFileSync(cfgPath(home), corrupt);
-      const r = runInstallProfiles(target, homeEnv(home));
-      assert(r.status === 0, '#543(h): corrupt config must NOT abort the install (WARN-first, exit 0)');
-      assert(fs.readFileSync(cfgPath(home), 'utf8') === corrupt,
-        '#543(h): corrupt config file must be left byte-untouched');
-    } finally { rm(home, target); }
-  }
-
-  // (i) non-object "[]" → WARN-first: exit 0, file left UNTOUCHED.
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      const nonObj = '[]\n';
-      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
-      fs.writeFileSync(cfgPath(home), nonObj);
-      const r = runInstallProfiles(target, homeEnv(home));
-      assert(r.status === 0, '#543(i): non-object config must NOT abort the install (WARN-first, exit 0)');
-      assert(fs.readFileSync(cfgPath(home), 'utf8') === nonObj,
-        '#543(i): non-object config file must be left byte-untouched');
-    } finally { rm(home, target); }
-  }
-
-  // (j) parallel_mode setdefault: {} → "auto"; {"parallel_mode":"off"} → stays "off" (never overwrite).
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      runInstallProfiles(target, homeEnv(home));
-      assert(readCfg(home).parallel_mode === 'auto', '#543(j): empty config → parallel_mode setdefault "auto"');
-    } finally { rm(home, target); }
-  }
-  {
-    const home = freshHome(), target = freshTarget();
-    try {
-      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
-      fs.writeFileSync(cfgPath(home), JSON.stringify({ parallel_mode: 'off' }) + '\n');
-      runInstallProfiles(target, homeEnv(home));
-      assert(readCfg(home).parallel_mode === 'off',
-        '#543(j): setdefault must NOT overwrite a user parallel_mode value (stays "off")');
-    } finally { rm(home, target); }
-  }
-
-  // Export-surface lock: seedKaolaConfig is exported + returns a discriminating status (unit-level).
-  {
-    const mod = require(installProfilesScript);
-    assert(typeof mod.seedKaolaConfig === 'function', '#543: seedKaolaConfig must be exported for unit tests');
-    const home = freshHome();
-    try {
-      const res = mod.seedKaolaConfig(home, true, false);
-      assert(res.status === 'updated' && JSON.stringify(res.installed_paths) === JSON.stringify(['fast']),
-        '#543: seedKaolaConfig fast → {status:"updated", installed_paths:["fast"]}, got ' + JSON.stringify(res));
-      eqArr(readCfg(home).installed_paths, ['fast'], '#543: seedKaolaConfig wrote the file');
-    } finally { rm(home); }
-  }
-
-  console.log('testCodexInstalledPathsPartition543 (#543): PASSED');
 }
 
 function testCodexReplanEditionContract699() {

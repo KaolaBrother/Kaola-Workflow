@@ -1,6 +1,6 @@
 # Kaola-Workflow
 
-**Loop engineering for coding agents.** Instead of prompting an agent and hoping, you hand Kaola-Workflow an issue and it designs the loop that prompts the agent for you: a **task-shaped DAG of role nodes** sized to the issue, each node running inside a verified act → check → close cycle, with fail-closed **exit conditions**, adversarial **verification loops**, and **durable state** that survives sessions and context resets — all inside a locked claim → worktree → *free design* → Finalization frame. Runs on four agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), and [Kimi Code](https://www.kimi.com/code)** — across the **GitHub, GitLab, and Gitea** forges. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
+**Loop engineering for coding agents.** Instead of prompting an agent and hoping, you hand Kaola-Workflow an issue and it designs the loop that prompts the agent for you: a **task-shaped DAG of role nodes** sized to the issue, each node running inside a verified act → check → close cycle, with fail-closed **exit conditions**, adversarial **verification loops**, and **durable state** that survives sessions and context resets — all inside a locked claim → worktree → *free design* → Finalization frame. Runs on four agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), and [Kimi Code](https://www.kimi.com/code)** — across the **GitHub, GitLab, and Gitea** forges. Adaptive is the only workflow path — the earlier fast single-pass path and classic six-phase sequence have been retired ([D-725-01](docs/decisions/D-725-01.md)).
 
 ## Philosophy
 
@@ -52,7 +52,7 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
 ### What you get
 
 - **Engineered loops, not one-shot prompts** — every node runs act → verify → close, and the run iterates, escalates, or stops on explicit conditions, never on hope.
-- **Adaptive, task-shaped planning** sized to each issue — plus optional fast single-pass and full 6-phase paths.
+- **Adaptive, task-shaped planning** sized to each issue — the only workflow path (the earlier fast single-pass and full 6-phase paths are retired).
 - **Multi-model** across Claude Code, Codex, and opencode, right-sizing the model for each step.
 - **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work. Write frontiers the planner proves **disjoint** co-open as isolated parallel legs **by default** (per-leg worktree isolation + a mandatory synthesizer reconcile are the correctness net); only genuinely-overlapping writes stay serial/consent-gated, and any host without worktree support degrades to serial.
 - **Independent adversarial verification** plus fail-closed quality gates.
@@ -75,24 +75,19 @@ Every loop-engineering concept here is backed by a concrete mechanism — nothin
    /workflow-next       per cycle — resumes from
         │               kaola-workflow/{project}/workflow-state.md
         │
-        ├──► Adaptive path  ★ DEFAULT
-        │      the agent freely composes a task-shaped DAG of role nodes,
-        │      sized to the issue — sequence, fan-out, loop, or select —
-        │      then runs it node-by-node ──────────────────► Finalization
-        │
-        │      ┄┄ optional alternatives (explicit opt-in) ┄┄
-        │
-        ├──► Fast path (KAOLA_PATH=fast)
-        │      plan + implement + review in one pass ──────► Finalization
-        │
-        └──► Full 6-phase flow (KAOLA_PATH=full)
-            1 Research → 2 Ideation → 3 Plan → 4 Execute → 5 Review
-                                       │
-                                       ▼
+        └──► Adaptive path  ★ THE ONLY PATH
+               the agent freely composes a task-shaped DAG of role nodes,
+               sized to the issue — sequence, fan-out, loop, or select —
+               then runs it node-by-node ──────────────────► Finalization
+
    Finalization   doc-updater · sink-merge | sink-pr
                   archive folder, close issue,
                   push branch or open PR, refresh ROADMAP.md
 ```
+
+The earlier fast single-pass path (`KAOLA_PATH=fast`) and the full 6-phase flow
+(`KAOLA_PATH=full`, 1 Research → 2 Ideation → 3 Plan → 4 Execute → 5 Review) have been
+retired; see [D-725-01](docs/decisions/D-725-01.md).
 
 ## Autonomy and goal contract
 
@@ -116,8 +111,8 @@ default cap of 500 turns. Examples:
 
 ```text
 /goal use the kaola-workflow commands to finish issue #42.
-/goal finish phase 4 for issue #42 — all tasks done, validation green,
-      phase4-progress.md updated.
+/goal finish issue #42 — every plan node closed, validation green,
+      workflow-plan.md's Node Ledger all-complete.
 /goal use kaola-workflow to finish all remaining open issues, one at a
       time, until ROADMAP.md has no active entries.
 ```
@@ -276,7 +271,7 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. See [docs/kimi-edition.md](docs/kimi-edition.md).
 
-**Path selection is identical across all four editions.** Adaptive is the unconditional default everywhere — Claude Code, Codex, opencode, and Kimi Code — and `fast` / `full` are install-time opt-ins (`--with-fast` / `--with-full`) on every edition, never installed by default. Each installer records the opt-ins by UNION into the shared `~/.config/kaola-workflow/config.json` `installed_paths` field (canonical order `["fast","full"]`; a re-install never removes a prior opt-in), and the runtime gate refuses a path that is not installed with a typed `path_not_installed` — never a silent fallback. See [docs/decisions/D-543-01.md](docs/decisions/D-543-01.md).
+**Adaptive is the unconditional default everywhere** — Claude Code, Codex, opencode, and Kimi Code. On Claude Code, Codex, GitLab, and Gitea it is now also the *only* workflow path: `fast`/`full` and the install-time opt-in axis that used to gate them (`--with-fast` / `--with-full`) are retired ([D-725-01](docs/decisions/D-725-01.md), superseding [D-538-01](docs/decisions/D-538-01.md)/[D-543-01](docs/decisions/D-543-01.md)); `install.sh` no longer accepts either flag, and no installer on those editions writes the shared `~/.config/kaola-workflow/config.json` `installed_paths` field anymore — a stale value from a pre-retirement install is tolerated on read and never re-written. The runtime gate refuses a non-adaptive path request with a typed `path_not_installed` — never a silent fallback. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime's own installer flag state.
 
 ### Claude Code
 
@@ -347,20 +342,11 @@ To install the four profile-governed agents on Sonnet, request the `common` prof
 
 #### Adaptive workflow path
 
-The [adaptive workflow](#adaptive-workflow-the-default-path) — Kaola-Workflow's
-**default path** — requires no configuration: a bare `./install.sh` installs the
-adaptive path and nothing else. To also install the fast or full paths:
-
-```bash
-./install.sh --with-fast                 # adds the fast path (opt-in)
-./install.sh --with-full                 # adds the full six-phase path (opt-in)
-./install.sh --with-fast --with-full     # both opt-ins together
-```
-
-Adaptive is the unconditional default in `/workflow-next` — `fast` and `full` are
-explicit path-naming escapes, available only when installed. Re-install unions what is
-already installed with any new `--with-*` flags; it never removes a previously-installed
-path. There is no per-session switch.
+The [adaptive workflow](#adaptive-workflow-the-default-path) is Kaola-Workflow's
+**only path** — it requires no configuration: `./install.sh` installs adaptive and
+nothing else. The earlier `--with-fast` / `--with-full` install-time opt-ins are retired;
+both flags now fall through to `install.sh`'s generic unknown-argument error (exit 2).
+See [D-725-01](docs/decisions/D-725-01.md).
 
 Then in Claude Code:
 
@@ -592,30 +578,19 @@ ephemeral command-line configuration supplied when Codex was launched, including
 `-c`; do not treat a filesystem-only pass as attestation of those per-process overrides.
 
 Re-run the profile installer (and restart Codex) rather than treating profile or config drift as a
-local-tool fallback. The installer and full-path transaction also refuse symlinked, escaping, or
+local-tool fallback. The installer also refuses symlinked, escaping, or
 wrong-type managed destinations instead of following them outside their declared project/HOME
 authority.
 
-The full review path uses the same loop semantics on Claude Code, Codex, and opencode: finish every
-strictly parsed Phase 4 task, run `code-reviewer`, make an explicit file-risk decision for
-`security-reviewer`, route admitted CRITICAL/HIGH fixes, run narrow validation, and re-run the
-affected reviewer after the newest fix. Finalization requires fresh, nonce-bound, substantive
-review/fix evidence at the canonical `.cache/` paths. Reviewer approval is a bounded structured
-contract: exact column-zero `domain_outcome: approved`, `verdict: pass`, `findings_blocking: 0`,
-`review_summary: no_blocking_findings`, and `review_attestation: full_review_completed` rows, plus
-exactly one final column-zero `review_conclusion: <substantive prose>`. Emit the attestation and
-conclusion only after completing the full review. The conclusion must be the final nonempty line,
-and its text after the prefix must contain at least 24 Unicode letter/number characters and four
-word tokens. The entire durable body rejects control, format, Unicode line/paragraph separator,
-and default-ignorable code points. Reserved labels and finding gate keys reject recognized
-compatibility/confusable and single-Damerau-edit near-spoofs, while ordinary Unicode prose remains
-non-authoritative. Canonical finding tokens require a lowercase ASCII key, ASCII `=`, and a
-non-whitespace value. Any noncanonical line carrying all three assignment-shaped gate keys, or a
-finding-like label followed by all three alternating key/value pairs, refuses. Receipt
-rows remain the only mechanical outcome authority, and canonical `finding:` rows remain the only
-mechanical finding authority. The conclusion's presence, position, and minimum shape are enforced
-mechanically, while its prose content remains orchestrator context rather than regex-classified
-authority. After three non-converging fix-and-re-review cycles, stop for operator direction.
+The retired `full` path's own numbered Phase 4/Phase 5 review/fix/re-review loop (and the
+`kaola-workflow-full-advance.js` script that gated it) is gone (#725; see
+[D-725-01](docs/decisions/D-725-01.md)). The live review mechanism on Claude Code, Codex, and
+opencode is the **adaptive** path's schema-2 `code-reviewer`/`security-reviewer` post-dominance
+gates and review-attempt journal — documented above under "Reviewer contract 2 for newly authored
+plans" and in `docs/api.md` (decisions D-693-01 through D-698-01). The legacy compatibility literal
+`review_attestation: full_review_completed` that `code-reviewer`/`security-reviewer` still emit for
+a schema-1 legacy block is unrelated vocabulary (a fixed token name, not a reference to the retired
+`full` path) and remains live.
 
 #### Config audit for effort-safe subagents
 
@@ -871,11 +846,11 @@ In any Claude Code session, run:
 /workflow-next
 ```
 
-The command is a thin router. It first checks local/remote Git state, safely fast-forwards clean behind-only branches, and asks before risky synchronization such as diverged history, dirty worktrees with upstream changes, rebases, merges, stashes, resets, or conflicts. It then scans `kaola-workflow/`, reads `workflow-state.md` when present, and routes to the right phase command.
+The command is a thin router. It first checks local/remote Git state, safely fast-forwards clean behind-only branches, and asks before risky synchronization such as diverged history, dirty worktrees with upstream changes, rebases, merges, stashes, resets, or conflicts. It then scans `kaola-workflow/`, reads `workflow-state.md` when present, and routes to the right command.
 
 ### Adaptive workflow (the default path)
 
-This is Kaola-Workflow's primary design. For most issues — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. Adaptive is the **unconditional default**: a bare `./install.sh` installs it; no switch to flip, nothing to deliberate. `fast` and `full` are install-time opt-ins (`--with-fast` / `--with-full`) and explicit path-naming escapes once installed (see [Other paths](#other-paths-fast-and-full-optional) below).
+This is Kaola-Workflow's **only** design. For every issue — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. Adaptive is the **unconditional, exclusive path**: `./install.sh` installs it and nothing else; there is no switch, no install-time opt-in axis, nothing to deliberate. The earlier `fast` and `full` paths are retired — see [D-725-01](docs/decisions/D-725-01.md).
 
 ```
 /workflow-next                       # adaptive is the default route
@@ -1004,34 +979,21 @@ The executor runs **one FRONTIER UNIT at a time** rather than strictly one node 
 
 For the design history, see `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
-### Other paths: fast and full (optional)
+### Other paths: fast and full — retired
 
-Two non-default paths remain for cases the adaptive planner does not fit. Both are install-time opt-ins (`--with-fast` / `--with-full`); once installed they are reachable by an explicit path-naming request or `KAOLA_PATH`. A request for a path that is not installed returns a typed `path_not_installed` refusal — never a silent adaptive substitution.
+The earlier `fast` single-pass path and the classic numbered `full` six-phase sequence (Research →
+Ideation → Plan → Execute → Review → Finalization, one durable phase-N artifact per phase) are
+retired: their commands, transaction scripts, and Codex skill packs are deleted, and
+`KAOLA_PATH=fast` / `KAOLA_PATH=full` now return a typed `path_not_installed` refusal — never a
+silent adaptive substitution. See [D-725-01](docs/decisions/D-725-01.md) for the full retirement
+record and its superseded predecessors.
 
-#### Fast path
-
-For small, well-scoped issues where the approach is unambiguous and mechanical — exactly one sensible way to do it (a rename or move, threading an existing field through a known call path, a behavior-preserving refactor, repetitive parallel edits, or a bug fix whose root cause is already located), confined to a single area of ≤ 5 files with no new external deps, no public API/schema/migration change, no security/auth/encryption concern, and no `depends-on:#N` — request the fast path. Anything with ≥ 2 materially-different viable approaches stays on the full path regardless of size, because that is a design choice where full-workflow ideation earns its keep:
-
-```
-KAOLA_PATH=fast /workflow-next
-```
-
-Fast path executes Plan, Implement, and Review in a single pass, writing `fast-summary.md` instead of the full 6-phase artifacts. If the planner surfaces ≥ 2 materially-different viable approaches (`approach_ambiguity`), or scope expands during execution (beyond the declared write set by more than 1 file or past the absolute backstop of 6 files, security concerns, dependencies, new packages), fast path escalates automatically to the full workflow. Otherwise, it routes directly to Finalization.
-
-#### Full path — the six phases
-
-The classic fixed sequence, reachable with `KAOLA_PATH=full /workflow-next` (requires `--with-full` at install time). Each phase writes one durable artifact:
-
-| # | Phase | What happens | Output file |
-|---|-------|-------------|-------------|
-| 1 | Research/Discovery | Facts only: requirement parsing → code-explorer maps affected code/patterns/tests/config → knowledge-lookup checks external docs when needed → completeness gate | `phase1-research.md` |
-| 2 | Ideation | Strategy only: planner generates 2–3 grounded approaches → orchestrator selects | `phase2-ideation.md` |
-| 3 | Plan | Blueprint only: code-architect turns selected approach into files, tasks, write sets, dependencies, parallel groups, and validation | `phase3-plan.md` |
-| 4 | Execute | Per-task TDD loop: tdd-guide executes RED → GREEN → REFACTOR; main session reviews, validates, and checkpoints | `phase4-progress.md` |
-| 5 | Review | code-reviewer always; security-reviewer conditional; review fixes delegated to tdd-guide/build-error-resolver | `phase5-review.md` |
-| 6 | Finalization | Full validation with delegated repair if needed, documentation docking, closure decisions, issue/roadmap/archive updates, final commit and push | `finalization-summary.md` |
-
-All phase files are written to `{project-root}/kaola-workflow/{project-name}/` while active. Completed workflow folders are archived to `{project-root}/kaola-workflow/archive/`. Active unfinished work is tracked in `{project-root}/kaola-workflow/ROADMAP.md`. The adaptive default does not follow this fixed numbered sequence — it composes role nodes into a `workflow-plan.md` DAG (frozen `plan_hash` + `## Node Ledger`) and runs them dynamically — but it lands in the same Finalization sink, so the artifacts/archive/roadmap contract above is shared by all three paths.
+Active work is tracked under `{project-root}/kaola-workflow/{project-name}/` while active and
+archived to `{project-root}/kaola-workflow/archive/`; unfinished work is tracked in
+`{project-root}/kaola-workflow/ROADMAP.md` — this archive/roadmap contract is unchanged, only the
+`fast`/`full` phase-file vocabulary above it is gone. The adaptive path composes role nodes into a
+`workflow-plan.md` DAG (frozen `plan_hash` + `## Node Ledger`) and runs them dynamically, landing in
+the same Finalization sink.
 
 ## Automation scripts
 
@@ -1048,17 +1010,16 @@ when developing locally. Drift between `scripts/` and
 
 | Script | What it does | When it runs |
 |--------|--------------|--------------|
-| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup, legacy-worktree-cleanup. Provisions a per-issue Git worktree at `<repo-root>/.kw/worktrees/<project>/` by default on all workflow paths (full, fast, adaptive); set `KAOLA_WORKTREE_NATIVE=0` to disable. | All phases |
+| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup, legacy-worktree-cleanup. Provisions a per-issue Git worktree at `<repo-root>/.kw/worktrees/<project>/` by default on every claim; set `KAOLA_WORKTREE_NATIVE=0` to disable. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`, and appends an optional project-local `kaola-workflow/.roadmap/_rules.md` to the generated `## Rules` section under a `### Project rules` sub-heading (no-op, byte-identical output, when the file is absent or empty). Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Phase 1, Finalization |
-| `kaola-workflow-repair-state.js` | Reconstructs `workflow-state.md` from existing phase artifacts or `fast-summary.md` when state is missing or stale, so a resumed session has a single safe next command. | Init / Resume |
+| `kaola-workflow-repair-state.js` | Reconstructs `workflow-state.md` from the frozen `workflow-plan.md` when state is missing or stale, so a resumed session has a single safe next command. Reconstruction from the retired numbered phase artifacts / `fast-summary.md` is gone; a project with no adaptive plan returns a typed "no adaptive plan available for repair". | Init / Resume |
 | `kaola-workflow-replan.js` (GitHub/Codex) / `kaola-gitlab-workflow-replan.js` (GitLab) / `kaola-gitea-workflow-replan.js` (Gitea) | Owns claim-preserving schema-2 re-plan epochs: prepare from a settled typed review outcome, fence ordinary mutation, request a planner-authored child, verify four candidate/claim-root/frontier CAS seams, snapshot the parent epoch, journal activation, resume crash prefixes, extend the consent ceiling one slot at a time, and verify retained snapshots. | Adaptive repair / Resume / Finalization verification |
 | `kaola-workflow-closure-audit.js` (GitHub) / `kaola-gitlab-workflow-closure-audit.js` (GitLab) / `kaola-gitea-workflow-closure-audit.js` (Gitea) | Reports closure drift (stale `.roadmap` sources, `ROADMAP.md` listing closed issues, stale `workflow:in-progress` labels, active folders/unarchived PR/MR folders for closed issues). Dry-run JSON by default; `--execute` repairs only safe local roadmap/label drift and never deletes active folders or worktrees. GitLab edition uses `unarchived_mr_folders` with lowercase MR state matching (`merged`/`closed`). Gitea edition keeps `unarchived_pr_folders` with lowercase PR state matching (`merged`/`closed`). Complements `stale-worktree-check`/`-cleanup` (which owns worktree/branch drift). | On demand / audit |
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Finalization merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Finalization |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
-| `kaola-workflow-fast-audit.js` | Read-only fast-path calibration audit: scans archived and active `fast-summary.md` files and reports status counts, escalation-reason histogram, file-count distribution, and review mode (delegated `code-reviewer` vs self-review). Human table by default; `--json` for machine-readable output. Always exits 0. | On demand / audit |
 | `kaola-workflow-run-chains.js` | Runs all four edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, workTreeHash, startedAt, chains:[{name, exit}]}`). Used by the contractor at Finalization (Step 8c) and gated by `--finalize-check` (`chains_unverified`, `chains_stale`, `chains_red`). `--accept-known-red name:issue` registers a waiver for a known-red chain. | Finalization |
 
 ### Validation and test scripts
@@ -1071,13 +1032,12 @@ when developing locally. Drift between `scripts/` and
 | `validate-kaola-workflow-contracts.js` | Same contractual assertions on the Codex plugin surface under `plugins/kaola-workflow/`. |
 | `validate-script-sync.js` | Byte-identical drift guard between `scripts/` (Claude Code) and `plugins/kaola-workflow/scripts/` (Codex), plus shared hook copies that must stay in sync across GitHub, GitLab, and Gitea surfaces. |
 | `validate-vendored-agents.js` | Asserts the vendored Claude Code agent prompts match the pinned upstream Everything Claude Code commit. |
-| `test-fast-audit.js` | Regression test for `kaola-workflow-fast-audit.js` — 40 assertions over synthetic fast-summary fixtures (status/escalation/file-count/review-mode parsing, empty-corpus and malformed-input robustness). Uses temp-dir fixtures only, never the real archive. |
 
 ### Active folder coordination
 
 Kaola-Workflow treats `kaola-workflow/{project}/workflow-state.md` plus the configured forge's issue and PR/MR state as the durable coordination contract. No lease/session layer remains.
 
-The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: `ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `kaola-workflow/.roadmap/_rules.md` appended under `### Project rules`), `.roadmap/` is not purged wholesale, active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
+The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: `ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `kaola-workflow/.roadmap/_rules.md` appended under `### Project rules`), `.roadmap/` is not purged wholesale, active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and `.cache/` evidence.
 
 **Environment Variables:**
 
@@ -1091,7 +1051,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
-| `KAOLA_PATH` | (unset) | Set to `fast`, `full`, or `adaptive` to name a specific path explicitly. Adaptive is the unconditional default when unset. Naming a path that is not installed returns a typed `path_not_installed` refusal — never a silent substitution |
+| `KAOLA_PATH` | (unset) | `adaptive` is the only legal value and the default when unset. The retired `fast`/`full` values (or any other value) return a typed `path_not_installed` refusal — never a silent substitution |
 | `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
 | `KAOLA_PARALLEL_WRITES` | `1` (ON) | Default-ON master switch for default-on disjoint write parallelism (D-542-01). When ON, write frontiers the planner proves **disjoint** (`parallel_safe`) co-open as isolated parallel legs — per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net. Set to `0` (also `false`/`no`) to force every write frontier serial. Overlapping (non-disjoint) writes stay serial/consent-gated regardless, and a host without worktree support degrades to serial regardless |
 | `--write-overlap-consent` / `write_overlap_policy` | (overlap only) | The overlap-only consent gate. `--write-overlap-consent` plus a plan `write_overlap_policy: coarse` (anything other than `off`) is what permits a **genuinely-overlapping** (non-disjoint) write frontier to co-open under a coarse shared lane; it does NOT gate disjoint co-open (that is default-on, above). With the policy `off` or consent absent, an overlapping frontier stays serial |
@@ -1131,7 +1091,7 @@ Valid `parallel_mode` values:
 - `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, exact file-path overlaps, file-area overlaps, and active folders.
 - Other values: Bypass classification; treat all issues as green for fast claiming.
 
-Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`. A claimed project's in-flight file-set is read from its `phase3-plan.md`/`phase1-research.md` or, for a fast-path project, from the `- Write Set:` declaration in its `fast-summary.md` `## Scope` section — so fast projects participate in overlap detection at parity with full projects.
+Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`. A claimed project's in-flight file-set is read from its declared adaptive write set or, for a legacy project still on disk from before the `fast`/`full` retirement (#725), from its numbered `phase3-plan.md`/`phase1-research.md` or the `- Write Set:` declaration in its `fast-summary.md` `## Scope` section — so a legacy fast-path project participates in overlap detection at parity with the rest.
 
 When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
 
@@ -1229,7 +1189,7 @@ The workflow also enforces context discipline: `CLAUDE.md` targets under 200 lin
 
 Each phase records a required-agent compliance ledger. Each active workflow also maintains `workflow-state.md`, which records the current phase, intra-phase step, next command, pending gates, and ownership rules. After resume or compaction, the main session must read that state file and the relevant compliance ledger before continuing.
 
-Avoid redundant validation runs: Phase 4 uses targeted affected checks, Phase 5 validates only review fixes or cites existing evidence, and Finalization runs each full final command once against the final candidate state. Small targeted commands may run in the main session, while expensive or noisy test/lint/type/build commands should be delegated and summarized from cache evidence.
+Avoid redundant validation runs: an implement node uses targeted affected checks, a review-gate node validates only review fixes or cites existing evidence, and Finalization runs each full final command once against the final candidate state. Small targeted commands may run in the main session, while expensive or noisy test/lint/type/build commands should be delegated and summarized from cache evidence.
 
 ## Hook policy
 
@@ -1323,16 +1283,18 @@ leaves commit-and-push as the final step on a clean, synced workspace.
 
 ## Resuming
 
-Any interrupted session resumes from `workflow-state.md` first, then reconstructs from phase files or `fast-summary.md` if state is missing or stale. Phase 4 tracks `pending / in_progress / complete` per task in `phase4-progress.md`, and all phases record intra-phase checkpoints in `workflow-state.md`.
+Any interrupted session resumes from `workflow-state.md` first, then reconstructs from the frozen `workflow-plan.md` if state is missing or stale — the `## Node Ledger` tracks each node's `pending`/`in_progress`/`complete`/`n/a` status, and every node records intra-run checkpoints in its own `.cache/{node-id}.md` evidence plus the ledger. A project created before the `fast`/`full` retirement (#725) may still carry the legacy numbered phase artifacts or `fast-summary.md`; these are read only by tolerant, defensive parses, never newly authored.
 
 ### State bootstrap and repair
 
-When `/workflow-next` can reconstruct one safe next command from phase
-artifacts or `fast-summary.md`, it repairs or creates `kaola-workflow/{project}/workflow-state.md`
+When `/workflow-next` can reconstruct one safe next command from the frozen
+`workflow-plan.md` (or, for a legacy pre-retirement project, its terminal `finalization-summary.md`),
+it repairs or creates `kaola-workflow/{project}/workflow-state.md`
 before routing by running `scripts/kaola-workflow-repair-state.js` when the
 helper is available. It does not create state for brand-new work, ambiguous
-active projects, contradictory phase files, or unresolved compliance gates that
-make the next command unsafe.
+active projects, or unresolved compliance gates that
+make the next command unsafe; a project with no adaptive plan and no legacy artifact returns a
+typed "no adaptive plan available for repair" instead of guessing.
 
 Hook installation is covered in the [Hook policy](#hook-policy) section above —
 do not hand-merge entries into `~/.claude/settings.json`.
@@ -1422,7 +1384,7 @@ cd ~/Workspace/Kaola-Workflow
 /goal use the workflow-next skill to finish issue #43.
 ```
 
-By default, every active issue (full, fast, and adaptive paths) runs in a
+By default, every active issue runs in a
 repo-local worktree at `<repo-root>/.kw/worktrees/<project>/`, so file edits
 in one issue do not interfere with another (set `KAOLA_WORKTREE_NATIVE=0` to
 disable).
@@ -1438,7 +1400,7 @@ terminals, scope the goal text accordingly:
 ### Per-issue Git worktrees
 
 By default, `kaola-workflow-claim.js` provisions a Git worktree on every
-claim (full, fast, and adaptive paths) so each active issue has its own
+claim so each active issue has its own
 checkout — separate from the main repo checkout and from every other active
 issue. Set `KAOLA_WORKTREE_NATIVE=0` to disable (a repo-root run, no
 worktree).
@@ -1446,7 +1408,7 @@ worktree).
 **Why.** With one shared checkout, two parallel sessions stepping on the
 same files would collide on branch switches and stash state. A
 per-issue worktree gives each session its own working tree, so file
-edits, builds, and Phase 4 TDD runs in one issue do not affect another.
+edits, builds, and node runs in one issue do not affect another.
 
 **Where.** Worktrees live at `<repo-root>/.kw/worktrees/<project>/`.
 If the main repo is `~/Workspace/Kaola-Workflow`, the worktree for

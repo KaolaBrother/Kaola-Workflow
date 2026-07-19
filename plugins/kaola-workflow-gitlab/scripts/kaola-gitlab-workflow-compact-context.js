@@ -91,14 +91,14 @@ function main() {
 
   const lines = [
     'Kaola-Workflow compact resume:',
-    `- Read ${relativeState} first, then the current phase artifact or fast-summary.md and compliance ledger.`,
+    `- Read ${relativeState} first, then the frozen workflow-plan.md and its Node Ledger.`,
     `- Project: ${project}`,
     `- Current phase: ${phase}`,
     `- Current step: ${step}`,
     `- Next command: ${nextCommand}`,
     `- Inline emergency fallback authorized: ${fallback}`,
-    '- If Phase 4 or Finalization validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
-    '- If state and artifacts disagree, stop and reconstruct conservatively from phase files or fast-summary.md.'
+    '- If node execution or Finalization validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
+    '- If state and artifacts disagree, stop and reconstruct conservatively from the frozen workflow-plan.md.'
   ];
 
   process.stdout.write(`${lines.join('\n')}\n`);

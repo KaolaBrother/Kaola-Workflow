@@ -2,7 +2,6 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
@@ -14,16 +13,6 @@ const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, i
 // #579: lane session helpers from forge classifier (in-process; no subprocess).
 const { resolveSessionMarker, classifyLane } = classifier;
 
-// Read the shared global config (read-only; never creates the file). Returns {} on any
-// error so resolveInstalledPaths sees an absent/malformed `installed_paths` field and
-// degrades to `[]` (adaptive-only legal — #538).
-function readAdaptiveConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ...adaptiveSchema.CONFIG_REL_PATH), 'utf8'));
-  } catch (_) {
-    return {};
-  }
-}
 const {
   field,
   getRoot,
@@ -681,11 +670,11 @@ function writeState(root, data) {
   // failure before workflow-state.md is written; missing-schema compatibility
   // belongs exclusively to the verified legacy re-plan import path.
   const claimAnchors = buildClaimAnchors(root, data);
-  const workflowPath = data.workflow_path || 'full';
-  const isFast = workflowPath === 'fast';
-  // issue #227: adaptive runs resume via the plan-run executor, not the phaseN ladder.
-  // Toggle-agnostic — an already-frozen plan must emit plan-run regardless of the switch.
-  const isAdaptive = workflowPath === adaptiveSchema.ADAPTIVE_PATH;
+  // issue #227: adaptive is the ONLY workflow path — a fresh claim always scaffolds an
+  // adaptive run that resumes via the plan-run executor (the fast/full paths and the phaseN
+  // ladder were retired). A stale non-adaptive workflow_path is tolerated on read but never
+  // scaffolded here — the #538 selection gate refuses a non-adaptive path before writeState.
+  const workflowPath = data.workflow_path || adaptiveSchema.ADAPTIVE_PATH;
   const adaptiveCommand = adaptiveSchema.PLAN_RUN_COMMAND + ' ' + data.project;
   const adaptiveSkill = adaptiveSchema.PLAN_RUN_SKILL + ' ' + data.project;
   const lines = [
@@ -696,20 +685,20 @@ function writeState(root, data) {
     'status: ' + (data.status || 'active'),
     '',
     '## Current Position',
-    'phase: ' + (isFast ? 'fast' : isAdaptive ? 'adaptive' : (data.phase || 1)),
-    'phase_name: ' + (isFast ? 'Fast' : isAdaptive ? 'Adaptive' : (data.phase_name || 'Research')),
+    'phase: adaptive',
+    'phase_name: Adaptive',
     'workflow_path: ' + workflowPath,
     'runtime: ' + (data.runtime || 'claude'),
     'step: ' + (data.step || 'start'),
-    'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : isAdaptive ? adaptiveCommand : '/kaola-workflow-phase1 ' + data.project)),
-    'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : isAdaptive ? adaptiveSkill : 'kaola-workflow-research ' + data.project)),
+    'next_command: ' + (data.next_command || adaptiveCommand),
+    'next_skill: ' + (data.next_skill || adaptiveSkill),
     'main_session_role: orchestrator',
     'implementation_owner: N/A',
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
     '## Pending Gates',
-    isFast ? '- fast-summary' : isAdaptive ? '- workflow-plan' : '- phase1-research',
+    '- workflow-plan',
     '',
     '## Last Evidence',
     'phase_file: N/A',
@@ -876,24 +865,22 @@ function claimProject(root, args) {
 
   // issue #538: the single path-legality gate for NEW claims (covers cmdClaim and
   // cmdStartup -> claimExplicitTarget). Adaptive is the unconditional default and is
-  // ALWAYS legal; fast/full are legal ONLY when installed (install-time opt-in via
-  // --with-fast/--with-full -> `installed_paths` in config). A KAOLA_PATH/--workflow-path
-  // naming a non-installed path is a TYPED `path_not_installed` refusal (#44/#538) — never
-  // a silent substitution to adaptive, never a crash. Resume of a frozen plan does not pass
-  // here (the `existing` early-return handles re-claims), so this gates SELECTION only.
+  // the ONLY legal workflow path — the fast/full paths were retired. A KAOLA_PATH/
+  // --workflow-path naming any non-adaptive path is a TYPED `path_not_installed` refusal
+  // (#44/#538) — never a silent substitution to adaptive, never a crash. A stale
+  // `installed_paths` config field is tolerated on read but no longer confers legality.
+  // Resume of a frozen plan does not pass here (the `existing` early-return handles
+  // re-claims), so this gates SELECTION only.
   const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'adaptive';
-  const installedPaths = adaptiveSchema.resolveInstalledPaths(readAdaptiveConfig());
-  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath, installedPaths)) {
-    const legal = [adaptiveSchema.ADAPTIVE_PATH, ...installedPaths].join(', ');
+  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath)) {
     return {
       status: 'path_not_installed',
       result: 'refuse',
       claim: 'none',
       issue: issueIid,
       project,
-      reasoning: 'workflow_path "' + requestedPath + '" is not installed. Installed paths: ' + legal +
-        ' (adaptive is always available). Re-run install with --with-fast / --with-full to add it. ' +
-        'Refusing to silently substitute adaptive (#538/#44).'
+      reasoning: 'workflow_path "' + requestedPath + '" is not a legal path. Adaptive is the only ' +
+        'workflow path (the fast/full paths were retired). Refusing to silently substitute adaptive (#538/#44).'
     };
   }
 
@@ -1284,7 +1271,7 @@ function claimExplicitBundle(root, args) {
     return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
       reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
   }
-  // Step 3: bundle lane is adaptive-only (fast/full have no multi-issue lane). #538: this is
+  // Step 3: bundle lane is adaptive-only (adaptive is the only workflow path). #538: this is
   // a lane constraint, not an installed-path legality question — adaptive is always legal, so the
   // only refusal here is "this lane only accepts adaptive."
   const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'adaptive';
@@ -1526,24 +1513,18 @@ function cmdPickNext() {
 }
 
 function resumeFallbackCommand(root, folder) {
-  let isFast = false;
-  let isAdaptive = false;
-  try {
-    const sf = path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md');
-    const content = fs.readFileSync(sf, 'utf8');
-    isFast = /^(?:workflow_path|phase):\s*fast\s*$/m.test(content);
-    // issue #227: adaptive resumes via the plan-run executor, never the phaseN ladder. Toggle-agnostic.
-    isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content);
-  } catch (_) {}
-  if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
-  return (isFast ? '/kaola-workflow-fast ' : '/kaola-workflow-phase' + (folder.phase || 1) + ' ') + folder.project;
+  // issue #227: adaptive is the only workflow path — resume routes to the plan-run
+  // executor (the fast/full paths and the phaseN ladder were retired). reconcileNextCommand
+  // trusts a legacy project's persisted next_command first, so this fallback only fires
+  // when no command was persisted.
+  return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
 }
 
 // #234 E1: reconcile the persisted next_command against the project's true path before trusting it.
-// Adaptive (state field or a workflow-plan.md) -> FORCE plan-run, ignore a stale phaseN. The
-// NON-adaptive path keeps its pre-existing contract (trust persisted, else reconstruct): a full/fast
-// next_command legitimately points FORWARD of `phase:` (phase5 complete -> next_command /phase6), so
-// it must NOT be overridden by phase-derived reconstruction. Toggle-agnostic.
+// Adaptive (state field or a workflow-plan.md) -> FORCE plan-run, ignore a stale phaseN. Adaptive is
+// the only path now, but a legacy non-adaptive folder is still tolerated on read: it keeps its
+// pre-existing contract (trust the persisted command, else fall back to plan-run via
+// resumeFallbackCommand). Toggle-agnostic.
 function reconcileNextCommand(root, folder) {
   let content = '';
   try {
@@ -2604,8 +2585,9 @@ function cmdFinalize() {
   // Both modes also run the attribution sweep (B). On any non-`pass` result, refuse to commit —
   // exit non-zero with finalize_gate_unverified carrying the inner reason. Gate is UNCONDITIONAL
   // for BOTH the --keep-worktree path and the in-place path, placed here (before archiveProjectDir)
-  // so no side effect has occurred on refusal. A plan-absent full run (including the contract's
-  // absent-field default) shells sibling full-advance phase5-verify; only explicit fast stays N/A.
+  // so no side effect has occurred on refusal. Adaptive is the only workflow path, so a finalize
+  // with NO frozen workflow-plan.md present is an unconditional typed `adaptive_plan_missing`
+  // refusal — there is no retired fast/full verifier to shell and no N/A pass.
   {
     const authorityPlanPath = path.join(finalizeAuthorityDir, adaptiveSchema.PLAN_FILE);
     if (fs.existsSync(authorityPlanPath)) {
@@ -2643,70 +2625,22 @@ function cmdFinalize() {
         return;
       }
     } else {
+      // Adaptive is the only workflow path. A finalize with NO frozen workflow-plan.md
+      // present is an unconditional typed `adaptive_plan_missing` refusal — the fast/full
+      // paths and their verifiers were retired, so there is no sibling verifier to shell
+      // and no N/A pass. Placed BEFORE any archive/close side effect. A stale non-adaptive
+      // workflow_path field is reported for diagnostics but does not change the verdict.
       const workflowPath = field(finalizeAuthorityState, 'workflow_path');
-      if (!workflowPath || workflowPath === 'full') {
-        const fullAdvanceScript = path.join(__dirname, 'kaola-gitea-workflow-full-advance.js');
-        let gateResult = null;
-        let gateError = null;
-        let gateExitedZero = false;
-        let verifierRoot = root;
-        let verifierProjectionRoot = null;
-        try {
-          if (!finalizeLiveSourcePresent) {
-            verifierProjectionRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-verify-')));
-            const projectedWorkflowDir = path.join(verifierProjectionRoot, 'kaola-workflow');
-            fs.mkdirSync(projectedWorkflowDir, { recursive: true });
-            fs.cpSync(finalizeAuthorityDir, path.join(projectedWorkflowDir, args.project), {
-              recursive: true,
-              dereference: false,
-              preserveTimestamps: true,
-              verbatimSymlinks: true,
-            });
-            verifierRoot = verifierProjectionRoot;
-          }
-          const raw = execFileSync(process.execPath, [fullAdvanceScript, 'phase5-verify',
-            '--project', args.project, '--root', verifierRoot, '--json'],
-          { cwd: verifierRoot, encoding: 'utf8', timeout: 120000 });
-          gateResult = JSON.parse(raw.trim());
-          gateExitedZero = true;
-        } catch (e) {
-          const stdout = e && e.stdout ? String(e.stdout).trim() : '';
-          try { gateResult = JSON.parse(stdout); } catch (_) { gateError = stdout || String(e && e.message || e); }
-        } finally {
-          if (verifierProjectionRoot) {
-            try { fs.rmSync(verifierProjectionRoot, { recursive: true, force: true }); } catch (_) {}
-          }
-        }
-        if (!gateExitedZero || !gateResult || gateResult.result !== 'ok' ||
-            gateResult.phase5_verified !== true || gateResult.project !== args.project) {
-          const innerReason = (gateResult && gateResult.reason) || gateError || 'full_phase5_verifier_error';
-          const innerHint = (gateResult && gateResult.operator_hint) ||
-            'Repair the full-path Phase 5 evidence, then re-run finalize. No archive or closure side effect was made.';
-          output({
-            result: 'refuse',
-            reason: 'finalize_gate_unverified',
-            gate: 'full_phase5',
-            inner_reason: innerReason,
-            operator_hint: innerHint,
-            errors: (gateResult && gateResult.errors) || [innerReason]
-          }, 1);
-          return;
-        }
-      } else if (workflowPath !== 'fast') {
-        const innerReason = workflowPath === 'adaptive' ? 'adaptive_plan_missing' : 'invalid_workflow_path';
-        output({
-          result: 'refuse',
-          reason: 'finalize_gate_unverified',
-          gate: 'workflow_path',
-          inner_reason: innerReason,
-          workflow_path: workflowPath,
-          operator_hint: workflowPath === 'adaptive'
-            ? 'Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.'
-            : 'Repair workflow_path to an installed canonical value before Finalization. No archive or closure side effect was made.',
-          errors: [innerReason]
-        }, 1);
-        return;
-      }
+      output({
+        result: 'refuse',
+        reason: 'finalize_gate_unverified',
+        gate: 'workflow_path',
+        inner_reason: 'adaptive_plan_missing',
+        workflow_path: workflowPath || adaptiveSchema.ADAPTIVE_PATH,
+        operator_hint: 'Restore the frozen workflow-plan.md before Finalization. No archive or closure side effect was made.',
+        errors: ['adaptive_plan_missing']
+      }, 1);
+      return;
     }
   }
   const result = archiveProjectDirSafely(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
@@ -3683,7 +3617,7 @@ function copyDir(src, dest) {
 // gate evidence. Enumerate the ones that ACTUALLY EXIST in the live SOURCE folder — this is the
 // SOURCE-RELATIVE completeness set. A minimal project (only workflow-state.md) yields just that; a
 // full adaptive run yields the frozen workflow-plan.md + workflow-state.md + finalization-summary.md
-// + EVERY per-node .cache/*.md gate-evidence file; a fast run additionally may carry fast-summary.md.
+// + EVERY per-node .cache/*.md gate-evidence file.
 // Nothing the source never had is ever demanded, so the gate can never break a minimal fixture — it
 // only fires when a copy genuinely dropped a file the source held.
 //
@@ -3705,7 +3639,7 @@ const ARCHIVE_CACHE_SIDECAR_MD = new Set([
 ]);
 function listSourceEvidenceFiles(srcDir) {
   const rels = [];
-  for (const f of ['workflow-plan.md', 'workflow-state.md', 'finalization-summary.md', 'fast-summary.md']) {
+  for (const f of ['workflow-plan.md', 'workflow-state.md', 'finalization-summary.md']) {
     if (fs.existsSync(path.join(srcDir, f))) rels.push(f);
   }
   let cacheEntries = [];
@@ -3722,7 +3656,7 @@ function listSourceEvidenceFiles(srcDir) {
 // evidence files were recorded during the run even when the folder being archived no longer holds
 // them (the worktree-postured divergence: evidence written to the WORKTREE's live copy while the
 // archiver reads the MAIN checkout's). Returns the expected `.cache/<id>.md` relative paths;
-// [] when the folder has no parseable plan/ledger (legacy fast/full folders, discards, minimal
+// [] when the folder has no parseable plan/ledger (legacy non-adaptive folders, discards, minimal
 // fixtures) so plan-less archives are never affected. n/a / pending / in_progress rows carry no
 // evidence obligation. Node ids are validated against the sanitizeNodeId grammar so a corrupted
 // ledger cell can never smuggle a path segment into the required set.
@@ -3748,7 +3682,7 @@ function listRecordedNodeEvidence(dirPath) {
 // workflow-state.md is additionally required UNCONDITIONALLY as the archive's identity anchor:
 // archiveProjectDir only ever runs for a claimed project (which always writes workflow-state.md at
 // claim time), and an archived folder lacking it is unusable. This is NOT the rejected absolute
-// evidence floor — plan / summary / fast-summary / node-evidence stay strictly source-relative —
+// evidence floor — plan / summary / node-evidence stay strictly source-relative —
 // it is the single #426 archive-integrity invariant (a state-less source is malformed and must not
 // be deleted before its archive is proven to carry the state file).
 //

@@ -16,7 +16,7 @@ Everything under `.kimi/` is **generated from canonical** by
 
 | Canonical source | kimi edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (11 commands). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
+| `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (5 commands — canonical `commands/` shrank from 11 to 5 when the `fast`/`full` paths were retired, #725). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
 | `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. `agents/profiles/higher/` is skipped (meaningless under inherit). |
 | `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 3 runtime-neutral hook scripts — byte-copied where the Kimi payload is field-compatible (pre-commit), payload-adapted at generation time where it is not (write-lane, dispatch-log; see [Hooks](#hooks)). |
 | `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The four canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
@@ -119,36 +119,41 @@ paths"** — so the kimi surface inherits the guard verbatim.
 
 `install-kimi.sh` is a standalone installer (not `install.sh --forge`) and mirrors
 `install-opencode.sh`'s install-time opt-in partition. The **default** install deploys the
-**adaptive-core** command skills ONLY (5 of the 11), so adaptive is the unconditional
-default both at the router (the transform above) and at the install surface (which commands
-exist). The fast / full-phase command skills are opt-ins; **all 16 `kaola-role-*` skills
-are always installed**:
+**adaptive-core** command skills — which, since canonical `commands/kaola-workflow-fast.md` and
+`commands/kaola-workflow-phase{1..5}.md` were retired (#725; see `docs/decisions/D-725-01.md`), is
+now all 5 surviving commands, not a subset. `install-kimi.sh` itself still parses
+`--with-fast`/`--with-full` (unowned by this retirement pass — see the Known residual note in
+`docs/decisions/D-725-01.md`), but the fast / full-phase command skills those flags used to add no
+longer have a matching canonical source to deploy. **All 16 `kaola-role-*` skills are always
+installed**:
 
 | Flag | Command skills added | Recorded in `installed_paths` |
 | --- | --- | --- |
-| *(default)* | kaola-workflow-adapt, kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next | `[]` |
-| `--with-fast` | `kaola-workflow-fast` | `["fast"]` |
-| `--with-full` | `kaola-workflow-phase1`..`phase5` | `["full"]` |
-| `--with-fast --with-full` | all of the above | `["fast","full"]` |
+| *(default, and currently the only reachable outcome)* | kaola-workflow-adapt, kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next | `[]` |
+| `--with-fast` | *(no matching canonical source — see above)* | `["fast"]` |
+| `--with-full` | *(no matching canonical source — see above)* | `["full"]` |
+| `--with-fast --with-full` | *(no matching canonical source — see above)* | `["fast","full"]` |
 
-**Lockstep with install.sh.** The opt-in is recorded in the **shared**
-`~/.config/kaola-workflow/config.json` `installed_paths` field — the *same* file
-`install.sh` and `install-opencode.sh` read/write — via a UNION read-modify-write
-(implemented in **node**, not python3). A re-install **never removes** a prior opt-in still
-in `installed_paths`: `--with-fast` once, then a *bare* re-install (no flags) into the same
-dest/HOME, preserves the `fast` command **and** `installed_paths:["fast"]`.
+**No longer in lockstep with `install.sh`.** `install-kimi.sh` still records its opt-in flags into
+the **shared** `~/.config/kaola-workflow/config.json` `installed_paths` field via a UNION
+read-modify-write (implemented in **node**, not python3) — but `install.sh` itself no longer
+participates in this union: since #725 it never writes `installed_paths` and strips any stale value
+it finds on that shared file instead. A `--with-fast` recorded here is therefore visible only to
+readers that still tolerate the field (e.g. the classifier's defensive parse); it grants no
+capability, because there is no `fast` command left to reach.
 
 **Reset to adaptive-only is real (not additive-only).** `copy_skills` is **self-healing**:
-before re-copying it PRUNES every kaola-owned skill dir not in the EFFECTIVE opt-in set, so
-a narrowed `installed_paths` converges the on-disk command set back to exactly the 5
-adaptive-core command skills. `--enable-adaptive` is retired and accepted-but-ignored
-(adaptive is always installed). Canonical order is `["fast","full"]`.
+before re-copying it PRUNES every kaola-owned skill dir not in the EFFECTIVE opt-in set — a
+no-op today (there is nothing beyond the 5 adaptive-core skills left to prune). `--enable-adaptive`
+is retired and accepted-but-ignored (adaptive is always installed).
 
-**The generator still emits all 11.** `sync-kimi-edition.js` produces every command skill
-into the in-repo `.kimi/skills/` tree (the single source the installer copies from); the
-partition is an **install-time** selection of which skills to COPY to the user's dest, and
-the test pins the partition as exhaustive — a new canonical command unassigned to a
-partition fails both the test and the installer (fail-closed).
+**The generator now emits only the 5 surviving commands.** `sync-kimi-edition.js` produces one
+command skill per canonical `commands/*.md` file into the in-repo `.kimi/skills/` tree (the single
+source the installer copies from); since canonical no longer has `kaola-workflow-fast.md` or
+`kaola-workflow-phase{1..5}.md` (#725), the generator cannot emit skills for them regardless of any
+install-time flag. The partition is still an **install-time** selection of which skills to COPY to
+the user's dest; the test pins the partition as exhaustive over the surviving 5 — a new canonical
+command unassigned to a partition still fails both the test and the installer (fail-closed).
 
 ## Hooks
 
@@ -237,22 +242,22 @@ token anywhere in the generated tree (the kimi twin of the opencode #544 path-le
 `install-opencode.sh`):
 
 ```bash
-./install-kimi.sh                         # adaptive-core only (default)
-./install-kimi.sh --with-fast             # also deploy kaola-workflow-fast
-./install-kimi.sh --with-full             # also deploy kaola-workflow-phase1..5
-./install-kimi.sh --with-fast --with-full # deploy everything
+./install-kimi.sh                         # adaptive-core only (default, and currently the only outcome)
+./install-kimi.sh --with-fast             # opt-in flag still parsed; no fast source left to deploy (#725)
+./install-kimi.sh --with-full             # opt-in flag still parsed; no full-phase source left to deploy (#725)
+./install-kimi.sh --with-fast --with-full # same as a bare install today
 ./install-kimi.sh --target /path/to/repo  # deploy into a specific project
 ./install-kimi.sh --global                # skills → ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
 ./install-kimi.sh --regenerate            # refresh in-repo .kimi/ from canonical
 ./install-kimi.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-Add `--yes` for non-interactive use. The default install deploys the **adaptive-core**
-command skills only (5); `--with-fast` / `--with-full` add the fast / full-phase command
-skills (see
-[Installer command-set partition](#installer-command-set-partition--with-fast---with-full)).
-The opt-in is recorded in the shared `~/.config/kaola-workflow/config.json`
-`installed_paths` and is preserved across re-installs (UNION, never removes).
+Add `--yes` for non-interactive use. The install deploys the **adaptive-core** command skills — all
+5 that canonical still has; `--with-fast` / `--with-full` are still accepted (see
+[Installer command-set partition](#installer-command-set-partition--with-fast---with-full)) but,
+since the `fast`/`full` canonical command sources were retired (#725), have nothing left to add.
+The flags still record their opt-in into the shared `~/.config/kaola-workflow/config.json`
+`installed_paths` (UNION, never removes), even though the recorded value now grants no capability.
 `--enable-adaptive` is retired and accepted-but-ignored.
 
 ### Deploy layout — project vs global (scope-dependent)
@@ -321,10 +326,11 @@ opencode precedent).
 
 ## Verification
 
-The edition is covered by `scripts/test-kimi-edition.js` (**577 assertions**), which
-regenerates the tree itself (`--write`) before asserting:
+The edition is covered by `scripts/test-kimi-edition.js` (**440 assertions** — was 577 before the
+`fast`/`full` P2/P3 installer probes and the stale "11" count references were retired alongside
+their canonical sources, #725), which regenerates the tree itself (`--write`) before asserting:
 
-- **K1 — count/structure parity:** exactly 11 command skills + 16 `kaola-role-*` skills;
+- **K1 — count/structure parity:** exactly 5 command skills + 16 `kaola-role-*` skills;
   every `SKILL.md` carries `name` + `description`; role skills are named `kaola-role-*`.
 - **K2 — no transform residue:** no `{X_MODEL}` placeholders, no `model="{`, no "MUST pass
   `model=`" prose, no `,,` collapse artifacts; `--runtime kimi` present.
@@ -357,9 +363,10 @@ regenerates the tree itself (`--write`) before asserting:
   kimi-native reviewer SKILL.md — project candidate wins over global, global fallback when
   no project candidate exists, a stray `.opencode/agent/` profile never hijacks the kimi
   identity, and a typed `review_profile_unavailable` refusal when no kimi profile exists.
-- **P0–P4 / U1 / A1 — installer contract:** partition exhaustiveness (canonical commands ==
-  adaptive-core ∪ fast ∪ full, fail-closed on a new command); default/`--with-fast`/
-  `--with-full` deploy sets; re-install idempotency (exactly one managed hooks block);
+- **P0 / P1 / P4 / U1 / A1 — installer contract** (P2/P3, the `--with-fast`/`--with-full` opt-in
+  deploy-set probes, were retired alongside their canonical sources, #725): partition
+  exhaustiveness (canonical commands == adaptive-core exactly, fail-closed on a new command);
+  default deploy set; re-install idempotency (exactly one managed hooks block);
   `--uninstall` zero-residue; zero Claude-path leaks across the **deployed** tree. Each
   sub-case runs the real `install-kimi.sh` hermetically — its own temp `HOME`, temp
   `KIMI_CODE_HOME`, and temp `--target`, so the real `~/.kimi-code` is never touched — and

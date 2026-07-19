@@ -11,9 +11,9 @@ const assert = require('assert');
 const root = path.resolve(__dirname, '..', '..', '..');
 
 // #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
-// Set a hermetic HOME seeded with installed_paths:[] (the #538 adaptive-only default) so every
-// subprocess inheriting process.env sees the canonical config regardless of the dev machine.
-// Tests that need fast/full installed pass their own HOME in extraEnv.
+// Adaptive is the only workflow path (the fast/full opt-ins were retired); a stale installed_paths
+// field is tolerated on read but never written. Set a hermetic HOME so every subprocess inheriting
+// process.env sees the canonical config regardless of the dev machine.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
@@ -26,12 +26,81 @@ process.env.USERPROFILE = kwSandboxHome;
 const sinkMr = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr'));
 const claimScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js');
 
-function markPlanAbsentFinalizeFixtureFast(fixtureRoot, project) {
-  const stateFile = path.join(fixtureRoot, 'kaola-workflow', project, 'workflow-state.md');
-  const content = fs.readFileSync(stateFile, 'utf8');
-  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
-    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
-    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+// Retirement of the fast/full paths: a finalize with NO frozen workflow-plan.md now refuses
+// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight from
+// claim to finalize to exercise terminal archive/closure normalization — not an adaptive run — so
+// they seed a minimal FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation
+// gate. Pass writeSet paths for any real production files committed on the feature branch so a
+// tdd-guide node's declared write set attributes them for the finalize sweep. (Historically this
+// marked the state `workflow_path: fast` so the retired fast N/A gate skipped verification.)
+function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
+  const glValScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
+  const dir = path.join(fixtureRoot, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  const paths = Array.isArray(writeSet) ? writeSet.filter(Boolean) : [];
+  const nodesTable = paths.length ? [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | tdd-guide | n1 | ' + paths.join(' ') + ' | 1 | sequence |',
+    '| n3 | code-reviewer | n2 | — | 1 | sequence |',
+    '| n4 | finalize | n3 | — | 1 | sequence |',
+  ] : [
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |',
+  ];
+  const ledgerRows = paths.length
+    ? ['| n1 | complete |', '| n2 | complete |', '| n3 | complete |', '| n4 | complete |']
+    : ['| n1 | complete |', '| n2 | complete |'];
+  const complianceRows = paths.length ? [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| tdd-guide (n2) | subagent-invoked | evidence-binding: n2 planless | |',
+    '| code-reviewer (n3) | subagent-invoked | evidence-binding: n3 planless | |',
+    '| finalize (n4) | main-session-direct | evidence-binding: n4 planless | |',
+  ] : [
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |',
+  ];
+  const tasks = paths.length ? [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'tdd-guide', ledger_status: 'complete', status: 'completed' },
+    { id: 'n3', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n4', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ] : [
+    { id: 'n1', role: 'code-explorer', ledger_status: 'complete', status: 'completed' },
+    { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+  ];
+  const planBody = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    ...nodesTable, '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledgerRows, '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    ...complianceRows, ''
+  ].join('\n');
+  const planHash = require(glValScript).computePlanHash(planBody);
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + planHash + ' -->\n\n' + planBody);
+  const glVal = (a) => spawnSync(process.execPath, [glValScript, ...a], { cwd: fixtureRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  let finalHash = '';
+  try { finalHash = JSON.parse(glVal([planPath, '--freeze', '--json']).stdout).planHash || ''; } catch (_) {}
+  const sFile = path.join(dir, 'workflow-state.md');
+  if (finalHash && fs.existsSync(sFile) && /^active_plan_hash:\s*none\s*$/m.test(fs.readFileSync(sFile, 'utf8'))) {
+    const s = fs.readFileSync(sFile, 'utf8')
+      .replace(/^plan_hash:\s*none\s*$/m, 'plan_hash: ' + finalHash)
+      .replace(/^active_plan_hash:\s*none\s*$/m, 'active_plan_hash: ' + finalHash)
+      .replace(/^first_node_id:\s*none\s*$/m, 'first_node_id: n1')
+      .replace(/^first_node_role:\s*none\s*$/m, 'first_node_role: code-explorer');
+    fs.writeFileSync(sFile, s);
+    fs.writeFileSync(path.join(dir, 'workflow-tasks.json'), JSON.stringify({ source_plan_hash: finalHash, tasks }) + '\n');
+  }
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try { cand = JSON.parse(glVal([planPath, '--candidate-hash', '--json']).stdout).validated_candidate_hash || ''; } catch (_) {}
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
 
 function tail30(str) {
@@ -241,65 +310,6 @@ function testAuditAndRepairLabels() {
   }
 }
 
-function testRepairFastEscalation() {
-  const repairScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js');
-
-  // --- Assertion 1: ESCALATED fast → full/Phase1 ---
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-repair-fast-esc-'));
-  try {
-    const projectDir = path.join(tmp, 'kaola-workflow', 'fast-esc');
-    fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
-      '# Kaola-Workflow State',
-      '## Project',
-      'name: fast-esc',
-      'status: active',
-      '## Current Position',
-      'phase: fast',
-      'phase_name: Fast',
-      'workflow_path: fast',
-      'next_command: /kaola-workflow-fast fast-esc',
-      'next_skill: kaola-workflow-fast fast-esc',
-      ''
-    ].join('\n'));
-    fs.writeFileSync(path.join(projectDir, 'fast-summary.md'),
-      '# Fast Summary: fast-esc\n\n## Status\nESCALATED\n');
-
-    const result = spawnSync(process.execPath, [repairScript, 'fast-esc'], {
-      cwd: tmp,
-      encoding: 'utf8',
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    assert.strictEqual(result.status, 0, 'gitlab repair should exit 0 for ESCALATED fast, got: ' + result.status + ' stderr: ' + result.stderr);
-    const parsed = JSON.parse(result.stdout);
-    assert.strictEqual(parsed.repaired, true, 'gitlab repair must mark repaired:true for ESCALATED fast');
-    const state = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
-    assert.ok(state.includes('workflow_path: full'), 'gitlab: ESCALATED fast must rewrite to workflow_path: full');
-    assert.ok(state.includes('next_command: /kaola-workflow-phase1 fast-esc'), 'gitlab: ESCALATED fast must route to /kaola-workflow-phase1');
-    assert.ok(!state.includes('next_command: /kaola-workflow-fast'), 'gitlab: rewritten state must not retain /kaola-workflow-fast');
-
-    // --- Assertion 2 (negative control): non-ESCALATED fast → stays on /kaola-workflow-fast ---
-    const project2Dir = path.join(tmp, 'kaola-workflow', 'fast-ok');
-    fs.mkdirSync(project2Dir, { recursive: true });
-    fs.writeFileSync(path.join(project2Dir, 'fast-summary.md'),
-      '# Fast Summary: fast-ok\n\n## Status\nIN_PROGRESS\n');
-
-    const result2 = spawnSync(process.execPath, [repairScript, 'fast-ok'], {
-      cwd: tmp,
-      encoding: 'utf8',
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    assert.strictEqual(result2.status, 0, 'gitlab repair should exit 0 for IN_PROGRESS fast');
-    const state2 = fs.readFileSync(path.join(project2Dir, 'workflow-state.md'), 'utf8');
-    assert.ok(state2.includes('next_command: /kaola-workflow-fast fast-ok'), 'gitlab: IN_PROGRESS fast must still route to /kaola-workflow-fast');
-    assert.ok(!state2.includes('workflow_path: full'), 'gitlab: IN_PROGRESS fast must not redirect to full');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-  console.log('testRepairFastEscalation: PASSED');
-}
-
-// issue #227: adaptive-path port — toggle guard + routeAdaptive resume on the GitLab fork.
 function testGitlabAdaptive() {
   const repairScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js');
   const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
@@ -740,7 +750,7 @@ function testGitlabAdaptive() {
       + 'next_command: /kaola-workflow-plan-run issue-9701\n'
       + '## Sink\nbranch: workflow/issue-9701\nsink: merge\n'
       + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-9701');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-9701');
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-9701.md'),
       'issue: #9701\ntitle: t\nstatus: open\nworkflow_project: issue-9701\nnext_step: ready\n');
     const csRun = spawnNode(claimScript, ['finalize', '--project', 'issue-9701', '--attest-contractor-spawn'], tmp);
@@ -762,7 +772,7 @@ function testGitlabAdaptive() {
       + 'next_command: /kaola-workflow-plan-run issue-971\n'
       + '## Sink\nbranch: workflow/issue-971\nsink: merge\n'
       + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-971');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-971');
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-971.md'),
       'issue: #971\ntitle: t\nstatus: open\nworkflow_project: issue-971\nnext_step: ready\n');
     const koRun = spawnNode(claimScript, ['finalize', '--project', 'issue-971', '--keep-open'], tmp);
@@ -1104,7 +1114,7 @@ function testGitlabAttestationWarningPersistence() {
     glPlantRoadmapIssue(tmp, 653101);
     // This fixture jumps directly from claim state to finalize and intentionally
     // does not author an adaptive plan.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
     // Seed .cache/dispatch-log.jsonl with ONLY a contractor entry (no workflow-planner entry) —
     // the exact inline-bypass scenario the ATTESTATION WARNING exists to catch.
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
@@ -1165,7 +1175,7 @@ function testGitlabSelectionEvidenceDocking() {
         ].join('\n')
       });
       glPlantRoadmapIssue(tmp, issue);
-      markPlanAbsentFinalizeFixtureFast(tmp, project);
+      seedAdaptiveFinalizeFixture(tmp, project);
       if (seed) {
         const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
         fs.mkdirSync(cacheDir, { recursive: true });
@@ -1350,9 +1360,6 @@ function testGitlabBundleFinalizeRoadmapCleanup() {
         'sink: merge', 'run_posture: in-place', ''
       ].join('\n')
     });
-    // This bundle fixture isolates roadmap and closure-receipt behavior and
-    // intentionally omits adaptive planning.
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
     glPlantRoadmapIssue(tmp, 42);
     glPlantRoadmapIssue(tmp, 47);
     glPlantRoadmapIssue(tmp, 53);
@@ -1363,6 +1370,8 @@ function testGitlabBundleFinalizeRoadmapCleanup() {
     ].join('\n'));
     writeBundleGlabMockScript(binDir, { closedIssues: [42, 47, 53] });
 
+    // Seed the frozen adaptive plan + passing gate LAST (after every code-band write).
+    seedAdaptiveFinalizeFixture(tmp, project);
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,
       env: Object.assign({}, process.env, {
@@ -1512,66 +1521,7 @@ function testRepairFinalizationRoute() {
     assert.ok(legacyComplete.complete !== true,
       'R2: phase6-summary.md alone must NOT be the completion signal (hard-removed), got: ' + JSON.stringify(legacyComplete));
 
-    // --- R3: point-of-use-verified phase5-review.md → finalization names ---
-    const binding = 'evidence-binding: phase5-code-review-1 nonce-fin-route-1';
-    const phase5Content = [
-      '# Phase 5 - Review: fin-route',
-      '',
-      '## Required Agent Compliance',
-      '| Requirement | Status | Evidence | Binding | Skip Reason |',
-      '|-------------|--------|----------|---------|-------------|',
-      '| code-reviewer | subagent-invoked | .cache/code-reviewer.md | ' + binding + ' |  |',
-      '| security-reviewer | n/a |  | n/a | no security-sensitive files in write set |',
-      '| review-fix executors | n/a |  | n/a | no CRITICAL/HIGH blocking findings |',
-      '',
-      '## Review Status',
-      'PASSED',
-      ''
-    ].join('\n');
-    writeProject('fin-route', {
-      'phase5-review.md': phase5Content,
-      'phase4-progress.md': [
-        '# Phase 4',
-        '## Tasks',
-        '| # | Task | Status |',
-        '|---|------|--------|',
-        '| 1 | done | complete |',
-        ''
-      ].join('\n')
-    });
-    const finRouteCache = path.join(workflowDir, 'fin-route', '.cache');
-    fs.mkdirSync(finRouteCache, { recursive: true });
-    fs.writeFileSync(path.join(finRouteCache, 'code-reviewer.md'), [
-      binding,
-      'domain_outcome: approved',
-      'verdict: pass',
-      'findings_blocking: 0',
-      'review_summary: no_blocking_findings',
-      'review_attestation: full_review_completed',
-      'No admitted findings.',
-      'review_conclusion: Reviewed all changed files and found no unresolved blocking issues.',
-      '',
-    ].join('\n'));
-    const r3 = spawnSync(process.execPath, [repairScript, 'fin-route'], {
-      cwd: tmp,
-      encoding: 'utf8',
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-    assert.strictEqual(r3.status, 0,
-      'R3: repair must exit 0 for fin-route, stdout: ' + r3.stdout + ' stderr: ' + r3.stderr);
-    const finRouteState = readState('fin-route');
-    assert.ok(finRouteState.includes('stage: finalization'),
-      'R3: repair must emit stage: finalization for terminal routine, got state:\n' + finRouteState);
-    assert.ok(finRouteState.includes('stage_name: Finalization'),
-      'R3: repair must emit stage_name: Finalization for terminal routine, got state:\n' + finRouteState);
-    assert.ok(finRouteState.includes('next_command: /kaola-workflow-finalize fin-route'),
-      'R3: repair must emit next_command: /kaola-workflow-finalize, got state:\n' + finRouteState);
-    assert.ok(!finRouteState.includes('phase: 6'),
-      'R3: repair must NOT emit phase: 6, got state:\n' + finRouteState);
-    assert.ok(!finRouteState.includes('next_command: /kaola-workflow-phase6'),
-      'R3: repair must NOT emit /kaola-workflow-phase6, got state:\n' + finRouteState);
-
-    // --- R4: one-way migration converts legacy active folder ---
+    // --- R3: one-way migration converts legacy active folder ---
     writeProject('legacy-active', {
       'phase6-summary.md': '# Phase 6 Summary\nLegacy content\n',
       'workflow-state.md': [
@@ -1671,7 +1621,6 @@ function testSinkMrUsesFinalizationSummary() {
 testFallbackGuardsAfterArchive();
 testGitlabSinkRefusesLingeringLaneGroup();
 testAuditAndRepairLabels();
-testRepairFastEscalation();
 testRepairFinalizationRoute();
 testSinkMrUsesFinalizationSummary();
 testGitlabAdaptive();
@@ -1773,7 +1722,7 @@ function testGitlabFinalizeClosesIssueBundleMembers() {
         'sink: merge', 'run_posture: in-place', ''
       ].join('\n')
     });
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
     glPlantRoadmapIssue(tmp, 42);
     glPlantRoadmapIssue(tmp, 47);
 
@@ -1831,12 +1780,13 @@ function testGitlabBundleFinalizeAllOpenCloseIsPending() {
         'sink: merge', 'run_posture: in-place', ''
       ].join('\n')
     });
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
     glPlantRoadmapIssue(tmp, 71);
     glPlantRoadmapIssue(tmp, 72);
     // Both members probe as OPEN (close deferred to sink-merge on merge-lane).
     writeBundleGlabMockScript(binDir, { openIssues: [71, 72] });
 
+    // Seed the frozen adaptive plan + passing gate LAST (after every code-band write).
+    seedAdaptiveFinalizeFixture(tmp, project);
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,
       env: Object.assign({}, process.env, {
@@ -1881,7 +1831,7 @@ function testGitlabFinalizeRoadmapResidueDetection() {
         '## Sink', 'branch: workflow/issue-428gl', 'issue_number: 428', 'sink: merge', ''
       ].join('\n')
     });
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428gl');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-428gl');
     glPlantRoadmapIssue(tmp, 428);
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428gl'], {

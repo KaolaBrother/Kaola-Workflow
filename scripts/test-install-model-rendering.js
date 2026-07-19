@@ -201,9 +201,11 @@ function trustCodexProject(homeRoot, projectRoot, trustLevel = 'trusted') {
       fs.writeFileSync(sentinel, 'unchanged\n');
       fs.symlinkSync(sentinel, plantedStage);
 
-      codexProfileInstaller.seedKaolaConfig(homeDir, true, false);
+      codexProfileInstaller.seedKaolaConfig(homeDir);
 
-      assert.deepStrictEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')).installed_paths, ['fast']);
+      const seeded = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      assert.strictEqual(seeded.parallel_mode, 'auto');
+      assert.ok(!('installed_paths' in seeded), 'shared-config seed must not write installed_paths (retired)');
       assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n',
         'shared-config staging must not write through the historical predictable symlink');
       assert(fs.lstatSync(plantedStage).isSymbolicLink(),
@@ -258,14 +260,14 @@ function trustCodexProject(homeRoot, projectRoot, trustLevel = 'trusted') {
       fs.symlinkSync(sentinel, collision);
 
       const random = withRandomStageHexes([collisionHex, '44'.repeat(16)], () => {
-        codexProfileInstaller.seedKaolaConfig(homeDir, false, true);
+        codexProfileInstaller.seedKaolaConfig(homeDir);
       });
 
       assert.strictEqual(random.calls, 2,
         'shared-config staging must retry the colliding exclusive candidate with fresh randomness');
       const installed = JSON.parse(fs.readFileSync(configFile, 'utf8'));
       assert.strictEqual(installed.parallel_mode, 'manual');
-      assert.deepStrictEqual(installed.installed_paths, ['fast', 'full']);
+      assert.ok(!('installed_paths' in installed), 'shared-config seed must strip a stale installed_paths (retired)');
       assert.strictEqual(fs.readFileSync(sentinel, 'utf8'), 'unchanged\n');
       assert(fs.lstatSync(collision).isSymbolicLink(),
         'exclusive shared-config staging must preserve a colliding symlink owned by another process');
@@ -325,7 +327,7 @@ function trustCodexProject(homeRoot, projectRoot, trustLevel = 'trusted') {
           return bytes;
         };
 
-        const result = codexProfileInstaller.seedKaolaConfig(homeDir, true, false);
+        const result = codexProfileInstaller.seedKaolaConfig(homeDir);
 
         assert.strictEqual(injected, true,
           'fixture must mutate config after the seed read and before its compare-and-swap');
@@ -337,8 +339,8 @@ function trustCodexProject(homeRoot, projectRoot, trustLevel = 'trusted') {
           'retry must merge from the concurrent replacement, not the superseded snapshot');
         assert.strictEqual(installed.parallel_mode, 'manual',
           'retry must preserve the concurrent writer parallel_mode');
-        assert.deepStrictEqual(installed.installed_paths, ['fast', 'full'],
-          'retry must UNION requested opt-ins with the concurrent writer paths');
+        assert.ok(!('installed_paths' in installed),
+          'retry must strip a stale installed_paths from the concurrent writer (retired)');
       } finally {
         fs.readFileSync = originalReadFileSync;
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -3156,7 +3158,7 @@ function parseCodexAgentMetadata(pluginRoot) {
 try {
   const higherInstallOutput = execFileSync(
     'bash',
-    ['install.sh', '--yes', '--forge=github', '--profile=higher', '--with-fast', '--with-full', '--no-settings-merge'],
+    ['install.sh', '--yes', '--forge=github', '--profile=higher', '--no-settings-merge'],
     {
       cwd: root,
       env: { ...process.env, HOME: tmp },
@@ -3165,37 +3167,28 @@ try {
     }
   );
 
-  const phase3 = readInstalledCommand('kaola-workflow-phase3.md');
-  const phase4 = readInstalledCommand('kaola-workflow-phase4.md');
-  const phase5 = readInstalledCommand('kaola-workflow-phase5.md');
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
-  const fast = readInstalledCommand('kaola-workflow-fast.md');
+  const adapt = readInstalledCommand('kaola-workflow-adapt.md');
 
-  assert(phase3.includes('model="opus",'), 'higher profile should render code-architect as opus');
-  assert(phase4.includes('model="sonnet",'), 'tdd-guide should render as sonnet');
-  assert(
-    phase4.includes('\n\n## Validation Delegation Policy\n\n'),
-    'installer rendering should preserve blank markdown lines'
-  );
-  assert(phase5.includes('model="opus",'), 'higher profile should render reviewers as opus');
+  // The always-opus workflow-planner tier (adapt command) renders opus under the higher profile;
+  // the finalize command carries the sonnet routed-fix (tdd-guide / build-error-resolver) and
+  // doc-updater tiers. (The profile-sensitive reviewer/architect tiers are proven at the agent-model
+  // manifest level below, the surface the adaptive resolver actually reads.)
+  assert(adapt.includes('subagent_type="workflow-planner",\n  model="opus",'),
+    'higher profile should render the workflow-planner as opus');
   assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
   assert(
-    phase5.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
-    'phase5 routed-fix build-error-resolver block should render as sonnet'
+    finalize.includes('\n\n## Validation Delegation Policy\n\n'),
+    'installer rendering should preserve blank markdown lines'
   );
   assert(
     finalize.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
     'finalize routed-fix build-error-resolver block should render as sonnet'
   );
   assert(
-    phase5.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
-    'phase5 routed-fix tdd-guide block should render as sonnet'
-  );
-  assert(
     finalize.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
     'finalize routed-fix tdd-guide block should render as sonnet'
   );
-  assert(fast.includes('model="opus",'), 'fast command should render higher-profile reviewer/planner models');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
     .filter(name => name.endsWith('.md'))
@@ -3243,35 +3236,23 @@ try {
   assert(higherInstallOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
     'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');
 
-  // Default profile is `higher`: an install with no `--profile` flag renders the
-  // three reviewer agents on Opus (this is what locks the default — not an explicit
-  // --profile). #538: full-path commands are an opt-in, so pass --with-full to install
-  // the phase[1-5] files this block reads (the profile defaulting under test is unaffected).
+  // Default profile is `higher`: an install with NO --profile flag must resolve the profile-sensitive
+  // reviewer/architect tier to opus (this is what locks the default). Proven via the .kaola-agent-models.json
+  // manifest — the surface the adaptive resolver actually reads — since the retired phase[1-5] command
+  // surfaces that once carried these placeholders no longer exist. The explicit --profile=common contrast
+  // is covered by the manifest section (ii) below.
   {
     const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-default-'));
     try {
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--with-fast', '--with-full', '--no-settings-merge'],
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: dtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const rd = n => fs.readFileSync(path.join(dtmp, '.claude', 'commands', n), 'utf8');
-      assert(rd('kaola-workflow-phase3.md').includes('subagent_type="code-architect",\n  model="opus",'),
-        'no-flag install must render code-architect as opus (higher is the default profile)');
-      assert(rd('kaola-workflow-phase5.md').includes('subagent_type="code-reviewer",\n  model="opus",'),
-        'no-flag install must render code-reviewer as opus (higher is the default profile)');
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(dtmp, '.claude', 'agents', '.kaola-agent-models.json'), 'utf8'));
+      assert(manifest['code-architect'] === 'opus',
+        'no-flag install must resolve code-architect→opus (higher is the default profile); got ' + manifest['code-architect']);
+      assert(manifest['code-reviewer'] === 'opus',
+        'no-flag install must resolve code-reviewer→opus (higher is the default profile); got ' + manifest['code-reviewer']);
     } finally { fs.rmSync(dtmp, { recursive: true, force: true }); }
-  }
-
-  // `--profile=common` must be requested explicitly to get the Sonnet assignments.
-  {
-    const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-common-'));
-    try {
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=common', '--with-fast', '--with-full', '--no-settings-merge'],
-        { cwd: root, env: { ...process.env, HOME: ctmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const rd = n => fs.readFileSync(path.join(ctmp, '.claude', 'commands', n), 'utf8');
-      assert(rd('kaola-workflow-phase3.md').includes('subagent_type="code-architect",\n  model="sonnet",'),
-        '--profile=common must render code-architect as sonnet');
-      assert(rd('kaola-workflow-phase5.md').includes('subagent_type="code-reviewer",\n  model="sonnet",'),
-        '--profile=common must render code-reviewer as sonnet');
-    } finally { fs.rmSync(ctmp, { recursive: true, force: true }); }
   }
 
   // issue #242: .kaola-agent-models.json manifest — produced by install.sh so the
@@ -3917,16 +3898,16 @@ try {
         fs.rmSync(postureHome, { recursive: true, force: true });
       }
 
-      // #543 cross-edition: a default (no-flags) codex installer run must seed the shared
-      // ~/.config/kaola-workflow/config.json with installed_paths:[] (adaptive-only). This is the
-      // claude-chain behavioral-identity assertion that the codex triplet writer (node port) and the
-      // Claude install.sh D4 writer produce the same config shape read by the runtime legality gate.
+      // cross-edition: a default codex installer run must seed the shared
+      // ~/.config/kaola-workflow/config.json with parallel_mode:auto and NEVER an installed_paths field
+      // (fast/full retired). This is the behavioral-identity assertion that the codex triplet writer
+      // (node port) and the Claude install.sh writer produce the same config shape.
       const sharedConfigPath = path.join(chome, '.config', 'kaola-workflow', 'config.json');
-      assert(fs.existsSync(sharedConfigPath), '#543: default install must seed ~/.config/kaola-workflow/config.json');
+      assert(fs.existsSync(sharedConfigPath), 'default install must seed ~/.config/kaola-workflow/config.json');
       const sharedConfig = JSON.parse(fs.readFileSync(sharedConfigPath, 'utf8'));
-      assert(Array.isArray(sharedConfig.installed_paths) && sharedConfig.installed_paths.length === 0,
-        '#543: default install installed_paths must be [] (adaptive-only), got: ' + JSON.stringify(sharedConfig.installed_paths));
-      assert(sharedConfig.parallel_mode === 'auto', '#543: default install parallel_mode setdefault "auto"');
+      assert(!('installed_paths' in sharedConfig),
+        'default install must NOT write installed_paths (retired), got: ' + JSON.stringify(sharedConfig));
+      assert(sharedConfig.parallel_mode === 'auto', 'default install parallel_mode setdefault "auto"');
     } finally {
       fs.rmSync(cproj, { recursive: true, force: true });
       fs.rmSync(chome, { recursive: true, force: true });

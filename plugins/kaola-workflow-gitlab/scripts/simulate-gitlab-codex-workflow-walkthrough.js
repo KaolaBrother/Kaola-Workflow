@@ -17,12 +17,38 @@ function tail30(str) {
   return lines.slice(Math.max(0, lines.length - 30)).join('\n');
 }
 
-function markPlanAbsentFinalizeFixtureFast(rootDir, project) {
-  const stateFile = path.join(rootDir, 'kaola-workflow', project, 'workflow-state.md');
-  const content = fs.readFileSync(stateFile, 'utf8');
-  fs.writeFileSync(stateFile, /^workflow_path:.*$/m.test(content)
-    ? content.replace(/^workflow_path:.*$/m, 'workflow_path: fast')
-    : content.replace(/\s*$/, '\nworkflow_path: fast\n'));
+// Retirement of the fast/full paths: a finalize with NO frozen workflow-plan.md now refuses
+// adaptive_plan_missing (adaptive is the only workflow path). These fixtures jump straight from
+// claim to finalize to exercise terminal archive/closure normalization — not an adaptive run — so
+// they seed a minimal FROZEN adaptive workflow-plan.md plus a passing consumer-mode final-validation
+// gate. (Historically this marked the state `workflow_path: fast` so the retired fast N/A gate
+// skipped verification.)
+function seedAdaptiveFinalizeFixture(rootDir, project) {
+  const glPlanValScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
+  const dir = path.join(rootDir, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  const planBody = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| n1 | code-explorer | — | — | 1 | sequence |',
+    '| n2 | finalize | n1 | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| n1 | complete |', '| n2 | complete |', '',
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+    '| code-explorer (n1) | subagent-invoked | evidence-binding: n1 planless | |',
+    '| finalize (n2) | main-session-direct | evidence-binding: n2 planless | |', ''
+  ].join('\n');
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(glPlanValScript).computePlanHash(planBody) + ' -->\n\n' + planBody);
+  glSpawn(process.execPath, [glPlanValScript, planPath, '--freeze', '--json'], { cwd: rootDir, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  let cand = '';
+  try { cand = JSON.parse(glSpawn(process.execPath, [glPlanValScript, planPath, '--candidate-hash', '--json'], { cwd: rootDir, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } }).stdout).validated_candidate_hash || ''; } catch (_) {}
+  fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'),
+    'verdict: pass\nfindings_blocking: 0\nvalidated_candidate_hash: ' + cand + '\n');
 }
 
 function run(script) {
@@ -196,7 +222,7 @@ const glOs = require('os');
       'issue_number: 42', 'issue_numbers: 42,47', 'bundle_id: ' + project,
       'closure_policy: all_or_nothing', 'sink: merge', 'run_posture: in-place', ''
     ].join('\n'));
-    markPlanAbsentFinalizeFixtureFast(tmp, project);
+    seedAdaptiveFinalizeFixture(tmp, project);
     for (const n of [42, 47]) {
       const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
       fs.mkdirSync(rd, { recursive: true });
@@ -239,7 +265,7 @@ const glOs = require('os');
       '## GitLab', 'issue_iid: 428', 'path_with_namespace: test/repo', '',
       '## Sink', 'branch: workflow/issue-428glcx', 'issue_number: 428', 'sink: merge', ''
     ].join('\n'));
-    markPlanAbsentFinalizeFixtureFast(tmp, 'issue-428glcx');
+    seedAdaptiveFinalizeFixture(tmp, 'issue-428glcx');
     const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(rd, { recursive: true });
     fs.writeFileSync(path.join(rd, 'issue-428.md'),

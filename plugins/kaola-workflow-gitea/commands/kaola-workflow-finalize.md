@@ -68,14 +68,8 @@ rewrite that plan in place.
 
 ## Prerequisite
 
-Read `workflow_path` from `kaola-workflow/{project}/workflow-state.md` (defaults to `full` when absent).
-
-If `workflow_path: fast`:
-- `fast-summary.md` must exist with status `PASSED`. If missing, stop:
-  ```text
-  Fast-path summary is not complete. Run /kaola-workflow-fast first.
-  ```
-If `workflow_path: adaptive`:
+Adaptive is the only workflow path (`workflow_path: adaptive` in
+`kaola-workflow/{project}/workflow-state.md`):
 - `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
   `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
   `phase5-review.md`; Finalization anchors on the plan's completion state. The barrier is
@@ -126,17 +120,13 @@ If `workflow_path: adaptive`:
   ```text
   Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
   ```
-If `workflow_path: full` (or absent):
-- Run the read-only point-of-use verifier before any Finalization side effect.
-  It revalidates strict Phase 4 completion, the canonical five-column review
-  compliance table, exact seeded evidence bindings and substantive bodies,
-  evidence freshness, fix decisions, and project-path authority:
-  ```bash
-  kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-  FULL_ADVANCE="$(kaola_script kaola-gitea-workflow-full-advance.js)" || { echo "BLOCKED: full-path verifier unavailable" >&2; exit 1; }
-  node "$FULL_ADVANCE" phase5-verify --root "$PWD" --project {project} --json \
-    || { echo "BLOCKED: phase5_point_of_use_failed — run /kaola-workflow-phase5 first" >&2; exit 1; }
-  ```
+If `workflow-plan.md` is absent, `cmdFinalize` refuses unconditionally — before any
+archive/close side effect — with the typed `finalize_gate_unverified` /
+`adaptive_plan_missing` refusal (there is no retired fast/full verifier to shell and no
+N/A pass):
+```text
+BLOCKED: finalize_gate_unverified (adaptive_plan_missing) — restore the frozen workflow-plan.md before Finalization.
+```
 
 ### Validation Gate (dual-mode by repo kind)
 
@@ -221,21 +211,7 @@ Read:
 
 ```text
 kaola-workflow/{project}/workflow-state.md
-```
-
-If `workflow_path: fast`, also read (`fast-summary.md` is the Phase 1-5 substitute):
-
-```text
-kaola-workflow/{project}/fast-summary.md
-```
-
-If `workflow_path: full` (or absent), also read:
-
-```text
-kaola-workflow/{project}/phase1-research.md
-kaola-workflow/{project}/phase3-plan.md
-kaola-workflow/{project}/phase4-progress.md
-kaola-workflow/{project}/phase5-review.md
+kaola-workflow/{project}/workflow-plan.md
 ```
 
 ## Resume Detection
@@ -400,9 +376,6 @@ Compare:
 - Phase 3 task blueprint
 - Phase 4 implementation evidence
 - Phase 5 review findings and follow-ups
-- on the fast path (`workflow_path: fast`), substitute `fast-summary.md`
-  (`## Scope`, `## Plan`, `## Implementation Evidence`, `## Review`) for the
-  Phase 1/3/4/5 bullets above
 - docs touched or skipped by `doc-updater`
 - `README.md`, API docs, architecture docs, changelog, `.env.example`, roadmap,
   and issue comments when relevant
@@ -501,22 +474,12 @@ Verify:
 - no CRITICAL or HIGH review findings remain
 - no debug statements remain
 
-On the fast path (`workflow_path: fast`), the Phase 1/3 artifacts do not exist —
-source the acceptance evidence from `fast-summary.md` instead: the deliverable and
-acceptance criteria from `## Scope`, the plan from `## Plan`, implementation
-evidence from `## Implementation Evidence`, and the review result from `## Review`.
 <!-- PIN: fast-compliance-backstop -->
-Also verify fast-path review compliance: in `## Required Agent Compliance`, the
-`code-reviewer` row status must be a real delegation status (`subagent-invoked`,
-`local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real
-evidence path or skip\_reason — not `pending`, `invoked` without evidence, or
-bare `N/A` without a skip\_reason — whenever `## Scope` lists more than one
-changed file or any production-path file (outside `docs/`, `*.md`, `tests/`).
-`N/A` with a documented skip\_reason is acceptable only for the trivial band
-(a single docs/comment/markdown edit). The `fast_compliance_unresolved` script
-refusal enforces this fail-closed at `summary-write` time; Finalization
-is a second-line gate that verifies the written compliance table is clean before
-proceeding.
+Legacy backstop (dormant post-retirement): the retired fast path's `fast_compliance_unresolved`
+script refusal used to enforce `## Required Agent Compliance` review-delegation evidence at
+`summary-write` time inside the now-deleted fast-advance/fast-audit scripts. Adaptive's own
+`--verdict-check` barrier (see Prerequisite, above) is the sole compliance gate on the surviving
+path; there is no fast-path project left for this backstop to fire against.
 
 ## Step 3 - Documentation Update
 
@@ -661,8 +624,7 @@ the final Git gate.
 
 ## Step 7 - Gitea Issue, Roadmap, Archive, And Metadata
 
-If the project links a Gitea issue (from `phase1-research.md` on the full path,
-or `issue_number` in `workflow-state.md` on the fast path):
+If the project links a Gitea issue (`issue_number` in `workflow-state.md`):
 
 - close it only after acceptance criteria pass and the Closure Decision Gate says
   the implementation is complete

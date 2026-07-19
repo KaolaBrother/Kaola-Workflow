@@ -1,0 +1,1 @@
+{"result":"refuse","reason":"finding_malformed","detail":null,"missingTokenClass":null,"nodeId":"n11-code-certify","role":"code-reviewer","operator_hint":"Refusal reason: finding_malformed (node n11-code-certify). Run orient to inspect the plan + ledger state and the relevant plan-run recovery card."}

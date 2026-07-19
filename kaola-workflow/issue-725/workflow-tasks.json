@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "7dd4b0472fea7adff2769698c714521a82e1e223244413ad7a4302e863c17e82",
+  "tasks": [
+    {
+      "id": "n1-repair",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-code-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-security-certify",
+      "role": "security-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-19T12:12:25.075Z"
+}

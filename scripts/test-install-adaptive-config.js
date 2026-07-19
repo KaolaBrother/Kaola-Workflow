@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-// issue #538: install.sh adaptive-default switch flip.
-// Adaptive is now the unconditional default; --with-fast / --with-full are install-time opt-ins.
-// Config writes `installed_paths: []` (default) instead of `enable_adaptive: true/false`.
-// Re-install preserves (UNION) what was installed. Uninstall clears the shared config.
+// issue #725: fast/full retirement. Adaptive is the unconditional and sole workflow path.
+// install.sh seeds ~/.config/kaola-workflow/config.json with parallel_mode only (never
+// installed_paths); the retired --with-fast / --with-full flags are now unknown-flag errors and the
+// install ships no fast/full command artifacts. Uninstall clears the shared config.
 
 const assert = require('assert');
 const { execFileSync, spawnSync } = require('child_process');
@@ -48,14 +48,16 @@ const homes = [];
 function cleanup() { for (const h of homes) try { fs.rmSync(h, { recursive: true, force: true }); } catch (_) {} }
 
 try {
-  // AC1: Default install (bare, no flags) -> config installed_paths: [] AND no fast/full commands.
+  // AC1 (retirement regression): a bare install seeds parallel_mode:auto, NEVER writes installed_paths
+  // (fast/full retired), migrates away enable_adaptive, installs NO fast/full command artifacts, and
+  // installs the adaptive command surface + plan-run cards.
   {
     const home = freshHome('ac1-default'); homes.push(home);
     runInstall(home, []);
     const cfg = readConfig(home);
-    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.length === 0,
-      'AC1: bare install must write installed_paths:[], got ' + JSON.stringify(cfg));
-    assert(cfg.parallel_mode === 'auto', 'AC1: bare install must write parallel_mode:auto, got ' + JSON.stringify(cfg));
+    assert(cfg.parallel_mode === 'auto', 'AC1: bare install must seed parallel_mode:auto, got ' + JSON.stringify(cfg));
+    assert(!('installed_paths' in cfg),
+      'AC1: bare install must NOT write installed_paths (retired), got ' + JSON.stringify(cfg));
     assert(!('enable_adaptive' in cfg), 'AC1: bare install must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
     assert(!commandExists(home, 'kaola-workflow-fast.md'),
       'AC1: bare install must NOT install kaola-workflow-fast.md');
@@ -74,74 +76,57 @@ try {
       'AC1: bare install must ship docs/plan-run-cards/repair-routing.md into the support dir');
   }
 
-  // AC2a: --with-fast -> installed_paths contains 'fast' AND kaola-workflow-fast.md is installed.
-  {
-    const home = freshHome('ac2a-fast'); homes.push(home);
-    runInstall(home, ['--with-fast']);
-    const cfg = readConfig(home);
-    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.includes('fast'),
-      'AC2a: --with-fast must write installed_paths containing fast, got ' + JSON.stringify(cfg));
-    assert(!cfg.installed_paths.includes('full'),
-      'AC2a: --with-fast must NOT include full in installed_paths, got ' + JSON.stringify(cfg));
-    assert(commandExists(home, 'kaola-workflow-fast.md'),
-      'AC2a: --with-fast must install kaola-workflow-fast.md');
-    // full phase commands still absent
-    for (let i = 1; i <= 5; i++) {
-      assert(!commandExists(home, `kaola-workflow-phase${i}.md`),
-        `AC2a: --with-fast must NOT install kaola-workflow-phase${i}.md`);
-    }
-  }
-
-  // AC2b: --with-full -> installed_paths contains 'full' AND phase commands are installed.
-  {
-    const home = freshHome('ac2b-full'); homes.push(home);
-    runInstall(home, ['--with-full']);
-    const cfg = readConfig(home);
-    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.includes('full'),
-      'AC2b: --with-full must write installed_paths containing full, got ' + JSON.stringify(cfg));
-    assert(!cfg.installed_paths.includes('fast'),
-      'AC2b: --with-full must NOT include fast in installed_paths, got ' + JSON.stringify(cfg));
-    for (let i = 1; i <= 5; i++) {
-      assert(commandExists(home, `kaola-workflow-phase${i}.md`),
-        `AC2b: --with-full must install kaola-workflow-phase${i}.md`);
-    }
-    // fast command still absent
+  // AC2 (flags refused): the retired --with-fast / --with-full are unknown-flag errors (exit non-zero),
+  // and no fast/full command artifact is installed.
+  for (const flag of ['--with-fast', '--with-full']) {
+    const home = freshHome('ac2-refuse-' + flag.replace(/[^a-z]/gi, '')); homes.push(home);
+    const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge', flag], {
+      cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8',
+    });
+    assert(result.status !== 0,
+      `AC2: ${flag} must be an unknown-flag error (exit non-zero), got status=${result.status}\nstderr: ${result.stderr}`);
+    assert(/Unknown argument/.test(result.stderr || ''),
+      `AC2: ${flag} must print an unknown-argument error, got stderr: ${result.stderr}`);
     assert(!commandExists(home, 'kaola-workflow-fast.md'),
-      'AC2b: --with-full must NOT install kaola-workflow-fast.md');
+      `AC2: a refused ${flag} install must not have the retired fast command`);
   }
 
-  // AC3: Re-install preserves installed paths. Install --with-fast, then bare reinstall ->
-  // installed_paths STILL contains fast AND kaola-workflow-fast.md is still present (spared AND refreshed).
+  // AC3 (reset lifecycle): a bare install writes the shared config; uninstall removes it; a bare
+  // reinstall comes back up with parallel_mode:auto and still no installed_paths / fast artifacts.
   {
-    const home = freshHome('ac3-preserve'); homes.push(home);
-    runInstall(home, ['--with-fast']);
-    let cfg = readConfig(home);
-    assert(cfg.installed_paths.includes('fast'), 'AC3 precondition: first install must have fast');
-    runInstall(home, []); // bare reinstall
-    cfg = readConfig(home);
-    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.includes('fast'),
-      'AC3: bare reinstall must preserve fast in installed_paths, got ' + JSON.stringify(cfg));
-    assert(commandExists(home, 'kaola-workflow-fast.md'),
-      'AC3: bare reinstall must preserve kaola-workflow-fast.md (spare AND refresh)');
-  }
-
-  // AC4: Uninstall -> reinstall -> config gone after uninstall; bare reinstall comes up installed_paths: [].
-  {
-    const home = freshHome('ac4-reset'); homes.push(home);
-    runInstall(home, ['--with-fast']);
-    assert(fs.existsSync(configPath(home)), 'AC4: config must exist after install');
+    const home = freshHome('ac3-reset'); homes.push(home);
+    runInstall(home, []);
+    assert(fs.existsSync(configPath(home)), 'AC3: config must exist after install');
     runUninstall(home, []);
-    assert(!fs.existsSync(configPath(home)), 'AC4: config must be removed after uninstall');
-    // bare reinstall -> adaptive-only
+    assert(!fs.existsSync(configPath(home)), 'AC3: config must be removed after uninstall');
+    runInstall(home, []); // bare reinstall
+    const cfg = readConfig(home);
+    assert(cfg.parallel_mode === 'auto',
+      'AC3: reinstall after uninstall must seed parallel_mode:auto, got ' + JSON.stringify(cfg));
+    assert(!('installed_paths' in cfg),
+      'AC3: reinstall after uninstall must NOT write installed_paths, got ' + JSON.stringify(cfg));
+    assert(!commandExists(home, 'kaola-workflow-fast.md'),
+      'AC3: reinstall after uninstall must NOT have the retired fast command');
+  }
+
+  // AC4 (stale installed_paths tolerated on read, stripped on write): a pre-existing config carrying a
+  // stale installed_paths from an old install is tolerated and stripped on the next install (never
+  // re-written), while a user parallel_mode and unrelated user fields are preserved.
+  {
+    const home = freshHome('ac4-strip-stale'); homes.push(home);
+    fs.mkdirSync(path.dirname(configPath(home)), { recursive: true });
+    fs.writeFileSync(configPath(home),
+      JSON.stringify({ parallel_mode: 'manual', installed_paths: ['fast', 'full'], user_field: 'keep' }, null, 2) + '\n');
     runInstall(home, []);
     const cfg = readConfig(home);
-    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.length === 0,
-      'AC4: reinstall after uninstall must come up installed_paths:[], got ' + JSON.stringify(cfg));
-    assert(!commandExists(home, 'kaola-workflow-fast.md'),
-      'AC4: reinstall after uninstall must NOT have fast command');
+    assert(!('installed_paths' in cfg),
+      'AC4: install must strip a stale installed_paths (never re-writes it), got ' + JSON.stringify(cfg));
+    assert(cfg.parallel_mode === 'manual', 'AC4: install must preserve a user parallel_mode, got ' + JSON.stringify(cfg));
+    assert(cfg.user_field === 'keep', 'AC4: install must preserve unrelated user config fields, got ' + JSON.stringify(cfg));
   }
 
-  // AC5: --enable-adaptive warns-and-ignores (exit 0, no enable_adaptive field written, deprecation warning on stderr).
+  // AC5: --enable-adaptive warns-and-ignores (exit 0, no enable_adaptive field written, deprecation
+  // warning on stderr); the seeded config carries parallel_mode:auto and no retired installed_paths.
   {
     const home = freshHome('ac5-deprecated'); homes.push(home);
     const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge', '--enable-adaptive=yes'], {
@@ -153,8 +138,10 @@ try {
     const cfg = readConfig(home);
     assert(!('enable_adaptive' in cfg),
       'AC5: --enable-adaptive=yes must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
-    assert(Array.isArray(cfg.installed_paths),
-      'AC5: config must have installed_paths field after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
+    assert(cfg.parallel_mode === 'auto',
+      'AC5: config must seed parallel_mode:auto after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
+    assert(!('installed_paths' in cfg),
+      'AC5: config must NOT carry installed_paths after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
     const hasWarning = (result.stderr || '').includes('retired') || (result.stderr || '').includes('#538');
     assert(hasWarning,
       'AC5: --enable-adaptive must emit a deprecation warning on stderr mentioning retired/#538, got stderr: ' + result.stderr);

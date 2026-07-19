@@ -89,15 +89,6 @@ const COMMON_SCRIPTS = [
   // #435: run-gap capture gate. Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-gap-sweep.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-gap-sweep.js',
-  // #456: fast-path script-owned advance. Byte-identical claude↔codex; gitlab/gitea carry
-  // rename-normalized ports (kaola-{forge}-workflow-fast-advance.js) in RENAME_NORMALIZED_FAMILIES.
-  'kaola-workflow-fast-advance.js',
-  // #457: full-path phase script-owned advance. Byte-identical claude↔codex; gitlab/gitea carry
-  // rename-normalized ports (kaola-{forge}-workflow-full-advance.js) in RENAME_NORMALIZED_FAMILIES.
-  'kaola-workflow-full-advance.js',
-  // #458: full-path Phase 4 script-owned advance. Byte-identical claude↔codex; gitlab/gitea carry
-  // rename-normalized ports (kaola-{forge}-workflow-phase4-advance.js) in RENAME_NORMALIZED_FAMILIES.
-  'kaola-workflow-phase4-advance.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -310,38 +301,6 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-gap-sweep.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-gap-sweep.js' },
-    ],
-  },
-  {
-    // #456: fast-advance fast-path transaction owner forge ports. The script carries no
-    // forge-specific tokens (command/skill route names are KW-split), so the rename-normalized
-    // ports are body-identical to canonical. Reference = canonical scripts/ copy.
-    label: 'fast-advance forge ports',
-    reference: 'scripts/kaola-workflow-fast-advance.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-fast-advance.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-fast-advance.js' },
-    ],
-  },
-  {
-    // #457: full-advance full-path phase transaction owner forge ports. The script carries no
-    // forge-specific tokens (command/skill route names are KW-split), so the rename-normalized
-    // ports are body-identical to canonical. Reference = canonical scripts/ copy.
-    label: 'full-advance forge ports',
-    reference: 'scripts/kaola-workflow-full-advance.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-full-advance.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-full-advance.js' },
-    ],
-  },
-  {
-    // #458: phase4-advance Phase 4 transaction owner forge ports. Rename-normalized per edition
-    // (the lone repair-state require rewrites; routes are KW-split). Reference = canonical scripts/ copy.
-    label: 'phase4-advance forge ports',
-    reference: 'scripts/kaola-workflow-phase4-advance.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-phase4-advance.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-phase4-advance.js' },
     ],
   },
 ];
