@@ -1,0 +1,118 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "d39f89af03fab7a5511d2cdf7fb97b7c719162e87b47b896e5a9dc51c77384cd",
+  "attempts": [
+    {
+      "attempt_id": "review2-3fc0f0687172272e:1",
+      "ordinal": 1,
+      "plan_hash": "d39f89af03fab7a5511d2cdf7fb97b7c719162e87b47b896e5a9dc51c77384cd",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "3ae971e132894f5431958f0f6f30c5f5495f942cec175b0ee6e1e78f746d814d",
+        "key": "3fc0f0687172272ebaf4925a6dbc3fe711cf0b06c24fb341f3b58e86a1d8d0e0",
+        "kind": "sequence",
+        "members": [
+          "c2-code-review"
+        ],
+        "surface_digests": [
+          "9afec688db23d39bcee103bdbd3aa81ac5df82700fe4d7623113cfbe60a56ccd"
+        ]
+      },
+      "transaction_key": "1e2a000db9c15c878ec969de9a52f4fe367fe4b3720350dc84032578aac5bb32",
+      "candidate_digest": "ded6076484685d202c63485bfe63f5c1312ed36dd762741d6ef352dd0532291c",
+      "candidate_declared": {
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-run-chains.js": "100644 a0bafa0b6765650b16b1b1b70d8dd3bf9d0d64f4",
+        "plugins/kaola-workflow-gitea/scripts/test-gitea-run-chains.js": "100644 a46333a039e205a7540af250e0247119dde28b7c",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-run-chains.js": "100644 bcac6c0f12afa327aa3c7b8d42911b156fc7c4a9",
+        "plugins/kaola-workflow-gitlab/scripts/test-gitlab-run-chains.js": "100644 5f6ede5812ec88fbf93a1954bc9b83f5ae46ced1",
+        "plugins/kaola-workflow/scripts/kaola-workflow-run-chains.js": "100644 8d6b1acd081e81a723d01c881bbfeb65c997b42a",
+        "scripts/kaola-workflow-run-chains.js": "100644 8d6b1acd081e81a723d01c881bbfeb65c997b42a",
+        "scripts/test-run-chains.js": "100644 afb9ef5a31643865568dbe0f6077be53e61f4da8"
+      },
+      "candidate_residue_digest": "f37c8f38fc04da1a07caa845efc61628ab50a3e0ef98c985cca9d5eb6e51dcfc",
+      "epoch_lineage_id": "a51a6b4bd9b931c3d59f860bc99d07b68a1fa826583a70fb922843cf123bac12",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "69b3f44e70fe1abf2886fafc040161f6fe43be047dd4e52e365d8b2fd480c671",
+      "context_hashes": [
+        "39b31a5d3db1b9f08f20665e4d38da3d30aebd0b694bf2eee52d96f4b57ae7a6"
+      ],
+      "profile_hashes": [
+        "3b3a7fc8e0683a8d7aac7979d0ec9f93a89570c2a90d2a3414d776de7c983d89"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "ded6076484685d202c63485bfe63f5c1312ed36dd762741d6ef352dd0532291c",
+          "certifier_digest": "ded6076484685d202c63485bfe63f5c1312ed36dd762741d6ef352dd0532291c",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "c2-code-review",
+            "nonce": "0917b8988cef"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "c2-code-review",
+          "raw_evidence_sha256": "af73ed01c70177006516f6f484608ee3aeb29a20acacbcccb4582d19d8ef96cb",
+          "resolutions": [],
+          "resolved_profile_hash": "3b3a7fc8e0683a8d7aac7979d0ec9f93a89570c2a90d2a3414d776de7c983d89",
+          "review_context_hash": "39b31a5d3db1b9f08f20665e4d38da3d30aebd0b694bf2eee52d96f4b57ae7a6",
+          "schema_version": 2,
+          "surface": "the full candidate: the run-chains four-edition family (canonical scripts/ copy, the codex byte twin under plugins/kaola-workflow/scripts/, the gitlab and gitea rename-normalized ports), its test surfaces (test-run-chains.js and the two forge test ports test-gitlab-run-chains.js / test-gitea-run-chains.js), and the n2 documentation delta (CLAUDE.md Validation Policy + CHANGELOG), reviewed against the accumulated diff vs the claim root base f92ec240 and n1's before/after timing evidence, with particular attention to the R1 diff-scope classifier coverage of root cross-edition read surfaces and the R2 per-chain timeout enforcement",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "c1-scope-timeout-fix": {
+          "baseline": "2b57aba7d890016f1e7a3b8929a30ed3d4e7228c",
+          "anchored_ref": "2b57aba7d890016f1e7a3b8929a30ed3d4e7228c",
+          "open_token": "f92ec240e3a02c3e8b10d07ebac7e3a9f4a3f088",
+          "generation": "2b57aba7d890",
+          "ref": "refs/kaola-workflow/barrier/issue-725/c1-scope-timeout-fix"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

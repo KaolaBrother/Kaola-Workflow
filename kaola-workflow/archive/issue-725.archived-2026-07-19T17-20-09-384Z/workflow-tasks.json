@@ -1,0 +1,24 @@
+{
+  "source_plan_hash": "d39f89af03fab7a5511d2cdf7fb97b7c719162e87b47b896e5a9dc51c77384cd",
+  "tasks": [
+    {
+      "id": "c1-scope-timeout-fix",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "c2-code-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "c3-finalize",
+      "role": "finalize",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-19T16:59:49.595Z"
+}

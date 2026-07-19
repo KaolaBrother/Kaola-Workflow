@@ -1,0 +1,10 @@
+{"node":"n1-receipt-diet","event":"opened","ts":"2026-07-19T13:26:48.020Z"}
+{"node":"n1-receipt-diet","event":"closed","ts":"2026-07-19T15:00:33.463Z"}
+{"node":"n2-docs","event":"opened","ts":"2026-07-19T15:00:33.912Z"}
+{"node":"n2-docs","event":"closed","ts":"2026-07-19T15:04:00.252Z"}
+{"node":"n3-code-review","event":"opened","ts":"2026-07-19T15:04:01.374Z"}
+{"node":"c1-scope-timeout-fix","event":"opened","ts":"2026-07-19T15:58:58.877Z"}
+{"node":"c1-scope-timeout-fix","event":"closed","ts":"2026-07-19T16:26:15.382Z"}
+{"node":"c2-code-review","event":"opened","ts":"2026-07-19T16:27:09.463Z"}
+{"node":"c2-code-review","event":"closed","ts":"2026-07-19T16:59:48.879Z"}
+{"node":"c3-finalize","event":"opened","ts":"2026-07-19T16:59:49.522Z"}

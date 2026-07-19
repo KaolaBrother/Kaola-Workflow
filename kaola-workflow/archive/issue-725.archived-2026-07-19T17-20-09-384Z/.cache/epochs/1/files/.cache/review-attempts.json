@@ -1,0 +1,394 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "3628c722ce42946dc80f16c00be32532b2f3b9eb65d88cb9a15af702fa7a1813",
+  "attempts": [
+    {
+      "attempt_id": "review2-40d0c5e30594dda0:1",
+      "ordinal": 1,
+      "plan_hash": "3628c722ce42946dc80f16c00be32532b2f3b9eb65d88cb9a15af702fa7a1813",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "06ba746f0dcdf2e5671043fc3f5dfde1e0f39beb7c2bb103a85924816bf7ddd6",
+        "key": "40d0c5e30594dda0207de475670204e0c101d74dc047662f63a9f36811de3384",
+        "kind": "sequence",
+        "members": [
+          "n3-code-review"
+        ],
+        "surface_digests": [
+          "627ec16a2fa0dd9b28d28e8df480f4b6919944a08f445c36b7f095b991025e51"
+        ]
+      },
+      "transaction_key": "9a3c4f55b7e1c5b6d81c59e95274962b160de04b468fd19b1b6d848ff2686f44",
+      "candidate_digest": "76ad48a1ddb8aa6228d2bce800739cf9c9f1c2476772c07617859fa40a148bac",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 82014ebc55dc094cea0f037973a2e6e242fe50c3",
+        "CLAUDE.md": "100644 99ea321c4f71b59c81400eaa27c7822a4561cc82",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-run-chains.js": "100644 5f4ab65d2296f14376a246320dca64782c48d4f9",
+        "plugins/kaola-workflow-gitea/scripts/test-gitea-run-chains.js": "100644 d4f6f849f3dc1c93edc03e6416c74f8c54278850",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-run-chains.js": "100644 a2c379f92d7184e558622c9f4352a343e9a2c256",
+        "plugins/kaola-workflow-gitlab/scripts/test-gitlab-run-chains.js": "100644 1a48ffc0d82913ea21de4aa600149a8219996021",
+        "plugins/kaola-workflow/scripts/kaola-workflow-run-chains.js": "100644 970e169adbb2df69f69f7d8ee324156b08ff0582",
+        "scripts/kaola-workflow-run-chains.js": "100644 970e169adbb2df69f69f7d8ee324156b08ff0582",
+        "scripts/test-run-chains.js": "100644 b982198d347b8d5d44222e4875cb583807d13e1a"
+      },
+      "candidate_residue_digest": "62dd80ab76c80a83e3af5df8b3a750c2baccd5a2a05799863636c6381edb2201",
+      "epoch_lineage_id": "b6fd8b93f02d0466a476fca4a90362d9c8dade8ca7bddf6b16cb822eaaac5832",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "f696fa213b4647b5e371be4b7729402e1bc4950a3c108af7b233e57af0346161",
+      "context_hashes": [
+        "2165130a8af1ab29f6c3c4f8898cdfecac0e9f3871bbda22a197e7473e390c41"
+      ],
+      "profile_hashes": [
+        "3b3a7fc8e0683a8d7aac7979d0ec9f93a89570c2a90d2a3414d776de7c983d89"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [
+        "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55",
+        "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb",
+        "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711"
+      ],
+      "current_findings": [
+        {
+          "uid": "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "d9214fad79689ee0166e09ab8bae2aef4f160b816660fd1defce56b79cfcb9c4",
+            "input_digest": "777d9cdd34dd70409e703227ab530fc1bf255c3d59af368f8388ecd7b55bd516",
+            "expected_digest": "47a115e6adfa41de217b16a39c3f175d1288037aa77681d673ad2ecc779e82d2",
+            "observed_digest": "8390c104fbe09e91c381a1cb8ed8f58b5bb58bf55ac8e30f0058649a5f40999b"
+          },
+          "trigger_digest": "e5e791bbc379ac7d13616d9974d43395d9654d85f5ac752e7ba0d233626f297f",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+            "observation_key": "gate:n3-code-review:R1-diff-scope-false-green",
+            "trigger_digest": "e5e791bbc379ac7d13616d9974d43395d9654d85f5ac752e7ba0d233626f297f"
+          },
+          "secondary_anchors": [],
+          "severity": "high",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "tdd-guide",
+          "proof_digest": null
+        },
+        {
+          "uid": "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb",
+          "failure_class": "contract",
+          "trigger": {
+            "precondition_digest": "058c4539e14378e4560bde6ec6bc2d66d719b9da94c9a0325c8910feb6257376",
+            "input_digest": "d4f7f31c0c22cd7e58521ce4ecc58ad00e0ee5db4f249bae6de9b7c11a98acda",
+            "expected_digest": "4cf045132efd0a0a5a2fe997307b00117a23aa8b10e08245e605d9602823d945",
+            "observed_digest": "d745c3856931ff877a56319f71cacc3ac44b1f9caf270dd56f4e8d84ae98181a"
+          },
+          "trigger_digest": "d0f2d9ad30928319e9176201fb6e466f362ab6ca3ddf3e6a7e02dfd6b4b11089",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+            "observation_key": "gate:n3-code-review:R2-timeout-contract-drift",
+            "trigger_digest": "d0f2d9ad30928319e9176201fb6e466f362ab6ca3ddf3e6a7e02dfd6b4b11089"
+          },
+          "secondary_anchors": [],
+          "severity": "low",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "tdd-guide",
+          "proof_digest": null
+        },
+        {
+          "uid": "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711",
+          "failure_class": "contract",
+          "trigger": {
+            "precondition_digest": "3a4284e7ac059fb500dc5066b2630081e37444e7ac69d1eea79db096cb93189e",
+            "input_digest": "73a14e91c00b08c6229d45ef5f08383c343a18f5fc40ca11c4119d83877e2210",
+            "expected_digest": "db5357476676672d9d3a66a1f0bb72147a29e2415ed3aa9374c9f3ce7bd56178",
+            "observed_digest": "796f4e21225e11eecdc69072b5062bb89a7ec7b3a22be53f88390f8aa1cfa259"
+          },
+          "trigger_digest": "186deff38a92a64e4a9d01f006f6b73225b0f1763c36cec6339249c4888d8211",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+            "observation_key": "gate:n3-code-review:R3-50pct-cut-shortfall-deferred",
+            "trigger_digest": "186deff38a92a64e4a9d01f006f6b73225b0f1763c36cec6339249c4888d8211"
+          },
+          "secondary_anchors": [],
+          "severity": "medium",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "deferred",
+          "fix_role": "none",
+          "proof_digest": null
+        }
+      ],
+      "findings": [
+        {
+          "uid": "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "d9214fad79689ee0166e09ab8bae2aef4f160b816660fd1defce56b79cfcb9c4",
+            "input_digest": "777d9cdd34dd70409e703227ab530fc1bf255c3d59af368f8388ecd7b55bd516",
+            "expected_digest": "47a115e6adfa41de217b16a39c3f175d1288037aa77681d673ad2ecc779e82d2",
+            "observed_digest": "8390c104fbe09e91c381a1cb8ed8f58b5bb58bf55ac8e30f0058649a5f40999b"
+          },
+          "trigger_digest": "e5e791bbc379ac7d13616d9974d43395d9654d85f5ac752e7ba0d233626f297f",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+            "observation_key": "gate:n3-code-review:R1-diff-scope-false-green",
+            "trigger_digest": "e5e791bbc379ac7d13616d9974d43395d9654d85f5ac752e7ba0d233626f297f"
+          },
+          "secondary_anchors": [],
+          "severity": "high",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "tdd-guide",
+          "proof_digest": null
+        },
+        {
+          "uid": "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb",
+          "failure_class": "contract",
+          "trigger": {
+            "precondition_digest": "058c4539e14378e4560bde6ec6bc2d66d719b9da94c9a0325c8910feb6257376",
+            "input_digest": "d4f7f31c0c22cd7e58521ce4ecc58ad00e0ee5db4f249bae6de9b7c11a98acda",
+            "expected_digest": "4cf045132efd0a0a5a2fe997307b00117a23aa8b10e08245e605d9602823d945",
+            "observed_digest": "d745c3856931ff877a56319f71cacc3ac44b1f9caf270dd56f4e8d84ae98181a"
+          },
+          "trigger_digest": "d0f2d9ad30928319e9176201fb6e466f362ab6ca3ddf3e6a7e02dfd6b4b11089",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+            "observation_key": "gate:n3-code-review:R2-timeout-contract-drift",
+            "trigger_digest": "d0f2d9ad30928319e9176201fb6e466f362ab6ca3ddf3e6a7e02dfd6b4b11089"
+          },
+          "secondary_anchors": [],
+          "severity": "low",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "tdd-guide",
+          "proof_digest": null
+        },
+        {
+          "uid": "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711",
+          "failure_class": "contract",
+          "trigger": {
+            "precondition_digest": "3a4284e7ac059fb500dc5066b2630081e37444e7ac69d1eea79db096cb93189e",
+            "input_digest": "73a14e91c00b08c6229d45ef5f08383c343a18f5fc40ca11c4119d83877e2210",
+            "expected_digest": "db5357476676672d9d3a66a1f0bb72147a29e2415ed3aa9374c9f3ce7bd56178",
+            "observed_digest": "796f4e21225e11eecdc69072b5062bb89a7ec7b3a22be53f88390f8aa1cfa259"
+          },
+          "trigger_digest": "186deff38a92a64e4a9d01f006f6b73225b0f1763c36cec6339249c4888d8211",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+            "observation_key": "gate:n3-code-review:R3-50pct-cut-shortfall-deferred",
+            "trigger_digest": "186deff38a92a64e4a9d01f006f6b73225b0f1763c36cec6339249c4888d8211"
+          },
+          "secondary_anchors": [],
+          "severity": "medium",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "deferred",
+          "fix_role": "none",
+          "proof_digest": null
+        }
+      ],
+      "resolutions": [],
+      "route_candidates": [
+        {
+          "source_node": "n3-code-review",
+          "finding_id": "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55",
+          "id": "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "tdd-guide",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "raw": "uid=3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55"
+        },
+        {
+          "source_node": "n3-code-review",
+          "finding_id": "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb",
+          "id": "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "low",
+          "fix_role": "tdd-guide",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "raw": "uid=b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb"
+        },
+        {
+          "source_node": "n3-code-review",
+          "finding_id": "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711",
+          "id": "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711",
+          "scope": "in_scope",
+          "action": "follow_up",
+          "status": "deferred",
+          "severity": "medium",
+          "fix_role": "none",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "raw": "uid=b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711"
+        }
+      ],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": [
+          "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55",
+          "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb",
+          "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711"
+        ]
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "changes_requested",
+        "gate_effect": "fail",
+        "blocking_findings": 3
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 3,
+          "candidate_digest": "76ad48a1ddb8aa6228d2bce800739cf9c9f1c2476772c07617859fa40a148bac",
+          "certifier_digest": "76ad48a1ddb8aa6228d2bce800739cf9c9f1c2476772c07617859fa40a148bac",
+          "contract_version": 2,
+          "domain_outcome": "changes_requested",
+          "evidence_binding": {
+            "node_id": "n3-code-review",
+            "nonce": "cde3cad3a929"
+          },
+          "execution_status": "complete",
+          "findings": [
+            {
+              "action": "fix",
+              "failure_class": "validation",
+              "fix_role": "tdd-guide",
+              "primary_anchor": {
+                "kind": "evidence_observation",
+                "observation_key": "gate:n3-code-review:R1-diff-scope-false-green",
+                "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+                "trigger_digest": "e5e791bbc379ac7d13616d9974d43395d9654d85f5ac752e7ba0d233626f297f"
+              },
+              "proof_digest": null,
+              "scope": "in_scope",
+              "secondary_anchors": [],
+              "severity": "high",
+              "status": "open",
+              "trigger": {
+                "expected_digest": "47a115e6adfa41de217b16a39c3f175d1288037aa77681d673ad2ecc779e82d2",
+                "input_digest": "777d9cdd34dd70409e703227ab530fc1bf255c3d59af368f8388ecd7b55bd516",
+                "observed_digest": "8390c104fbe09e91c381a1cb8ed8f58b5bb58bf55ac8e30f0058649a5f40999b",
+                "precondition_digest": "d9214fad79689ee0166e09ab8bae2aef4f160b816660fd1defce56b79cfcb9c4"
+              },
+              "trigger_digest": "e5e791bbc379ac7d13616d9974d43395d9654d85f5ac752e7ba0d233626f297f",
+              "uid": "3c5a3f613f1e4ac0e6f8c9a813ae117dc11c4db4e85b176a926148648cd9cf55"
+            },
+            {
+              "action": "fix",
+              "failure_class": "contract",
+              "fix_role": "tdd-guide",
+              "primary_anchor": {
+                "kind": "evidence_observation",
+                "observation_key": "gate:n3-code-review:R2-timeout-contract-drift",
+                "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+                "trigger_digest": "d0f2d9ad30928319e9176201fb6e466f362ab6ca3ddf3e6a7e02dfd6b4b11089"
+              },
+              "proof_digest": null,
+              "scope": "in_scope",
+              "secondary_anchors": [],
+              "severity": "low",
+              "status": "open",
+              "trigger": {
+                "expected_digest": "4cf045132efd0a0a5a2fe997307b00117a23aa8b10e08245e605d9602823d945",
+                "input_digest": "d4f7f31c0c22cd7e58521ce4ecc58ad00e0ee5db4f249bae6de9b7c11a98acda",
+                "observed_digest": "d745c3856931ff877a56319f71cacc3ac44b1f9caf270dd56f4e8d84ae98181a",
+                "precondition_digest": "058c4539e14378e4560bde6ec6bc2d66d719b9da94c9a0325c8910feb6257376"
+              },
+              "trigger_digest": "d0f2d9ad30928319e9176201fb6e466f362ab6ca3ddf3e6a7e02dfd6b4b11089",
+              "uid": "b435cb3cebe3167a18e824805d96a7e5df13f17afe96ff08677caba58258a9bb"
+            },
+            {
+              "action": "follow_up",
+              "failure_class": "contract",
+              "fix_role": "none",
+              "primary_anchor": {
+                "kind": "evidence_observation",
+                "observation_key": "gate:n3-code-review:R3-50pct-cut-shortfall-deferred",
+                "producer_evidence_digest": "980da5d5c49a5f1007bac51be35d45a60681eeefc4109730182bcde2a9ba1e38",
+                "trigger_digest": "186deff38a92a64e4a9d01f006f6b73225b0f1763c36cec6339249c4888d8211"
+              },
+              "proof_digest": null,
+              "scope": "in_scope",
+              "secondary_anchors": [],
+              "severity": "medium",
+              "status": "deferred",
+              "trigger": {
+                "expected_digest": "db5357476676672d9d3a66a1f0bb72147a29e2415ed3aa9374c9f3ce7bd56178",
+                "input_digest": "73a14e91c00b08c6229d45ef5f08383c343a18f5fc40ca11c4119d83877e2210",
+                "observed_digest": "796f4e21225e11eecdc69072b5062bb89a7ec7b3a22be53f88390f8aa1cfa259",
+                "precondition_digest": "3a4284e7ac059fb500dc5066b2630081e37444e7ac69d1eea79db096cb93189e"
+              },
+              "trigger_digest": "186deff38a92a64e4a9d01f006f6b73225b0f1763c36cec6339249c4888d8211",
+              "uid": "b72ea9ee8de6d58f081ecfd071fb046e9d0f5a76f9915520d2f3e0becf14c711"
+            }
+          ],
+          "gate_effect": "fail",
+          "node_id": "n3-code-review",
+          "raw_evidence_sha256": "7cde660797535513949d58f1e334511e2c103acbd9aeadd6453950547c9cdd3e",
+          "resolutions": [],
+          "resolved_profile_hash": "3b3a7fc8e0683a8d7aac7979d0ec9f93a89570c2a90d2a3414d776de7c983d89",
+          "review_context_hash": "2165130a8af1ab29f6c3c4f8898cdfecac0e9f3871bbda22a197e7473e390c41",
+          "schema_version": 2,
+          "surface": "the full candidate: the run-chains four-edition family (canonical scripts/ copy, the codex byte twin under plugins/kaola-workflow/scripts/, the gitlab and gitea rename-normalized ports), its test surfaces (test-run-chains.js and the two forge test ports test-gitlab-run-chains.js / test-gitea-run-chains.js), and the n2 documentation delta (CLAUDE.md Validation Policy + CHANGELOG), reviewed against the accumulated diff vs the claim root base and n1's before/after timing evidence",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "fail",
+      "reason": "review_gate_failed",
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-receipt-diet": {
+          "baseline": "8176ed34521262ea6a1f8ad0e9284f9d6ecebd3c",
+          "anchored_ref": "8176ed34521262ea6a1f8ad0e9284f9d6ecebd3c",
+          "open_token": "f92ec240e3a02c3e8b10d07ebac7e3a9f4a3f088",
+          "generation": "8176ed345212",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-receipt-diet"
+        },
+        "n2-docs": {
+          "baseline": "500c77477a049099e63dd33c70439ea525df7aaa",
+          "anchored_ref": "500c77477a049099e63dd33c70439ea525df7aaa",
+          "open_token": "f92ec240e3a02c3e8b10d07ebac7e3a9f4a3f088",
+          "generation": "500c77477a04",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n2-docs"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}
