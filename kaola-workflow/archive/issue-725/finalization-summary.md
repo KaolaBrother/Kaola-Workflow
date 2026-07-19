@@ -44,6 +44,7 @@ Phase A (retire fast/full paths — adaptive-only consolidation) shipped as feat
 | epoch activation lacks cross-epoch review-journal rotation | filed: #722 (workaround applied) |
 | finalize attribution sweep not epoch-lineage-aware | filed: #724 (workaround applied, evidence above) |
 | proxy EADDRNOTAVAIL on rapid gh bursts (claim escalation ×5) | noise: environmental flake, recovered by retry |
+| sink-merge FF-race gate red: detectReviewRuntime misclassifies a default-named (`kaola-workflow`) self-dev checkout as opencode → `#712[self-dev]` fails in the main root (pre-existing; reproduced on pristine main `7c40f33b`; sink completed manually against the green worktree receipt) | filed: #736 |
 | GAP-5/6/7 unowned-file discoveries (required-blocks.js, forge sinks tests, test-bundle-finalize) | resolved in-run: owned + fixed by the epoch-2 repair (n1-repair write set) |
 
 ## Partial-Close Contract
