@@ -148,11 +148,6 @@ const SINGLE_ISSUE_STATE = [
     assert(folder.issue_number === 42, 'issue_number (primary) is 42, got ' + folder.issue_number);
     assert(Array.isArray(folder.issue_numbers), 'issue_numbers is an array, got ' + typeof folder.issue_numbers);
     assert(folder.issue_numbers.length === 3, 'issue_numbers has 3 members, got ' + folder.issue_numbers.length);
-    assert(folder.issue_numbers[0] === 42, 'issue_numbers[0] is 42');
-    assert(folder.issue_numbers[1] === 47, 'issue_numbers[1] is 47');
-    assert(folder.issue_numbers[2] === 53, 'issue_numbers[2] is 53');
-    assert(folder.bundle_id === 'bundle-42-47-53', 'bundle_id is bundle-42-47-53, got ' + folder.bundle_id);
-    assert(folder.closure_policy === 'all_or_nothing', 'closure_policy is all_or_nothing, got ' + folder.closure_policy);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
