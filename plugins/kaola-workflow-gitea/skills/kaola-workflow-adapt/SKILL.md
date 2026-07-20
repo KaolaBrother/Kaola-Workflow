@@ -331,7 +331,7 @@ delegating: nothing is claimed yet — run the Startup git-freshness checks agai
 reset is needed), STOP and ask — do NOT delegate, so **no folder / `workflow:in-progress`
 label is created until git is clean** (the front end claims here at repo-root — the adaptive claim provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`, the same as full/fast paths; the planner authors + freezes at repo-root and does NOT itself cd into the worktree — so the router's post-claim freshness-block release no longer guards this path).
 
-**Co-tenant clean-check.** The dirty-worktree check above disregards `kaola-workflow/*` and `.kw/*` paths belonging to OTHER active lanes (lanes this session did not claim), so a second concurrent session starting alongside an already-running first lane does not receive a false "dirty main" refusal. The check STILL fails on any uncommitted code change; this session's OWN in-progress state is still enforced. Only non-owned lane scratch — another session's `kaola-workflow/<project>/` folder and its `.kw/worktrees/<project>/` worktree — is selectively disregarded.
+**Co-tenant clean-check.** That dirty check disregards `kaola-workflow/*` and `.kw/*` scratch of OTHER active lanes (so a co-tenant session is not falsely refused) but still fails on any uncommitted code change; this session's own in-progress state stays enforced.
 
 Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-gitea-workflow-claim.js startup --runtime <runtime> --workflow-path adaptive
 --target-issue <issue> --attest-planner-spawn` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit

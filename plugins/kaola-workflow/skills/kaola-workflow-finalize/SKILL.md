@@ -146,17 +146,12 @@ verdict/evidence semantics and does not acquire schema-2 receipt requirements. N
 rewrite that plan in place.
 <!-- /PIN -->
 
-Read `workflow_path` from `kaola-workflow/{project}/workflow-state.md` (defaults
-to `full` when absent). If `workflow_path: fast`, the fast path replaces Phase
-1-5: require `fast-summary.md` with status `PASSED` (stop if it is missing or not
-`PASSED`), and read it as the Phase 1-5 substitute (`## Scope`, `## Plan`,
-`## Implementation Evidence`, `## Review`) wherever the steps below reference
-Phase 1/3/5 artifacts. If `workflow_path: adaptive`, the adaptive path
-replaces Phase 1-5: require a frozen `workflow-plan.md` (re-check `plan_hash`) whose
-`## Node Ledger` rows are all `complete` or `n/a`; on corruption or an incomplete
-ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its plan_hash
-failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the Phase
-1-5 substitute.
+Adaptive is the only workflow path. Read `workflow_path: adaptive` from
+`kaola-workflow/{project}/workflow-state.md` and require a frozen `workflow-plan.md`
+(re-check `plan_hash`) whose `## Node Ledger` rows are all `complete` or `n/a`; on corruption
+or an incomplete ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its
+plan_hash failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the
+Phase 1-5 substitute.
 
 The adaptive completion check is **script-enforced**, not prose: run all
 four gates and capture each exit code DIRECTLY (never gate on a piped `| tail`, which
@@ -217,60 +212,26 @@ N/A pass):
 BLOCKED: finalize_gate_unverified (adaptive_plan_missing) — restore the frozen workflow-plan.md before Finalization.
 ```
 
-### Chain-Receipt Gate
+### Validation Gate (dual-mode by repo kind)
 
-Finalization is **machine-gated** on a fresh, valid chain receipt. The main session stamps that
-receipt after all code changes and test-consumed prose/docs for the final candidate have landed, as
-the last action before Finalization. Before proceeding past the prerequisite check, verify
-`.cache/chain-receipt.json` and stop with a typed refusal if any of the following are true (checked
-in precedence order):
+`--finalize-check` auto-detects mode; the attribution sweep runs for both. Never gate on CI. These
+typed refusals are classified structurally — do not string-match; the remedy for a stale receipt/hash
+is always a full re-run, never a hand-patch.
 
-- **`chains_unverified`** — `.cache/chain-receipt.json` is absent. No chains have
-  been run through the gated runner; prose attestation is not accepted.
-  Remedy: the orchestrator (main session) must run `kaola-workflow-run-chains.js`
-  (resolved the same way as `validator_script` above) after the final candidate is assembled so the
-  receipt is written against the current HEAD. Do NOT delegate this to the contractor
-  subagent — the contractor only verifies.
-- **`chains_stale`** — the receipt's `codeTreeHash` no longer matches the current
-  code-relevant tree: code or a chain-asserted doc changed since the chains ran.
-  Workflow state and inert, non-test-consumed docs do NOT trigger it; a legacy receipt without
-  `codeTreeHash` falls back to the `headSha`-vs-HEAD pin. Diagnostics may identify stale paths or
-  a stale kind, but the remedy is still a full restamp.
-  Remedy: the orchestrator (main session) must re-run `kaola-workflow-run-chains.js`
-  to regenerate the receipt against HEAD. Do NOT patch the receipt, and do NOT delegate this to
-  the contractor subagent.
-- **`chains_red`** — at least one chain has a non-zero exit code and
-  `accepted_red: false`. A real failing chain that has not been explicitly waived
-  blocks finalization.
-  Remedy: fix the failing chain, OR waive it with
-  `--accept-known-red <name>:<open-issue>` if it is a known-failing chain tracked
-  by an open issue (the waiver is recorded durably in the receipt and the other
-  chains still gate).
-
-These typed refusals are emitted by `cmdFinalize` / the plan-validator's
-finalize/verdict path and are classified structurally — do not match by string.
-
-**Consumer product repos.** The Chain-Receipt Gate above is the **self-host (npm)** mode.
-A consumer repo whose validation is not npm-based (no `test:kaola-workflow:*` scripts in
-`package.json`) does **NOT** run `kaola-workflow-run-chains.js` — the agent owns verification. It records `.cache/final-validation.md` with a column-0 **`verdict: pass`**, and
-`--finalize-check` (consumer mode, auto-detected by the absent npm scripts) gates on that file:
-`final_validation_unverified` if it is absent, `final_validation_failed` if it lacks `verdict: pass`,
-`final_validation_unbound` if it lacks a well-formed column-0 `validated_candidate_hash:` line, and
-`final_validation_stale` if that recorded hash no longer equals the recomputed current code-tree
-hash (the refusal payload carries `recorded_candidate_hash` + `current_candidate_hash`). Produce
-the hash with the plan-validator's `--candidate-hash --json` mode (`$validator_script`) — computed
-LAST, after every file the validation covered has landed — and record it as a column-0
-`validated_candidate_hash:` line. On `final_validation_stale`, re-run the recorded validation
-command and re-record with a fresh hash — never hand-patch the hash; workflow state and inert,
-non-test-consumed docs are validation-invisible and do not stale the binding. The binding gate
-compares two hashes and never re-runs tests.
-If an unchanged terminal change-gate validation run covers the final candidate, the agent may cite
-that run instead of rerunning by recording column-0 `verdict: pass`, `source: cited:<node-id>`,
-`validated_command`, `validated_at_head`, and `reuse_boundary`, plus a fresh
-`validated_candidate_hash:` computed at citation time (the binding is what proves the cited run
-still covers the candidate). Any doubt about the boundary means run the command.
-The attribution sweep runs for **both** repo kinds. The v6.2.0 `kaola-workflow/chains.json` opt-in
-is **retired** — there is no middle-ground; a consumer repo finalizes on the agent's evidence.
+- **Self-host (npm)** (declares `test:kaola-workflow:*`): machine-gated on a fresh, valid
+  `.cache/chain-receipt.json`. The main session runs `kaola-workflow-run-chains.js` after all code +
+  test-consumed prose/docs land, as the last pre-Finalization action (do NOT delegate — the contractor
+  only verifies). Precedence-ordered refusals: `chains_unverified` (absent), `chains_stale`
+  (`codeTreeHash` ≠ code-relevant tree; inert docs + workflow state do not trigger it), `chains_red`
+  (a real failing chain, `accepted_red: false` — fix it or waive `--accept-known-red <name>:<open-issue>`).
+- **Consumer (non-npm)** (no `test:kaola-workflow:*`): does NOT run chains — the agent owns
+  verification and records `.cache/final-validation.md` with a column-0 `verdict: pass` +
+  `validated_candidate_hash:` (produce it with the plan-validator's `--candidate-hash --json` mode
+  via `$validator_script`, computed LAST). `--finalize-check` gates on `final_validation_unverified`
+  / `final_validation_failed` / `final_validation_unbound` / `final_validation_stale`. When the
+  candidate is unchanged since a terminal change-gate run, cite it with `source: cited:<node-id>`,
+  `validated_command`, `validated_at_head`, `reuse_boundary`, plus a fresh `validated_candidate_hash:`.
+  Any doubt → run the command. The attribution sweep runs for both repo kinds.
 
 ### Run-Gap Sweep Gate
 
@@ -327,8 +288,7 @@ choices, or ambiguity that blocks correctness.
 ## Required Steps
 
 1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build) after all test-consumed prose/docs and code changes have landed, as the last pre-Finalization action; on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence with `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. Save output to `.cache/final-validation.md`, then bind it: record a column-0 `validated_candidate_hash:` line produced by the plan-validator's `--candidate-hash --json` as the LAST action, after every file the validation covered has landed. **State the actual validation-reuse boundary, not a false absolute:** when you cite a prior run instead of rerunning, record which node/state it covered and that later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node) are outside it — do NOT write a terminal absolute like `No files changed after those runs` when the finalize node itself changes docs/changelog afterward. Any doubt about the boundary means run the command. (At closure, `archiveProjectDir` also mechanically neutralizes that known false-absolute phrase in the archived `.cache/final-validation.md` as a backstop.)
-<!-- PIN: fast-compliance-backstop -->
-2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a real delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real evidence path or skip\_reason — not `pending`, `invoked` without evidence, or bare `N/A` without skip\_reason — whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` with a documented skip\_reason is allowed only for the trivial band (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script refusal enforces this fail-closed at `summary-write` time; this step is a second-line gate.
+2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. Adaptive's `--verdict-check` barrier (see the Prerequisite gate above) is the sole compliance gate.
    ```bash
    ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"

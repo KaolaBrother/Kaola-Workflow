@@ -11,7 +11,7 @@
 // The kimi edition is delivered the Kimi-native way: directory-form Skills
 // under `.kimi/skills/<name>/SKILL.md` (5 command skills — adaptive-only, the
 // fast/full command skills are #725-retired — + 16 kaola-role-*
-// role-contract skills) plus `.kimi/hooks/` (3 byte-copied shell hooks + the
+// role-contract skills) plus `.kimi/hooks/` (1 byte-copied shell hook + the
 // generated `kimi-hooks.toml` fragment the installer merges into the global
 // config.toml). ONE model tier: every subagent inherits the session model (the
 // Codex inherit precedent), so there is no variant/effort surface to assert —
@@ -330,31 +330,26 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// K7: hooks — the generated kimi-hooks.toml fragment maps the four canonical
-// hooks.json entries to Kimi [[hooks]] rules (PreToolUse/Bash → pre-commit,
-// PreToolUse/Write|Edit → write-lane, SubagentStart → dispatch-log, and the
-// Claude SessionStart"compact" entry → PostCompact → compact-context.js), and
-// the 3 runtime-neutral shell scripts are byte-identical to canonical hooks/.
+// K7: hooks — the generated kimi-hooks.toml fragment maps the two canonical
+// hooks.json entries to Kimi [[hooks]] rules (SubagentStart → dispatch-log,
+// and the Claude SessionStart"compact" entry → PostCompact →
+// compact-context.js), and the 1 runtime-neutral shell script is
+// byte-identical to canonical hooks/.
 // ---------------------------------------------------------------------------
 {
   const toml = read('.kimi/hooks/kimi-hooks.toml');
   assert(toml === sync.renderKimiHooksToml(),
     'K7: committed kimi-hooks.toml is byte-equal to renderKimiHooksToml() (regenerate via --write)');
   const blocks = toml.match(/^\[\[hooks\]\]$/gm) || [];
-  assert(blocks.length === 4,
-    'K7: kimi-hooks.toml carries EXACTLY 4 [[hooks]] rules (mapped from canonical hooks.json) — got ' + blocks.length);
-  const ALLOWED_EVENTS = new Set(['PreToolUse', 'SubagentStart', 'PostCompact']);
+  assert(blocks.length === 2,
+    'K7: kimi-hooks.toml carries EXACTLY 2 [[hooks]] rules (mapped from canonical hooks.json) — got ' + blocks.length);
+  const ALLOWED_EVENTS = new Set(['SubagentStart', 'PostCompact']);
   const events = [...toml.matchAll(/^event = "([^"]+)"$/gm)].map(m => m[1]);
-  assert(events.length === 4 && events.every(e => ALLOWED_EVENTS.has(e)),
-    'K7: every [[hooks]] event is a valid Kimi event ∈ {PreToolUse, SubagentStart, PostCompact} — got ' + JSON.stringify(events));
-  assert(events.filter(e => e === 'PreToolUse').length === 2
-    && events.filter(e => e === 'SubagentStart').length === 1
+  assert(events.length === 2 && events.every(e => ALLOWED_EVENTS.has(e)),
+    'K7: every [[hooks]] event is a valid Kimi event ∈ {SubagentStart, PostCompact} — got ' + JSON.stringify(events));
+  assert(events.filter(e => e === 'SubagentStart').length === 1
     && events.filter(e => e === 'PostCompact').length === 1,
-    'K7: event partition is PreToolUse×2 + SubagentStart×1 + PostCompact×1 (the canonical 4-entry map)');
-  assert(/event = "PreToolUse"\nmatcher = "Bash"\ncommand = "bash __KIMI_HOME__\/kaola-workflow\/hooks\/kaola-workflow-pre-commit\.sh"/.test(toml),
-    'K7: PreToolUse/Bash → pre-commit.sh (matcher preserved; __KIMI_HOME__ placeholder for the installer)');
-  assert(/event = "PreToolUse"\nmatcher = "Write\|Edit"\ncommand = "bash __KIMI_HOME__\/kaola-workflow\/hooks\/kaola-workflow-write-lane\.sh"/.test(toml),
-    'K7: PreToolUse/Write|Edit → write-lane.sh (Kimi matchers are regexes; the alternation carries over)');
+    'K7: event partition is SubagentStart×1 + PostCompact×1 (the canonical 2-entry map)');
   assert(/event = "SubagentStart"\ncommand = "bash __KIMI_HOME__\/kaola-workflow\/hooks\/kaola-workflow-subagent-dispatch-log\.sh"/.test(toml),
     'K7: SubagentStart → dispatch-log.sh (matcher omitted)');
   assert(/event = "PostCompact"\ncommand = "node __KIMI_HOME__\/kaola-workflow\/scripts\/kaola-workflow-compact-context\.js"/.test(toml),
@@ -383,39 +378,6 @@ for (const script of sync.HOOK_SCRIPTS) {
     }
   }
 }
-{
-  // The write-lane adaptation is LOAD-BEARING: Kimi's PreToolUse Write|Edit payload
-  // carries tool_input.path (Claude: file_path). Decisive end-to-end probe through the
-  // REAL generated script: in a staged temp git repo with an OPEN GATE manifest, a
-  // kimi-shaped payload for an in-repo write must be DENIED (exit 2 — the #607 gate
-  // window fence; an unadapted script fail-opens on the missing file_path and exits 0),
-  // and the Claude-shaped payload must behave identically (backward compatibility).
-  const os = require('os');
-  const { spawnSync } = require('child_process');
-  const probeRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-k7-writelane-'));
-  try {
-    spawnSync('git', ['init', '-q'], { cwd: probeRepo });
-    const cacheDir = path.join(probeRepo, 'kaola-workflow', 'probe', '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
-      JSON.stringify({ nodes: [{ id: 'g1', kind: 'gate', role: 'code-reviewer' }] }));
-    const probe = (payload) => spawnSync('bash',
-      [path.join(REPO, '.kimi/hooks/kaola-workflow-write-lane.sh')],
-      { input: JSON.stringify(payload), encoding: 'utf8', cwd: probeRepo });
-    const kimiShape = probe({ tool_input: { path: 'k7-probe.txt' } });
-    assert(kimiShape.status === 2 && /gate-window fence/.test(kimiShape.stderr || ''),
-      'K7[write-lane]: kimi-shaped payload (tool_input.path) reaches the #607 gate fence — DENIED with the fence message, got status=' + kimiShape.status + ' stderr=' + JSON.stringify((kimiShape.stderr || '').slice(0, 120)));
-    const claudeShape = probe({ tool_input: { file_path: 'k7-probe.txt' } });
-    assert(claudeShape.status === 2 && /gate-window fence/.test(claudeShape.stderr || ''),
-      'K7[write-lane]: claude-shaped payload (tool_input.file_path) still reaches the fence after adaptation');
-    const outsideShape = probe({ tool_input: { path: '/tmp/k7-outside-repo.txt' } });
-    assert(outsideShape.status === 0,
-      'K7[write-lane]: out-of-repo write stays allowed (fail-open band preserved), got ' + outsideShape.status);
-  } finally {
-    fs.rmSync(probeRepo, { recursive: true, force: true });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // K8: route reachability (mirror of test-route-reachability.js T2 + the
 // opencode A9, scoped to .kimi/skills/) — every receipt-EMITTED command target
@@ -604,8 +566,8 @@ for (const script of sync.HOOK_SCRIPTS) {
     assert(JSON.stringify(deployedSkills(r1)) === JSON.stringify(deployedSkills(r2)),
       'P4: re-install leaves the deployed skill set unchanged');
     const hookBlockCount = readFileSync(r1.kimiConfig, 'utf8').match(/^\[\[hooks\]\]$/gm) || [];
-    assert(hookBlockCount.length === 4,
-      'P4: re-installed config.toml carries exactly the 4 [[hooks]] rules (no duplication)');
+    assert(hookBlockCount.length === 2,
+      'P4: re-installed config.toml carries exactly the 2 [[hooks]] rules (no duplication)');
     clean(r1);
     clean(r2);
   }

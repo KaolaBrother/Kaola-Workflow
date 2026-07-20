@@ -18,8 +18,8 @@ Everything under `.kimi/` is **generated from canonical** by
 | ---------------- | ------------------- | ----- |
 | `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (5 commands — canonical `commands/` shrank from 11 to 5 when the `fast`/`full` paths were retired, #725). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
 | `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. `agents/profiles/higher/` is skipped (meaningless under inherit). |
-| `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 3 runtime-neutral hook scripts — byte-copied where the Kimi payload is field-compatible (pre-commit), payload-adapted at generation time where it is not (write-lane, dispatch-log; see [Hooks](#hooks)). |
-| `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The four canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
+| `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 1 runtime-neutral hook script — payload-adapted at generation time where the Kimi payload field name differs (dispatch-log; see [Hooks](#hooks)). |
+| `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The two canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
 
 The generated tree is deliberately model-agnostic, so regenerating it never overwrites a
 user's model choices — those live only in the user-owned Kimi `config.toml`.
@@ -159,40 +159,34 @@ command unassigned to a partition still fails both the test and the installer (f
 
 Kimi's hook model is **TOML `[[hooks]]` rules in `config.toml`** — not Claude Code's
 `settings.json` shell hooks, and not opencode's TS/JS plugin. The kimi edition ships the
-**same runtime-neutral shell scripts** the other editions use (single source of truth)
+**same runtime-neutral shell script** the other editions use (single source of truth)
 plus a generated `kimi-hooks.toml` fragment that
-re-expresses the four canonical `hooks/hooks.json` entries:
+re-expresses the two canonical `hooks/hooks.json` entries:
 
 | Claude/Codex hook | Kimi `[[hooks]]` mapping | Script |
 | --- | --- | --- |
-| `PreToolUse` Bash (block multi-project commits) | `event="PreToolUse"`, `matcher="Bash"` | `kaola-workflow-pre-commit.sh` |
-| `PreToolUse` Write\|Edit (#376 lane containment) | `event="PreToolUse"`, `matcher="Write\|Edit"` | `kaola-workflow-write-lane.sh` |
 | `SubagentStart` (dispatch attestation) | `event="SubagentStart"` (matcher omitted) | `kaola-workflow-subagent-dispatch-log.sh` |
 | `SessionStart` compact (resume state) | `event="PostCompact"` | `node kaola-workflow-compact-context.js` |
 
-Kimi matchers are regexes, so the `Write|Edit` alternation carries over verbatim. Kimi
-honors the same exit-code contract (0 = allow, 2 = deny); the scripts stay
-fail-open everywhere (a missing script, malformed payload, or non-git cwd never breaks the
-session), and the write-lane hook stays dormant unless `KAOLA_LANE_CONTAINMENT` is set,
-matching canonical behavior.
+The advisory pre-commit and write-lane hooks are retired across every edition — canonical
+`hooks/` no longer ships either script, and the kimi edition carries no residual reference
+to them. The surviving script stays fail-open everywhere (a missing script, malformed
+payload, or non-git cwd never breaks the session).
 
-**Payload-field adaptation (verified against kimi-code 0.26.0).** Kimi's hook payloads use
-different field names than Claude's for two events, and an unadapted script would silently
+**Payload-field adaptation (verified against kimi-code 0.26.0).** Kimi's hook payload uses
+a different field name than Claude's for one event, and an unadapted script would silently
 fail-open on every trigger:
 
 | Event | Claude payload | Kimi payload | Adaptation |
 | --- | --- | --- | --- |
-| `PreToolUse` Write\|Edit | `tool_input.file_path` | `tool_input.path` | write-lane accepts `file_path \|\| path` |
 | `SubagentStart` | `agent_type` | `agent_name` | dispatch-log accepts `agent_type \|\| agent_name` |
-| `PreToolUse` Bash | `tool_input.command` | `tool_input.command` | none — pre-commit stays byte-identical |
 | `PostCompact` | `cwd` | `cwd` | none — compact-context stays as-is |
 
-The generator applies these as anchored single-string rewrites (`HOOK_ADAPTATIONS` in
-`scripts/sync-kimi-edition.js`) and marks the two adapted files with a
+The generator applies this as an anchored single-string rewrite (`HOOK_ADAPTATIONS` in
+`scripts/sync-kimi-edition.js`) and marks the adapted file with a
 `# kimi-edition: payload-adapted copy` header; a drifted canonical anchor is a hard error
 at generation time, never a silently unadapted hook. The K7 test block re-derives the
-expected bytes from canonical + adaptation and functionally probes the generated
-write-lane with a Kimi-shaped payload through a staged gate window (deny = exit 2).
+expected bytes from canonical + adaptation for every byte-copied/adapted hook script.
 
 **Event-mapping note (`PostCompact`).** Kimi has no `SessionStart"compact"` event;
 `PostCompact` is its semantic counterpart — it fires *after a compaction completes* rather
@@ -350,12 +344,9 @@ their canonical sources, #725), which regenerates the tree itself (`--write`) be
   `behavior_contract_version`, `behavior_contract_hash`, core bytes) through the kimi
   render. Each reviewer skill's re-stamped `resolved_profile_hash` verifies against its
   own bytes (exactly one hash line; never the reused Claude hash).
-- **K7 — hooks:** the generated fragment carries the four `[[hooks]]` entries with legal
-  event names; pre-commit is byte-identical to canonical, while write-lane/dispatch-log
-  equal canonical with exactly the pinned payload-field adaptation applied (see
-  [Hooks](#hooks)) — including a functional probe that pipes a Kimi-shaped
-  `tool_input.path` payload through the generated write-lane inside a staged gate window
-  (deny = exit 2).
+- **K7 — hooks:** the generated fragment carries the two `[[hooks]]` entries with legal
+  event names; dispatch-log equals canonical with exactly the pinned payload-field
+  adaptation applied (see [Hooks](#hooks)).
 - **K8 — route reachability:** every receipt-emitted command target resolves under
   `.kimi/skills/`.
 - **K9 — reviewer profile resolution end-to-end:** hermetic installs (real `install-kimi.sh`

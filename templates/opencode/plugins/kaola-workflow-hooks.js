@@ -8,7 +8,6 @@
 // denial per the official .env-protection plugin pattern).
 //
 // Coverage (mirrors plugins/kaola-workflow/config/hooks.json):
-//   tool.execute.before · bash      → kaola-workflow-pre-commit.sh   (block multi-project commits)
 //   tool.execute.before · edit/write→ kaola-workflow-write-lane.sh   (#376 lane containment; dormant until enabled)
 //   tool.execute.before · task      → kaola-workflow-subagent-dispatch-log.sh (record spawn for closure attestation)
 //   experimental.session.compacting → inject active kaola-workflow resume state
@@ -29,7 +28,6 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url));
 const OPENCODE_CONFIG_DIR = process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), ".config", "opencode");
 
 const HOOK = {
-  preCommit: "kaola-workflow-pre-commit.sh",
   writeLane: "kaola-workflow-write-lane.sh",
   dispatchLog: "kaola-workflow-subagent-dispatch-log.sh",
 };
@@ -127,14 +125,6 @@ export default async function KaolaWorkflowHooks({ directory, worktree }) {
     "tool.execute.before": async (input, output) => {
       const tool = input && input.tool;
       const args = (output && output.args) || {};
-
-      if (tool === "bash") {
-        const r = runHook(root, HOOK.preCommit, { tool_input: { command: args.command || "" } });
-        if (r.status === 2) {
-          throw new Error(r.stderr.trim() || "Kaola-Workflow: commit blocked (multiple kaola-workflow projects staged).");
-        }
-        return;
-      }
 
       if (tool === "edit" || tool === "write") {
         const fp = args.filePath || args.path || args.file_path || "";

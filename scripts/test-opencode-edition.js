@@ -528,17 +528,10 @@ for (const target of emittedCommandTargets) {
   assert(has('kaola-workflow-plan-run', '--speculative-consent'),
     'A19: plan-run must contain "--speculative-consent" literal');
 
-  // A20 (mirror T10): finalize carries the fast-compliance-backstop PIN + fast_compliance_unresolved
-  // literal (#504). #725 Phase A: `kaola-workflow-fast` is retired (n2-deleted from canonical) — the
-  // PIN survives ONLY on finalize now, force-kept alive as dormant legacy prose by the (unowned,
-  // out-of-scope) templates/routing/required-blocks.js `fn-fast-compliance-backstop` manifest entry
-  // (see n1-recon / n6-routing evidence for the discovered write-set gap).
-  for (const name of ['kaola-workflow-finalize']) {
-    assert(has(name, '<!-- PIN: fast-compliance-backstop -->'),
-      'A20[' + name + ']: must contain <!-- PIN: fast-compliance-backstop --> comment');
-    assert(has(name, 'fast_compliance_unresolved'),
-      'A20[' + name + ']: must contain "fast_compliance_unresolved" literal');
-  }
+  // A20 (mirror T10) — RETIRED (#725 Phase D). The dormant fast-compliance-backstop PIN +
+  // `fast_compliance_unresolved` legacy backstop on finalize was removed with the deleted fast path
+  // (no project left for it to fire against), so there is nothing to lock in on the generated finalize
+  // surface; retired alongside its manifest block and SUPERSET-PROOF entry.
 
   // A21 (mirror T11) — DELETED IN FULL. Both surfaces it probed
   // (`kaola-workflow-phase1`, `kaola-workflow-fast`) are 100% n2-deleted canonical
@@ -1141,14 +1134,14 @@ if (exists(pluginRel)) {
     const h = spawnSync('node', ['--input-type=module', '-e', harness], {
       env: Object.assign({}, process.env, {
         OPENCODE_CONFIG_DIR: emptyCfg, KW_PLUGIN: pluginPath,
-        KW_SCRIPT: 'kaola-workflow-pre-commit.sh', KW_FAKEROOT: fakeRoot,
+        KW_SCRIPT: 'kaola-workflow-subagent-dispatch-log.sh', KW_FAKEROOT: fakeRoot,
       }),
       encoding: 'utf8',
     });
     assert(h.status === 0, 'H1: hookPath ESM harness runs (got ' + h.status + (h.stderr ? ' — ' + String(h.stderr).split('\n')[0] : '') + ')');
     let out; try { out = JSON.parse(h.stdout); } catch (_) { out = {}; }
     const resolvedNorm = (out.resolved || '').replace(/\\/g, '/');
-    assert(resolvedNorm.includes('.opencode/hooks/kaola-workflow-pre-commit.sh'),
+    assert(resolvedNorm.includes('.opencode/hooks/kaola-workflow-subagent-dispatch-log.sh'),
       'H1 (#F3): hookPath resolves a hook via the plugin-sibling ../hooks candidate when the project + config dir have none — got ' + JSON.stringify(out.resolved));
     assert(out.missing === null,
       'H1 (#F3): hookPath returns null (fail-open) for a hook that exists nowhere');

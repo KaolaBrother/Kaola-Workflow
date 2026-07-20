@@ -291,13 +291,6 @@ const REQUIRED_BLOCKS = [
     content_tokens: ['--issue-numbers', 'issue_numbers'],
   },
   {
-    block_id: 'fn-fast-compliance-backstop',
-    topic: 'finalize',
-    runtime_tag: 'both',
-    surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: fast-compliance-backstop -->', 'fast_compliance_unresolved'],
-  },
-  {
     // final-validation.md is present on all 6 finalize surfaces; the tighter
     // typed refusal `final_validation_unverified` is a github command+skill pin
     // only (the gitlab/gitea finalize COMMANDS are the 2:1 rewrite and lack it),

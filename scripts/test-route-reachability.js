@@ -429,13 +429,11 @@ for (const ed of codexEditions) {
 // T10/T11 RETIRED (#725 Phase A): both pins' DEDICATED fast/full-entry surfaces
 // (kaola-workflow-fast.md, kaola-workflow-phase1.md, and their Codex SKILL/
 // command mirrors) are fully retired (n2-delete) — there is nothing left to
-// check them against, so the surface lists themselves are gone. The
-// fast-compliance-backstop PIN + `fast_compliance_unresolved` literal survive
-// as a dormant legacy backstop on the 6 finalize surfaces ONLY (both/both) —
-// obligated there by the separate `fn-fast-compliance-backstop` block in
-// `templates/routing/required-blocks.js` (outside this node's write set), so
-// they are NOT removed from the finalize commands; see the MANIFEST presence
-// check + the SUPERSET-PROOF `fast_compliance_unresolved` entry below.
+// check them against, so the surface lists themselves are gone. The dormant
+// fast-compliance-backstop PIN + `fast_compliance_unresolved` legacy backstop
+// on the finalize surfaces was also retired (#725 Phase D): the deleted fast
+// path left no project for it to fire against, so its `fn-fast-compliance-backstop`
+// manifest block + SUPERSET-PROOF entry are gone with it.
 // `path_not_installed` remains a live typed refusal (see the next-surface
 // SUPERSET-PROOF entry below) — only the dedicated fast/full-entry pin's own
 // surface set is gone.
@@ -1386,7 +1384,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'workflow_path: adaptive', surfaces: FN6 },
     { token: '--issue-numbers', surfaces: FN6 },
     { token: 'issue_numbers', surfaces: FN6 },
-    { token: 'fast_compliance_unresolved', surfaces: FN6 },
     { token: 'final-validation.md', surfaces: FN6 },
     // github command+skill-only finalize refusal — residual
     { token: 'final_validation_unverified', surfaces: [fnCmd[0], fnSkill[0]] },

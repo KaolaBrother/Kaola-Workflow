@@ -3178,7 +3178,7 @@ try {
     'higher profile should render the workflow-planner as opus');
   assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
   assert(
-    finalize.includes('\n\n## Validation Delegation Policy\n\n'),
+    finalize.includes('\n\n## Steps\n\n'),
     'installer rendering should preserve blank markdown lines'
   );
   assert(

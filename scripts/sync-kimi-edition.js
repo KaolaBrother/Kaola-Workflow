@@ -51,12 +51,10 @@ const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 // Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the kimi
-// edition). hooks.json is Claude-shaped and is NOT copied — its four entries are
+// edition). hooks.json is Claude-shaped and is NOT copied — its entries are
 // re-expressed as the Kimi [[hooks]] TOML fragment below (renderKimiHooksToml).
 // Same allowlist discipline as the opencode generator's HOOK_SCRIPTS.
 const HOOK_SCRIPTS = [
-  'kaola-workflow-pre-commit.sh',
-  'kaola-workflow-write-lane.sh',
   'kaola-workflow-subagent-dispatch-log.sh',
 ];
 
@@ -262,14 +260,19 @@ function transformCommandBody(body) {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    // Strip the "## Agent Model Badge" section ENTIRELY (where opencode substitutes
-    // its Effort Variant Resolution block, the kimi edition has no badge analogue at
-    // all — there is no per-dispatch model to document; the surviving "MUST pass
-    // model=" prose outside the block is rewritten below). Detect the heading, skip
-    // its flat body up to the next heading line, and leave a single-blank seam.
+    // Strip the "## Agent Model Badge" section (where opencode substitutes its
+    // Effort Variant Resolution block, the kimi edition has no badge analogue at
+    // all — there is no per-dispatch model to document) and replace its body with
+    // the one-line kimi-true guidance, since canonical dispatch prose ("MUST pass
+    // model=…") now lives entirely inside this section for every command that has
+    // it (a standalone occurrence outside the block, if any, is separately
+    // rewritten below). Detect the heading, skip its flat body up to the next
+    // heading line, and leave a single-blank seam around the replacement line.
     if (/^##\s+Agent Model Badge\s*$/.test(line)) {
       while (out.length && out[out.length - 1].trim() === '') out.pop();
       if (out.length) out.push('');
+      out.push('Never pass a per-call model override; sub-agents inherit the session model.');
+      out.push('');
       i++;
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
       continue;
@@ -405,29 +408,16 @@ function renderCommand(canonContent, commandName) {
   return lines.join('\n') + '\n';
 }
 
-// The generated Kimi hooks fragment. Maps the four canonical hooks/hooks.json
-// entries to Kimi [[hooks]] rules: PreToolUse/Bash → pre-commit, PreToolUse/
-// Write|Edit (Kimi matchers are regexes, so the alternation carries over) →
-// write-lane, SubagentStart → dispatch-log (matcher omitted), and the Claude
-// SessionStart"compact" entry → PostCompact (Kimi's semantic counterpart) running the
-// compact-context script. `__KIMI_HOME__` is a placeholder token the installer
-// substitutes with the real ${KIMI_CODE_HOME:-$HOME/.kimi-code} path at install time;
-// the >>> / <<< marker comments delimit the managed block for idempotent merges.
+// The generated Kimi hooks fragment. Maps the two canonical hooks/hooks.json
+// entries to Kimi [[hooks]] rules: SubagentStart → dispatch-log (matcher
+// omitted), and the Claude SessionStart"compact" entry → PostCompact (Kimi's
+// semantic counterpart) running the compact-context script. `__KIMI_HOME__` is
+// a placeholder token the installer substitutes with the real
+// ${KIMI_CODE_HOME:-$HOME/.kimi-code} path at install time; the >>> / <<<
+// marker comments delimit the managed block for idempotent merges.
 function renderKimiHooksToml() {
   return [
     '# >>> kaola-workflow kimi hooks',
-    '[[hooks]]',
-    'event = "PreToolUse"',
-    'matcher = "Bash"',
-    'command = "bash __KIMI_HOME__/kaola-workflow/hooks/kaola-workflow-pre-commit.sh"',
-    'timeout = 30',
-    '',
-    '[[hooks]]',
-    'event = "PreToolUse"',
-    'matcher = "Write|Edit"',
-    'command = "bash __KIMI_HOME__/kaola-workflow/hooks/kaola-workflow-write-lane.sh"',
-    'timeout = 30',
-    '',
     '[[hooks]]',
     'event = "SubagentStart"',
     'command = "bash __KIMI_HOME__/kaola-workflow/hooks/kaola-workflow-subagent-dispatch-log.sh"',
@@ -490,18 +480,12 @@ function writeCommands() {
 // Kimi hook-payload adaptation. Canonical hooks are byte-copied EXCEPT where Kimi's
 // event payload uses different field names than Claude's (verified empirically against
 // kimi-code 0.26.0):
-//   - PreToolUse Write|Edit: Kimi tool_input carries `path` (Claude: `file_path`).
-//     Unadapted, the write-lane hook fail-opens on every Kimi write — inert.
 //   - SubagentStart: Kimi names the sub-agent `agent_name` (Claude: `agent_type`).
 // Each adaptation is a single anchored string rewrite; a missing or ambiguous anchor
 // is a HARD ERROR so a canonical edit that drifts the anchor fails loudly here instead
-// of silently shipping an unadapted hook. Pre-commit (Bash tool_input.command) and
-// PostCompact (cwd) are payload-compatible and stay byte-identical.
+// of silently shipping an unadapted hook. PostCompact (cwd) is payload-compatible
+// and stays byte-identical.
 const HOOK_ADAPTATIONS = {
-  'kaola-workflow-write-lane.sh': [
-    ['d.tool_input&&d.tool_input.file_path',
-     'd.tool_input&&(d.tool_input.file_path||d.tool_input.path)'],
-  ],
   'kaola-workflow-subagent-dispatch-log.sh': [
     ["p.agent_type||''", "(p.agent_type||p.agent_name||'')"],
   ],

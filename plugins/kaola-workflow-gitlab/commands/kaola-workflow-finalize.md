@@ -5,17 +5,20 @@ argument-hint: <project name>
 
 # Kaola-Workflow Finalization
 
+Finalization proves the workflow is complete and records final metadata. Do not repair inline (except
+the Trivial Inline Edit Exception). Read `kaola-workflow/{project}/workflow-state.md` and
+`kaola-workflow/{project}/workflow-plan.md`.
+
 ## In-progress re-plan control plane
 
 <!-- PIN: replan-finalize -->
 
 This fence outranks every Finalization prerequisite and side effect. Before validation, contractor
-dispatch, archive, closure, roadmap, commit, or sink work, read the project state and transaction
-status. If either reports `replan_in_progress`, the frozen parent remains authoritative and
-Finalization is forbidden. Read-only orientation reports the exact `replan_phase`,
-`transaction_id`, `parent_plan_hash`, `child_plan_hash` (or `none`), and `last_cas_result`.
-
-The single legal mutation while the fence is active is:
+dispatch, archive, closure, roadmap, commit, or sink work, read the project state + transaction
+status. If either reports `replan_in_progress`, the frozen parent stays authoritative and
+Finalization is forbidden; read-only orientation reports `replan_phase`, `transaction_id`,
+`parent_plan_hash`, `child_plan_hash` (or `none`), and `last_cas_result`. The single legal mutation
+while the fence is active:
 
 ```bash
 REPLAN_SCRIPT="./plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-replan.js"
@@ -25,24 +28,16 @@ REPLAN_SCRIPT="./plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-rep
 node "$REPLAN_SCRIPT" resume --project {project} --json
 ```
 
-`decision:ask` remains advisory. If resume returns `replan_planner_dispatch_required`, dispatch
-the genuine `workflow-planner` profile in Re-plan dispatch mode with only repository root, project,
-`transaction_id`, `dispatch_nonce`, profile identity, the exact
-`.cache/replan-planner-packet.json` path, and its reason/source evidence. No role sequence, node
-ids, dependencies, write sets, cardinality, shape, model, or exact DAG fragment may come from the
-orchestrator; that is `planner_control_boundary_violation`. Only the planner writes the seeded
-`workflow-plan.next.md` and `.cache/replan-planner-attestation.json`; then run the same resume
-command. Missing or mismatched proof is `replan_planner_attestation_invalid`.
-
-An invalid child uses the bounded unfrozen child-repair loop with the same planner and verbatim
-validator errors; the main session never repairs the child DAG. At the bound, stop with typed
-evidence—never finalize the parent, start another claim, or route to another path. A verified
-legacy-v1 parent transitions through the same fenced resume path; normal legacy behavior outside a
-transaction remains unchanged.
-
-Finalization proves the workflow is complete and records final metadata. Do not
-repair inline when final validation fails except under the Trivial Inline Edit
-Exception below.
+`decision:ask` remains advisory. If resume returns `replan_planner_dispatch_required`, dispatch the
+genuine `workflow-planner` in Re-plan mode with only repo root, project, `transaction_id`,
+`dispatch_nonce`, profile identity, the exact `.cache/replan-planner-packet.json` path, and its
+reason/source evidence. No role sequence, node ids, dependencies, write sets, cardinality, shape,
+model, or exact DAG fragment may come from the orchestrator; that is
+`planner_control_boundary_violation`. Only the planner writes the seeded `workflow-plan.next.md` and
+`.cache/replan-planner-attestation.json`; then re-run resume. An invalid child uses the bounded
+unfrozen child-repair loop (same planner, verbatim validator errors); at the bound stop with typed
+evidence — never finalize the parent or route to another path. A legacy-v1 parent transitions through
+this same fenced resume path.
 
 <!-- PIN: reviewer-contract-v2-finalization -->
 ### Reviewer Contract Version and Freshness Gate
@@ -66,226 +61,125 @@ verdict/evidence semantics and does not acquire schema-2 receipt requirements. N
 rewrite that plan in place.
 <!-- /PIN -->
 
-## Prerequisite
+## Agent Model Badge
 
-Adaptive is the only workflow path (`workflow_path: adaptive` in
-`kaola-workflow/{project}/workflow-state.md`):
-- `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
-  `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
-  `phase5-review.md`; Finalization anchors on the plan's completion state. The barrier is
-  **script-enforced** by four gates — run all four and capture each exit code
-  DIRECTLY (never gate on a piped `| tail`, which masks failure):
-  ```bash
-  PLAN=kaola-workflow/{project}/workflow-plan.md
-  # Resolve the validator via the kaola_script() resolver: a bare relative
-  # validator path is MODULE_NOT_FOUND in a consumer plugin install (no local scripts
-  # dir), turning the only blocking pre-merge enforcement into a false BLOCK.
-  kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-  VALIDATOR="$(kaola_script kaola-gitlab-workflow-plan-validator.js)"
-  node "$VALIDATOR" "$PLAN" --resume-check --json; RC=$?
-  node "$VALIDATOR" "$PLAN" --gate-verify --json; GV=$?
-  # Forward --base to the whole-plan --barrier-check ONLY, mirroring
-  # --finalize-check forwarding so the attribution sweep can scope to a project's OWN diff
-  # on a SHARED multi-issue branch. Sourced from the KAOLA_FINALIZE_BASE env var, defaulting
-  # to UNSET (→ the validator's `origin/main` default — byte-equivalent to today for
-  # branch-per-issue runs, so the four-chain walkthrough stays green). The per-node
-  # --barrier-check STILL rejects --base (the anti-laundering guard) — unchanged.
-  BARRIER_BASE="${KAOLA_FINALIZE_BASE:-}"
-  BARRIER_BASE_ARG=()
-  [ -n "$BARRIER_BASE" ] && BARRIER_BASE_ARG=(--base "$BARRIER_BASE")
-  node "$VALIDATOR" "$PLAN" --barrier-check --json "${BARRIER_BASE_ARG[@]}"; BC=$?
-  node "$VALIDATOR" "$PLAN" --verdict-check --json; VC=$?
-  if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
-    echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
-  fi
-  ```
-  - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
-    **completed** reviewer in the `## Node Ledger` (closes G1/H5). **G3: a
-    non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
-    completed code nodes.**
-  - `--barrier-check` re-scans the files actually written (git diff vs the merge-base
-    of HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
-    node, or an out-of-allowlist production write (closes H1/H3). Any nonzero exit
-    **blocks the merge**.
-  - `--verdict-check` reads every completed gate-role node's `.cache/{node-id}.md` and
-    requires `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the
-    merge** — proves every code-reviewer/security-reviewer/adversarial-verifier/main-session-gate node
-    recorded a passing verdict. **Exception:** an *investigation*
-    `adversarial-verifier` that post-dominates no code-producing or sensitive node is
-    exempt from this check — its refutation is analytical output, not a finalize block
-    (applies to both sequence and fanout majority-refute shapes). A *change-gate*
-    `adversarial-verifier` (post-dominates a code-producing or sensitive node) keeps full
-    `--verdict-check` coverage.
-  On any failure stop with a **typed refusal** (do not proceed):
-  ```text
-  Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
-  ```
-If `workflow-plan.md` is absent, `cmdFinalize` refuses unconditionally — before any
-archive/close side effect — with the typed `finalize_gate_unverified` /
-`adaptive_plan_missing` refusal (there is no retired fast/full verifier to shell and no
-N/A pass):
-```text
-BLOCKED: finalize_gate_unverified (adaptive_plan_missing) — restore the frozen workflow-plan.md before Finalization.
+Every subagent dispatch below carries an explicit `model=` line — the installer fills each
+`model="{...}"` placeholder from the agent's frontmatter and it is what shows the model badge.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in the contractor Agent call exactly as shown; never omit
+the `model=` line on any dispatch.
+
+## Prerequisite — script-enforced barrier
+
+Adaptive is the only path (`workflow_path: adaptive`). `workflow-plan.md` must exist, be frozen
+(re-check `plan_hash`), and every `## Node Ledger` row must be `complete` or `n/a`. The barrier is
+four gates — run all four and capture each exit code DIRECTLY (never gate on a piped `| tail`):
+
+```bash
+PLAN=kaola-workflow/{project}/workflow-plan.md
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+VALIDATOR="$(kaola_script kaola-gitlab-workflow-plan-validator.js)"
+node "$VALIDATOR" "$PLAN" --resume-check --json; RC=$?
+node "$VALIDATOR" "$PLAN" --gate-verify --json; GV=$?
+# --barrier-check forwards KAOLA_FINALIZE_BASE (default UNSET → validator's origin/main default) so
+# the attribution sweep can scope to a project's own diff on a shared branch; the per-node
+# --barrier-check still rejects --base (anti-laundering).
+BARRIER_BASE="${KAOLA_FINALIZE_BASE:-}"; BARRIER_BASE_ARG=()
+[ -n "$BARRIER_BASE" ] && BARRIER_BASE_ARG=(--base "$BARRIER_BASE")
+node "$VALIDATOR" "$PLAN" --barrier-check --json "${BARRIER_BASE_ARG[@]}"; BC=$?
+node "$VALIDATOR" "$PLAN" --verdict-check --json; VC=$?
+if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
+  echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
+fi
 ```
 
-### Validation Gate (dual-mode by repo kind)
+- `--resume-check` proves `plan_hash` integrity + structure + closed library.
+- `--gate-verify` proves every completed code/sensitive node is post-dominated by a **completed**
+  reviewer in the `## Node Ledger` (a required reviewer silently `n/a` at runtime is caught). **G3:
+  a non-delegable `main-session-gate` must be complete — never `n/a`.**
+- `--barrier-check` re-scans the files actually written (git diff vs the HEAD/`origin/main`
+  merge-base) and refuses a sensitive write with no `security-reviewer` node or an out-of-allowlist
+  production write.
+- `--verdict-check` requires machine-readable `verdict: pass` + `findings_blocking: 0` in every
+  completed `code-reviewer`/`security-reviewer`/`adversarial-verifier`/`main-session-gate`
+  `.cache/{node-id}.md`. **Exception:** an *investigation* `adversarial-verifier` post-dominating no
+  code/sensitive node is exempt (sequence and fanout majority-refute); a *change-gate*
+  `adversarial-verifier` keeps full coverage.
 
-`--finalize-check` enforces a validation gate whose mode is auto-detected by repo kind:
-a **self-host (npm)** repo (its `package.json` declares the `test:kaola-workflow:*` scripts)
-is gated on a machine-verifiable chain receipt; a **consumer (non-npm)** product repo is
-gated on the agent's recorded `.cache/final-validation.md`. Either way the attribution sweep runs.
-
-#### Self-host (npm): Chain-Receipt Gate
-
-In the self-host, finalization is **machine-gated** on a fresh, valid chain receipt. The main
-session stamps that receipt after all code changes and test-consumed prose/docs for the final
-candidate have landed, as the last action before Finalization. Before proceeding past the
-prerequisite check, verify `.cache/chain-receipt.json` and stop with a typed refusal if any of the
-following are true (checked in precedence order):
-
-- **`chains_unverified`** — `.cache/chain-receipt.json` is absent. No chains have
-  been run through the gated runner; prose attestation is not accepted.
-  Remedy: the orchestrator (main session) must run the edition run-chains script after the final
-  candidate is assembled so the receipt is written against the current HEAD. Do NOT delegate this
-  to the contractor subagent — the contractor only verifies.
-- **`chains_stale`** — the receipt's `codeTreeHash` no longer matches the current
-  code-relevant tree: code or a chain-asserted doc changed since the chains ran
-  (workflow state and inert, non-test-consumed docs do NOT trigger it; a legacy receipt without
-  `codeTreeHash` falls back to the `headSha`-vs-HEAD pin). Diagnostics may identify stale paths
-  or a stale kind, but the remedy is still a full restamp.
-  Remedy: the orchestrator (main session) must rerun the edition run-chains script to regenerate
-  the receipt against HEAD. Do NOT patch the receipt, and do NOT delegate this to the contractor
-  subagent.
-- **`chains_red`** — at least one chain has a non-zero exit code and
-  `accepted_red: false`. A real failing chain that has not been explicitly waived blocks
-  finalization.
-  Remedy: fix the failing chain, OR waive it with `--accept-known-red <name>:<open-issue>` if it is
-  a known-failing chain tracked by an open issue (the waiver is recorded durably in the receipt and
-  the other chains still gate).
-
-These typed refusals are emitted by `cmdFinalize` / the plan-validator's finalize/verdict path and
-are classified structurally — do not match by string.
-
-#### Consumer product repos: the agent's validation IS the gate
-
-A consumer product repo whose validation is **not** npm-based does **NOT** run the edition
-run-chains script at all. The agent records its validation result in
-**`.cache/final-validation.md`** with a column-0 **`verdict: pass`** line, and
-`--finalize-check` (consumer mode, auto-detected by the absence of the `test:kaola-workflow:*`
-scripts) gates on that file:
-
-- **`final_validation_unverified`** — `.cache/final-validation.md` is absent (or empty). The
-  agent must record its validation evidence before finalize.
-- **`final_validation_failed`** — the file is present but does not carry a column-0
-  `verdict: pass`. The agent's own validation did not pass; remediate and re-record.
-
-When the final candidate is unchanged since a terminal change-gate validation run, the agent may
-cite that run instead of rerunning. The citation must record column-0 `verdict: pass`,
-`source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. If
-there is any doubt about whether the cited boundary still covers the final candidate, run the
-command and record the new result.
-
-### Run-Gap Sweep Gate
-
-Finalization is **machine-gated** on a clean run-gap sweep. Before
-proceeding past the prerequisite check, verify `.cache/run-gaps.json` and
-`finalization-summary.md`'s `## Run gaps` section and stop with a typed
-refusal if the following is true:
-
-- **`gaps_unswept`** — emitted by
-  `kaola_script kaola-gitlab-workflow-gap-sweep.js --check` (using the
-  edition's `kaola_script()` resolver above) when `.cache/run-gaps.json`
-  contains a swept reason class with no matching entry in the `## Run gaps`
-  section of `finalization-summary.md`, or when that section is absent while
-  swept classes exist.
-  Remedy: for each real run-discovered defect (`in_run_repair`,
-  `deferred_red_chain`, or `manual:<slug>`), file a follow-up issue with the
-  forge and record `filed: #N` in the `## Run gaps` section. If the item is
-  not a product defect (upstream flake, tool-environment noise, or an
-  already-filed and tracked waiver), record `noise: <one-line justification>`
-  instead.
-
-This typed refusal is classified structurally — do not string-match.
-
-Read:
-
+Any nonzero exit blocks the merge. On failure stop with the typed refusal:
 ```text
-kaola-workflow/{project}/workflow-state.md
-kaola-workflow/{project}/workflow-plan.md
+Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
 ```
+If `workflow-plan.md` is absent, `cmdFinalize` refuses unconditionally with
+`finalize_gate_unverified` / `adaptive_plan_missing`. These typed refusals are classified
+structurally — do not string-match.
+
+## Validation Gate (dual-mode by repo kind)
+
+`--finalize-check` auto-detects mode; the attribution sweep runs for both. Never gate on CI. These
+typed refusals are classified structurally — do not string-match; the remedy for a stale receipt/hash
+is always a full re-run, never a hand-patch.
+
+- **Self-host (npm)** (declares `test:kaola-workflow:*`): machine-gated on a fresh, valid
+  `.cache/chain-receipt.json`. The main session runs `kaola-workflow-run-chains.js` after all code +
+  test-consumed prose/docs land, as the last pre-Finalization action (do NOT delegate — the
+  contractor only verifies). Precedence-ordered refusals: `chains_unverified` (absent),
+  `chains_stale` (`codeTreeHash` ≠ code-relevant tree; inert docs + workflow state do not trigger it),
+  `chains_red` (a real failing chain, `accepted_red: false` — fix it or waive
+  `--accept-known-red <name>:<open-issue>`).
+- **Consumer (non-npm)** (no `test:kaola-workflow:*`): does NOT run chains — the agent owns
+  verification and records `.cache/final-validation.md` with a column-0 `verdict: pass` +
+  `validated_candidate_hash:` (produce it with the plan-validator's `--candidate-hash --json`,
+  computed LAST). `--finalize-check` gates on `final_validation_unverified` / `final_validation_failed`
+  / `final_validation_unbound` / `final_validation_stale`. When the candidate is unchanged since a
+  terminal change-gate run, cite it with `source: cited:<node-id>`, `validated_command`,
+  `validated_at_head`, `reuse_boundary`, plus a fresh hash. Any doubt → run the command.
+
+## Run-Gap Sweep Gate
+
+Machine-gated (after the Chain-Receipt Gate) on a clean run-gap sweep via
+`kaola-gitlab-workflow-gap-sweep.js --check` against `.cache/run-gaps.json` + the `## Run gaps` section of
+`finalization-summary.md`:
+- **`gaps_unswept`** — a swept reason class with no matching `## Run gaps` entry. For each real defect
+  (`in_run_repair`/`deferred_red_chain`/`manual:<slug>`) file a follow-up and record `filed: #N`; for
+  non-defects record `noise: <justification>`.
+- **`observed_gap_unseeded`** — a hand-typed `## Run gaps` row with no machine-swept entry. Append
+  `gap: <class> — <text>` to `.cache/run-gaps-manual.md`, re-run the scanner, then re-run `--check`.
+
+Advisory: export `KAOLA_GOAL` (or set a `goal:` line in `## Meta`) so `goal_check` records `satisfied`.
 
 ## Resume Detection
 
-- final validation not run -> `final-validation`
-- final validation failed and no ledger row -> `route-final-fix`
-- final validation fixed but not re-run -> `final-validation`
-- acceptance checklist incomplete -> `acceptance-check`
-- documentation gate incomplete -> `doc-update`
-- documentation docking incomplete -> `doc-docking`
-- phase summary missing -> `write-summary`
-- closure decision gate incomplete -> `closure-decision`
-- linked issue not updated -> `issue-update`
-- roadmap/archive incomplete -> `roadmap-archive`
-- final metadata pending -> `final-metadata`
-- commit and push missing -> `commit-push`
-- final workspace sync missing -> `verify-sync`
+final validation not run → `final-validation`; failed w/ no ledger row → `route-final-fix`; fixed but
+not re-run → `final-validation`; acceptance incomplete → `acceptance-check`; doc gate → `doc-update`;
+docking → `doc-docking`; summary missing → `write-summary`; closure gate → `closure-decision`; issue
+not updated → `issue-update`; roadmap/archive → `roadmap-archive`; metadata pending →
+`final-metadata`; commit missing → `commit-push`; sync missing → `verify-sync`. If ambiguous, stop
+and ask.
 
-If ambiguous, stop and ask.
+## Guardrails, Delegation, De-Duplication, Trivial Edit
 
-## Operational Guardrails
+- Run/delegate the repo-kind-appropriate final validation before claiming completion; do not repair
+  inline; do not close a GitLab issue until acceptance passes; do not archive incomplete folders or
+  stage unrelated changes; commit only after docs/issue/roadmap/archive/metadata complete; no
+  post-final commits except the sanctioned `sink-mr.js`/`sink-pr.js` metadata follow-up.
+- **Delegation:** the main session may run one small focused command (classify a failure, a quick
+  post-trivial-edit check, a short smoke). Delegate expensive/noisy validation (full suites, broad
+  lint, long logs, repeated repro) to a fresh validation subagent or the fix agent — `tdd-guide` for
+  behavior/regression/coverage, `build-error-resolver` for build/type/lint/tooling. Raw output →
+  `kaola-workflow/{project}/.cache/final-validation.md`; record only command, result, summary,
+  classification, evidence path, route, and citation boundary.
+- **De-duplication:** run each full relevant command once against the final candidate; cite a prior
+  pass instead of rerunning, but **state the actual reuse boundary, not a false absolute** (record
+  WHICH node/state it covered; a finalize-node CHANGELOG/docs edit is outside a code/test rerun
+  trigger — never write `No files changed after those runs` when the finalize node changed docs).
+  The self-host receipt is keyed on the code-relevant-tree hash: inert-docs/workflow-state commits
+  stay fresh; a code or `README`/`CHANGELOG`/`docs/api.md` change invalidates it.
+- **Trivial Inline Edit Exception:** the main session may make a one-line/mechanically-obvious edit
+  (no behavior/API/security/design judgment) that fixes finalization friction/formatting/typo/import,
+  stays in scope, is recorded in `finalization-summary.md`, and reruns affected validation. Anything
+  else routes to `tdd-guide`/`build-error-resolver` or back to Phase 5.
 
-- Run or delegate the final validation appropriate to repo kind — the
-  four-chain receipt on self-host, or the plan's `validation_command` (or
-  cited fresh evidence) on a consumer repo — before claiming completion.
-- Do not repair inline. Final validation failures are routed unless the Trivial
-  Inline Edit Exception applies.
-- Do not close a GitLab issue until acceptance criteria pass.
-- Do not archive incomplete workflow folders.
-- Do not stage unrelated user changes.
-- Do not create tracked file edits after the final commit, except the sanctioned
-  PR/MR metadata follow-up commit produced automatically by `sink-pr.js` or
-  `sink-mr.js`. No other post-final commits are permitted.
-- Commit and push only after documentation, issue updates, roadmap refresh,
-  archive movement, and final metadata are complete.
-- If `/prp-commit` is unavailable, stage the approved implementation, docs, and
-  workflow artifacts for this project only.
-- If push cannot complete because no upstream exists, authentication fails, or
-  the remote rejects the update, stop with exact remediation steps. Do not
-  create a second cleanup commit unless the user explicitly approves it.
-
-## Agent Model Badge
-
-Every subagent dispatch below includes an explicit `model=` line. Always pass it
-exactly as written — it is what makes Claude Code show the model badge on the
-subagent card. The installer fills each `model="{...}"` placeholder with the
-agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
-
-## Validation Delegation Policy
-
-Finalization is the final validation gate. The required validation — the
-four-chain receipt on self-host, or the plan's `validation_command` (or cited
-fresh evidence) on a consumer repo — must pass, but the main session does not
-need to personally run noisy commands in conversation.
-
-Main session may run small targeted commands by default:
-
-- one focused command needed to classify a final failure
-- one quick lint/typecheck/test command after a trivial inline edit
-- a short smoke check for acceptance evidence
-
-Main session must delegate expensive or noisy validation by default:
-
-- full `cargo test`, full monorepo test suites, full builds, or coverage runs
-- broad lint/typecheck commands across unrelated packages
-- commands expected to produce long logs
-- repeated reproduction of an already-classified final failure
-
-Delegated validation should use a fresh validation subagent when available, or
-the relevant fix agent (`tdd-guide` for behavior/regression/coverage checks,
-`build-error-resolver` for build/type/lint/tooling checks).
-
-Route behavior/test fixes to the Claude Code agent `tdd-guide`:
+Routed-fix dispatches (include the `model=` line exactly):
 
 ```text
 Agent(
@@ -296,9 +190,6 @@ Agent(
 )
 ```
 
-Route build/type/lint/tooling fixes to the Claude Code agent
-`build-error-resolver`:
-
 ```text
 Agent(
   subagent_type="build-error-resolver",
@@ -308,465 +199,123 @@ Agent(
 )
 ```
 
-Raw output goes to:
+## Steps
 
-```text
-kaola-workflow/{project}/.cache/final-validation.md
+**Step 1 — Final Validation.** Update `workflow-state.md` (`stage: finalization`,
+`step: final-validation`, `main_session_role: orchestrator`, `fix_owner: tdd-guide or
+build-error-resolver`), then run the repo-kind validation from the Validation Gate above, saving raw
+output to `kaola-workflow/{project}/.cache/final-validation.md`. On failure route
+(build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage → `tdd-guide`;
+review/security → Phase 5), write fix output to `.cache/final-validation-fix-{n}.md`, and rerun the
+failed command.
+
+**Step 2 — Acceptance Check.** Verify the deliverable matches Phase 1 criteria, all Phase 3 tasks
+complete, tests pass (per validation result, not a re-run universal suite), no type/lint errors, no
+CRITICAL/HIGH review findings, no debug statements. Adaptive's `--verdict-check` barrier is the sole
+compliance gate.
+
+**Step 3 — Documentation Update.** Read project-root `CLAUDE.md` for the Documentation Update
+Checklist (create/append if missing). This is a required gate: invoke `doc-updater` with changed
+files + checklist, or skip only with an explicit no-impact reason. Resolve the worktree first:
+
+```bash
+ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
+[ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
-
-The main session records only the command, pass/fail result, short failure
-summary, classification, evidence path, next route, and citation boundary fields when reusing
-prior validation.
-
-## Validation De-Duplication
-
-Avoid redundant validation runs.
-
-- Finalization runs each full relevant final command once against the final candidate
-  state.
-- Do not rerun the targeted per-node validation commands recorded in
-  `.cache/{node-id}.md` separately when the Finalization full command already covers them.
-- If a Finalization command already passed after the last relevant file change, cite
-  its evidence path instead of rerunning it.
-- After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
-  affected command. Rerun broader validation only when shared infrastructure,
-  dependencies, build config, or public behavior changed.
-- The self-host four-chain receipt is keyed on a code-relevant-tree hash: a commit
-  touching only inert docs or workflow-state since the chains ran stays fresh (no re-run);
-  a code OR chain-asserted-doc (`README`/`CHANGELOG`/`docs/api.md`) change still invalidates it.
-- **State the actual reuse boundary, not a false absolute.** When you cite
-  a prior run instead of rerunning, record WHICH node/state that run covered and that
-  later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node)
-  are outside it. Do NOT write a terminal absolute like `No files changed after those
-  runs` when the finalize node itself changes docs/changelog afterward — say e.g.
-  `validation reuse covers code/test impact through node nN; the finalize-node
-  CHANGELOG edit is docs-only and outside the rerun trigger`. (At closure,
-  `archiveProjectDir` also mechanically neutralizes the known false-absolute phrase in
-  the archived `.cache/final-validation.md` as a backstop, but the accurate boundary
-  is yours to state here.) Consumer citations must include `source: cited:<node-id>`,
-  `validated_command`, `validated_at_head`, and `reuse_boundary`; uncertainty means
-  run the command.
-
-## Trivial Inline Edit Exception
-
-The main session may make a trivial inline edit without emergency fallback only
-when all conditions are true:
-
-- the edit is one line or mechanically obvious
-- no behavior, API, security, architecture, test intent, release, or design
-  judgment is required
-- it fixes finalization friction, formatting, an unused import, a typo, import
-  ordering, or an obvious generated path/name mistake
-- it stays inside the approved implementation/docs/workflow artifact scope
-- it is recorded in `finalization-summary.md` or `workflow-state.md`
-- affected validation is rerun or prior valid evidence is cited under
-  Validation De-Duplication
-
-Anything else is routed to `tdd-guide`, `build-error-resolver`, or back to Phase
-5 when review/security behavior is implicated.
-
-## Documentation Docking
-
-Documentation docking is the closure check that matches documents with the
-actual code and workflow changes before Git metadata is finalized.
-
-Compare:
-
-- changed implementation, test, config, and workflow files from `git diff`
-- Phase 1 success criteria and linked issue acceptance criteria
-- Phase 3 task blueprint
-- Phase 4 implementation evidence
-- Phase 5 review findings and follow-ups
-- docs touched or skipped by `doc-updater`
-- `README.md`, API docs, architecture docs, changelog, `.env.example`, roadmap,
-  and issue comments when relevant
-
-Every public behavior, API, setup, architecture, environment, validation, or
-roadmap-impacting change must be reflected in the appropriate document or have
-an explicit no-impact reason. Save the docking record to:
-
-```text
-kaola-workflow/{project}/.cache/doc-docking.md
-```
-
-If docking finds gaps, update the docs through `doc-updater` or the Trivial
-Inline Edit Exception, then rerun docking before continuing.
-
-## Closure Decision Gate
-
-Before updating issues or reorganizing the roadmap, scan all phase artifacts for
-deferred items, unresolved conflicts, partial implementation notes, open review
-follow-ups, or decisions that need the user.
-
-If none exist, record the scan in `finalization-summary.md` and continue.
-
-If any exist, route them directly to the USER:
-
-1. Summarize each deferred item, unresolved conflict, partial-implementation note,
-   open review follow-up, or decision that needs the user — with your own
-   recommendation for the safest next step and whether the current item can close.
-2. Ask the user for permission before creating, closing, splitting, merging, or
-   reorganizing roadmap entries or GitLab issues.
-
-## Step 1 - Final Validation
-
-Update `workflow-state.md`:
-
-```text
-stage: finalization
-stage_name: Finalization
-step: final-validation
-next_command: /kaola-workflow-finalize {project}
-main_session_role: orchestrator
-implementation_owner: N/A
-fix_owner: tdd-guide or build-error-resolver
-inline_emergency_fallback_authorized: no
-```
-
-Run or delegate the final validation appropriate to repo kind:
-
-- **Self-host (npm)**: the full relevant project commands are the four-chain
-  receipt gate (test suite, type check, lint, build via
-  `kaola-workflow-run-chains.js`); coverage applies only where the self-host
-  chains define a coverage gate.
-- **Consumer (non-npm)**: run the plan's `## Meta` `validation_command` once
-  against the final candidate state, OR cite fresh prior evidence under
-  Validation De-Duplication (state the actual reuse boundary with `source: cited:<node-id>`,
-  `validated_command`, `validated_at_head`, and `reuse_boundary`). Any doubt about the
-  boundary means run the command. There is no universal "full suite + coverage >= 80%"
-  mandate on a consumer repo.
-
-Save raw delegated output to:
-
-```text
-kaola-workflow/{project}/.cache/final-validation.md
-```
-
-All must pass before continuing.
-
-If validation fails, update a Final Validation Failure Ledger and route:
-
-- build/type/lint/dependency/tooling -> `build-error-resolver`
-- behavior/regression/coverage -> `tdd-guide`
-- review/security regression -> return to Phase 5 and re-run reviewer after fix
-
-Write fix output to:
-
-```text
-kaola-workflow/{project}/.cache/final-validation-fix-{n}.md
-```
-
-Re-run the failed command after each routed fix.
-
-For every delegated validation or routed final-validation fix, include the
-explicit `model=` parameter in the `Agent(...)` call exactly as documented above —
-never omit it.
-
-## Step 2 - Acceptance Check
-
-Verify:
-
-- deliverable matches Phase 1 success criteria
-- all Phase 3 tasks complete
-- tests pass (per the validation_command / self-host chain result — not a
-  separately re-run universal test suite), and, only where the project itself
-  defines a coverage gate, the coverage target is met or justified
-- no type errors or lint errors
-- no CRITICAL or HIGH review findings remain
-- no debug statements remain
-
-<!-- PIN: fast-compliance-backstop -->
-Legacy backstop (dormant post-retirement): the retired fast path's `fast_compliance_unresolved`
-script refusal used to enforce `## Required Agent Compliance` review-delegation evidence at
-`summary-write` time inside the now-deleted fast-advance/fast-audit scripts. Adaptive's own
-`--verdict-check` barrier (see Prerequisite, above) is the sole compliance gate on the surviving
-path; there is no fast-path project left for this backstop to fire against.
-
-## Step 3 - Documentation Update
-
-Read project root `CLAUDE.md`. Look for `Documentation Update Checklist`.
-
-This is a required documentation gate.
-
-If checklist exists, invoke the Claude Code agent
-`doc-updater` with changed files and checklist.
-
-If missing, create or append the checklist, then invoke `doc-updater`:
 
 ```text
 Agent(
   subagent_type="doc-updater",
   model="{DOC_UPDATER_MODEL}",
   description="Update docs for {project}",
-  prompt="..."
+  prompt="changed files, checklist, Working directory: ${ACTIVE_WORKTREE_PATH}"
 )
 ```
 
-```markdown
-## Documentation Update Checklist
+Write to `.cache/doc-updater.md`. **Anti-fabrication (required):** instruct `doc-updater` to
+transcribe verified ground truth (real `--json`/`--help` output, real signatures, existing schema)
+for any API/schema/CLI/config section, or emit `BLOCK: <what it needs>` — never invent field
+names/keys/enum values/example numbers. Reject any untraceable structured section as a docking gap.
 
-- [ ] README.md - update feature list, usage examples, env vars
-- [ ] API docs - add/update endpoint descriptions and examples
-- [ ] CHANGELOG.md - add entry under [Unreleased]
-- [ ] Architecture docs - update if structure changed
-- [ ] .env.example - add any new environment variables
-- [ ] Inline comments - update where public interfaces changed
-```
+**Step 4 — Documentation Docking.** Compare changed code/config/test/workflow files against Phase
+1 criteria, the task blueprint, implementation + review evidence, and `README`/API/architecture/
+changelog/`.env.example`/roadmap/issue comments. Every public behavior/API/setup/architecture/env/
+validation/roadmap change is reflected or has an explicit no-impact reason. Write `.cache/doc-docking.md`
+(changed files reviewed, documents checked, gaps found+fixed, no-impact reasons, verdict `DOCKED` or
+`BLOCKED`). Only continue on `DOCKED`.
 
-If no documentation update is needed, skip only with explicit reason and
-evidence such as:
+**Step 5 — Write Summary.** Create `kaola-workflow/{project}/finalization-summary.md` with sections:
+Delivered, Files Changed, Test Coverage, Final Validation Evidence, Documentation Docking, a Final
+Validation Failure Ledger table (Failing Command | Classification | Routed To | Evidence | Status),
+Follow-Up Items, `## Run gaps` (one line per swept `(reasonClass, sample)` as `filed: #N` or
+`noise: <justification>`; omit if empty), Closure Decision, GitLab Issue, Roadmap, Archive, a
+`## Required Agent Compliance` table (doc-updater, documentation docking, final-validation fix
+executors, roadmap refresh, archive completed folder, final commit and push — each with
+Status/Evidence/Skip Reason; no `pending` rows except `final commit and push` may be `ready`), and
+`## Status: READY FOR FINAL GIT GATE`.
 
-```text
-no public behavior, API, setup, architecture, roadmap, or docs impact
-```
+**Step 6 — Closure Decision Gate.** Scan all phase artifacts for deferred items, unresolved
+conflicts, partial-implementation notes, open review follow-ups, or user-decision items. If none,
+record the scan and continue. If any exist, route them to the USER with your recommendation and **ask
+before creating/closing/splitting/merging/reorganizing** any issue or roadmap entry.
 
-```bash
-# Resolve linked worktree path from workflow-state.md
-ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
-[ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
-```
-
-Invoke `doc-updater` with changed files, checklist, and `Working directory: ${ACTIVE_WORKTREE_PATH}`.
-
-Write agent output to:
-
-```text
-kaola-workflow/{project}/.cache/doc-updater.md
-```
-
-**Anti-fabrication constraint (required).** Instruct `doc-updater` to NOT invent or free-form any API/schema/CLI-output/config section. For any such section, it must transcribe verified ground truth — e.g. the actual output of `node <script> --json` / `--help`, real function signatures, or existing schema definitions read from the code — or, if the ground truth is not available to it, emit a `BLOCK: <what it needs>` line instead of guessing. Plausible-looking invented field names, keys, enum values, or example numbers are a docking failure, not a doc. The orchestrator must reject (treat as a docking gap) any doc-updater output whose structured sections are not traceable to real code or command output.
-
-## Step 4 - Documentation Docking
-
-Run the Documentation Docking check described above after `doc-updater` finishes.
-Write the result to:
-
-```text
-kaola-workflow/{project}/.cache/doc-docking.md
-```
-
-The docking record must list:
-
-- changed code/config/test/workflow files reviewed
-- documents checked
-- gaps found and fixed
-- explicit no-impact reasons for skipped document classes
-- final verdict: `DOCKED` or `BLOCKED`
-
-Only continue when the final verdict is `DOCKED`.
-
-## Step 5 - Write Summary
-
-Create `kaola-workflow/{project}/finalization-summary.md`:
-
-```markdown
-# Finalization Summary: {project}
-
-## Delivered
-[what was built]
-
-## Files Changed
-[list]
-
-## Test Coverage
-[% or reason unavailable]
-
-## Final Validation Evidence
-[commands run/delegated/cited, result, evidence path]
-
-## Documentation Docking
-[DOCKED/BLOCKED, evidence path]
-
-## Final Validation Failure Ledger
-| Failing Command | Classification | Routed To | Evidence | Status |
-|-----------------|----------------|-----------|----------|--------|
-
-## Follow-Up Items
-[from Phase 5 and closure scan]
-
-## Closure Decision
-[none needed/user approved next steps]
-
-## Commit And Push
-[pending final Git gate; final hash is reported after push and is not written back here]
-
-## GitLab Issue
-[closed/open/none]
-
-## Roadmap
-[updated yes/no]
-
-## Archive
-[archive path or pending]
-
-## Required Agent Compliance
-| Requirement | Status | Evidence | Skip Reason |
-|-------------|--------|----------|-------------|
-| doc-updater | invoked/skipped | .cache/doc-updater.md or docs-impact check | [reason if skipped] |
-| documentation docking | invoked | .cache/doc-docking.md | |
-| final-validation fix executors | invoked/N/A | .cache/final-validation-fix-*.md | [reason if N/A] |
-| roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status/git diff/upstream check | final gate runs after this file is committed |
-
-## Status
-READY FOR FINAL GIT GATE
-```
-
-## Step 6 - Closure Decision Gate
-
-Run the Closure Decision Gate described above.
-
-If deferred items, conflicts, partial work, or user-decision items exist, stop and
-ask the user for permission before changing roadmap or issue organization.
-
-If the user approves issue or roadmap reorganization, make those changes before
-the final Git gate.
-
-## Step 7 - GitLab Issue, Roadmap, Archive, And Metadata
-
-If the project links a GitLab issue (`issue_iid` in `workflow-state.md`):
-
-- close it only after acceptance criteria pass and the Closure Decision Gate says
-  the implementation is complete
-- keep it open if follow-ups, partial implementation, or unresolved user
-  decisions remain
-- for `issue_action: comment_keep_open` (keep-open partial-close terminal), do NOT
-  close; post the substantive partial-close note listing the residual scope
-  instead (the mechanical keep-open note is posted by `sink-merge`)
-- create/update follow-up issues only after user permission when the Closure
-  Decision Gate found decision items
-- comment with validation evidence and the planned commit message; add the final
-  commit hash only after push if doing so does not dirty the local worktree
-
-**Roadmap regeneration:**
-
-The actual roadmap closure (delete `kaola-workflow/.roadmap/issue-N.md` +
-regenerate `ROADMAP.md` via `kaola-gitlab-workflow-roadmap.js generate`) is
-performed by `cmdFinalize` / `archiveProjectDir` at Step 8b. The git-add staging
-runnable body lives exclusively in `agents/contractor.md` (Step 7 of the
-Mechanical Finalization Procedure): the contractor only stages the result — the
-deleted per-issue file and the regenerated `ROADMAP.md` — with `git add`. It does
-not re-run the delete or generate. This ensures the closure happens exactly once,
-owned solely by `cmdFinalize`.
-
-Do not reorganize roadmap entries that came from closure decision items until the user has approved the next step.
-
-Archive is performed atomically by `cmdFinalize` in Step 8b below. Do not perform a manual copy or git mv here.
-
-**Keep-open partial-close runs.** If the Closure Decision Gate keeps the issue OPEN
-(partial implementation, residual follow-ups), still archive through the SAME `finalize`
-subcommand, adding `--keep-open`. It stamps the archived `workflow-state.md` terminal
-(`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`) so a
-later resume/audit cannot mistake the archived run for active work. Never archive by manual
-`mv`/`git mv` — a bypassed archive preserves claim-time state (`status: active`, pending gates)
-forever (a re-run of `finalize` over such a manual archive now heals it in place, but the
-supported path is `--keep-open`). See the **Keep-Open Terminal Mode** section below for the full
-script-side lane (roadmap retention, guaranteed no-close sink, merge-sink-only fence).
-
-Update `finalization-summary.md` with:
-
-- final GitLab issue state
-- final roadmap state
-- final archive path
-- documentation docking result
-- closure decision result
-- compliance table with no `pending` rows, except `final commit and push` may be
-  `ready` because it runs after this tracked file is finalized
-
-Before the final Git gate, verify every other `Required Agent Compliance` row
-across phase files is `invoked`, `skipped`, or `N/A` with evidence or skip
-reason.
+**Step 7 — GitLab Issue, Roadmap, Archive, Metadata.** If the project links an `issue_number`: close
+it only after acceptance passes and the Closure Decision Gate clears; keep it open if follow-ups /
+partial work / unresolved decisions remain; for `issue_action: comment_keep_open` do NOT close — post
+the substantive partial-close comment (the mechanical keep-open comment is posted by `sink-merge`).
+The actual roadmap closure (rm `.roadmap/issue-N.md` + regenerate `ROADMAP.md`) and archive are done
+once by `cmdFinalize`/`archiveProjectDir` in Step 8b; `agents/contractor.md` (Step 7) only stages the
+result with `git add` — do not rm/generate/`git mv` here. Update `finalization-summary.md` with the
+final issue/roadmap/archive/docking/closure state; verify every other Required Agent Compliance row
+is `invoked`/`skipped`/`N/A` with evidence (except `final commit and push` may be `ready`).
 
 ## Staging Guard
 
-Enforce the single-project rule before committing. If more than one
-`kaola-workflow/*/` project is staged at once, split the commit:
+Enforce the single-project rule before committing (compare `{project}` as a fixed string, never a
+regex): split the commit if a foreign project's `archive/` band or more than one `kaola-workflow/*/`
+project is staged.
 
 ```bash
-# a staged archive/<other>/ that is NOT the finalized project is a swept-in stray.
-# Compare {project} as a fixed string (awk index/equality), never as a regex, so a project
-# name carrying regex metacharacters cannot make this guard fail open.
-FOREIGN_ARCHIVE=$(git diff --cached --name-only \
-  | grep '^kaola-workflow/archive/' \
+FOREIGN_ARCHIVE=$(git diff --cached --name-only | grep '^kaola-workflow/archive/' \
   | awk -F'/' 'NF>=3 {print $3}' | sort -u \
   | awk -v p="{project}" '$0 != p && index($0, p ".archived-") != 1' || true)
-if [ -n "$FOREIGN_ARCHIVE" ]; then
-  echo "BLOCKED: a foreign project's archive band is staged (${FOREIGN_ARCHIVE}) — only {project}'s archive may be committed. Unstage the stray archive/<other>/ before committing." >&2
-  exit 1
-fi
-PROJECT_COUNT=$(git diff --cached --name-only \
-  | grep '^kaola-workflow/' \
-  | grep -v '^kaola-workflow/archive/' \
-  | grep -v '^kaola-workflow/\.roadmap/' \
-  | grep -v '^kaola-workflow/ROADMAP\.md$' \
-  | awk -F'/' 'NF>=3 {print $2}' | sort -u | grep -c . || true)
-if [ "${PROJECT_COUNT:-0}" -gt 1 ]; then
-  echo "BLOCKED: split your commit — multiple kaola-workflow projects staged." >&2
-  exit 1
-fi
+[ -n "$FOREIGN_ARCHIVE" ] && { echo "BLOCKED: a foreign project's archive band is staged (${FOREIGN_ARCHIVE})." >&2; exit 1; }
+PROJECT_COUNT=$(git diff --cached --name-only | grep '^kaola-workflow/' \
+  | grep -v '^kaola-workflow/archive/' | grep -v '^kaola-workflow/\.roadmap/' \
+  | grep -v '^kaola-workflow/ROADMAP\.md$' | awk -F'/' 'NF>=3 {print $2}' | sort -u | grep -c . || true)
+[ "${PROJECT_COUNT:-0}" -gt 1 ] && { echo "BLOCKED: split your commit — multiple kaola-workflow projects staged." >&2; exit 1; }
 ```
-
-If the check fails, do not stage; split the commit or coordinate manually.
 
 ## Keep-Open Terminal Mode (partial-close)
 
-A run can be **complete as a cycle** while the GitLab issue must **stay OPEN** as a residual
-vehicle (partial implementation, deferred follow-ups). The durable signal is one optional line
-in the `## Sink` block of `workflow-state.md`:
-
-```
-issue_action: comment_keep_open      # default when absent: close
-```
-
-This field is written by the **main session** when the keep-open decision is made — at the
-Closure Decision Gate, with user approval (no startup flag). Behavior under keep-open:
-
-- The GitLab issue is **NOT closed**. `sink-merge` posts a mechanical keep-open note instead of
-  closing; the substantive partial-close note listing the residual scope is main-session issue
-  governance in **Step 7**.
-- The roadmap source `kaola-workflow/.roadmap/issue-N.md` is **preserved** and `ROADMAP.md` is
-  regenerated still listing #N (closure invariant `keep-open-roadmap-preserved` enforces it).
-- The claim is released and the worktree/branch removed, exactly like a normal close.
-- The archive is stamped `last_result: closed_keep_open` + `issue_disposition: kept-open`; the
-  closure receipt records `remote_issue_closed: kept_open` and `roadmap_source_removed: kept`.
-
-**Keep-open is merge-sink-only.** An MR/PR sink would auto-close the kept-open issue via its
-hard-coded `Closes #N` body, and `watch-mr`/`watch-pr`'s archive-on-merge would delete the
-preserved roadmap source. Step 9 therefore (1) refuses a non-merge sink under keep-open before
-the case statement, (2) refuses the exit-3 merge-impossible auto-pivot with a typed BLOCKED
-(manual remediation, never auto-pivot), and (3) the `sink-mr.js`/`sink-pr.js` scripts themselves
-refuse when the live OR archived state carries `issue_action: comment_keep_open`.
-
-The Completion Contract still applies: keep-open is **one terminal** for the run.
+A run can be complete as a cycle while the issue stays OPEN. The durable signal is one optional line
+in the `## Sink` block: `issue_action: comment_keep_open` (default absent: close), written by the main
+session at the Closure Decision Gate with user approval. Under keep-open the issue is NOT closed
+(`sink-merge` posts a mechanical keep-open comment), the roadmap source `.roadmap/issue-N.md` is
+preserved and `ROADMAP.md` still lists #N (invariant `keep-open-roadmap-preserved`), the claim is
+released and worktree/branch removed, and the archive is stamped `last_result: closed_keep_open` /
+`issue_disposition: kept-open`. **Keep-open is merge-sink-only**: Step 9 refuses a non-merge sink and
+the exit-3 MR/PR auto-pivot under keep-open, and `sink-mr.js`/`sink-pr.js` refuse a project carrying
+`issue_action: comment_keep_open`.
 
 ## Sink Metadata Capture (before contractor dispatch)
 
-Capture sink metadata now, while `workflow-state.md` still exists. The contractor
-archives it during Step 8b; the main session reuses these variables in Step 9. Shell
-variables do NOT cross the subagent boundary, so this capture runs here (main session)
-and the contractor re-derives its own copy.
+Capture now, while `workflow-state.md` still exists (shell vars do not cross the subagent boundary;
+the contractor re-derives its own copy in Step 8b):
 
 ```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
 SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
 SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
-SINK_ISSUE=$(grep '^issue_iid:' "$SINK_STATE_FILE" | awk '{print $2}')
-[ -z "$SINK_ISSUE" ] && SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
-SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print $2}')
-SINK_KIND=${SINK_KIND:-merge}
-SINK_ISSUE_FLAG=""
-[ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
-# bundle member set — sink-merge closes EVERY member (all-or-nothing), not just the primary.
+SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
+SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print $2}'); SINK_KIND=${SINK_KIND:-merge}
+SINK_ISSUE_FLAG=""; [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+# bundle members — sink-merge closes EVERY member (all-or-nothing).
 SINK_ISSUE_NUMBERS=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_numbers:' | awk '{print $2}')
 [ -z "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS=$(grep '^issue_numbers:' "$SINK_STATE_FILE" | awk '{print $2}')
-SINK_ISSUE_NUMBERS_FLAG=""
-[ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
-# keep-open partial-close terminal — issue_action defaults to close when absent.
-SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
-SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
-SINK_KEEP_OPEN_FLAG=""
-[ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
+SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
+SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
 ACTIVE_WORKTREE_PATH="$(pwd)"
 _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
 [ -n "$_WT_PRE" ] && [ -d "$_WT_PRE" ] && ACTIVE_WORKTREE_PATH="$_WT_PRE"
@@ -774,229 +323,131 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-wo
 
 ## Mechanical Finalization (delegated to the contractor)
 
-**Before dispatching the contractor**: gate on repo kind:
-
-- **Self-host (npm)** — the repo's `package.json` declares the `test:kaola-workflow:*`
-  scripts: run `kaola-workflow-run-chains.js` (main session, via the edition's `kaola_script()`
-  resolver) after all test-consumed prose/docs and code changes have landed, as the last
-  pre-Finalization action. The contractor only VERIFIES the resulting
-  `.cache/chain-receipt.json` — it does not run the chains. `cmdFinalize` (Step 8b) enforces the
-  finalize gate fail-closed before the archive rename; the contractor will return
-  `finalize_gate_unverified` if the receipt is absent, stale, or red. If `chains_stale` fires,
-  rerun the full gated runner; validation-invisible workflow state and inert docs do not stale the
-  receipt.
-- **Consumer (non-npm)** — the repo has no `test:kaola-workflow:*` scripts: do **NOT**
-  invoke `kaola-workflow-run-chains.js` (it would only return `chains_config_missing`). The
-  gate is the agent's own `.cache/final-validation.md` with a column-0 `verdict: pass`,
-  produced by running the plan's `## Meta` `validation_command` or by citing an unchanged
-  terminal change-gate validation run with `source: cited:<node-id>`, `validated_command`,
-  `validated_at_head`, and `reuse_boundary`; `--finalize-check` auto-detects consumer mode
-  (absence of the npm scripts) and gates on that file. Any doubt about the boundary means run the
-  command.
-
-Dispatch the contractor to execute the mechanical finalization. The full
-procedure body (Step 8a artifact mirror, Step 8b cmdFinalize archive + status
-close, Step 7 roadmap regen + git-add staging, and Step 8 commit gate) lives
-exclusively in `agents/contractor.md` — the contractor reads it there.
+Gate on repo kind first: self-host runs `kaola-workflow-run-chains.js` (main session) as the last
+pre-Finalization action, the contractor only VERIFIES `.cache/chain-receipt.json`; consumer gates on
+`.cache/final-validation.md`. The full procedure body (Step 8a artifact mirror, Step 8b cmdFinalize
+archive + status close, Step 7 roadmap regen + git-add staging, Step 8 commit gate) lives exclusively
+in `agents/contractor.md`. Dispatch it:
 
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical finalize {project}",
-  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND, issue action SINK_ISSUE_ACTION). For self-host repos, the chain receipt .cache/chain-receipt.json has already been generated by the orchestrator as the last pre-Finalization action after all test-consumed prose landed; for consumer repos, verify final-validation.md instead. Execute the full procedure in your contractor profile: Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only — add --keep-issue-open when SINK_ISSUE_ACTION is comment_keep_open), the Step 7 roadmap regen + git-add staging, and the Step 8 commit gate (chore: finalize {project}). For Step 8c: VERIFY the receipt or final-validation evidence is present and covers the declared boundary — do NOT run kaola-workflow-run-chains.js yourself. Re-derive your own kaola_script/CLAIM_JS and re-read SINK_KIND/SINK_ISSUE_ACTION from workflow-state.md (it exists until cmdFinalize archives it). Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
+  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND, issue action SINK_ISSUE_ACTION). Self-host: the receipt .cache/chain-receipt.json was already generated by the orchestrator; consumer: verify final-validation.md. Execute your contractor profile Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only — add --keep-issue-open when SINK_ISSUE_ACTION is comment_keep_open), Step 7 roadmap regen + git-add staging, Step 8 commit gate (chore: finalize {project}). Step 8c: VERIFY the receipt/final-validation evidence — do NOT run kaola-workflow-run-chains.js. Re-derive kaola_script/CLAIM_JS and re-read SINK_KIND/SINK_ISSUE_ACTION from workflow-state.md. Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
 )
 ```
 
-### Attestation boundary (closure receipt)
+**Attestation boundary.** The contractor's Step 8b passes `--attest-contractor-spawn` so a delegated
+run back-fills `finalize_contractor_attested: attested`; the main session must NEVER pass the flag on
+an inline run. A genuinely-tooling-unavailable inline run records `local-fallback-tool-unavailable`
+and omits the flag — the resulting `finalize_contractor_attested: missing` + ATTESTATION WARNING is
+truthful and never blocks. `cmdFinalize` appends a `## Attestation` section to the archived summary
+verbatim — never remove it. The adaptive plan's `finalize (<node>)` compliance row is
+`main-session-direct`, a distinct contract from this delegation.
 
-The contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely
-delegated run back-fills its own dispatch marker and the closure receipt reads
-`finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a
-contractor dispatched into a linked worktree, or a hookless harness). This back-fill is the
-contractor's; the main session must never pass the flag on an inline run.
-
-The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded
-`main-session-direct` (the in-plan sink bookkeeping is, by the plan-run contract, performed by the
-main session). That row neither requires nor replaces the contractor's delegation of mechanical
-finalization here — they are two distinct contracts on two distinct steps.
-
-**Inline-fallback contract.** If the contractor tooling is genuinely unavailable and the session
-runs the mechanical finalization inline, it must (a) record `local-fallback-tool-unavailable` with
-evidence in Required Agent Compliance, and (b) NOT pass `--attest-contractor-spawn`. The resulting
-`finalize_contractor_attested: missing` plus the ATTESTATION WARNING is then the truthful, expected
-outcome — attestation is warn-first and never blocks finalization.
-
-## Crash Recovery
-
-If the session crashes after `cmdFinalize` archives the project folder but before the Step 8 `git commit` runs, finalize is resumable.
-
-**Detect:** run from the worktree root (self-contained — resolves `$CLAIM_JS`
-via the same `kaola_script()` resolver used elsewhere in this file):
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"
-node "$CLAIM_JS" resume --project {project} --json
-```
-
-A result with `"reason":"finalize_incomplete"` confirms the archive dir (`kaola-workflow/archive/{project}/`) is present but uncommitted. `"reason":"already_finalized"` means the commit already landed — no action needed.
-
-**Recover:** re-dispatch the contractor with the same finalization prompt. Step 8b re-runs `cmdFinalize --keep-worktree`; it detects the source-missing state and stages the already-archived dir, then proceeds through Step 7 and Step 8 normally.
+**Crash recovery.** If the session crashes after `cmdFinalize` archives but before the Step 8 commit,
+`node "$(kaola_script kaola-gitlab-workflow-claim.js)" resume --project {project} --json` reports
+`finalize_incomplete` (archive present, uncommitted) or `already_finalized`. Recover by re-dispatching
+the contractor with the same prompt.
 
 ## Step 9 - Sink
 
-Use the sink metadata captured before Step 8b. Do not read the active
-`workflow-state.md` here on the merge path; it may already be archived.
+Use the sink metadata captured before Step 8b (do not re-read the active `workflow-state.md` on the
+merge path; it may already be archived).
 
 ```bash
-# Capture main repo root before sink dispatch.
-# --git-common-dir always resolves to the shared .git dir (same idiom as the
-# Step 8a - Artifact Mirror section in agents/contractor.md).
-# --show-toplevel returns the worktree root sink-merge is about to delete.
 _COORD_ROOT_RAW_SINK="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
 if [[ "$_COORD_ROOT_RAW_SINK" != /* ]]; then _COORD_ROOT_RAW_SINK="$(pwd)/$_COORD_ROOT_RAW_SINK"; fi
 _MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
-: "${SINK_BRANCH:?SINK_BRANCH must be captured before Step 8b}"
-: "${SINK_KIND:=merge}"
-: "${SINK_ISSUE_FLAG:=}"
-: "${SINK_ISSUE_NUMBERS_FLAG:=}"
-```
-
-Dispatch based on `SINK_KIND`:
-
-```bash
-# keep-open is merge-sink-only — refuse an MR/PR sink before dispatch.
+: "${SINK_BRANCH:?SINK_BRANCH must be captured before Step 8b}"; : "${SINK_KIND:=merge}"
+: "${SINK_ISSUE_FLAG:=}"; : "${SINK_ISSUE_NUMBERS_FLAG:=}"
+# keep-open is merge-sink-only — refuse an MR sink before dispatch.
 if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
-  echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink. MR/PR sinks close via the merged MR; switch sink: merge or remove issue_action." >&2
-  exit 1
+  echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink." >&2; exit 1
 fi
 case "$SINK_KIND" in
   mr|pr)
-    kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
     SINK_MR_JS="$(kaola_script kaola-gitlab-workflow-sink-mr.js)"
-    node "$SINK_MR_JS" \
-      --branch "$SINK_BRANCH" \
-      $SINK_ISSUE_FLAG \
-      --project {project}
+    node "$SINK_MR_JS" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project {project}
     ;;
   merge|*)
-    kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
     SINK_MERGE_JS="$(kaola_script kaola-gitlab-workflow-sink-merge.js)"
-    node "$SINK_MERGE_JS" \
-      --branch "$SINK_BRANCH" \
-      $SINK_ISSUE_FLAG \
-      $SINK_ISSUE_NUMBERS_FLAG \
-      $SINK_KEEP_OPEN_FLAG \
-      --project {project}
+    node "$SINK_MERGE_JS" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project}
     _SINK_MERGE_EXIT=$?
     if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
-      # keep-open is merge-sink-only — never auto-pivot to an MR sink (its Closes #N body
-      # would close the kept-open issue; watch-mr would delete the preserved roadmap source).
+      # keep-open never auto-pivots to an MR sink (its Closes #N body would close the kept-open issue).
       if [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
-        echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run. Keep-open is merge-sink-only: the MR fallback body closes the issue on merge and watch-mr would delete the preserved roadmap source. Remediate the merge blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to an MR sink." >&2
-        exit 1
+        echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run — remediate the blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to an MR sink." >&2; exit 1
       fi
       cd "$_MAIN_ROOT"
       CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"
-      node "$CLAIM_JS" sink-fallback \
-        --project {project}
+      node "$CLAIM_JS" sink-fallback --project {project}
       SINK_MR_JS="$(kaola_script kaola-gitlab-workflow-sink-mr.js)"
-      node "$SINK_MR_JS" \
-        --branch "$SINK_BRANCH" \
-        $SINK_ISSUE_FLAG \
-        --project {project}
+      node "$SINK_MR_JS" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project {project}
       exit $?
     fi
     [ "$_SINK_MERGE_EXIT" -ne 0 ] && exit "$_SINK_MERGE_EXIT"
     ;;
 esac
-# Restore CWD: sink-merge may have removed the worktree this shell was in.
-cd "$_MAIN_ROOT" 2>/dev/null || true
+cd "$_MAIN_ROOT" 2>/dev/null || true   # sink-merge may have removed the worktree this shell was in
 ```
 
 ### Script-owned worktree sink (`--sink` mode)
 
-When the branch carries a worktree run (recorded `run_posture: worktree`), use the `--sink` flag to
-replace the manual 8-step choreography:
+When the branch carries a worktree run (`run_posture: worktree`), `--sink` replaces the manual
+choreography with one resumable transaction: preflight (refuses `sink_blocked` with `blocked_paths`,
+auto-stashes `.roadmap/issue-N.md`) → push branch → rebase onto `origin/main` → `npm test` (four-chain
+gate) → FF-merge → push main → close issue (idempotent) → archive via `cmdFinalize` → cleanup.
 
 ```bash
-node "$SINK_MERGE_JS" \
-  --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG \
-  $SINK_KEEP_OPEN_FLAG \
-  --project {project} \
-  --sink --json
+node "$SINK_MERGE_JS" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json
 ```
 
-`--sink` mode runs a single resumable transaction:
-1. **Preflight** — refuses `sink_blocked` with `blocked_paths` listing any foreign dirt; zero mutation on refusal.
-   Auto-stashes the claim-time `.roadmap/issue-N.md` if present.
-2. **Push branch** — `git push -u origin {branch}` (creates upstream if absent)
-3. **Rebase** — rebases onto `origin/main` (`--force-with-lease` on branch)
-4. **Test** — runs `npm test` (four-chain gate for cross-edition diffs)
-5. **FF-merge** — fast-forward merges branch into main
-6. **Push main** — `git push origin main`
-7. **Close issue** — idempotent (probe-before-close)
-8. **Archive** — via `cmdFinalize` internals
-9. **Cleanup** — stash restore, remove worktree
+**Co-tenant merge protocol.** Each lane cleans up its OWN branch/worktree/folder only AFTER its own
+merge lands; the later of two concurrent finishers rebases onto updated main and retries the
+fast-forward. A true content conflict halts and asks a human — never auto-resolved. Do not clean up
+another session's branch/worktree/folder.
 
-**Co-tenant merge protocol.** Each lane cleans up its own branch, worktree, and `kaola-workflow/<project>/` folder ONLY AFTER its own merge lands — cleanup follows the merge, not the other way around. When two sessions run concurrently: the first finisher merges normally; the later finisher rebases onto the updated main and retries the fast-forward merge. A true content conflict halts and asks a human — it is NEVER auto-resolved. Do not clean up another session's branch, worktree, or project folder.
+**Crash-resume.** `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each step; re-running
+resumes from the last incomplete step. `sink-receipt.json`/`sink-fallback.json` are transaction
+journals — a terminally successful sink deletes them itself; a `clean and synced` check that finds one
+must DELETE it, never commit it.
 
-**Crash-resume**: a step-receipt at `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each step.
-Re-running the command after a crash resumes from the last incomplete step — no double-apply.
-
-`sink-merge.js` exit codes:
-- Exit 0: branch merged onto main, issue closed (online), local branch deleted. Confirm worktree is on main with `git status --short --branch`.
-- Exit 1: conflict or fatal error. Rebase conflict remediation printed to stderr. Re-run after resolving.
-- Exit 2: FF race exhausted after MAX_AUTOMERGE_RETRIES retries. Follow printed remediation instructions.
-- Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Finalization pivots to MR creation automatically — except on keep-open runs (`SINK_KEEP_OPEN_FLAG` set), where exit 3 is a typed BLOCKED refusal requiring manual remediation of the merge blocker; keep-open is merge-sink-only.
-
-`sink-mr.js` exit codes:
-- Exit 0: branch pushed, MR opened, URL recorded in the `## Sink` block and committed in a metadata follow-up commit. If `mr_auto_merge: true` in config, auto-merge was requested.
-- Exit 1: fatal error (push failed, `glab mr create` failed, or metadata commit/push failed). MR URL and manual recovery instructions printed to stderr when MR was already created.
-
-After `sink-mr.js` exits 0, the active folder remains open. It is archived automatically when `watch-mr` detects the MR is MERGED or CLOSED on the next `/workflow-next` startup.
+`sink-merge.js` exit codes: 0 merged + issue closed + journals disposed (confirm `git status --short
+--branch` shows no lingering journal); 1 conflict/fatal (re-run after resolving); 2 FF race exhausted;
+3 merge-impossible (receipt in `.cache/sink-fallback.json`, pivots to MR — except keep-open, a typed
+BLOCKED). `sink-mr.js`: 0 pushed + MR opened + URL recorded; 1 fatal. After `sink-mr.js` exit 0 the
+folder stays open and is archived when `watch-mr` sees the MR MERGED/CLOSED on the next
+`/workflow-next` startup.
 
 <!-- PIN: closure-audit -->
 ### Sink result handling and closure-audit reconciliation sweep
 
-**Transactional catch (n1's `sink_incomplete` emit):** when `--sink --json` returns
-`result:"refuse"` with `reason:"sink_incomplete"`, the sink did NOT complete — do NOT treat it as
-success. Branch on `step`:
+**Transactional catch:** when `--sink --json` returns `result:"refuse"` with
+`reason:"sink_incomplete"`, the sink did NOT complete — branch on `step`: `push_main` +
+`push_main:"failed"` (merge landed locally, remote not advanced — re-run `--sink`, resolve the remote
+fault first); `closure` + `remote_issue_closed:"partial"` + `failed_issue_closures:[...]` (close the
+listed issues manually or resolve the forge fault, then re-run `--sink`). The receipt makes resume
+idempotent.
 
-- `step:"push_main"` + `push_main:"failed"` — the merge landed locally but the remote was NOT
-  advanced. The deliverable is not on the remote. Re-run `--sink` to resume (the receipt makes the
-  push step idempotent). Resolve any remote fault first.
-- `step:"closure"` + `remote_issue_closed:"partial"` + `failed_issue_closures:[...]` — the merge
-  is on the remote but one or more issues could not be closed. Close the listed issues manually
-  (`glab issue close N`) or resolve the forge fault, then re-run `--sink`.
-
-In either case, the receipt preserves the partial state so `--sink` resumes from the incomplete step
-without double-applying completed steps.
-
-**Reconciliation sweep (defense-in-depth):** after a successful sink, run `closure-audit.js` as the
-after-the-fact drift detector — it flags a closed issue still carrying `workflow:in-progress`, a
-stale roadmap source, or an un-archived merged-MR folder that escaped the inline catch.
+**Reconciliation sweep (defense-in-depth):** after a successful sink, run `closure-audit.js` — it
+flags a closed issue still carrying `workflow:in-progress`, a stale roadmap source, or an un-archived
+merged-PR folder that escaped the inline catch.
 
 ```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
 CLOSURE_AUDIT_JS="$(kaola_script kaola-gitlab-workflow-closure-audit.js)"
 node "$CLOSURE_AUDIT_JS"            # dry-run: JSON report (default)
 # node "$CLOSURE_AUDIT_JS" --execute  # repair safe local drift
 ```
 
-Dry-run (default) reports findings as JSON without mutating state. Pass `--execute` to repair safe
-local drift (stale `.roadmap` sources, ROADMAP rows, `workflow:in-progress` label on closed issues).
-It never deletes folders or worktrees.
-
-**Two-mechanism rationale:** the inline `sink_incomplete` emit is the immediate transactional catch
-(fires at sink time, refuses the sinked status so the caller knows immediately). `closure-audit` is
-the periodic broad reconciliation sweep (runs after the fact, catches drift that the inline path
-cannot reach — e.g. a label left behind by a prior partial run or a folder not archived). Together
-they form the defense-in-depth complement: transactional catch + reconciliation sweep.
+Dry-run reports without mutating; `--execute` repairs safe local drift (stale `.roadmap` sources,
+ROADMAP rows, `workflow:in-progress` on closed issues) and never deletes folders or worktrees. The
+inline `sink_incomplete` emit is the immediate transactional catch; `closure-audit` is the after-the-
+fact reconciliation sweep — together, defense in depth.
 
 ## Completion Contract
 
-This phase closes exactly one issue. After issue #N is closed and the active
-folder is archived, the single-issue completion contract is satisfied. Do not auto-route
-into the next issue in line. Stop and await explicit re-direction from the user.
+This phase closes exactly one issue. After issue #N is closed and the active folder is archived, the
+single-issue completion contract is satisfied. Do not auto-route into the next issue. Stop and await
+explicit re-direction from the user.
