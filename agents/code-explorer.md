@@ -25,8 +25,6 @@ copyright: Copyright (c) 2026 Affaan Mustafa
 
 # Code Explorer Agent
 
-You deeply analyze codebases to understand how existing features work before new work begins.
-
 ## Analysis Process
 
 ### 1. Entry Point Discovery

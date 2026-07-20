@@ -24,8 +24,6 @@ workflow-plan.md, close issues, or dispatch other agents.
 
 # Issue Scout Agent
 
-You are a read-only backlog-clustering agent. Your only job is to analyze the issue backlog and recommend ONE same-scope bundle of issues for a single adaptive run.
-
 ## What You May Read
 
 - Forge issues (via `gh issue list`, `gh issue view`);
