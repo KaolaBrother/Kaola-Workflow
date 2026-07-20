@@ -160,13 +160,9 @@ if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" ]; then
 fi
 ```
 
-**Resolve the scripts path per command, not once.** The Bash tool does NOT persist
-environment variables between calls (true for Claude Code AND opencode) — a `$KAOLA_SCRIPTS` set
-in one Bash call is GONE in the next, so a later lifecycle call crashes with `Cannot find module
-'/…-adaptive-node.js'`. Re-resolve the absolute scripts path in EVERY Bash call that needs it:
-either repeat the resolver block above (or an equivalent absolute-path lookup) at the top of each
-call, or hardcode the absolute path — never rely on a once-set `$KAOLA_SCRIPTS` carrying into a
-subsequent call.
+**Resolve the scripts path per command, not once** — the Bash tool does not persist env vars between
+calls, so re-resolve `$KAOLA_SCRIPTS` (repeat the resolver, or hardcode the absolute path) in EVERY
+Bash call that needs it; a once-set value is GONE in the next call.
 
 Then mirror the project folder into the worktree (idempotent, `plan_hash`-verified):
 
@@ -378,6 +374,10 @@ The fused `close-and-open-next` (step 4) opens every subsequent node. Re-run `op
 when no node is `in_progress`.
 
 ### 3. Dispatch the role agent
+
+<!-- PIN: mirror-before-dispatch -->
+**Mirror before dispatch.** Apply the returned `taskTransitions` to the visible task list BEFORE
+spawning the role agent — the ledger stays authoritative; the mirror is the operator's only live view.
 
 **Every spawn parameter comes from the dispatch card.** NEVER improvise a task name, omit
 `agent_type`, or drop the effort tier because the card was not in view — go get the card
@@ -725,27 +725,8 @@ refuses `observed_gap_unseeded` at Finalization.
 
 #### Validation De-Duplication
 
-Avoid redundant validation runs.
-
-- During the run, each node validates only its affected task scope, not the full
-  project, unless the node plan explicitly requires a full command or the touched
-  surface is high risk.
-- If a node's recorded check already passed against the same relevant file set and no
-  relevant files changed afterward, cite the prior node evidence path
-  (`.cache/{node-id}.md`) instead of rerunning it.
-- After any routed fix or Trivial Inline Edit Exception edit, rerun only the affected
-  node command unless the fix changes shared infrastructure.
-- Run the full chains once here at All-done, not per node; that is the single
-  full-suite pass before Finalization.
-- Use the `validation_command` recorded in the plan `## Meta` for any full-suite
-  validation; do not re-derive a per-node command (the record-once discipline).
-- **State the actual reuse boundary, not a false absolute.** When you cite a
-  prior node run instead of rerunning, record WHICH node/state that run covered and that
-  any later edits are outside it. Do NOT write a terminal absolute like `No files changed
-  after those runs` when a node afterward changes relevant files — say e.g. `validation
-  reuse covers code/test impact through node nN; the later edit is docs-only and outside
-  the rerun trigger`. Consumer final-validation citations must also record `source: cited:<node-id>`,
-  `validated_command`, `validated_at_head`, and `reuse_boundary`; uncertainty means run the command.
-  A citation still requires a fresh `validated_candidate_hash:` line computed at citation time —
-  the binding is what proves the tree is unchanged; if the hash no longer matches at finalize, the
-  cited run does not cover the candidate and the command must be re-run.
+Avoid redundant runs: each node validates only its affected scope; cite a prior node's passing
+evidence (`.cache/{node-id}.md`) when no relevant file changed after it, stating the exact reuse
+boundary (never a false `No files changed` absolute) — a consumer citation still needs a fresh
+`validated_candidate_hash:`. Run the full chains ONCE here at All-done using the `## Meta`
+`validation_command` (the record-once discipline), not per node.

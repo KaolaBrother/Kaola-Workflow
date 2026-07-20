@@ -140,32 +140,15 @@ This is the thin router. It owns startup checks, roadmap freshness, active proje
 
 ## Goal Contract
 
-Continue until the selected workflow phase objective is satisfied, evidence is
-recorded, and `workflow-state.md` points to the correct `next_skill`. Do not
-stop after routine substeps. Stop only for true external authorization,
-destructive or risky Git operations, materially user-owned choices, or ambiguity
-that blocks correctness.
-
-## Autonomy Policy
-
-Treat nonessential workflow bookkeeping as autonomous: generated project names,
-collision suffixes such as `-2`, cache/artifact paths, and harmless ordering
-choices are selected automatically and recorded. For essential technical
-decisions, consult the strongest available expert model/profile for the session,
-apply the chosen answer directly, and record it under `.cache/` or the phase
-artifact.
+Continue until the phase objective is satisfied, evidence is recorded, and `workflow-state.md` points
+to the correct `next_skill`. Decide nonessential bookkeeping autonomously; stop only for external
+authorization, risky Git operations, materially user-owned choices, or correctness-blocking ambiguity.
 
 ## Run-Gap Capture (Goal Completion Rule)
 
-**Finishing an issue INCLUDES capturing its run-discovered defects.** A run that
-surfaces a defect — a reviewer finding deferred to follow-up, an in-run
-repair/reopen, a deferred or waived chain, a flake — is not "done" until each
-such gap is either FILED as a follow-up issue (recorded `filed: #N` in
-`finalization-summary.md`'s `## Run gaps` section) or explicitly justified as
-`noise: <reason>`. Filing the follow-up SATISFIES the goal; silently deferring a
-known defect without filing or justifying it VIOLATES the goal, and the
-`gaps_unswept` finalize gate will refuse. "Loop until criteria pass" includes
-this capture step. Use the forge's issue tracker to file follow-ups.
+**Finishing an issue INCLUDES capturing its run-discovered defects** — each gap is FILED (`filed: #N`
+in `finalization-summary.md`'s `## Run gaps`) or justified `noise: <reason>`, else the `gaps_unswept`
+finalize gate refuses.
 
 ## Delegation Contract
 
@@ -247,23 +230,11 @@ several issues or when auto-bundle mode identifies a high-confidence same-scope 
 
 ### Explicit-bundle entry
 
-When the user names several issues together (e.g., "finish issues #N #N #N
-together"), route through the bundle lane:
-
-- Set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces) before calling startup.
-- The startup script validates the exact set — it does NOT substitute or reorder issues.
-- Project name and active folder: `bundle-42-47-53` (sorted ascending, deduplicated).
-- Branch: `workflow/bundle-42-47-53`.
-- Bundle lane is **adaptive-path only** (`workflow_path: adaptive` is required). A
-  bundle request with an explicit `KAOLA_PATH=fast`/`full` is refused with
-  `bundle_requires_adaptive`; do not silently downgrade to a single issue.
-- In the startup call, pass `--target-issues 42,47,53` (instead of `--target-issue N`)
-  and `--workflow-path adaptive`.
-
-Compatibility rule: `KAOLA_TARGET_ISSUE` / `--target-issue` keep current one-issue
-behavior UNCHANGED. `KAOLA_TARGET_ISSUES` / `--target-issues` are the ONLY
-multi-issue startup path. If BOTH are set, the script refuses with
-`target_ambiguity`; never set both.
+When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
+and pass `--target-issues 42,47,53 --workflow-path adaptive` (project/branch `bundle-42-47-53`, sorted
++ deduplicated; the script validates the exact set, never reorders). The bundle lane is adaptive-only
+(`workflow_path: adaptive`; a `fast`/`full` request is refused with `bundle_requires_adaptive`).
+`--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
 
 ### Auto-bundle entry
 
@@ -331,16 +302,10 @@ issue-scout's ENTIRE JSON reply verbatim, fenced, to
 automatically with the project when the run finalizes. Skip this step entirely on the
 user-named-issue branch — a user-named claim legitimately has no selection evidence.
 
-Auto-bundle mode emits a bundle only when:
-- all candidate issues are open and unclaimed;
-- no dependency is unresolved outside the bundle;
-- the issues share a coherent scope signal (same subsystem, same label, same
-  failing area, or an explicit dependency relation);
-- issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 4).
-
-**Fallback rule:** when no high-confidence same-scope bundle exists, the scout
-returns a single `primary_issue` (or `confidence: low`) → fall back to single-issue
-selection via `KAOLA_TARGET_ISSUE`. Do not manufacture a bundle.
+Auto-bundle emits a bundle only when all candidates are open + unclaimed, no dependency is unresolved
+outside the set, they share a coherent scope signal, and the count is ≤ `KAOLA_BUNDLE_MAX_ISSUES`
+(default 4). Otherwise the scout returns a single `primary_issue` → single-issue selection via
+`KAOLA_TARGET_ISSUE`; do not manufacture a bundle.
 
 ### Bundle closure
 
@@ -373,25 +338,11 @@ agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Adaptive is the unconditional default and the only installable workflow path —
-there is nothing to resolve and nothing to deliberate. `export KAOLA_PATH=adaptive`
-and proceed to the Adaptive front-end entry section. The export is the action (it
-makes the Startup transaction skip and the adaptive front end fire). Adaptive just
-runs.
-
-If `KAOLA_PATH` is somehow already exported to a non-adaptive value (residual
-environment state, a direct script invocation, or similar), honor it verbatim and
-hand it to the claim — do NOT re-derive a rubric and do NOT check whether the path
-is installed. The claim's `path_not_installed` typed refusal is the single
-authority: if the named path isn't installed the run surfaces that refusal (a hard
-stop), it does NOT silently fall to adaptive. There is no automatic fallback. For a
-normal fresh-start draft that never froze, the recourse stays inside adaptive
-(bounded planner repair → discard+restart a fresh adaptive run → stop+ask), per the
-`kaola-workflow-adapt` skill. This startup fallback is forbidden while
-`replan_in_progress`; the re-plan fence permits only the edition-local
-`resume --project {project} --json` mutation.
-
-State the chosen path aloud before the Startup transaction:
+Adaptive is the unconditional default and only installable path: `export KAOLA_PATH=adaptive` and
+proceed to the Adaptive front-end entry (this makes the Startup transaction skip and the front end
+fire). Honor an already-set non-adaptive `KAOLA_PATH` verbatim and hand it to the claim — its
+`path_not_installed` typed refusal is the single authority (no silent fall to adaptive, no automatic
+fallback). State the chosen path:
 
 ```text
 Path: adaptive (default)
@@ -531,25 +482,10 @@ git pull --ff-only
 git status --short --branch
 ```
 
-If the block passes, continue to routing. If the block persists (merge/rebase required, dirty worktree), release the claimed folder before stopping:
-
-```bash
-[ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$KAOLA_PROJECT" ] && node "$claim_script" release --project "$KAOLA_PROJECT" --reason git-freshness-block
-```
-
-Stop and ask the user to resolve the Git state manually before retrying `/workflow-next`. Do not proceed to routing or adopt any active folder after this release.
-
-### Co-active Folders Advisory
-
-If multiple active folders exist from prior sessions (e.g., `issue-63` and `issue-65` in different states), they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
-
-**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Finalization sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
-
-If GitLab is available, refresh open issues:
-
-```bash
-glab issue list --limit 100 --json number,title,state,labels,assignees,updatedAt,url
-```
+If the block persists (merge/rebase required, dirty worktree), release the claimed folder
+(`node "$claim_script" release --project "$KAOLA_PROJECT" --reason git-freshness-block`) and ask the
+user to resolve the Git state before retrying. Distinct active folders run independently; do not merge
+or batch commits across them. If GitLab is available, refresh open issues with `glab issue list`.
 
 Keep `kaola-workflow/ROADMAP.md` as a compact mirror of active unfinished work.
 
