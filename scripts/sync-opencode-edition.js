@@ -71,8 +71,6 @@ const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 // opencode edition). The .opencode/plugins/kaola-workflow-hooks.js adapter feeds
 // them Claude-style JSON payloads and honors their exit codes.
 const HOOK_SCRIPTS = [
-  'kaola-workflow-pre-commit.sh',
-  'kaola-workflow-write-lane.sh',
   'kaola-workflow-subagent-dispatch-log.sh',
 ];
 

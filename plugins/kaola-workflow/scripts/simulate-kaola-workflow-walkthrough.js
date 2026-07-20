@@ -233,8 +233,9 @@ function testAC1HooksJson() {
       'AC1 GREEN: installed hooks.json must NOT contain literal __KW_PLUGIN_ROOT__');
 
     const parsed = JSON.parse(installedRaw);
-    // #372: the PostToolUse phantom-advisor hook is retired — exactly 3 lifecycle events remain.
-    const EVENTS = ['SessionStart', 'PreToolUse', 'SubagentStart'];
+    // #372: the PostToolUse phantom-advisor hook is retired. #725: the PreToolUse
+    // pre-commit-guard and write-lane hooks are also retired — exactly 2 lifecycle events remain.
+    const EVENTS = ['SessionStart', 'SubagentStart'];
     for (const event of EVENTS) {
       const entries = (parsed.hooks || {})[event];
       assert(Array.isArray(entries) && entries.length > 0,
@@ -245,6 +246,8 @@ function testAC1HooksJson() {
     }
     assert(!(parsed.hooks || {}).PostToolUse,
       '#372: hooks.json must NOT carry a PostToolUse event (phantom-advisor retired)');
+    assert(!(parsed.hooks || {}).PreToolUse,
+      '#725: hooks.json must NOT carry a PreToolUse event (pre-commit-guard/write-lane retired)');
 
     // AC1: SessionStart entry with matcher "compact" must reference the compact-resume script.
     const sessionStart = (parsed.hooks || {}).SessionStart || [];
@@ -276,8 +279,8 @@ function testAC1HooksJson() {
       '#447 AC5: no hooks.json in project .codex after double-run');
     const afterSecond = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
     // Assert NO DUPLICATE managed entries after the 2nd install: each kaola-workflow: id appears
-    // exactly once (an event MAY carry >1 distinct managed id — e.g. PreToolUse holds both
-    // pre-commit-guard and the #376 write-lane hook — so the check is per-id, not per-event count).
+    // exactly once (an event MAY carry >1 distinct managed id, so the check is per-id, not
+    // per-event count).
     const idCounts = {};
     for (const event of Object.keys(afterSecond.hooks || {})) {
       for (const e of afterSecond.hooks[event]) {
@@ -730,7 +733,7 @@ function test409StableHomeSurvivesDirDeletion() {
         }
       }
     }
-    assert(commandCount >= 4, '#409: expected the four managed hook commands, saw ' + commandCount);
+    assert(commandCount >= 2, '#409: expected the two managed hook commands, saw ' + commandCount);
 
     // 4. Reinstall sweeps a planted stale script (no orphan left in the stable home).
     // #447: stable home lives in global HOME/.codex/kaola-workflow, not in the project .codex.

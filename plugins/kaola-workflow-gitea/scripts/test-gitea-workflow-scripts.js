@@ -1968,7 +1968,7 @@ function test409StableHomeSurvivesDirDeletion() {
         }
       }
     }
-    assert.ok(commandCount >= 4, '#409 gt: expected the four managed hook commands, saw ' + commandCount);
+    assert.ok(commandCount >= 2, '#409 gt: expected the two managed hook commands, saw ' + commandCount);
 
     // #447: stable home also lives in global HOME/.codex/kaola-workflow
     const globalStableHome409 = path.join(tempHome409, '.codex', 'kaola-workflow');
@@ -2024,7 +2024,7 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(fs.existsSync(freshHooksPath), '#447 AC1: fresh install must create HOME/.codex/hooks.json (global), not found at: ' + freshHooksPath);
     assert.ok(!fs.existsSync(path.join(fresh, '.codex', 'hooks.json')), '#447 AC5: no hooks.json must be written to project .codex');
     const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
-    const requiredEvents = ['SessionStart', 'PreToolUse', 'SubagentStart'];
+    const requiredEvents = ['SessionStart', 'SubagentStart'];
     for (const event of requiredEvents) {
       const entries = freshHooks.hooks[event];
       assert.ok(Array.isArray(entries) && entries.length > 0, `hooks.json must have entries for ${event}`);

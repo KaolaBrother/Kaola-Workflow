@@ -138,8 +138,8 @@ if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') 
   try {
     const rootHooksText = fs.readFileSync(path.join(repoRoot, 'hooks/hooks.json'), 'utf8');
     const rootHooks = JSON.parse(rootHooksText);
-    // plant an extra PreToolUse matcher (drift) into the fixture root copy only.
-    rootHooks.hooks.PreToolUse.push({
+    // plant an extra SubagentStart matcher (drift) into the fixture root copy only.
+    rootHooks.hooks.SubagentStart.push({
       matcher: 'PLANTED-DRIFT',
       hooks: [{ type: 'command', command: 'echo planted', timeout: 5 }],
       description: 'planted drift (test fixture only, never written to a real file)',

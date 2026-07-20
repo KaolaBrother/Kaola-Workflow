@@ -8323,9 +8323,28 @@ function mutationGuardPrologue(opts, cfg) {
   // opener (open-next / open-ready / open-batch / top-up) carries this layer; a mismatch refuses
   // plan_integrity_failed with zero mutation.
   if (cfg.integrity && typeof shell === 'function') {
-    const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
-    if (integrity.exitCode !== 0 || integrity.ok !== true) {
-      return refuse('plan_integrity_failed', { detail: integrity.reason || null });
+    // #725 WS2 — fast-path the plan_hash integrity gate. Recompute the plan_hash IN-PROCESS via the
+    // validator's exported computePlanHash (call it, never a narrower re-implementation, so the two can
+    // never drift over which bytes are hash-covered) and compare against the frozen embedded
+    // <!-- plan_hash --> marker. On a clean MATCH the plan is byte-untampered vs freeze, so the
+    // authoritative --resume-check subprocess is redundant — skip it (the dedup). On a MISMATCH, a
+    // MISSING marker, or ANY error (read failure / computePlanHash throw) FALL BACK to the full shell
+    // --resume-check and refuse plan_integrity_failed EXACTLY as before. The recompute only ever ADDS a
+    // skip on a proven-clean plan; it never becomes the verdict on a non-clean one.
+    let hashMatch = false;
+    try {
+      const planContent = readFile(planPath);
+      const stored = planHashFromContent(planContent);
+      if (stored) {
+        const { computePlanHash } = require('./kaola-gitlab-workflow-plan-validator');
+        hashMatch = computePlanHash(planContent) === stored;
+      }
+    } catch (_) { hashMatch = false; }
+    if (!hashMatch) {
+      const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
+      if (integrity.exitCode !== 0 || integrity.ok !== true) {
+        return refuse('plan_integrity_failed', { detail: integrity.reason || null });
+      }
     }
   }
 

@@ -413,9 +413,8 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
 
   **Narrow #607 exception to [INV-2].** `open-next` and the `close-and-open-next` fused advance
   now write a minimal `running-set.json` when — and only when — the node being opened is a
-  `main-session-gate`: a single `kind:'gate'` entry recording that a gate window is open, consumed
-  solely by the write-lane hook's gate-window fence and excluded from every write-oriented
-  scheduler count (`liveHasLeglessWrite`, `selectSpeculativeWriteGroup`, the `open-ready` slot math,
+  `main-session-gate`: a single `kind:'gate'` entry recording that a gate window is open, excluded
+  from every write-oriented scheduler count (`liveHasLeglessWrite`, `selectSpeculativeWriteGroup`, the `open-ready` slot math,
   and the `reconcile-running-set` roll-forward budget all explicitly filter out `kind:'gate'`). This is
   a disclosed narrowing of [INV-2], not a silent violation of it: the invariant's purpose — write-
   frontier concurrency accounting stays byte-identical when nothing is co-opening — is preserved (a

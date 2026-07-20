@@ -2002,7 +2002,7 @@ function test409StableHomeSurvivesDirDeletion() {
         }
       }
     }
-    assert.ok(commandCount >= 4, '#409 gl: expected the four managed hook commands, saw ' + commandCount);
+    assert.ok(commandCount >= 2, '#409 gl: expected the two managed hook commands, saw ' + commandCount);
 
     // #447: stable home also lives in global HOME/.codex/kaola-workflow
     const globalStableHome409 = path.join(tempHome409, '.codex', 'kaola-workflow');
@@ -2060,7 +2060,7 @@ function testInstallProfilesFeaturesTableHandling() {
     const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
 
     // All three required events must be present, each with at least one kaola-workflow: entry
-    for (const event of ['SessionStart', 'PreToolUse', 'SubagentStart']) {
+    for (const event of ['SessionStart', 'SubagentStart']) {
       const entries = freshHooks.hooks[event];
       assert.ok(Array.isArray(entries) && entries.length > 0,
         `hooks.json must have entries for event ${event}`);

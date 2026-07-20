@@ -1283,8 +1283,8 @@ Configuration files control workflow behavior and issue sorting.
 - `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
 - `installed_paths` — **Retired (#725).** No installer writes this field anymore; `resolveInstalledPaths()` and `INSTALLED_PATHS_FIELD` are removed from `kaola-workflow-adaptive-schema.js`. A stale value left over from a pre-retirement install is tolerated on read (never dereferenced for path legality) and is stripped, not preserved, the next time `install.sh`/`install-codex-agent-profiles.js` write this config file. See `docs/workflow-state-contract.md` § Adaptive Path — the only workflow path, and `docs/decisions/D-725-01.md`.
-- `KAOLA_LANE_CONTAINMENT` (#376) — fail-closed env flag (default false; only `1`/`true`/`yes` enables) that arms rules (a)/(b) — the lane-containment arm — of the write-lane PreToolUse hook (`hooks/kaola-workflow-write-lane.sh`). When ON and a `kaola-workflow/<project>/.cache/running-set.json` manifest of open write-nodes exists, the hook DENIES (exit 2) an out-of-lane `Write`/`Edit` — inside a member worktree outside its declared lane, or in the parent worktree matching an open node's lane. Fail-open (exit 0) on a missing flag/manifest, malformed stdin, or non-git cwd; dormant until the #377 scheduler produces the manifest. Successor of the retired #320 `KAOLA_BATCH_CWD_ENFORCED`.
-- `KAOLA_GATE_WINDOW_FENCE` (#607) — a SECOND, independent switch on the SAME write-lane hook, arming rule (c) — the gate-window fence — evaluated FIRST, ahead of the `KAOLA_LANE_CONTAINMENT` rules above (so it fires regardless of that flag's setting). DEFAULT-ON: only `0`/`false`/`no` disables it; any other value, including unset, keeps it ON. While any node in `running-set.json` carries `kind:'gate'` (an open `main-session-gate` — see `docs/workflow-state-contract.md` § `kind: 'gate'` member), the hook DENIES (exit 2) an in-worktree, out-of-band `Write`/`Edit` landing outside the workflow bands (`kaola-workflow/`, any `.cache/`), UNLESS it is under the `.kw/` band (member worktrees / per-node legs / co-open speculative work), inside a member worktree (governed by rules (a)/(b) instead), or under a live co-open writer's own declared lane (so a #596 speculative write co-opened behind the same gate is unaffected). Every existing fail-open exit is unchanged when no gate is open: a missing manifest, an unparseable stdin payload, or a non-git cwd all still exit 0. See `docs/decisions/D-607-01.md`.
+- `KAOLA_LANE_CONTAINMENT` (#376) — env flag (default false; only `1`/`true`/`yes` enables) that formerly armed rules (a)/(b) — the lane-containment arm — of the write-lane PreToolUse hook, denying an out-of-lane `Write`/`Edit` while a `kaola-workflow/<project>/.cache/running-set.json` manifest of open write-nodes existed. That enforcing hook has been removed; this flag is currently read by no runtime consumer. Successor of the retired #320 `KAOLA_BATCH_CWD_ENFORCED`.
+- `KAOLA_GATE_WINDOW_FENCE` (#607) — a SECOND, independent switch (default-ON: only `0`/`false`/`no` disables it) that formerly armed rule (c) — the gate-window fence — on the same write-lane hook, evaluated ahead of the `KAOLA_LANE_CONTAINMENT` rules above. While any node in `running-set.json` carried `kind:'gate'` (an open `main-session-gate` — see `docs/workflow-state-contract.md` § `kind: 'gate'` member), the hook denied (exit 2) an in-worktree, out-of-band `Write`/`Edit` landing outside the workflow bands, with the same `.kw/`-band / member-worktree / co-open-writer exemptions as rules (a)/(b). That enforcing hook has been removed; this flag is currently read by no runtime consumer. See `docs/decisions/D-607-01.md`.
 
 ### Agent model manifest (`~/.claude/agents/.kaola-agent-models.json`)
 
@@ -2459,7 +2459,7 @@ When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generate
 ## Codex `~/.codex/hooks.json` managed-entry contract
 
 `install-codex-agent-profiles.js` (invoked by the Codex `kaola-workflow-init` skill)
-writes the global `~/.codex/hooks.json` containing the four managed
+writes the global `~/.codex/hooks.json` containing the two managed
 Kaola-Workflow hook entries. Agent profiles and the managed `[agents.*]` config block
 install **globally** into `~/.codex` by default (#571 — one install, all repos); hook
 entries and hook scripts are also machine-global. Project-local is a supported override:
@@ -2492,19 +2492,17 @@ that stable home, not the versioned plugin-cache path. Written command paths in
 `~/.codex/hooks.json` are therefore absolute and survive plugin-cache garbage
 collection, throwaway install trees, and project worktree changes.
 
-### The four managed entries
+### The two managed entries
 
 | Event | Matcher | id | Command script |
 |-------|---------|-----|----------------|
 | `SessionStart` | `compact` | `kaola-workflow:compact-context` | `scripts/kaola-workflow-codex-compact-resume.js` |
-| `PreToolUse` | `Bash` | `kaola-workflow:pre-commit-guard` | `hooks/kaola-workflow-pre-commit.sh` |
-| `PreToolUse` | `Write\|Edit` | `kaola-workflow:write-lane` | `hooks/kaola-workflow-write-lane.sh` |
 | `SubagentStart` | `*` | `kaola-workflow:subagent-dispatch-log` | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 (The `PostToolUse` `kaola-workflow:phantom-advisor` entry was retired in #372 with the
 advisor gates; an upgrade install de-registers any stale copy from existing settings.)
 
-All four entries carry a `timeout` field (5 seconds) and
+Both entries carry a `timeout` field (5 seconds) and
 a `description` field. These values come directly from the template; the installer
 does not add or modify them beyond the token substitution above.
 

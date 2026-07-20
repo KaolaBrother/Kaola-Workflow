@@ -283,8 +283,7 @@ for (const file of [
   `${pluginRoot}/scripts/kaola-workflow-classifier.js`,
   `${pluginRoot}/scripts/kaola-workflow-repair-state.js`,
   `${pluginRoot}/scripts/kaola-workflow-sink-merge.js`,
-  `${pluginRoot}/scripts/kaola-workflow-sink-pr.js`,
-  `${pluginRoot}/hooks/kaola-workflow-pre-commit.sh`
+  `${pluginRoot}/scripts/kaola-workflow-sink-pr.js`
 ]) {
   for (const token of retired) assertNotIncludes(file, token);
 }

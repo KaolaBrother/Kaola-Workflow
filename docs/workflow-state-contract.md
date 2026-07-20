@@ -188,13 +188,11 @@ here for the full contract.
     **`kind: 'gate'` member (issue #607).** `open-next` and the `close-and-open-next` fused
     advance record an opened `main-session-gate` into `running-set.json` as a minimal entry
     (`{ id, role, kind: 'gate', declared_write_set, model, baseline: 'recorded', openedAt? }`) —
-    the ONLY state channel that makes an open gate window visible to the write-lane hook's
-    gate-window fence (rule (c); default-ON, `KAOLA_GATE_WINDOW_FENCE=0` opt-out), since a
+    the state channel that records an open gate window in the running-set manifest, since a
     `main-session-gate` is opened serially and never lands in an `open-ready` batch frontier.
     Written AFTER the ledger flip to `in_progress`; removed by the same close paths that remove
     any other member (id-keyed). A crashed, non-`opening` lone gate is PRESERVED (not rolled back)
-    by `reconcile-running-set` — an intended fail-closed tripwire, since clearing it would silently
-    reopen the fenced window. A gate entry is excluded from every write-oriented scheduler count —
+    by `reconcile-running-set`. A gate entry is excluded from every write-oriented scheduler count —
     `liveHasLeglessWrite`, `selectSpeculativeWriteGroup`, the `open-ready` read-slot base
     (`cap - liveNodes.filter(n => n.kind !== 'gate').length`), and the `reconcile-running-set`
     roll-forward budget all explicitly filter it out — so it never affects write co-open, slot

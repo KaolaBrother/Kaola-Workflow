@@ -93,15 +93,6 @@ const COMMON_SCRIPTS = [
 
 const BYTE_IDENTICAL_GROUPS = [
   {
-    label: 'pre-commit hook copies',
-    files: [
-      'hooks/kaola-workflow-pre-commit.sh',
-      'plugins/kaola-workflow/hooks/kaola-workflow-pre-commit.sh',
-      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-pre-commit.sh',
-      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-pre-commit.sh',
-    ],
-  },
-  {
     label: 'closure-contract module copies',
     files: [
       'scripts/kaola-workflow-closure-contract.js',
@@ -162,16 +153,6 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow/hooks/kaola-workflow-subagent-dispatch-log.sh',
       'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-subagent-dispatch-log.sh',
       'plugins/kaola-workflow-gitea/hooks/kaola-workflow-subagent-dispatch-log.sh',
-    ],
-  },
-  {
-    // #376: the write-lane containment hook is byte-identical across all four trees (forge-neutral).
-    label: 'write-lane hook copies',
-    files: [
-      'hooks/kaola-workflow-write-lane.sh',
-      'plugins/kaola-workflow/hooks/kaola-workflow-write-lane.sh',
-      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-write-lane.sh',
-      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-write-lane.sh',
     ],
   },
   {

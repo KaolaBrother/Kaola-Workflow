@@ -271,7 +271,6 @@ for (const file of [
   'scripts/kaola-workflow-repair-state.js',
   'scripts/kaola-workflow-sink-merge.js',
   'scripts/kaola-workflow-sink-pr.js',
-  'hooks/kaola-workflow-pre-commit.sh',
   'hooks/hooks.json',
   'install.sh',
   'README.md',
@@ -284,12 +283,6 @@ assertIncludes('hooks/hooks.json', 'compact-context');
 assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
-assertIncludes('hooks/kaola-workflow-pre-commit.sh', 'multiple kaola-workflow projects staged');
-// #376: write-lane containment hook is registered (PreToolUse Write|Edit) + carries its load-bearing
-// flag gate. Anchors the successor enforcement primitive so it cannot silently disappear.
-assertIncludes('hooks/hooks.json', 'kaola-workflow:write-lane');
-assertIncludes('hooks/kaola-workflow-write-lane.sh', 'KAOLA_LANE_CONTAINMENT');
-assertIncludes('hooks/kaola-workflow-write-lane.sh', 'running-set.json');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLaneContainment');
 // #542: pin the parallel-writes DEFAULT-ON opt-OUT resolver so a future edit cannot silently drop
 // the seam that lets planner-proven-disjoint write frontiers co-open as isolated legs by default
@@ -305,7 +298,6 @@ assertIncludes('scripts/kaola-workflow-classifier.js', 'PROTECTED_BASENAMES');
 // shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
 assertIncludes('scripts/kaola-workflow-classifier.js', 'areaForPath');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'SHARED_INFRA');
-assertManifestHook('kaola-workflow-write-lane.sh');           // #407: was install.sh literal
 assertManifestScript('kaola-workflow-active-folders.js');     // #407: was install.sh literal
 assertManifestScript('kaola-workflow-resolve-agent-model.js'); // #407: was install.sh literal
 assertIncludes('uninstall.sh', 'subagentStatusLine');

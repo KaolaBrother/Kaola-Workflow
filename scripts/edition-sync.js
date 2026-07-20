@@ -37,7 +37,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, checkByteIdenticalGroup } = require('./validate-script-sync');
+const { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS } = require('./validate-script-sync');
 
 const REPO = path.resolve(__dirname, '..');
 const FORGES = ['gitlab', 'gitea'];
@@ -124,34 +124,11 @@ function syncIfDrift(rootDir, rel, content) {
   return true;
 }
 
-// Verify the COMMON_SCRIPTS canonical<->codex mirrors and BYTE_IDENTICAL_GROUPS copies against
-// rootDir (#638): `runWrite` below already regenerates/creates both mirror classes (steps b/c), but
-// `runCheck` used to verify ONLY the GENERATED_AGGREGATORS above — a missing or drifted COMMON_SCRIPTS
-// / byte-group mirror stayed green here (validate-script-sync.js catches it separately, in-chain, so
-// the enrollment loop was fail-closed end-to-end even so — a cosmetic --check/--write asymmetry, not a
-// live hole). Reuses checkByteIdenticalGroup for BOTH families (COMMON_SCRIPTS is a degenerate 2-file
-// group: [canonical, codex]) — the same primitive validate-script-sync.js's own check uses, so the two
-// stay logically identical. Takes the script lists as parameters (defaulting to the real constants) so
-// tests can run this against a synthetic fixture tree, mirroring checkByteIdenticalGroup's own
-// exported convention.
-function checkMirrors(rootDir, commonScripts = COMMON_SCRIPTS, byteGroups = BYTE_IDENTICAL_GROUPS) {
-  const missing = [];
-  const drift = [];
-  for (const base of commonScripts) {
-    const res = checkByteIdenticalGroup({ label: base, files: [canonRel(base), codexRel(base)] }, rootDir);
-    missing.push(...res.missing);
-    drift.push(...res.drift);
-  }
-  for (const group of byteGroups) {
-    const res = checkByteIdenticalGroup(group, rootDir);
-    missing.push(...res.missing);
-    drift.push(...res.drift);
-  }
-  return { missing, drift };
-}
-
-// --- check: recompute every generated port and compare to the committed file; also verify the
-// COMMON_SCRIPTS + BYTE_IDENTICAL_GROUPS mirrors (#638) so --check covers the same universe --write does. ---
+// --- check: recompute every generated forge aggregator port and compare to the committed file.
+// (The COMMON_SCRIPTS/BYTE_IDENTICAL_GROUPS mirror re-check that used to live here was cosmetic —
+// validate-script-sync.js is the authoritative check for that drift class and runs in-chain
+// regardless, so this stays scoped to the one thing only edition-sync itself can verify: the
+// rename-normalized forge aggregator ports.) ---
 function runCheck() {
   const mismatches = [];
   for (const base of GENERATED_AGGREGATORS) {
@@ -169,9 +146,6 @@ function runCheck() {
       }
     }
   }
-  const { missing, drift } = checkMirrors(REPO);
-  for (const m of missing) mismatches.push('missing mirror: ' + m);
-  for (const d of drift) mismatches.push(d);
   if (mismatches.length) {
     console.error('edition-sync: PARITY FAILED (' + mismatches.length + ' issue(s)):');
     for (const m of mismatches) console.error('  - ' + m);
@@ -180,8 +154,7 @@ function runCheck() {
     return;
   }
   console.log('edition-sync: ' + (GENERATED_AGGREGATORS.length * FORGES.length)
-    + ' forge aggregator ports, ' + COMMON_SCRIPTS.length + ' COMMON_SCRIPTS mirrors, and '
-    + BYTE_IDENTICAL_GROUPS.length + ' byte-identical groups in parity with canonical.');
+    + ' forge aggregator ports in parity with canonical.');
 }
 
 function firstDiff(expected, actual) {
@@ -255,4 +228,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, genHeader, syncIfDrift, checkMirrors };
+module.exports = { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, genHeader, syncIfDrift };

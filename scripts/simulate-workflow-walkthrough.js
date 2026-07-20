@@ -41,7 +41,6 @@ const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-
 const nextActionScript = path.join(repoRoot, 'scripts', 'kaola-workflow-next-action.js'); // issue #267
 const handoffScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'); // issue #255
 const adaptiveNodeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js'); // issue #272 / #328
-const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -569,124 +568,18 @@ function testSinkPrUsesFinalizationSummary() {
   console.log('testSinkPrUsesFinalizationSummary: PASSED');
 }
 
-function testHookSingleProjectGuard(tmp) {
-  spawnSync('git', ['init'], { cwd: tmp, encoding: 'utf8' });
-  writeProject(tmp, 'a', { 'workflow-state.md': 'status: active\n' });
-  writeProject(tmp, 'b', { 'workflow-state.md': 'status: active\n' });
-  spawnSync('git', ['add', 'kaola-workflow/a/workflow-state.md', 'kaola-workflow/b/workflow-state.md'], { cwd: tmp, encoding: 'utf8' });
-  const result = spawnSync('bash', [hookScript], { cwd: tmp, input: '', encoding: 'utf8' });
-  assert(result.status === 2, 'pre-commit hook should block mixed project commits');
-}
-
-// issue #351 — pre-commit hook must recognise `git -C <path> commit` and
-// `git -c k=v commit` as commit commands, inspect staging in the correct repo,
-// and allow single-project commits regardless of flag form.
-function testHookGitDashCCommitGuard() {
-  // Helper: build the PreToolUse JSON payload Claude Code sends to the hook.
-  const payload = (cmd) => JSON.stringify({ tool_input: { command: cmd } });
-
-  // Create the "target" repo (simulating the worktree the contractor commits into).
-  const targetRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hook-target-')));
-  // Create a second repo to serve as the hook's cwd (simulating kaola-workflow root).
-  const hookCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hook-cwd-')));
-  try {
-    // Initialise both repos.
-    spawnSync('git', ['init'], { cwd: targetRepo, encoding: 'utf8' });
-    spawnSync('git', ['init'], { cwd: hookCwd, encoding: 'utf8' });
-
-    // Stage cross-project kaola-workflow files in the TARGET repo.
-    writeProject(targetRepo, 'alpha', { 'workflow-state.md': 'status: active\n' });
-    writeProject(targetRepo, 'beta',  { 'workflow-state.md': 'status: active\n' });
-    spawnSync('git', ['add',
-      'kaola-workflow/alpha/workflow-state.md',
-      'kaola-workflow/beta/workflow-state.md'
-    ], { cwd: targetRepo, encoding: 'utf8' });
-
-    // (a) `git -C <repo> commit -m x` with cross-project staging → BLOCKED (exit 2).
-    // BUG: currently exits 0 because "git commit" is not a literal substring.
-    let r = spawnSync('bash', [hookScript], {
-      cwd: hookCwd,
-      input: payload('git -C ' + targetRepo + ' commit -m "wip"'),
-      encoding: 'utf8'
-    });
-    assert(r.status === 2,
-      '(a) git -C <repo> commit with cross-project staging must be BLOCKED (exit 2), got ' + r.status +
-      '\nstderr: ' + r.stderr);
-
-    // (b) `git -c user.name=x commit` with cross-project staging in hookCwd → BLOCKED.
-    // Stage the same cross-project files in hookCwd for this sub-case.
-    writeProject(hookCwd, 'alpha', { 'workflow-state.md': 'status: active\n' });
-    writeProject(hookCwd, 'beta',  { 'workflow-state.md': 'status: active\n' });
-    spawnSync('git', ['add',
-      'kaola-workflow/alpha/workflow-state.md',
-      'kaola-workflow/beta/workflow-state.md'
-    ], { cwd: hookCwd, encoding: 'utf8' });
-
-    r = spawnSync('bash', [hookScript], {
-      cwd: hookCwd,
-      input: payload('git -c user.name=Bot commit -m "wip"'),
-      encoding: 'utf8'
-    });
-    assert(r.status === 2,
-      '(b) git -c k=v commit with cross-project staging must be BLOCKED (exit 2), got ' + r.status +
-      '\nstderr: ' + r.stderr);
-
-    // (c) plain `git commit` with cross-project staging in hookCwd → still BLOCKED (regression).
-    r = spawnSync('bash', [hookScript], {
-      cwd: hookCwd,
-      input: payload('git commit -m "wip"'),
-      encoding: 'utf8'
-    });
-    assert(r.status === 2,
-      '(c) plain git commit with cross-project staging must be BLOCKED (exit 2), got ' + r.status +
-      '\nstderr: ' + r.stderr);
-
-    // (d) non-commit git command → exit 0 (untouched).
-    r = spawnSync('bash', [hookScript], {
-      cwd: hookCwd,
-      input: payload('git -C ' + targetRepo + ' status'),
-      encoding: 'utf8'
-    });
-    assert(r.status === 0,
-      '(d) non-commit git command must exit 0, got ' + r.status);
-
-    // (e) single-project commit via `git -C <repo>` → exit 0 (allowed).
-    // Stage only one project in the target repo.
-    const singleRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hook-single-')));
-    spawnSync('git', ['init'], { cwd: singleRepo, encoding: 'utf8' });
-    writeProject(singleRepo, 'gamma', { 'workflow-state.md': 'status: active\n' });
-    spawnSync('git', ['add', 'kaola-workflow/gamma/workflow-state.md'],
-      { cwd: singleRepo, encoding: 'utf8' });
-
-    r = spawnSync('bash', [hookScript], {
-      cwd: hookCwd,
-      input: payload('git -C ' + singleRepo + ' commit -m "single project"'),
-      encoding: 'utf8'
-    });
-    assert(r.status === 0,
-      '(e) single-project git -C commit must be ALLOWED (exit 0), got ' + r.status +
-      '\nstderr: ' + r.stderr);
-
-    fs.rmSync(singleRepo, { recursive: true, force: true });
-  } finally {
-    fs.rmSync(targetRepo, { recursive: true, force: true });
-    fs.rmSync(hookCwd,    { recursive: true, force: true });
-  }
-  console.log('testHookGitDashCCommitGuard: PASSED');
-}
-
 function testHookShapeNoPhantomAdvisor() {
   // #372: the phantom-advisor PostToolUse hook is retired — hooks.json must carry NO PostToolUse
-  // event. #376 added the PreToolUse write-lane hook, so the surviving id set is: compact-context
-  // (SessionStart), pre-commit-guard + write-lane (PreToolUse), subagent-dispatch-log (SubagentStart).
+  // event. #725: the pre-commit-guard and write-lane PreToolUse hooks are retired, so the surviving
+  // id set is: compact-context (SessionStart), subagent-dispatch-log (SubagentStart).
   const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8')).hooks;
   const events = Object.keys(hooks);
   assert(!events.includes('PostToolUse'), '#372: hooks.json must have NO PostToolUse event, got ' + events.join(','));
   const ids = [];
   for (const ev of events) for (const block of hooks[ev]) ids.push(block.id);
   ids.sort();
-  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context', 'kaola-workflow:pre-commit-guard', 'kaola-workflow:subagent-dispatch-log', 'kaola-workflow:write-lane']),
-    '#372/#376: expected hook id set (compact-context, pre-commit-guard, subagent-dispatch-log, write-lane), got ' + JSON.stringify(ids));
+  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context', 'kaola-workflow:subagent-dispatch-log']),
+    '#372/#725: expected hook id set (compact-context, subagent-dispatch-log), got ' + JSON.stringify(ids));
   const raw = fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8');
   assert(!/phantom-advisor/.test(raw), '#372: no phantom-advisor reference in hooks.json');
   assert(!fs.existsSync(path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh')), '#372: phantom-advisor.sh deleted');
@@ -708,153 +601,6 @@ function testResumeCompatLegacyAdvisorGateRow() {
   const unresolved = repairState.unresolvedCompliance(legacy, '');
   assert(!unresolved.some(r => (r.requirement || '').toLowerCase().includes('advisor')),
     '#372 (AC10): a legacy `advisor … gate | pending` row must NOT be pending-blocking on resume, got ' + JSON.stringify(unresolved));
-}
-
-function testWriteLaneHookGuard() {
-  // #376: scripted harness for the write-lane PreToolUse containment hook (AC1 cannot fire on a real
-  // dispatched subagent in the walkthrough — this drives the hook binary directly with crafted
-  // PreToolUse stdin). Proves: fail-OPEN (flag off / no manifest / malformed stdin); DENY rule (a)
-  // (out-of-lane member-worktree write); DENY rule (b) (parent-worktree leak); in-lane + workflow-band
-  // ALLOW. Mutation-checked: against a hook with the deny branches removed, cases (4)/(6) go GREEN(0).
-  const writeLaneHook = path.join(repoRoot, 'hooks', 'kaola-workflow-write-lane.sh');
-  assert(fs.existsSync(writeLaneHook), '#376: write-lane hook exists');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-write-lane-'));
-  try {
-    spawnSync('git', ['init'], { cwd: tmp, encoding: 'utf8' });
-    const RR = spawnSync('git', ['-C', tmp, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim();
-    const cacheDir = path.join(RR, 'kaola-workflow', 'proj', '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.mkdirSync(path.join(RR, '.kw', 'node', 'proj', 'n1', 'scripts'), { recursive: true });
-    fs.mkdirSync(path.join(RR, 'scripts'), { recursive: true });
-    const run = (fp, enforce) => spawnSync('bash', [writeLaneHook], {
-      cwd: RR, encoding: 'utf8',
-      input: JSON.stringify({ tool_input: { file_path: fp } }),
-      env: Object.assign({}, process.env, enforce ? { KAOLA_LANE_CONTAINMENT: '1' } : {}),
-    });
-    // (1) flag OFF -> fail-open exit 0
-    assert(run(path.join(RR, 'scripts/a.js'), false).status === 0, '#376: flag off -> exit 0 (fail-open)');
-    // (2) flag ON but NO manifest -> dormant exit 0
-    assert(run(path.join(RR, 'scripts/a.js'), true).status === 0, '#376: no running-set.json -> exit 0 (dormant)');
-    // Write a manifest of one open write-node.
-    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
-      JSON.stringify({ nodes: [{ id: 'n1', worktreePath: '.kw/node/proj/n1', declared_write_set: ['scripts/n1.js'] }] }));
-    // (3) in-lane member write -> allow
-    assert(run(path.join(RR, '.kw/node/proj/n1/scripts/n1.js'), true).status === 0, '#376: in-lane member write -> exit 0');
-    // (4) out-of-lane member write -> DENY (exit 2)
-    assert(run(path.join(RR, '.kw/node/proj/n1/scripts/other.js'), true).status === 2, '#376 AC3: out-of-lane member write -> exit 2');
-    // (5) parent-worktree leak matching n1 lane -> DENY (exit 2)
-    assert(run(path.join(RR, 'scripts/n1.js'), true).status === 2, '#376 AC4: parent-worktree leak -> exit 2');
-    // (6) unrelated parent write -> allow
-    assert(run(path.join(RR, 'scripts/unrelated.js'), true).status === 0, '#376: unrelated parent write -> exit 0');
-    // (7) malformed stdin -> fail-open
-    const bad = spawnSync('bash', [writeLaneHook], { cwd: RR, encoding: 'utf8', input: 'not json', env: Object.assign({}, process.env, { KAOLA_LANE_CONTAINMENT: '1' }) });
-    assert(bad.status === 0, '#376: malformed stdin -> exit 0 (fail-open)');
-
-    // (8) #386: an OPEN WRITE node (kind:write, no member worktree) writing its OWN declared lane in
-    // the PARENT worktree under enablement -> ALLOW (exit 0). This is the serial-fallback case the
-    // shipped hook bricked (rule (b) matched the node's only legal target). With the self-exempt the
-    // write node's own in-lane parent write passes; a non-write match still denies (case 5 above) and
-    // out-of-lane still denies (case 4). Mutation: remove the `kind === "write"` exemption -> RED (2).
-    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
-      JSON.stringify({ nodes: [{ id: 'w1', kind: 'write', declared_write_set: ['scripts/w1.js'] }] }));
-    assert(run(path.join(RR, 'scripts/w1.js'), true).status === 0,
-      '#386: open write node (kind:write) writes its OWN lane in the parent -> exit 0 (self-exempt)');
-    // (8b) a DIFFERENT parent write still allowed (no lane match).
-    assert(run(path.join(RR, 'scripts/other-x.js'), true).status === 0, '#386: out-of-lane parent write under write-node manifest -> exit 0');
-    // (8c) a READ node lane match in the parent is still a real leak -> DENY (kind!=='write').
-    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
-      JSON.stringify({ nodes: [{ id: 'r1', kind: 'read', declared_write_set: ['scripts/r1.js'] }] }));
-    assert(run(path.join(RR, 'scripts/r1.js'), true).status === 2,
-      '#386: a READ node lane match in the parent stays DENIED (only write self-exempts)');
-
-    // === #607 GATE-WINDOW FENCE (rule c) — DEFAULT-ON, KAOLA_GATE_WINDOW_FENCE=0 opt-out ==========
-    // A main-session-gate open (a manifest node with kind:'gate') denies an in-worktree out-of-band
-    // Write/Edit during the gate window (the write-then-delete probe shape refused at WRITE time), while
-    // co-open writer lanes / member worktrees / the `.kw/` band / workflow bands / out-of-repo paths stay
-    // allowed. runEnv drives the hook with an explicit env map so the two switches are set independently.
-    const runEnv = (fp, extraEnv) => spawnSync('bash', [writeLaneHook], {
-      cwd: RR, encoding: 'utf8',
-      input: JSON.stringify({ tool_input: { file_path: fp } }),
-      env: Object.assign({}, process.env, extraEnv || {}),
-    });
-    fs.mkdirSync(path.join(RR, 'crates', 'cadcore-verify', 'tests'), { recursive: true });
-    fs.mkdirSync(path.join(RR, '.kw', 'legs', 'proj', 'w1', 'scripts'), { recursive: true });
-    const outOfRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gate-scratch-'));
-    try {
-      // Manifest: a lone open main-session-gate (kind:'gate', no declared set) — the pure gate window.
-      const gateOnly = JSON.stringify({ state: 'open', nodes: [{ id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' }] });
-      // Manifest: the gate co-open with a speculative WRITE node (its lane must stay allowed).
-      const gatePlusWriter = JSON.stringify({ state: 'open', nodes: [
-        { id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' },
-        { id: 'w1', role: 'implementer', kind: 'write', declared_write_set: ['scripts/w1.js'] },
-      ] });
-      const probe = path.join(RR, 'crates/cadcore-verify/tests/probe_gpu_gate.rs');
-
-      // (c1) DEFAULT-ON: gate window + in-worktree out-of-band write -> DENY (exit 2) with NO env flags.
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gateOnly);
-      assert(runEnv(probe, {}).status === 2,
-        '#607 (c1): default-ON gate fence denies an in-worktree out-of-band probe write (exit 2) with no env flags');
-      // (c1b) the refusal message names the legal exits (provision upstream / route-findings / repair / write-halt).
-      assert(/route-findings|upstream writer|write-halt/.test(runEnv(probe, {}).stderr || ''),
-        '#607 (c1b): the gate-fence refusal names the legal exits');
-
-      // (c2) opt-out: KAOLA_GATE_WINDOW_FENCE=0 -> the SAME write is ALLOWED (exit 0).
-      assert(runEnv(probe, { KAOLA_GATE_WINDOW_FENCE: '0' }).status === 0,
-        '#607 (c2): KAOLA_GATE_WINDOW_FENCE=0 opts out — the probe write is allowed (exit 0)');
-
-      // (c3) co-open writer lane stays ALLOWED (a speculative writer`s declared lane in the parent).
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gatePlusWriter);
-      assert(runEnv(path.join(RR, 'scripts/w1.js'), {}).status === 0,
-        '#607 (c3): a write under a co-open writer declared lane is allowed during a gate window (exit 0)');
-      // (c3b) an out-of-band write STILL denies even with a co-open writer present.
-      assert(runEnv(probe, {}).status === 2,
-        '#607 (c3b): an out-of-band write is still denied when a co-open writer is present (exit 2)');
-
-      // (c4) the `.kw/` band (member worktrees / legs / co-open speculative work) stays ALLOWED.
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gateOnly);
-      assert(runEnv(path.join(RR, '.kw/legs/proj/w1/scripts/leg.rs'), {}).status === 0,
-        '#607 (c4): a write under the .kw/ band is allowed during a gate window (exit 0)');
-
-      // (c5) workflow bands (kaola-workflow/ and .cache/) stay ALLOWED.
-      assert(runEnv(path.join(RR, 'kaola-workflow/proj/.cache/vgate.md'), {}).status === 0,
-        '#607 (c5): a workflow-band write (evidence) is allowed during a gate window (exit 0)');
-
-      // (c6) out-of-repo paths (scratchpad, /tmp) stay ALLOWED (deny scopes to inside the worktree).
-      assert(runEnv(path.join(outOfRepo, 'probe.rs'), {}).status === 0,
-        '#607 (c6): an out-of-repo write is allowed during a gate window (exit 0)');
-
-      // (c7) NO gate open (manifest of writers only) -> the fence is inert, the out-of-band write is
-      //      ALLOWED even with the fence default-on (all #376 fail-open exits preserved when no gate).
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
-        JSON.stringify({ state: 'open', nodes: [{ id: 'w1', kind: 'write', declared_write_set: ['scripts/w1.js'] }] }));
-      assert(runEnv(probe, {}).status === 0,
-        '#607 (c7): no gate open -> the fence is inert; the out-of-band write is allowed (exit 0)');
-
-      // (c8) gate open but manifest ABSENT (removed) -> dormant fail-open (exit 0), fence default-on.
-      fs.rmSync(path.join(cacheDir, 'running-set.json'), { force: true });
-      assert(runEnv(probe, {}).status === 0,
-        '#607 (c8): no manifest -> dormant fail-open (exit 0) even with the fence default-on');
-      // (c8b) malformed stdin during a gate window -> fail-open (exit 0).
-      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gateOnly);
-      const badGate = spawnSync('bash', [writeLaneHook], { cwd: RR, encoding: 'utf8', input: 'not json', env: Object.assign({}, process.env) });
-      assert(badGate.status === 0, '#607 (c8b): malformed stdin during a gate window -> exit 0 (fail-open)');
-
-      // MUTATION: with rule (c) removed the hook would exit 0 on (c1)/(c3b), so those cases pin the fence.
-    } finally {
-      fs.rmSync(outOfRepo, { recursive: true, force: true });
-    }
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-function testWriteLaneHookRegistered() {
-  // #376: the write-lane hook is registered as a PreToolUse(Write|Edit) entry with the expected id.
-  const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8')).hooks;
-  const pre = hooks.PreToolUse || [];
-  const wl = pre.find(e => e.id === 'kaola-workflow:write-lane');
-  assert(wl, '#376: hooks.json has a kaola-workflow:write-lane PreToolUse entry');
-  assert(wl && wl.matcher === 'Write|Edit', '#376: write-lane matcher is Write|Edit, got ' + (wl && wl.matcher));
 }
 
 function testSubagentDispatchHookExists() {
@@ -15743,7 +15489,7 @@ function testAxiomBlockByteIdentity() {
 // SCENARIO REGISTRY
 //
 // Ordered array of [name, fn] pairs preserving the exact execution order from
-// the original main(). The first 13 entries are marked sharedTmp:true — they
+// the original main(). The first 12 entries are marked sharedTmp:true — they
 // share a single tmp directory created by main() and are ordering-coupled (git
 // init in entry 1 affects later entries; roadmap tests rmSync shared dirs).
 // When --only selects any shared-tmp scenario the WHOLE shared-tmp group runs
@@ -15757,7 +15503,6 @@ function testAxiomBlockByteIdentity() {
 async function runSharedTmpGroup(tmp) {
   testClaimStatusRelease(tmp);
   testFinalize(tmp);
-  testHookSingleProjectGuard(tmp);
   testRoadmapGenerateMissingSourceGuard(tmp);
   testRoadmapGenerateCloseLastIssue(tmp);
   testRoadmapGenerateAtomicReplace(tmp);
@@ -15774,7 +15519,6 @@ async function runSharedTmpGroup(tmp) {
 const SHARED_TMP_NAMES = [
   'testClaimStatusRelease',
   'testFinalize',
-  'testHookSingleProjectGuard',
   'testRoadmapGenerateMissingSourceGuard',
   'testRoadmapGenerateCloseLastIssue',
   'testRoadmapGenerateAtomicReplace',
@@ -16845,11 +16589,8 @@ function buildRegistry() {
   add('testManualArchiveBackstop',                        testManualArchiveBackstop);
   add('testRepairFinalizationRoute',                      testRepairFinalizationRoute);
   add('testSinkPrUsesFinalizationSummary',                testSinkPrUsesFinalizationSummary);
-  add('testHookGitDashCCommitGuard',                      testHookGitDashCCommitGuard);
   add('testHookShapeNoPhantomAdvisor',                    testHookShapeNoPhantomAdvisor);
   add('testResumeCompatLegacyAdvisorGateRow',             testResumeCompatLegacyAdvisorGateRow);
-  add('testWriteLaneHookGuard',                           testWriteLaneHookGuard);
-  add('testWriteLaneHookRegistered',                      testWriteLaneHookRegistered);
   add('testSubagentDispatchHookExists',                   testSubagentDispatchHookExists);
   add('testClassifierFolderOverlapRed',                   testClassifierFolderOverlapRed);
   add('testClassifierFolderOverlapYellow',                testClassifierFolderOverlapYellow);

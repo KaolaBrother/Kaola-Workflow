@@ -513,8 +513,8 @@ There is **no config key, trust file, or CLI flag that persists trust
 non-interactively** — the only non-interactive option is
 `codex exec --dangerously-bypass-hook-trust`, which skips the check for that single run
 **without** persisting trust (use it only for automation that already vets the hook
-sources). Until the hooks are trusted, compaction-resume, the commit-lane guard,
-write-lane containment, and subagent dispatch logging do not fire.
+sources). Until the hooks are trusted, compaction-resume and subagent dispatch
+logging do not fire.
 
 Update an existing Codex install (durable, stale-proof flow):
 
@@ -1045,7 +1045,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 |----------|---------|---------|
 | `KAOLA_GH_REMOTE_TIMEOUT_MS` | `30000` | Timeout in milliseconds for GitHub/GitLab/Gitea API calls during closure audit, active-folder checks, remote validation, and sink-merge/sink-pr gh calls. Set lower in tests to simulate API hangs. Values above 600000ms (10 minutes) are clamped to 600000ms to prevent hang protection bypass (issue #185) |
 | `KAOLA_RUN_CHAINS_TIMEOUT_MS` | `1800000` | Per-chain `spawnSync` kill ceiling in milliseconds for `kaola-workflow-run-chains.js`. Default 1800000 (30 min), raised from a prior 900000 (15 min, issue #512) after a live run on a constrained host outgrew that budget. Invalid/zero/negative values fall back to the default. No upper clamp (local test suite, not a remote-hang risk). A killed chain's receipt entry now records `timed_out: true` (issue #608), and the failure summary labels a timed-out chain inline so it reads distinctly from a genuine test regression |
-| `KAOLA_GATE_WINDOW_FENCE` | `1` (ON) | Default-ON write-lane hook fence (issue #607): while a `main-session-gate` node is open, an in-worktree out-of-band `Write`/`Edit` outside the workflow bands is denied by default (exit 2) — the workflow bands, the `.kw/` band, member worktrees, and a co-open writer's own declared lane stay legal. Set to `0` (also `false`/`no`) to opt out |
+| `KAOLA_GATE_WINDOW_FENCE` | `1` (ON) | Gate-window fence flag (issue #607). Formerly enforced by the write-lane hook, which denied an in-worktree, out-of-band `Write`/`Edit` outside the workflow bands while a `main-session-gate` node was open. That enforcing hook has been removed; this flag is currently read by no runtime consumer |
 | `KAOLA_FINALIZE_BASE` | (unset) | Override the integration-branch base for `cmdFinalize`'s `--finalize-check` attribution sweep (`scripts/kaola-workflow-claim.js` ×4 editions). Defaults to unset → the validator's `main` default (byte-equivalent for branch-per-issue runs). Set to a project merge-base (or `HEAD` for an in-place run whose own changes are already verified by the chain receipt) so the sweep attributes only the project's own diff on a shared/multi-issue branch. Also settable via the `--base <ref>` flag (flag wins). The per-node `--barrier-check` anti-laundering guard still rejects `--base` (issue #539) |
 | `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub/GitLab/Gitea calls for local tests or air-gapped usage. When unset and remote validation fails, startup returns `target_unavailable` refusal instead of silently proceeding |
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
@@ -1193,7 +1193,7 @@ Avoid redundant validation runs: an implement node uses targeted affected checks
 
 ## Hook policy
 
-Kaola-Workflow ships four Claude Code hooks via `install.sh`. They run
+Kaola-Workflow ships two Claude Code hooks via `install.sh`. They run
 silently in the background as background hygiene — they do not replace
 workflow validation, and `/workflow-next` should not re-run a check the
 hook already performed unless the phase requires broader validation or
@@ -1206,13 +1206,11 @@ evidence path.
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint (active project, current phase, current step, next command, fallback authorization) read from the most recent `workflow-state.md` | `scripts/kaola-workflow-compact-context.js` |
-| `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder (archive, `.roadmap/`, and `ROADMAP.md` are exempt) | `hooks/kaola-workflow-pre-commit.sh` |
-| `kaola-workflow:write-lane` | `PreToolUse` (`Write\|Edit`) | Denies an out-of-lane write while adaptive write-lane containment is enabled and a running-set manifest is active | `hooks/kaola-workflow-write-lane.sh` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` for WARN-FIRST closure attestation (#277 M1). Fail-open | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 ### Codex lifecycle hooks
 
-Codex wires the same four hooks via `install-codex-agent-profiles.js` (run by the
+Codex wires the same two hooks via `install-codex-agent-profiles.js` (run by the
 Codex `kaola-workflow-init` skill and re-run on every upgrade). Since #447, hooks
 install **globally** into `~/.codex/hooks.json`; their scripts land in the stable,
 version-less home `~/.codex/kaola-workflow/{hooks,scripts}`. The hooks are NOT in the
@@ -1226,8 +1224,6 @@ those paths.
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, next skill, in-progress node, pending gates, consent markers, task summary) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
-| `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder | `hooks/kaola-workflow-pre-commit.sh` |
-| `kaola-workflow:write-lane` | `PreToolUse` (`Write\|Edit`) | Denies an out-of-lane write while adaptive write-lane containment is enabled and a running-set manifest is active | `hooks/kaola-workflow-write-lane.sh` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl`, making `checkDispatchAttestations` (closure attestation) live on Codex when `multi_agent` is enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 **Caveats and preconditions:**
@@ -1249,13 +1245,13 @@ those paths.
 ### Installation and verification
 
 - `install.sh` copies hook files to `~/.claude/kaola-workflow/hooks/`, support
-  scripts to `~/.claude/kaola-workflow/scripts/`, and auto-merges the four
+  scripts to `~/.claude/kaola-workflow/scripts/`, and auto-merges the two
   managed hook entries into `~/.claude/settings.json`.
   The merge is idempotent and identifies managed entries by `id` prefix
   `kaola-workflow:` or a command path containing `kaola-workflow`. Prior
   settings are backed up under
   `~/.claude/backups/settings.json.kaola-workflow.<ts>.bak`.
-- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the four ids
+- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the two ids
   above, with scripts under `~/.claude/kaola-workflow/hooks/` or
   `~/.claude/kaola-workflow/scripts/`.
 - Model badges are enforced by slash-command dispatch, not by a status-line
@@ -1349,7 +1345,6 @@ Multiple Kaola-Workflow runs can coexist when each targets a distinct active fol
 - Startup requires an explicit `--target-issue N`; the agent chooses the issue and scripts validate it.
 - Claiming uses atomic folder creation, so two agents cannot create the same `kaola-workflow/{project}/` folder.
 - `status` lists active folders; `release` archives abandoned work; `finalize` archives completed work.
-- The pre-commit hook blocks commits that stage multiple workflow project folders together.
 
 ### Parallel execution examples
 

@@ -1466,17 +1466,6 @@ function testGitlabDispatchHookExists() {
   console.log('testGitlabDispatchHookExists: PASSED');
 }
 
-function testGitlabWriteLaneHookExists() {
-  // #376: the write-lane containment hook ships + is registered (PreToolUse Write|Edit) in this edition.
-  const hooksDir = path.join(root, 'plugins/kaola-workflow-gitlab/hooks');
-  assert.ok(fs.existsSync(path.join(hooksDir, 'kaola-workflow-write-lane.sh')), '#376: gitlab hooks/kaola-workflow-write-lane.sh must exist');
-  const hooks = JSON.parse(fs.readFileSync(path.join(hooksDir, 'hooks.json'), 'utf8'));
-  const pre = (hooks.hooks && hooks.hooks.PreToolUse) || [];
-  const wl = pre.find(e => e.id === 'kaola-workflow:write-lane');
-  assert.ok(wl && wl.matcher === 'Write|Edit', '#376: gitlab hooks.json must register kaola-workflow:write-lane on Write|Edit');
-  console.log('testGitlabWriteLaneHookExists: PASSED');
-}
-
 // issue #283: repair-state must use finalization-summary.md (not phase6-summary.md) as the
 // completion signal, emit stage: finalization / stage_name: Finalization / next_command:
 // /kaola-workflow-finalize for the terminal routine, and the one-way migration must convert
@@ -1627,7 +1616,6 @@ testGitlabAdaptive();
 testGitlabAdaptiveFreezeChecked();
 testGitlab237DotPathExtraction();
 testGitlabDispatchHookExists();
-testGitlabWriteLaneHookExists();
 
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGitlabBundleClaimCreatesOneFolder();

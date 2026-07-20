@@ -14,32 +14,6 @@
         "id": "kaola-workflow:compact-context"
       }
     ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-pre-commit.sh\"",
-            "timeout": 5
-          }
-        ],
-        "description": "Block commits that mix multiple kaola-workflow project folders",
-        "id": "kaola-workflow:pre-commit-guard"
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-write-lane.sh\"",
-            "timeout": 5
-          }
-        ],
-        "description": "Deny an out-of-lane Write/Edit when write-lane containment is enabled (#376; dormant until a running-set manifest exists)",
-        "id": "kaola-workflow:write-lane"
-      }
-    ],
     "SubagentStart": [
       {
         "matcher": "*",

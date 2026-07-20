@@ -617,6 +617,11 @@ mkdir -p "$SUPPORT_HOOKS_DIR"
 # #372: delete the stale installed phantom-advisor hook on upgrade (it was retired with the advisor
 # gates; it is no longer in SUPPORT_HOOK_NAMES, so a prior install's copy would otherwise linger).
 rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-phantom-advisor.sh"
+# #725: delete the stale installed pre-commit/write-lane advisory hooks on upgrade (retired with
+# this hook pair; neither is in SUPPORT_HOOK_NAMES anymore, so a prior install's copy would
+# otherwise linger).
+rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-pre-commit.sh"
+rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-write-lane.sh"
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   hook_file="$SOURCE_HOOKS_DIR/$hook_name"
   # #363: fail CLOSED on a missing allowlisted hook source (same rationale as the support scripts).
@@ -933,7 +938,7 @@ if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"
   case "$SETTINGS_MERGE_RESULT" in
     merged)
-      echo "Kaola-Workflow hooks (compaction resume, pre-commit, subagent-dispatch-log)"
+      echo "Kaola-Workflow hooks (compaction resume, subagent-dispatch-log)"
       echo "are now enabled in ~/.claude/settings.json."
       ;;
     skipped)

@@ -3403,8 +3403,8 @@ try {
           }
         }
       }
-      assert(managedIds.length >= 4, '#447 AC1: global hooks.json must carry at least four kaola-workflow: entries; found ' + managedIds.length + ': ' + managedIds.join(', '));
-      const expectedIds = ['kaola-workflow:compact-context', 'kaola-workflow:pre-commit-guard', 'kaola-workflow:write-lane', 'kaola-workflow:subagent-dispatch-log'];
+      assert(managedIds.length >= 2, '#447 AC1: global hooks.json must carry at least two kaola-workflow: entries; found ' + managedIds.length + ': ' + managedIds.join(', '));
+      const expectedIds = ['kaola-workflow:compact-context', 'kaola-workflow:subagent-dispatch-log'];
       for (const id of expectedIds) {
         assert(managedIds.includes(id), '#447 AC1: global hooks.json must carry hook id "' + id + '"; found: ' + managedIds.join(', '));
       }

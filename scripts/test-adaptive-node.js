@@ -7032,6 +7032,82 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// #725a (WS2 dedup): the guard-prologue Layer-1 integrity check takes the in-process plan-hash FAST
+// PATH on an UNTAMPERED frozen plan. L1 recomputes computePlanHash in-process; it MATCHES the embedded
+// <!-- plan_hash --> marker, so the authoritative validator --resume-check subprocess is SKIPPED (the
+// dedup), while the open still succeeds. Proves the resume-check shell is no longer spawned when the
+// in-process recompute already proves the plan untampered.
+// ---------------------------------------------------------------------------
+{
+  const body = makePlan(['| impl-core | pending | |']);
+  const frozen = '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body;
+  // Sanity: recompute over the full frozen content matches the stamped marker (fast path WILL fire).
+  assert(planValidator.computePlanHash(frozen) === planValidator.readStoredHash(frozen),
+    '#725a: setup — recompute equals the embedded marker on the untampered frozen plan');
+  let planContent = frozen;
+  const shellCalls = [];
+  const r = runOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+    shell: (sp, a) => {
+      const b = path.basename(sp); const args = a || []; shellCalls.push({ b, args: args.slice() });
+      // If L1 ever shells this on the matching-hash plan the dedup regressed — return ok so the
+      // regression surfaces via the call-count assertion, not a spurious refuse.
+      if (b === 'kaola-workflow-plan-validator.js' && args.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } };
+      if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-core', overallOk: true };
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
+    writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: () => false,
+  });
+  assert(r.result === 'ok' && r.opened && r.opened.id === 'impl-core',
+    '#725a: open-next still opens the ready node on the untampered frozen plan, got ' + JSON.stringify({ result: r.result, opened: r.opened && r.opened.id, reason: r.reason }));
+  assert(!shellCalls.some(c => c.b === 'kaola-workflow-plan-validator.js' && c.args.includes('--resume-check')),
+    '#725a: L1 integrity DEDUP — the in-process hash match SKIPS the --resume-check subprocess (no validator resume-check shell), got ' + JSON.stringify(shellCalls.map(c => c.b + ' ' + c.args.join(' '))));
+}
+
+// ---------------------------------------------------------------------------
+// #725b (WS2 AC-C tamper): open-next still REFUSES plan_integrity_failed on a POST-FREEZE tamper. The
+// in-process L1 recompute must be a TRUE recompute (call computePlanHash) — not a naive "marker present"
+// trust: freeze, then widen a declared_write_set WITHOUT restamping the marker, so recompute != the
+// stale marker. The fast path detects the MISMATCH and FALLS BACK to the authoritative --resume-check,
+// which refuses with zero mutation. A naive fast-path that trusted the still-present stale marker would
+// wrongly skip the check and open the tampered node — this pins the recompute.
+// ---------------------------------------------------------------------------
+{
+  const body = makePlan(['| impl-core | pending | |']);
+  const frozen = '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body;
+  // POST-FREEZE TAMPER: widen impl-core's declared_write_set (hash-defeating, marker left stale).
+  const tampered = frozen.replace(
+    '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+    '| impl-core | tdd-guide | — | scripts/adaptive-node.js scripts/evil.js | 1 | sequence |');
+  assert(tampered !== frozen, '#725b: setup — the tamper actually mutated the plan body');
+  assert(planValidator.computePlanHash(tampered) !== planValidator.readStoredHash(tampered),
+    '#725b: setup — recompute != the stale marker after tamper (the fast path MUST fall back)');
+  let planContent = tampered;
+  const shellCalls = [];
+  const r = runOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+    shell: (sp, a) => {
+      const b = path.basename(sp); const args = a || []; shellCalls.push({ b, args: args.slice() });
+      // The REAL validator refuses the tampered plan — model that so the fallback bites.
+      if (b === 'kaola-workflow-plan-validator.js' && args.includes('--resume-check')) return { exitCode: 1, ok: false, reason: 'plan_hash mismatch' };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } };
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
+    writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: () => false,
+  });
+  assert(r.result === 'refuse' && r.reason === 'plan_integrity_failed',
+    '#725b: open-next REFUSES plan_integrity_failed on a post-freeze tamper (recompute mismatch → fallback → refuse), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  assert(planContent.includes('| impl-core | pending | |'), '#725b: zero mutation — tampered node NOT opened');
+  assert(shellCalls.some(c => c.b === 'kaola-workflow-plan-validator.js' && c.args.includes('--resume-check')),
+    '#725b: the hash MISMATCH fell back to the authoritative --resume-check subprocess (true recompute, not marker-trust)');
+}
+
+// ---------------------------------------------------------------------------
 // S387b (#387): close-node refuses plan_integrity_failed on a tampered plan BEFORE close.
 // ---------------------------------------------------------------------------
 {

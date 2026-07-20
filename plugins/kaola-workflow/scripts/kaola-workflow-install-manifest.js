@@ -88,9 +88,7 @@ const SUPPORT_SCRIPTS = Object.freeze([
 // Hooks are forge-neutral (byte-identical across all four trees), so the same list serves
 // every forge. Adding a hook is a one-place edit here.
 const SUPPORT_HOOKS = Object.freeze([
-  'kaola-workflow-pre-commit.sh',
   'kaola-workflow-subagent-dispatch-log.sh',
-  'kaola-workflow-write-lane.sh',
 ]);
 
 // Per-forge CONTENT-rename overrides: a canonical base whose forge port is NOT a pure prefix

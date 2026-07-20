@@ -825,16 +825,12 @@ See `docs/decisions/D-579-01.md` for the full decision record.
 A `main-session-gate` is read-only by grammar and non-delegable — it never authors or deletes
 files. Two conventions enforce and preserve that boundary at runtime:
 
-**Gate-window fence.** While a `main-session-gate` node is open, an in-worktree, out-of-band
-`Write`/`Edit` is denied by default (`hooks/kaola-workflow-write-lane.sh` rule (c), exit 2) — the
-workflow bands, the `.kw/` band, member worktrees, and a co-open writer's own declared lane stay
-legal. The opt-out is `KAOLA_GATE_WINDOW_FENCE=0` (or `false`/`no`); any other value keeps the
-fence ON. **A crash mid-gate intentionally leaves the fence active** until the run resumes and
-closes the gate: `reconcile-running-set` preserves a lone, non-`opening` gate entry rather than
-clearing it, so every in-worktree product write stays fenced repo-wide across the crash window.
-This is a deliberate fail-closed tripwire, not a bug — recovery is resuming the run (which closes
-the gate normally) or, for a genuinely abandoned run, the manual `KAOLA_GATE_WINDOW_FENCE=0`
-opt-out. See `docs/decisions/D-607-01.md`.
+**Gate-window fence.** While a `main-session-gate` node was open, an in-worktree, out-of-band
+`Write`/`Edit` was denied by default (exit 2) by the write-lane hook — the workflow bands, the
+`.kw/` band, member worktrees, and a co-open writer's own declared lane stayed legal, with
+`KAOLA_GATE_WINDOW_FENCE=0` (or `false`/`no`) as the opt-out. That enforcing hook has been
+removed; the flag and its opt-out are currently read by no runtime consumer. See
+`docs/decisions/D-607-01.md`.
 
 **Upstream instrumentation provisioning.** Any instrumentation a gate's acceptance check needs (a
 probe script, build wiring to make a probe runnable) is authored by an UPSTREAM WRITER node,
