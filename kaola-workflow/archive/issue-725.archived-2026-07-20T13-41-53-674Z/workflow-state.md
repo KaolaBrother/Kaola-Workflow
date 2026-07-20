@@ -2,7 +2,7 @@
 
 ## Project
 name: issue-725
-status: active
+status: closed
 
 ## Current Position
 phase: adaptive
