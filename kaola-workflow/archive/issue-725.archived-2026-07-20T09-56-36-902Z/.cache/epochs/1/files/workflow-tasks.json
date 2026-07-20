@@ -1,0 +1,84 @@
+{
+  "source_plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+  "tasks": [
+    {
+      "id": "n1-routing-diet",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-routing-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-finalize-adapt-diet",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize-adapt-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-front-agents-diet",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-front-agents-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-role-agents-trim",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n8-role-agents-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n9-selfdev-guard",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n10-selfdev-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n11-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n12-code-certify",
+      "role": "code-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n13-finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-20T06:49:51.969Z"
+}

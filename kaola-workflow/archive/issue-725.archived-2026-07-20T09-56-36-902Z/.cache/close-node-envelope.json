@@ -1,0 +1,1 @@
+{"result":"ok","closed":"n10-selfdev-certify","allDone":false,"newlyReady":[],"taskTransitions":[{"id":"n10-selfdev-certify","status":"completed","ledger_status":"complete","reason":"close-node"}],"taskMirror":{"status":"updated","path":"kaola-workflow/issue-725/workflow-tasks.json"}}

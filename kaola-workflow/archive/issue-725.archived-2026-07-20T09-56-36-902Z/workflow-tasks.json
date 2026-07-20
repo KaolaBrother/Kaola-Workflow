@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "cf65f3b4483faeb3643b2027d94b0321e18eccbe30b4efbf690c900998ca31e3",
+  "tasks": [
+    {
+      "id": "n1-hook-pin-repair",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-code-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-security-certify",
+      "role": "security-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-20T09:44:49.132Z"
+}

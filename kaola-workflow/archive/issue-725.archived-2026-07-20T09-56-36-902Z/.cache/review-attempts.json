@@ -1,0 +1,228 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "cf65f3b4483faeb3643b2027d94b0321e18eccbe30b4efbf690c900998ca31e3",
+  "attempts": [
+    {
+      "attempt_id": "review2-dd4108f34386bd9f:1",
+      "ordinal": 1,
+      "plan_hash": "cf65f3b4483faeb3643b2027d94b0321e18eccbe30b4efbf690c900998ca31e3",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "5fd7c5027904c388c95af31e573b0cc588d63a8e586696b97bf96ee51d45ca65",
+        "key": "dd4108f34386bd9ffe4fcf7fc299480856f7d78f28f13b89ba402a253d860464",
+        "kind": "sequence",
+        "members": [
+          "n2-code-certify"
+        ],
+        "surface_digests": [
+          "b758f818e3e04c1b9d1790316482af01e85b21be8120bb74256ddb9d7d79349e"
+        ]
+      },
+      "transaction_key": "5bfc7c05f040514f779ebbdced2f89c75444ece96a204da29e715b9c05576ca4",
+      "candidate_digest": "da5911c85855c6dd0ea6dc324a8c4426603cfda6eaee47828023b3448ae63037",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 cff4592bdb6eb49eeaa3058116bd7d3093e0d66c",
+        "docs/kimi-edition.md": "100644 86804df240e2e6ab49f10d0f15004e102d1d7334",
+        "docs/opencode-edition.md": "100644 8dd1a4463eb10e7c4a200e7f40f8e83e187d9d64",
+        "scripts/sync-kimi-edition.js": "100644 6df30ea853a759e296882d38652f47f893634720",
+        "scripts/test-install-model-rendering.js": "100755 ec535af1c1c6a79ab7eba916b576b7d7ea7472ee",
+        "scripts/test-kimi-edition.js": "100644 eb65acb166d98931cb84a5c46d839e2c37b52994",
+        "scripts/test-opencode-edition.js": "100644 48b3e740a5e131925185863975a0847cf52a8600",
+        "templates/opencode/plugins/kaola-workflow-hooks.js": "100644 e2c0d536e7b434b1d8ae148f7ac8d881c9efc693"
+      },
+      "candidate_residue_digest": "34e2df00b46ac84c01bd792f042349f58d7f33734ed398694d2989a8b1ba923a",
+      "epoch_lineage_id": "38b676b0455daf24e54be04c4959f0a7ab3b353454db2876849df081cb4407bb",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "5745101521d5e56a7f86cfe20f27f5a16c86d105475f2cdd03eba1e47bb0f756",
+      "context_hashes": [
+        "14852bd8a0838d81ef9d985b6566673847835097615afef09858aa83653bd6dc"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "da5911c85855c6dd0ea6dc324a8c4426603cfda6eaee47828023b3448ae63037",
+          "certifier_digest": "da5911c85855c6dd0ea6dc324a8c4426603cfda6eaee47828023b3448ae63037",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n2-code-certify",
+            "nonce": "4705633604ca"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n2-code-certify",
+          "raw_evidence_sha256": "700ec29c024984b81ef3936d149156e98e447f4407df9cc34fc36efe422a0b3d",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "14852bd8a0838d81ef9d985b6566673847835097615afef09858aa83653bd6dc",
+          "schema_version": 2,
+          "surface": "the full accumulated candidate vs run base 1491c7e5 across all four editions plus the opencode/kimi suites, focused on the epoch-2 repair diff and the recorded validation command being green end to end",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-hook-pin-repair": {
+          "baseline": "fb4376cd9880e93d2458c70008664f1748b58d54",
+          "anchored_ref": "fb4376cd9880e93d2458c70008664f1748b58d54",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "fb4376cd9880",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-hook-pin-repair"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-56775af4d1c4c189:1",
+      "ordinal": 1,
+      "plan_hash": "cf65f3b4483faeb3643b2027d94b0321e18eccbe30b4efbf690c900998ca31e3",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "91a9dbf4cd2ae6824b3deb0dd5cf2b92a50fc213b07f2f7b871282ecd764d1b2",
+        "key": "56775af4d1c4c1895b42455afa8141b3a9c6d6d0a4c22bf3259d7d42235d012b",
+        "kind": "sequence",
+        "members": [
+          "n3-security-certify"
+        ],
+        "surface_digests": [
+          "7382cd36fdc39a13b4fad1ef298dfcd9697ebd7d5b0eef068fdef878a12102f4"
+        ]
+      },
+      "transaction_key": "25c3d55e2e34c615fa1453448df8ffc4ebf330f89e9df221f979d5ef565a1e1b",
+      "candidate_digest": "da5911c85855c6dd0ea6dc324a8c4426603cfda6eaee47828023b3448ae63037",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 cff4592bdb6eb49eeaa3058116bd7d3093e0d66c",
+        "docs/kimi-edition.md": "100644 86804df240e2e6ab49f10d0f15004e102d1d7334",
+        "docs/opencode-edition.md": "100644 8dd1a4463eb10e7c4a200e7f40f8e83e187d9d64",
+        "scripts/sync-kimi-edition.js": "100644 6df30ea853a759e296882d38652f47f893634720",
+        "scripts/test-install-model-rendering.js": "100755 ec535af1c1c6a79ab7eba916b576b7d7ea7472ee",
+        "scripts/test-kimi-edition.js": "100644 eb65acb166d98931cb84a5c46d839e2c37b52994",
+        "scripts/test-opencode-edition.js": "100644 48b3e740a5e131925185863975a0847cf52a8600",
+        "templates/opencode/plugins/kaola-workflow-hooks.js": "100644 e2c0d536e7b434b1d8ae148f7ac8d881c9efc693"
+      },
+      "candidate_residue_digest": "34e2df00b46ac84c01bd792f042349f58d7f33734ed398694d2989a8b1ba923a",
+      "epoch_lineage_id": "38b676b0455daf24e54be04c4959f0a7ab3b353454db2876849df081cb4407bb",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "f8f38b4f813204b4f70c006f460148e61927861f59d4dd25bf8d2d847e7b6c09",
+      "context_hashes": [
+        "5498ba1cc6a0aa94930e8446ae86df8cf192517399eafe6b47a3b3f46daa0e31"
+      ],
+      "profile_hashes": [
+        "a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "security-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584",
+          "blocking_findings": 0,
+          "candidate_digest": "da5911c85855c6dd0ea6dc324a8c4426603cfda6eaee47828023b3448ae63037",
+          "certifier_digest": "da5911c85855c6dd0ea6dc324a8c4426603cfda6eaee47828023b3448ae63037",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n3-security-certify",
+          "raw_evidence_sha256": "73fa5a11e325d5713be26070bc627968c039a0a75440c72726b17cc14b014f3e",
+          "resolutions": [],
+          "resolved_profile_hash": "a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d",
+          "review_context_hash": "5498ba1cc6a0aa94930e8446ae86df8cf192517399eafe6b47a3b3f46daa0e31",
+          "schema_version": 2,
+          "surface": "the full accumulated candidate vs run base 1491c7e5, with attention to the inherited security frontier (required-blocks.js and the routing/contract surfaces) and the epoch-2 repair diff",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-hook-pin-repair": {
+          "baseline": "fb4376cd9880e93d2458c70008664f1748b58d54",
+          "anchored_ref": "fb4376cd9880e93d2458c70008664f1748b58d54",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "fb4376cd9880",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-hook-pin-repair"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

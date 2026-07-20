@@ -1,0 +1,1311 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+  "attempts": [
+    {
+      "attempt_id": "review2-2f6ee820d31bf5b0:1",
+      "ordinal": 1,
+      "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "4c79ebe86e4c797180cd2f0ee04298de124c18fcda9fcdb39e573e84226c4583",
+        "key": "2f6ee820d31bf5b07d9133583f1ef7595aba7f2dadf07213ce58e5fc06f152e8",
+        "kind": "sequence",
+        "members": [
+          "n8-role-agents-certify"
+        ],
+        "surface_digests": [
+          "b838889e7f62743157f2b8e16f410166e218c7e03e75e77d71b741978dbe95ed"
+        ]
+      },
+      "transaction_key": "43b6c6a132865f84e1331229fb57003424c8afc1ff9eb3192768fc56d9c548c4",
+      "candidate_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 ba8549aeb7a0c0ebb5ab1de2fb88be69f57d8e35",
+        "agents/build-error-resolver.md": "100644 29c7db953aa7dfd2cb6903f0c2d8b7255fcb7317",
+        "agents/code-architect.md": "100644 48526cbebbf5ba1b4dac53fa7a5df9b59d2915f1",
+        "agents/code-explorer.md": "100644 60e84f67e514595a2bd8a8bd0ab5bc5c1cbf4800",
+        "agents/contractor.md": "100644 a3e18595aa4e62d5fae1b97c6c01db8b0b5fcfda",
+        "agents/doc-updater.md": "100644 dd525c818eaf2833d058ea20d59336edaf7cf084",
+        "agents/implementer.md": "100644 6086d8b805b40916a8d0730aaa15d49c961e792b",
+        "agents/issue-scout.md": "100644 8d50089e278218c7d2e27c54ff2c69777684c207",
+        "agents/knowledge-lookup.md": "100644 b2443029486a5f6ef6f947d1bdf0b878015fcfd2",
+        "agents/metric-optimizer.md": "100644 1d511e0cda1de3b9ce3451ac2fa9b3cde99552fd",
+        "agents/planner.md": "100644 56036300126c638b453d00b1adf615bd71821d59",
+        "agents/synthesizer.md": "100644 c574ee79f7a53d96cd54ecd83c63336ff5a88d24",
+        "agents/tdd-guide.md": "100644 51c9fc3dc41a910905658499b89378aa68a474f1",
+        "agents/workflow-planner.md": "100644 c63ebf3ea3fc66f5553328701d57877f57758bb6",
+        "commands/kaola-workflow-adapt.md": "100644 9c014f26ddf2ffbc91c12df7dcf61bfb2820ffc5",
+        "commands/kaola-workflow-finalize.md": "100644 32e890cb099471d53a1877823369b3db1e06ccd4",
+        "commands/kaola-workflow-plan-run.md": "100644 c0517199f042d844e4e82a344e9a96559d4a2627",
+        "commands/workflow-next.md": "100644 d8a0e1a49c5be0e1f6c4a6cfa9a22ccbe5cc46c8",
+        "plugins/kaola-workflow-gitea/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitea/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md": "100644 d449ea5a00bc4b786a4721b12e159bc149436655",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md": "100644 112c53deac0b75f5e652100711dad94dd7d69dc2",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 3285a433cf40da911e48cfd7a6944b51622fc2ad",
+        "plugins/kaola-workflow-gitea/commands/workflow-next.md": "100644 a1be1912727c858a0ec32f861cd86a94f24937a0",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 08e18a970cdc778ba421c232ae72a082491a4787",
+        "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js": "100644 46739473e7bd4f6b61fa14fdcd97705a901bcc39",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md": "100644 40ceb8a5e72d79617a526f3eefeb2aed8baf30bf",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 7c27a7d44270fcaf4f0ddced31802b9e285daddd",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md": "100644 85224d70d5da8b2ec482808561cc5ebc8c9b0566",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 20a0a6e013b5913c1483da6d77cfa9bb7298db7d",
+        "plugins/kaola-workflow-gitlab/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitlab/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md": "100644 f8dbee98cbf076c7511a88fcec8a2e76547b8a69",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md": "100644 4f57bc8251308e46a29bef6d37fa5bb24a895c4f",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 d51cd8c3c5ae2dda3a9994facc067dab940bda7f",
+        "plugins/kaola-workflow-gitlab/commands/workflow-next.md": "100644 a811dce414782115dea2e9c382b0ba30283b569e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 5cc8adf4a5ead3643769415829be01bac9360d03",
+        "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js": "100644 52f1d6406a8d51bd2c5147dd3a0da526d9247351",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md": "100644 76af836dbbe8840785b6b65edfeb057cbc799869",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 2808f934c0fbb07c809173569c80c697ae978cad",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md": "100644 a0b9239ab6f5675c5ab62c43c18d3fc1dbaaf20d",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 aed826f3b03c63eb13a923c55daeeace44c525e5",
+        "plugins/kaola-workflow/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md": "100644 4cc1c26db2d5f008da6c97c300bb7ed4a711c2c5",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 b692337f33f491c77fa8563c2648f342472999bb",
+        "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md": "100644 a8c4dad723cfd9609f701251a78009226d7f9083",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 b2c75c4dbc96ae5ba8676eb7e8df71a6f54ded28",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-kimi-edition.js": "100644 b3fe631db892efc3352dec4e6453b7b7e5336c06",
+        "scripts/test-opencode-edition.js": "100644 2973c4606c1dbf21d96e29ea3b8f18857ec3acfb",
+        "scripts/test-route-reachability.js": "100644 7008c51e490ae9a8e04d4db47a4b94612bec5770",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 082373e3df44a690fa487ba8b0d8cc76fc523101",
+        "scripts/validate-workflow-contracts.js": "100755 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "templates/routing/next.skeleton.md": "100644 3126457aa4ddcdbc578b122262f95fb4f300347b",
+        "templates/routing/plan-run.skeleton.md": "100644 dcc46459a3aef8962c1cbf903ffd30db500a2c33",
+        "templates/routing/required-blocks.js": "100644 958d59775d18cd58d76a276ae6262245756766cf",
+        "templates/routing/slots.js": "100644 aff7b93c85b8a728b04a69f7413da972f2d7db96"
+      },
+      "candidate_residue_digest": "5ad936ea4a178efa514c6eaa9d7239ca8e433c855f84be1a4c52b6e515fae088",
+      "epoch_lineage_id": "701e49e63588ecfd1766fd6e248591db67942119fd359fe7e270e6005324f5a6",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "4977c5935bdc39d1b6287bfc3ac5de9f9a8532980ed5c106f29f413ea1f4784c",
+      "context_hashes": [
+        "afd1a065bdd16d064346e0a21c47b21ccbf3a8ff3be15ec6e2d8e1eaf899b711"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+          "certifier_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n8-role-agents-certify",
+          "raw_evidence_sha256": "0c4691f38e6149e16a9c9352114c41b06bb5f0aab53cf6b88c49557193acca0f",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "afd1a065bdd16d064346e0a21c47b21ccbf3a8ff3be15ec6e2d8e1eaf899b711",
+          "schema_version": 2,
+          "surface": "the n7-role-agents-trim diff vs run base 1491c7e5 — the eleven agents/*.md role profiles only",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-node",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n7-role-agents-trim": {
+          "baseline": "cb98061ee5a15f3a5bdf5a41b76db633653225b1",
+          "anchored_ref": "cb98061ee5a15f3a5bdf5a41b76db633653225b1",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "cb98061ee5a1",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n7-role-agents-trim"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-9a3e87e1d8a945d1:1",
+      "ordinal": 1,
+      "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "62cefa5b65861446f16ab55ae9995497c27a2c07f6d426d9cce3e1fbf7de567c",
+        "key": "9a3e87e1d8a945d1a40bb42959cac4f25fda59de2ddc4d0be24de468b0980487",
+        "kind": "sequence",
+        "members": [
+          "n10-selfdev-certify"
+        ],
+        "surface_digests": [
+          "697f30ab525860cfeac28555f23763eec8478e7fc2cd33a54f47269f04b31282"
+        ]
+      },
+      "transaction_key": "86691a502b7dad2e5cf703456792710e76cc2f48189ea433a40aaf26c3cd83c9",
+      "candidate_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 ba8549aeb7a0c0ebb5ab1de2fb88be69f57d8e35",
+        "agents/build-error-resolver.md": "100644 29c7db953aa7dfd2cb6903f0c2d8b7255fcb7317",
+        "agents/code-architect.md": "100644 48526cbebbf5ba1b4dac53fa7a5df9b59d2915f1",
+        "agents/code-explorer.md": "100644 60e84f67e514595a2bd8a8bd0ab5bc5c1cbf4800",
+        "agents/contractor.md": "100644 a3e18595aa4e62d5fae1b97c6c01db8b0b5fcfda",
+        "agents/doc-updater.md": "100644 dd525c818eaf2833d058ea20d59336edaf7cf084",
+        "agents/implementer.md": "100644 6086d8b805b40916a8d0730aaa15d49c961e792b",
+        "agents/issue-scout.md": "100644 8d50089e278218c7d2e27c54ff2c69777684c207",
+        "agents/knowledge-lookup.md": "100644 b2443029486a5f6ef6f947d1bdf0b878015fcfd2",
+        "agents/metric-optimizer.md": "100644 1d511e0cda1de3b9ce3451ac2fa9b3cde99552fd",
+        "agents/planner.md": "100644 56036300126c638b453d00b1adf615bd71821d59",
+        "agents/synthesizer.md": "100644 c574ee79f7a53d96cd54ecd83c63336ff5a88d24",
+        "agents/tdd-guide.md": "100644 51c9fc3dc41a910905658499b89378aa68a474f1",
+        "agents/workflow-planner.md": "100644 c63ebf3ea3fc66f5553328701d57877f57758bb6",
+        "commands/kaola-workflow-adapt.md": "100644 9c014f26ddf2ffbc91c12df7dcf61bfb2820ffc5",
+        "commands/kaola-workflow-finalize.md": "100644 32e890cb099471d53a1877823369b3db1e06ccd4",
+        "commands/kaola-workflow-plan-run.md": "100644 c0517199f042d844e4e82a344e9a96559d4a2627",
+        "commands/workflow-next.md": "100644 d8a0e1a49c5be0e1f6c4a6cfa9a22ccbe5cc46c8",
+        "plugins/kaola-workflow-gitea/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitea/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md": "100644 d449ea5a00bc4b786a4721b12e159bc149436655",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md": "100644 112c53deac0b75f5e652100711dad94dd7d69dc2",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 3285a433cf40da911e48cfd7a6944b51622fc2ad",
+        "plugins/kaola-workflow-gitea/commands/workflow-next.md": "100644 a1be1912727c858a0ec32f861cd86a94f24937a0",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 08e18a970cdc778ba421c232ae72a082491a4787",
+        "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js": "100644 46739473e7bd4f6b61fa14fdcd97705a901bcc39",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md": "100644 40ceb8a5e72d79617a526f3eefeb2aed8baf30bf",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 7c27a7d44270fcaf4f0ddced31802b9e285daddd",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md": "100644 85224d70d5da8b2ec482808561cc5ebc8c9b0566",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 20a0a6e013b5913c1483da6d77cfa9bb7298db7d",
+        "plugins/kaola-workflow-gitlab/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitlab/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md": "100644 f8dbee98cbf076c7511a88fcec8a2e76547b8a69",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md": "100644 4f57bc8251308e46a29bef6d37fa5bb24a895c4f",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 d51cd8c3c5ae2dda3a9994facc067dab940bda7f",
+        "plugins/kaola-workflow-gitlab/commands/workflow-next.md": "100644 a811dce414782115dea2e9c382b0ba30283b569e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 5cc8adf4a5ead3643769415829be01bac9360d03",
+        "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js": "100644 52f1d6406a8d51bd2c5147dd3a0da526d9247351",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md": "100644 76af836dbbe8840785b6b65edfeb057cbc799869",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 2808f934c0fbb07c809173569c80c697ae978cad",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md": "100644 a0b9239ab6f5675c5ab62c43c18d3fc1dbaaf20d",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 aed826f3b03c63eb13a923c55daeeace44c525e5",
+        "plugins/kaola-workflow/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md": "100644 4cc1c26db2d5f008da6c97c300bb7ed4a711c2c5",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 b692337f33f491c77fa8563c2648f342472999bb",
+        "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md": "100644 a8c4dad723cfd9609f701251a78009226d7f9083",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 b2c75c4dbc96ae5ba8676eb7e8df71a6f54ded28",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-kimi-edition.js": "100644 b3fe631db892efc3352dec4e6453b7b7e5336c06",
+        "scripts/test-opencode-edition.js": "100644 2973c4606c1dbf21d96e29ea3b8f18857ec3acfb",
+        "scripts/test-route-reachability.js": "100644 7008c51e490ae9a8e04d4db47a4b94612bec5770",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 082373e3df44a690fa487ba8b0d8cc76fc523101",
+        "scripts/validate-workflow-contracts.js": "100755 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "templates/routing/next.skeleton.md": "100644 3126457aa4ddcdbc578b122262f95fb4f300347b",
+        "templates/routing/plan-run.skeleton.md": "100644 dcc46459a3aef8962c1cbf903ffd30db500a2c33",
+        "templates/routing/required-blocks.js": "100644 958d59775d18cd58d76a276ae6262245756766cf",
+        "templates/routing/slots.js": "100644 aff7b93c85b8a728b04a69f7413da972f2d7db96"
+      },
+      "candidate_residue_digest": "5ad936ea4a178efa514c6eaa9d7239ca8e433c855f84be1a4c52b6e515fae088",
+      "epoch_lineage_id": "866a0684c94cfc90a4367bbb6f212833ffd900c74ae0972c85ad0dc13a104003",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "b0f561572fd795233d7aebbd4da7b8a3ab8cf31636c4bc3b461cf0d26ee63177",
+      "context_hashes": [
+        "e64c314f15f958e2eb9511a5f0c459a432241e60f419435cf83de25af00ffc7a"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+          "certifier_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n10-selfdev-certify",
+          "raw_evidence_sha256": "629e6d141ac80e89b8c44d5d0d5433aeb3130bce843e4111e9bafd2bea7cc555",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "e64c314f15f958e2eb9511a5f0c459a432241e60f419435cf83de25af00ffc7a",
+          "schema_version": 2,
+          "surface": "the n9-selfdev-guard diff vs run base 1491c7e5 — the four adaptive-node editions and test-adaptive-node.js",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-node",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n9-selfdev-guard": {
+          "baseline": "c2c63a3d893ecfe8b16c0a4754afea1614e42fc4",
+          "anchored_ref": "c2c63a3d893ecfe8b16c0a4754afea1614e42fc4",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "c2c63a3d893e",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n9-selfdev-guard"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-67188ad54406e880:1",
+      "ordinal": 1,
+      "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "070c92c829ba1bf0e524f01eada310b3ec476f7f6b782f89a8c233ef7c2a9f7f",
+        "key": "67188ad54406e88015e06a67a734796f5bdaa026836ee111189664e57188a86e",
+        "kind": "sequence",
+        "members": [
+          "n2-routing-certify"
+        ],
+        "surface_digests": [
+          "1cdb94b64d20aac0b9ddb8971769e7874c9811c2b97910a7a1e507aa70651c81"
+        ]
+      },
+      "transaction_key": "e34a544c4b34463355dd1b11378b55f3821ca348379139c8a22f4b2bce26760c",
+      "candidate_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 ba8549aeb7a0c0ebb5ab1de2fb88be69f57d8e35",
+        "agents/build-error-resolver.md": "100644 29c7db953aa7dfd2cb6903f0c2d8b7255fcb7317",
+        "agents/code-architect.md": "100644 48526cbebbf5ba1b4dac53fa7a5df9b59d2915f1",
+        "agents/code-explorer.md": "100644 60e84f67e514595a2bd8a8bd0ab5bc5c1cbf4800",
+        "agents/contractor.md": "100644 a3e18595aa4e62d5fae1b97c6c01db8b0b5fcfda",
+        "agents/doc-updater.md": "100644 dd525c818eaf2833d058ea20d59336edaf7cf084",
+        "agents/implementer.md": "100644 6086d8b805b40916a8d0730aaa15d49c961e792b",
+        "agents/issue-scout.md": "100644 8d50089e278218c7d2e27c54ff2c69777684c207",
+        "agents/knowledge-lookup.md": "100644 b2443029486a5f6ef6f947d1bdf0b878015fcfd2",
+        "agents/metric-optimizer.md": "100644 1d511e0cda1de3b9ce3451ac2fa9b3cde99552fd",
+        "agents/planner.md": "100644 56036300126c638b453d00b1adf615bd71821d59",
+        "agents/synthesizer.md": "100644 c574ee79f7a53d96cd54ecd83c63336ff5a88d24",
+        "agents/tdd-guide.md": "100644 51c9fc3dc41a910905658499b89378aa68a474f1",
+        "agents/workflow-planner.md": "100644 c63ebf3ea3fc66f5553328701d57877f57758bb6",
+        "commands/kaola-workflow-adapt.md": "100644 9c014f26ddf2ffbc91c12df7dcf61bfb2820ffc5",
+        "commands/kaola-workflow-finalize.md": "100644 32e890cb099471d53a1877823369b3db1e06ccd4",
+        "commands/kaola-workflow-plan-run.md": "100644 c0517199f042d844e4e82a344e9a96559d4a2627",
+        "commands/workflow-next.md": "100644 d8a0e1a49c5be0e1f6c4a6cfa9a22ccbe5cc46c8",
+        "plugins/kaola-workflow-gitea/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitea/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md": "100644 d449ea5a00bc4b786a4721b12e159bc149436655",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md": "100644 112c53deac0b75f5e652100711dad94dd7d69dc2",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 3285a433cf40da911e48cfd7a6944b51622fc2ad",
+        "plugins/kaola-workflow-gitea/commands/workflow-next.md": "100644 a1be1912727c858a0ec32f861cd86a94f24937a0",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 08e18a970cdc778ba421c232ae72a082491a4787",
+        "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js": "100644 46739473e7bd4f6b61fa14fdcd97705a901bcc39",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md": "100644 40ceb8a5e72d79617a526f3eefeb2aed8baf30bf",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 7c27a7d44270fcaf4f0ddced31802b9e285daddd",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md": "100644 85224d70d5da8b2ec482808561cc5ebc8c9b0566",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 20a0a6e013b5913c1483da6d77cfa9bb7298db7d",
+        "plugins/kaola-workflow-gitlab/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitlab/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md": "100644 f8dbee98cbf076c7511a88fcec8a2e76547b8a69",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md": "100644 4f57bc8251308e46a29bef6d37fa5bb24a895c4f",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 d51cd8c3c5ae2dda3a9994facc067dab940bda7f",
+        "plugins/kaola-workflow-gitlab/commands/workflow-next.md": "100644 a811dce414782115dea2e9c382b0ba30283b569e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 5cc8adf4a5ead3643769415829be01bac9360d03",
+        "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js": "100644 52f1d6406a8d51bd2c5147dd3a0da526d9247351",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md": "100644 76af836dbbe8840785b6b65edfeb057cbc799869",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 2808f934c0fbb07c809173569c80c697ae978cad",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md": "100644 a0b9239ab6f5675c5ab62c43c18d3fc1dbaaf20d",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 aed826f3b03c63eb13a923c55daeeace44c525e5",
+        "plugins/kaola-workflow/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md": "100644 4cc1c26db2d5f008da6c97c300bb7ed4a711c2c5",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 b692337f33f491c77fa8563c2648f342472999bb",
+        "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md": "100644 a8c4dad723cfd9609f701251a78009226d7f9083",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 b2c75c4dbc96ae5ba8676eb7e8df71a6f54ded28",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-kimi-edition.js": "100644 b3fe631db892efc3352dec4e6453b7b7e5336c06",
+        "scripts/test-opencode-edition.js": "100644 2973c4606c1dbf21d96e29ea3b8f18857ec3acfb",
+        "scripts/test-route-reachability.js": "100644 7008c51e490ae9a8e04d4db47a4b94612bec5770",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 082373e3df44a690fa487ba8b0d8cc76fc523101",
+        "scripts/validate-workflow-contracts.js": "100755 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "templates/routing/next.skeleton.md": "100644 3126457aa4ddcdbc578b122262f95fb4f300347b",
+        "templates/routing/plan-run.skeleton.md": "100644 dcc46459a3aef8962c1cbf903ffd30db500a2c33",
+        "templates/routing/required-blocks.js": "100644 958d59775d18cd58d76a276ae6262245756766cf",
+        "templates/routing/slots.js": "100644 aff7b93c85b8a728b04a69f7413da972f2d7db96"
+      },
+      "candidate_residue_digest": "5ad936ea4a178efa514c6eaa9d7239ca8e433c855f84be1a4c52b6e515fae088",
+      "epoch_lineage_id": "78e2b89c1c9d0ec285cfc3879df5210409f3bbf1aa483572407085e2e7bc926f",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "2014a14d1a3b83c067d3d1be0a7c13447789532549a130cd5b113886f53f4c4f",
+      "context_hashes": [
+        "a8e4326cca71d94dadf1b25e6a7ebd65cc481e8b83462411f320482de1a38c1b"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+          "certifier_digest": "78fbd779e2a6b2316fe9acabd96b73f7f2671e9501d0c4920d5f71c49e4e9360",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n2-routing-certify",
+            "nonce": "789906e2d675"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n2-routing-certify",
+          "raw_evidence_sha256": "baf770e9f5f84a4836ca84da5e901a759c51713600eaeefb1756d69bb5c8c21d",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "a8e4326cca71d94dadf1b25e6a7ebd65cc481e8b83462411f320482de1a38c1b",
+          "schema_version": 2,
+          "surface": "the n1-routing-diet diff vs run base 1491c7e5 — templates/routing skeletons+slots+required-blocks, the 12 generated next/plan-run surfaces, the five contract validators, test-route-reachability.js, test-opencode-edition.js, test-kimi-edition.js",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-routing-diet": {
+          "baseline": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "anchored_ref": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "fc2d5a8c0215",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-routing-diet"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-c684aac86d7ce77a:1",
+      "ordinal": 1,
+      "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "03d7b34b4a7ebc088b11b3af1cf4311f2b25f90a9c2249e2fd745aa4f6ff8f71",
+        "key": "c684aac86d7ce77a45b485fc3c45a29bbfd256e294d617dc5d76f6136943cd50",
+        "kind": "sequence",
+        "members": [
+          "n4-finalize-adapt-certify"
+        ],
+        "surface_digests": [
+          "e02c7ad9459ae8295f11e300e597f1f966c4ac810d3a5323adb15f95a3ef206c"
+        ]
+      },
+      "transaction_key": "bb020322a401863fa172ae6682e8c76b6c4e1414d6a3ea5ea12d8ccd0cbde79f",
+      "candidate_digest": "8a2f6acc1220bfe229af341bcd9168498e88b88e8e331fea2547075d0b4af4b4",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 ba8549aeb7a0c0ebb5ab1de2fb88be69f57d8e35",
+        "agents/build-error-resolver.md": "100644 29c7db953aa7dfd2cb6903f0c2d8b7255fcb7317",
+        "agents/code-architect.md": "100644 48526cbebbf5ba1b4dac53fa7a5df9b59d2915f1",
+        "agents/code-explorer.md": "100644 60e84f67e514595a2bd8a8bd0ab5bc5c1cbf4800",
+        "agents/contractor.md": "100644 a3e18595aa4e62d5fae1b97c6c01db8b0b5fcfda",
+        "agents/doc-updater.md": "100644 dd525c818eaf2833d058ea20d59336edaf7cf084",
+        "agents/implementer.md": "100644 6086d8b805b40916a8d0730aaa15d49c961e792b",
+        "agents/issue-scout.md": "100644 8d50089e278218c7d2e27c54ff2c69777684c207",
+        "agents/knowledge-lookup.md": "100644 b2443029486a5f6ef6f947d1bdf0b878015fcfd2",
+        "agents/metric-optimizer.md": "100644 1d511e0cda1de3b9ce3451ac2fa9b3cde99552fd",
+        "agents/planner.md": "100644 56036300126c638b453d00b1adf615bd71821d59",
+        "agents/synthesizer.md": "100644 c574ee79f7a53d96cd54ecd83c63336ff5a88d24",
+        "agents/tdd-guide.md": "100644 51c9fc3dc41a910905658499b89378aa68a474f1",
+        "agents/workflow-planner.md": "100644 c63ebf3ea3fc66f5553328701d57877f57758bb6",
+        "commands/kaola-workflow-adapt.md": "100644 ca10119af27bb3033c876293acdc1bce90898050",
+        "commands/kaola-workflow-finalize.md": "100644 834a5ed2e58d306385a41809d4307815fecfcc49",
+        "commands/kaola-workflow-plan-run.md": "100644 c0517199f042d844e4e82a344e9a96559d4a2627",
+        "commands/workflow-next.md": "100644 d8a0e1a49c5be0e1f6c4a6cfa9a22ccbe5cc46c8",
+        "plugins/kaola-workflow-gitea/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitea/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md": "100644 56525254aa6f3b189799ef4ad1e619d5e6e3c5ca",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md": "100644 2878f0ccf6f507f10125321aa8f2f46f32cee1c6",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 3285a433cf40da911e48cfd7a6944b51622fc2ad",
+        "plugins/kaola-workflow-gitea/commands/workflow-next.md": "100644 a1be1912727c858a0ec32f861cd86a94f24937a0",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 08e18a970cdc778ba421c232ae72a082491a4787",
+        "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js": "100644 46739473e7bd4f6b61fa14fdcd97705a901bcc39",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md": "100644 f28107ef44ed6ed63e31e6218441a26130b1ad00",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 4819dc68e2ee19f055b3b947c685f5558a9e1a19",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md": "100644 85224d70d5da8b2ec482808561cc5ebc8c9b0566",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 20a0a6e013b5913c1483da6d77cfa9bb7298db7d",
+        "plugins/kaola-workflow-gitlab/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitlab/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md": "100644 1fae960e2fe5b3f7ffc8bb1117b4bb926993bf9b",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md": "100644 0f3aae463aa117faf63a36250d82b1a29d5923fc",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 d51cd8c3c5ae2dda3a9994facc067dab940bda7f",
+        "plugins/kaola-workflow-gitlab/commands/workflow-next.md": "100644 a811dce414782115dea2e9c382b0ba30283b569e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 5cc8adf4a5ead3643769415829be01bac9360d03",
+        "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js": "100644 52f1d6406a8d51bd2c5147dd3a0da526d9247351",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md": "100644 f9ce5e51b0a3ec829960143053ddd51ef6edfdee",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 5cc13cb3c52664f1a7b50739655e9360913ec998",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md": "100644 a0b9239ab6f5675c5ab62c43c18d3fc1dbaaf20d",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 aed826f3b03c63eb13a923c55daeeace44c525e5",
+        "plugins/kaola-workflow/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md": "100644 f09abb473830ed43e016af299d3043ae47581fc8",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 bc0cc4456ef6e2819aacf1b231e34e659cfbd8b2",
+        "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md": "100644 a8c4dad723cfd9609f701251a78009226d7f9083",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 b2c75c4dbc96ae5ba8676eb7e8df71a6f54ded28",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-kimi-edition.js": "100644 b3fe631db892efc3352dec4e6453b7b7e5336c06",
+        "scripts/test-opencode-edition.js": "100644 722d80f0568ef00073abe7b32f76ce4dd70a7a99",
+        "scripts/test-route-reachability.js": "100644 62fcfa27aed69dee85f59f1ee91036dc697e2794",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 082373e3df44a690fa487ba8b0d8cc76fc523101",
+        "scripts/validate-workflow-contracts.js": "100755 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "templates/routing/next.skeleton.md": "100644 3126457aa4ddcdbc578b122262f95fb4f300347b",
+        "templates/routing/plan-run.skeleton.md": "100644 dcc46459a3aef8962c1cbf903ffd30db500a2c33",
+        "templates/routing/required-blocks.js": "100644 d6c87164c64af45a322113a6db69e8df16351b80",
+        "templates/routing/slots.js": "100644 aff7b93c85b8a728b04a69f7413da972f2d7db96"
+      },
+      "candidate_residue_digest": "5ad936ea4a178efa514c6eaa9d7239ca8e433c855f84be1a4c52b6e515fae088",
+      "epoch_lineage_id": "e28875aadcf841d09b66e0b40eceb1b56fd2a80876aa285c6e28c5c88646730a",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "5bbbbd5ae8f923ae71d45971e0906b4ea21a51a0125d8922088be3546ff9203a",
+      "context_hashes": [
+        "e16727af603861003036b75e30166e77526402f6f0a485fd5501ded3a4f88aa2"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "8a2f6acc1220bfe229af341bcd9168498e88b88e8e331fea2547075d0b4af4b4",
+          "certifier_digest": "8a2f6acc1220bfe229af341bcd9168498e88b88e8e331fea2547075d0b4af4b4",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n4-finalize-adapt-certify",
+            "nonce": "02c3f39b8ef6"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n4-finalize-adapt-certify",
+          "raw_evidence_sha256": "d66d5812e0fffed19ec7b41fd5dbf67927ff8ead510138ee980bafcd5357a53e",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "e16727af603861003036b75e30166e77526402f6f0a485fd5501ded3a4f88aa2",
+          "schema_version": 2,
+          "surface": "the n3-finalize-adapt-diet diff vs its base — the 12 finalize/adapt command+skill surfaces, required-blocks.js, test-route-reachability.js, the five contract validators, test-opencode-edition.js, test-kimi-edition.js",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-routing-diet": {
+          "baseline": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "anchored_ref": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "fc2d5a8c0215",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-routing-diet"
+        },
+        "n3-finalize-adapt-diet": {
+          "baseline": "6b82c068ed139669563293a8bba4aaf46a87efaa",
+          "anchored_ref": "6b82c068ed139669563293a8bba4aaf46a87efaa",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "6b82c068ed13",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n3-finalize-adapt-diet"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-0a7acbf8cd138b3c:1",
+      "ordinal": 1,
+      "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "7a7b78a047d5af6dc686377a559f04861d459fd0c0a7fd33b8963d3aa5a3fb9b",
+        "key": "0a7acbf8cd138b3c64e07c2393d4abafa61ace4ef2064f4d7357db2c435bf1a6",
+        "kind": "sequence",
+        "members": [
+          "n6-front-agents-certify"
+        ],
+        "surface_digests": [
+          "607e711463d891393375a28661919fae2c648e72e39edfdf14c85ee88d018481"
+        ]
+      },
+      "transaction_key": "be6e30b4864ff8906d74a0ae44ebc892f57adef9f5f71863984d86384b0b4244",
+      "candidate_digest": "650215c195ce6fdd9df5e355222b4da2b7ad4f5f9316922dbba023c974afdaf5",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 ba8549aeb7a0c0ebb5ab1de2fb88be69f57d8e35",
+        "agents/build-error-resolver.md": "100644 29c7db953aa7dfd2cb6903f0c2d8b7255fcb7317",
+        "agents/code-architect.md": "100644 48526cbebbf5ba1b4dac53fa7a5df9b59d2915f1",
+        "agents/code-explorer.md": "100644 60e84f67e514595a2bd8a8bd0ab5bc5c1cbf4800",
+        "agents/contractor.md": "100644 3da284ceed13e623e0e8335a8b56f53d528cf19d",
+        "agents/doc-updater.md": "100644 dd525c818eaf2833d058ea20d59336edaf7cf084",
+        "agents/implementer.md": "100644 6086d8b805b40916a8d0730aaa15d49c961e792b",
+        "agents/issue-scout.md": "100644 8d50089e278218c7d2e27c54ff2c69777684c207",
+        "agents/knowledge-lookup.md": "100644 b2443029486a5f6ef6f947d1bdf0b878015fcfd2",
+        "agents/metric-optimizer.md": "100644 1d511e0cda1de3b9ce3451ac2fa9b3cde99552fd",
+        "agents/planner.md": "100644 56036300126c638b453d00b1adf615bd71821d59",
+        "agents/synthesizer.md": "100644 c574ee79f7a53d96cd54ecd83c63336ff5a88d24",
+        "agents/tdd-guide.md": "100644 51c9fc3dc41a910905658499b89378aa68a474f1",
+        "agents/workflow-planner.md": "100644 7ea955524d6aeae1d1c1e745d5bb3bd6ce32f619",
+        "commands/kaola-workflow-adapt.md": "100644 ca10119af27bb3033c876293acdc1bce90898050",
+        "commands/kaola-workflow-finalize.md": "100644 834a5ed2e58d306385a41809d4307815fecfcc49",
+        "commands/kaola-workflow-plan-run.md": "100644 c0517199f042d844e4e82a344e9a96559d4a2627",
+        "commands/workflow-next.md": "100644 d8a0e1a49c5be0e1f6c4a6cfa9a22ccbe5cc46c8",
+        "plugins/kaola-workflow-gitea/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitea/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md": "100644 56525254aa6f3b189799ef4ad1e619d5e6e3c5ca",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md": "100644 2878f0ccf6f507f10125321aa8f2f46f32cee1c6",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 3285a433cf40da911e48cfd7a6944b51622fc2ad",
+        "plugins/kaola-workflow-gitea/commands/workflow-next.md": "100644 a1be1912727c858a0ec32f861cd86a94f24937a0",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 08e18a970cdc778ba421c232ae72a082491a4787",
+        "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js": "100644 46739473e7bd4f6b61fa14fdcd97705a901bcc39",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md": "100644 f28107ef44ed6ed63e31e6218441a26130b1ad00",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 4819dc68e2ee19f055b3b947c685f5558a9e1a19",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md": "100644 85224d70d5da8b2ec482808561cc5ebc8c9b0566",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 20a0a6e013b5913c1483da6d77cfa9bb7298db7d",
+        "plugins/kaola-workflow-gitlab/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitlab/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md": "100644 1fae960e2fe5b3f7ffc8bb1117b4bb926993bf9b",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md": "100644 0f3aae463aa117faf63a36250d82b1a29d5923fc",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 d51cd8c3c5ae2dda3a9994facc067dab940bda7f",
+        "plugins/kaola-workflow-gitlab/commands/workflow-next.md": "100644 a811dce414782115dea2e9c382b0ba30283b569e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 5cc8adf4a5ead3643769415829be01bac9360d03",
+        "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js": "100644 52f1d6406a8d51bd2c5147dd3a0da526d9247351",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md": "100644 f9ce5e51b0a3ec829960143053ddd51ef6edfdee",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 5cc13cb3c52664f1a7b50739655e9360913ec998",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md": "100644 a0b9239ab6f5675c5ab62c43c18d3fc1dbaaf20d",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 aed826f3b03c63eb13a923c55daeeace44c525e5",
+        "plugins/kaola-workflow/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md": "100644 f09abb473830ed43e016af299d3043ae47581fc8",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 bc0cc4456ef6e2819aacf1b231e34e659cfbd8b2",
+        "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md": "100644 a8c4dad723cfd9609f701251a78009226d7f9083",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 b2c75c4dbc96ae5ba8676eb7e8df71a6f54ded28",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-kimi-edition.js": "100644 b3fe631db892efc3352dec4e6453b7b7e5336c06",
+        "scripts/test-opencode-edition.js": "100644 722d80f0568ef00073abe7b32f76ce4dd70a7a99",
+        "scripts/test-route-reachability.js": "100644 62fcfa27aed69dee85f59f1ee91036dc697e2794",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 082373e3df44a690fa487ba8b0d8cc76fc523101",
+        "scripts/validate-workflow-contracts.js": "100755 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "templates/routing/next.skeleton.md": "100644 3126457aa4ddcdbc578b122262f95fb4f300347b",
+        "templates/routing/plan-run.skeleton.md": "100644 dcc46459a3aef8962c1cbf903ffd30db500a2c33",
+        "templates/routing/required-blocks.js": "100644 d6c87164c64af45a322113a6db69e8df16351b80",
+        "templates/routing/slots.js": "100644 aff7b93c85b8a728b04a69f7413da972f2d7db96"
+      },
+      "candidate_residue_digest": "5ad936ea4a178efa514c6eaa9d7239ca8e433c855f84be1a4c52b6e515fae088",
+      "epoch_lineage_id": "1d53d3e5afb06834c05c9239e0d750bc67e42531423599e965947e451bc39639",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "952a60d948e168ab5427b321618b587f6c73b58dea2dad48c8998dbf27d4de49",
+      "context_hashes": [
+        "8833309f76affc01695ba75b79a525b6a6c183259ae6db69b00b79f04b75a6ad"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "650215c195ce6fdd9df5e355222b4da2b7ad4f5f9316922dbba023c974afdaf5",
+          "certifier_digest": "650215c195ce6fdd9df5e355222b4da2b7ad4f5f9316922dbba023c974afdaf5",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n6-front-agents-certify",
+          "raw_evidence_sha256": "f6d08342e14cae203376bae8ed70957333b8a0ac52111facb0661afaa88e8303",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "8833309f76affc01695ba75b79a525b6a6c183259ae6db69b00b79f04b75a6ad",
+          "schema_version": 2,
+          "surface": "the n5-front-agents-diet diff vs its base — agents/workflow-planner.md, agents/contractor.md, the six workflow-planner/contractor toml mirrors, the five contract validators, test-opencode-edition.js, test-kimi-edition.js",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-routing-diet": {
+          "baseline": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "anchored_ref": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "fc2d5a8c0215",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-routing-diet"
+        },
+        "n3-finalize-adapt-diet": {
+          "baseline": "6b82c068ed139669563293a8bba4aaf46a87efaa",
+          "anchored_ref": "6b82c068ed139669563293a8bba4aaf46a87efaa",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "6b82c068ed13",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n3-finalize-adapt-diet"
+        },
+        "n5-front-agents-diet": {
+          "baseline": "2dc6c8beb4a16873efde3b1edc9c76b8d931d1af",
+          "anchored_ref": "2dc6c8beb4a16873efde3b1edc9c76b8d931d1af",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "2dc6c8beb4a1",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n5-front-agents-diet"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-a53d19e97400f63e:1",
+      "ordinal": 1,
+      "plan_hash": "4fd7e95ef6792bd9c1ee0af846b49c51c1f358332974e1d349e87b9553ec6f4c",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "879ad82ce777be5ce9d8f6086c7b515d108e953c746b7d9b5455232a1b556245",
+        "key": "a53d19e97400f63e683503e193ebb07fe45b551cb65bf2aef7c60c53f296b171",
+        "kind": "sequence",
+        "members": [
+          "n12-code-certify"
+        ],
+        "surface_digests": [
+          "c256a3ad0823a511ee1092c38b939302320bd117ce332b5d183785e4bc336dec"
+        ]
+      },
+      "transaction_key": "0c49e4405cec470b1f97f507d0216e7abc591772eaa1e08ac06f7a7f7e4dfbef",
+      "candidate_digest": "d8c616faed5774cb7527c4f052b59901496cc855a9093cbe1f0f21d7ac6b4ad4",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 25b7d7df2ae728afe40e3e5a0c0e6d1d2c36c935",
+        "agents/build-error-resolver.md": "100644 29c7db953aa7dfd2cb6903f0c2d8b7255fcb7317",
+        "agents/code-architect.md": "100644 48526cbebbf5ba1b4dac53fa7a5df9b59d2915f1",
+        "agents/code-explorer.md": "100644 60e84f67e514595a2bd8a8bd0ab5bc5c1cbf4800",
+        "agents/contractor.md": "100644 3da284ceed13e623e0e8335a8b56f53d528cf19d",
+        "agents/doc-updater.md": "100644 dd525c818eaf2833d058ea20d59336edaf7cf084",
+        "agents/implementer.md": "100644 6086d8b805b40916a8d0730aaa15d49c961e792b",
+        "agents/issue-scout.md": "100644 8d50089e278218c7d2e27c54ff2c69777684c207",
+        "agents/knowledge-lookup.md": "100644 b2443029486a5f6ef6f947d1bdf0b878015fcfd2",
+        "agents/metric-optimizer.md": "100644 1d511e0cda1de3b9ce3451ac2fa9b3cde99552fd",
+        "agents/planner.md": "100644 56036300126c638b453d00b1adf615bd71821d59",
+        "agents/synthesizer.md": "100644 c574ee79f7a53d96cd54ecd83c63336ff5a88d24",
+        "agents/tdd-guide.md": "100644 51c9fc3dc41a910905658499b89378aa68a474f1",
+        "agents/workflow-planner.md": "100644 7ea955524d6aeae1d1c1e745d5bb3bd6ce32f619",
+        "commands/kaola-workflow-adapt.md": "100644 ca10119af27bb3033c876293acdc1bce90898050",
+        "commands/kaola-workflow-finalize.md": "100644 834a5ed2e58d306385a41809d4307815fecfcc49",
+        "commands/kaola-workflow-plan-run.md": "100644 c0517199f042d844e4e82a344e9a96559d4a2627",
+        "commands/workflow-next.md": "100644 d8a0e1a49c5be0e1f6c4a6cfa9a22ccbe5cc46c8",
+        "plugins/kaola-workflow-gitea/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitea/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md": "100644 56525254aa6f3b189799ef4ad1e619d5e6e3c5ca",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md": "100644 2878f0ccf6f507f10125321aa8f2f46f32cee1c6",
+        "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md": "100644 3285a433cf40da911e48cfd7a6944b51622fc2ad",
+        "plugins/kaola-workflow-gitea/commands/workflow-next.md": "100644 a1be1912727c858a0ec32f861cd86a94f24937a0",
+        "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js": "100644 08e18a970cdc778ba421c232ae72a082491a4787",
+        "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js": "100644 46739473e7bd4f6b61fa14fdcd97705a901bcc39",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md": "100644 f28107ef44ed6ed63e31e6218441a26130b1ad00",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md": "100644 4819dc68e2ee19f055b3b947c685f5558a9e1a19",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md": "100644 85224d70d5da8b2ec482808561cc5ebc8c9b0566",
+        "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md": "100644 20a0a6e013b5913c1483da6d77cfa9bb7298db7d",
+        "plugins/kaola-workflow-gitlab/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow-gitlab/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md": "100644 1fae960e2fe5b3f7ffc8bb1117b4bb926993bf9b",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md": "100644 0f3aae463aa117faf63a36250d82b1a29d5923fc",
+        "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md": "100644 d51cd8c3c5ae2dda3a9994facc067dab940bda7f",
+        "plugins/kaola-workflow-gitlab/commands/workflow-next.md": "100644 a811dce414782115dea2e9c382b0ba30283b569e",
+        "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js": "100644 5cc8adf4a5ead3643769415829be01bac9360d03",
+        "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js": "100644 52f1d6406a8d51bd2c5147dd3a0da526d9247351",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md": "100644 f9ce5e51b0a3ec829960143053ddd51ef6edfdee",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md": "100644 5cc13cb3c52664f1a7b50739655e9360913ec998",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md": "100644 a0b9239ab6f5675c5ab62c43c18d3fc1dbaaf20d",
+        "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md": "100644 aed826f3b03c63eb13a923c55daeeace44c525e5",
+        "plugins/kaola-workflow/agents/contractor.toml": "100644 d25dd8b73ffaa6738d1d6e3c8ee780a79608f94c",
+        "plugins/kaola-workflow/agents/workflow-planner.toml": "100644 13415bfd986dd4dcba31ab5e664b8fb62a1f281c",
+        "plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "plugins/kaola-workflow/scripts/validate-workflow-contracts.js": "100644 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md": "100644 f09abb473830ed43e016af299d3043ae47581fc8",
+        "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md": "100644 bc0cc4456ef6e2819aacf1b231e34e659cfbd8b2",
+        "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md": "100644 a8c4dad723cfd9609f701251a78009226d7f9083",
+        "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md": "100644 b2c75c4dbc96ae5ba8676eb7e8df71a6f54ded28",
+        "scripts/kaola-workflow-adaptive-node.js": "100644 f8208e636793eca6d83eaf56c91257bc8bc4224a",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-kimi-edition.js": "100644 b3fe631db892efc3352dec4e6453b7b7e5336c06",
+        "scripts/test-opencode-edition.js": "100644 722d80f0568ef00073abe7b32f76ce4dd70a7a99",
+        "scripts/test-route-reachability.js": "100644 62fcfa27aed69dee85f59f1ee91036dc697e2794",
+        "scripts/validate-kaola-workflow-contracts.js": "100755 082373e3df44a690fa487ba8b0d8cc76fc523101",
+        "scripts/validate-workflow-contracts.js": "100755 e63f660c726e2f4c5986de62f9ddd941d2202938",
+        "templates/routing/next.skeleton.md": "100644 3126457aa4ddcdbc578b122262f95fb4f300347b",
+        "templates/routing/plan-run.skeleton.md": "100644 dcc46459a3aef8962c1cbf903ffd30db500a2c33",
+        "templates/routing/required-blocks.js": "100644 d6c87164c64af45a322113a6db69e8df16351b80",
+        "templates/routing/slots.js": "100644 aff7b93c85b8a728b04a69f7413da972f2d7db96"
+      },
+      "candidate_residue_digest": "5ad936ea4a178efa514c6eaa9d7239ca8e433c855f84be1a4c52b6e515fae088",
+      "epoch_lineage_id": "3034b4c38f8f9afa666d2a2c1e55699584f85accb263f466a42fd2cfb313c42f",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "cff456f3e7d1e58aa69bef1d208d1488718aa9d3e2ab3cebef1d901598acd81e",
+      "context_hashes": [
+        "f0918ae0c43dfaaa332d2067c7fdd0c28811727a3627e742aae67f4632df140b"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [
+        "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560",
+        "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272",
+        "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74"
+      ],
+      "current_findings": [
+        {
+          "uid": "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "1a63023ccfc51358ff8434a2fc42580c6e8eaef623e8291388ca917b3ebebce8",
+            "input_digest": "4968153669df4dece28ea423d5e1cd9cc64a1d73480b1f3a4568f9f0bff2d0a3",
+            "expected_digest": "a8cda4d4761c79a6516366ed8f4b182c9b7693f95756296dab58ecc530718ad3",
+            "observed_digest": "78d74a8580c2cc66bbd836ff071dfe52adc2c1c73e17ce91e00ae28fbb1766b9"
+          },
+          "trigger_digest": "c4da18c46f82097552940077928356015031cd86f258b4b2a069d79b99ca0455",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+            "observation_key": "gate:n12-code-certify:R3-opencode-hooks-template-retired-hook",
+            "trigger_digest": "c4da18c46f82097552940077928356015031cd86f258b4b2a069d79b99ca0455"
+          },
+          "secondary_anchors": [],
+          "severity": "medium",
+          "scope": "pre_existing",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "implementer",
+          "proof_digest": null
+        },
+        {
+          "uid": "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "2342774d9fbcf9879db4186704f087568422a68643aa7728c5b8a1b587fe84a0",
+            "input_digest": "d3e46edba608cbd66a46cdd9583a10ec70fdcce48839702c3ea7143eb8a85909",
+            "expected_digest": "1b62fcd0f3b8066fd46ea817c248f4529a93162093e80564b929018fff34740c",
+            "observed_digest": "441a17458561f42d8697ce87274073949a30eec24438e4330d42bdab6cd8fa19"
+          },
+          "trigger_digest": "f45beb6affbf3ddf9ab8cff7819a42a5bf985a6f0081b280217729c4af149899",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+            "observation_key": "gate:n12-code-certify:R2-sync-kimi-retired-hook",
+            "trigger_digest": "f45beb6affbf3ddf9ab8cff7819a42a5bf985a6f0081b280217729c4af149899"
+          },
+          "secondary_anchors": [],
+          "severity": "high",
+          "scope": "pre_existing",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "implementer",
+          "proof_digest": null
+        },
+        {
+          "uid": "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "81e5ab5fcf310651e726052e5937f4183984a6779d00aa5afc7256c8279edad9",
+            "input_digest": "5482f2d104c43ee6577763050d00477e3d547bbbd12a60cd95a4405d3ed7eb48",
+            "expected_digest": "c8c74f03bef9411f4b95f3a240374ac53eddb1637bdd32d439d7b78e9b0a4306",
+            "observed_digest": "9611cdcbb600cc24bfac8ec1ae5c19be724a90477529172c088cab8d997c3a80"
+          },
+          "trigger_digest": "994e1ec765b8cfc1372d843e4215acf185400b16b348761e86e6b97f1f254e8d",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+            "observation_key": "gate:n12-code-certify:R1-validation-delegation-policy-heading",
+            "trigger_digest": "994e1ec765b8cfc1372d843e4215acf185400b16b348761e86e6b97f1f254e8d"
+          },
+          "secondary_anchors": [],
+          "severity": "high",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "implementer",
+          "proof_digest": null
+        }
+      ],
+      "findings": [
+        {
+          "uid": "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "1a63023ccfc51358ff8434a2fc42580c6e8eaef623e8291388ca917b3ebebce8",
+            "input_digest": "4968153669df4dece28ea423d5e1cd9cc64a1d73480b1f3a4568f9f0bff2d0a3",
+            "expected_digest": "a8cda4d4761c79a6516366ed8f4b182c9b7693f95756296dab58ecc530718ad3",
+            "observed_digest": "78d74a8580c2cc66bbd836ff071dfe52adc2c1c73e17ce91e00ae28fbb1766b9"
+          },
+          "trigger_digest": "c4da18c46f82097552940077928356015031cd86f258b4b2a069d79b99ca0455",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+            "observation_key": "gate:n12-code-certify:R3-opencode-hooks-template-retired-hook",
+            "trigger_digest": "c4da18c46f82097552940077928356015031cd86f258b4b2a069d79b99ca0455"
+          },
+          "secondary_anchors": [],
+          "severity": "medium",
+          "scope": "pre_existing",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "implementer",
+          "proof_digest": null
+        },
+        {
+          "uid": "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "2342774d9fbcf9879db4186704f087568422a68643aa7728c5b8a1b587fe84a0",
+            "input_digest": "d3e46edba608cbd66a46cdd9583a10ec70fdcce48839702c3ea7143eb8a85909",
+            "expected_digest": "1b62fcd0f3b8066fd46ea817c248f4529a93162093e80564b929018fff34740c",
+            "observed_digest": "441a17458561f42d8697ce87274073949a30eec24438e4330d42bdab6cd8fa19"
+          },
+          "trigger_digest": "f45beb6affbf3ddf9ab8cff7819a42a5bf985a6f0081b280217729c4af149899",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+            "observation_key": "gate:n12-code-certify:R2-sync-kimi-retired-hook",
+            "trigger_digest": "f45beb6affbf3ddf9ab8cff7819a42a5bf985a6f0081b280217729c4af149899"
+          },
+          "secondary_anchors": [],
+          "severity": "high",
+          "scope": "pre_existing",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "implementer",
+          "proof_digest": null
+        },
+        {
+          "uid": "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74",
+          "failure_class": "validation",
+          "trigger": {
+            "precondition_digest": "81e5ab5fcf310651e726052e5937f4183984a6779d00aa5afc7256c8279edad9",
+            "input_digest": "5482f2d104c43ee6577763050d00477e3d547bbbd12a60cd95a4405d3ed7eb48",
+            "expected_digest": "c8c74f03bef9411f4b95f3a240374ac53eddb1637bdd32d439d7b78e9b0a4306",
+            "observed_digest": "9611cdcbb600cc24bfac8ec1ae5c19be724a90477529172c088cab8d997c3a80"
+          },
+          "trigger_digest": "994e1ec765b8cfc1372d843e4215acf185400b16b348761e86e6b97f1f254e8d",
+          "primary_anchor": {
+            "kind": "evidence_observation",
+            "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+            "observation_key": "gate:n12-code-certify:R1-validation-delegation-policy-heading",
+            "trigger_digest": "994e1ec765b8cfc1372d843e4215acf185400b16b348761e86e6b97f1f254e8d"
+          },
+          "secondary_anchors": [],
+          "severity": "high",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "fix_role": "implementer",
+          "proof_digest": null
+        }
+      ],
+      "resolutions": [],
+      "route_candidates": [
+        {
+          "source_node": "n12-code-certify",
+          "finding_id": "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560",
+          "id": "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560",
+          "scope": "pre_existing",
+          "action": "fix",
+          "status": "open",
+          "severity": "medium",
+          "fix_role": "implementer",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "raw": "uid=15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560"
+        },
+        {
+          "source_node": "n12-code-certify",
+          "finding_id": "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272",
+          "id": "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272",
+          "scope": "pre_existing",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "implementer",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "raw": "uid=ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272"
+        },
+        {
+          "source_node": "n12-code-certify",
+          "finding_id": "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74",
+          "id": "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74",
+          "scope": "in_scope",
+          "action": "fix",
+          "status": "open",
+          "severity": "high",
+          "fix_role": "implementer",
+          "ownership_candidates": [],
+          "owning_node": null,
+          "raw": "uid=f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74"
+        }
+      ],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": [
+          "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560",
+          "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272",
+          "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74"
+        ]
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "changes_requested",
+        "gate_effect": "fail",
+        "blocking_findings": 3
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 3,
+          "candidate_digest": "d8c616faed5774cb7527c4f052b59901496cc855a9093cbe1f0f21d7ac6b4ad4",
+          "certifier_digest": "d8c616faed5774cb7527c4f052b59901496cc855a9093cbe1f0f21d7ac6b4ad4",
+          "contract_version": 2,
+          "domain_outcome": "changes_requested",
+          "evidence_binding": {
+            "node_id": "n12-code-certify",
+            "nonce": "704e0b40a8ff"
+          },
+          "execution_status": "complete",
+          "findings": [
+            {
+              "action": "fix",
+              "failure_class": "validation",
+              "fix_role": "implementer",
+              "primary_anchor": {
+                "kind": "evidence_observation",
+                "observation_key": "gate:n12-code-certify:R3-opencode-hooks-template-retired-hook",
+                "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+                "trigger_digest": "c4da18c46f82097552940077928356015031cd86f258b4b2a069d79b99ca0455"
+              },
+              "proof_digest": null,
+              "scope": "pre_existing",
+              "secondary_anchors": [],
+              "severity": "medium",
+              "status": "open",
+              "trigger": {
+                "expected_digest": "a8cda4d4761c79a6516366ed8f4b182c9b7693f95756296dab58ecc530718ad3",
+                "input_digest": "4968153669df4dece28ea423d5e1cd9cc64a1d73480b1f3a4568f9f0bff2d0a3",
+                "observed_digest": "78d74a8580c2cc66bbd836ff071dfe52adc2c1c73e17ce91e00ae28fbb1766b9",
+                "precondition_digest": "1a63023ccfc51358ff8434a2fc42580c6e8eaef623e8291388ca917b3ebebce8"
+              },
+              "trigger_digest": "c4da18c46f82097552940077928356015031cd86f258b4b2a069d79b99ca0455",
+              "uid": "15bffebde0fded18e17f36099e60f1bd8a88438ccd7c8f32347d588500bd3560"
+            },
+            {
+              "action": "fix",
+              "failure_class": "validation",
+              "fix_role": "implementer",
+              "primary_anchor": {
+                "kind": "evidence_observation",
+                "observation_key": "gate:n12-code-certify:R2-sync-kimi-retired-hook",
+                "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+                "trigger_digest": "f45beb6affbf3ddf9ab8cff7819a42a5bf985a6f0081b280217729c4af149899"
+              },
+              "proof_digest": null,
+              "scope": "pre_existing",
+              "secondary_anchors": [],
+              "severity": "high",
+              "status": "open",
+              "trigger": {
+                "expected_digest": "1b62fcd0f3b8066fd46ea817c248f4529a93162093e80564b929018fff34740c",
+                "input_digest": "d3e46edba608cbd66a46cdd9583a10ec70fdcce48839702c3ea7143eb8a85909",
+                "observed_digest": "441a17458561f42d8697ce87274073949a30eec24438e4330d42bdab6cd8fa19",
+                "precondition_digest": "2342774d9fbcf9879db4186704f087568422a68643aa7728c5b8a1b587fe84a0"
+              },
+              "trigger_digest": "f45beb6affbf3ddf9ab8cff7819a42a5bf985a6f0081b280217729c4af149899",
+              "uid": "ea4dd6296c706499a7be9b16d289be9e76c1ae05eac7643ad612f8ffc56dc272"
+            },
+            {
+              "action": "fix",
+              "failure_class": "validation",
+              "fix_role": "implementer",
+              "primary_anchor": {
+                "kind": "evidence_observation",
+                "observation_key": "gate:n12-code-certify:R1-validation-delegation-policy-heading",
+                "producer_evidence_digest": "64b59b1e7183e5a3f757fb31dc468a976ea61179465c7b56d27f1972a9eeacb4",
+                "trigger_digest": "994e1ec765b8cfc1372d843e4215acf185400b16b348761e86e6b97f1f254e8d"
+              },
+              "proof_digest": null,
+              "scope": "in_scope",
+              "secondary_anchors": [],
+              "severity": "high",
+              "status": "open",
+              "trigger": {
+                "expected_digest": "c8c74f03bef9411f4b95f3a240374ac53eddb1637bdd32d439d7b78e9b0a4306",
+                "input_digest": "5482f2d104c43ee6577763050d00477e3d547bbbd12a60cd95a4405d3ed7eb48",
+                "observed_digest": "9611cdcbb600cc24bfac8ec1ae5c19be724a90477529172c088cab8d997c3a80",
+                "precondition_digest": "81e5ab5fcf310651e726052e5937f4183984a6779d00aa5afc7256c8279edad9"
+              },
+              "trigger_digest": "994e1ec765b8cfc1372d843e4215acf185400b16b348761e86e6b97f1f254e8d",
+              "uid": "f670742c43cc8d9b4f347d996bc97c75a4afbd9c6bbd634f138141971fecab74"
+            }
+          ],
+          "gate_effect": "fail",
+          "node_id": "n12-code-certify",
+          "raw_evidence_sha256": "64aa12e832f197dd854b429204f9b294922fa07d06a9750869eda944dad27e94",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "f0918ae0c43dfaaa332d2067c7fdd0c28811727a3627e742aae67f4632df140b",
+          "schema_version": 2,
+          "surface": "the full accumulated Phase D candidate vs run base 1491c7e5 across all four editions plus the opencode/kimi suites, reviewed against issue #725 Phase D and AC-D",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "fail",
+      "reason": "review_gate_failed",
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n1-routing-diet": {
+          "baseline": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "anchored_ref": "fc2d5a8c0215b797737c7238b33ab669d7fea972",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "fc2d5a8c0215",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n1-routing-diet"
+        },
+        "n11-docs": {
+          "baseline": "c7dd31ebebb10da3f807e8afab86220a89d4483f",
+          "anchored_ref": "c7dd31ebebb10da3f807e8afab86220a89d4483f",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "c7dd31ebebb1",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n11-docs"
+        },
+        "n3-finalize-adapt-diet": {
+          "baseline": "6b82c068ed139669563293a8bba4aaf46a87efaa",
+          "anchored_ref": "6b82c068ed139669563293a8bba4aaf46a87efaa",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "6b82c068ed13",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n3-finalize-adapt-diet"
+        },
+        "n5-front-agents-diet": {
+          "baseline": "2dc6c8beb4a16873efde3b1edc9c76b8d931d1af",
+          "anchored_ref": "2dc6c8beb4a16873efde3b1edc9c76b8d931d1af",
+          "open_token": "a94ea0b7607abff38a4dd5f5adab075f8c677290",
+          "generation": "2dc6c8beb4a1",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n5-front-agents-diet"
+        },
+        "n7-role-agents-trim": {
+          "baseline": "cb98061ee5a15f3a5bdf5a41b76db633653225b1",
+          "anchored_ref": "cb98061ee5a15f3a5bdf5a41b76db633653225b1",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "cb98061ee5a1",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n7-role-agents-trim"
+        },
+        "n9-selfdev-guard": {
+          "baseline": "c2c63a3d893ecfe8b16c0a4754afea1614e42fc4",
+          "anchored_ref": "c2c63a3d893ecfe8b16c0a4754afea1614e42fc4",
+          "open_token": "1491c7e5ad37f18c5836a31fbc32e05675f80c0d",
+          "generation": "c2c63a3d893e",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n9-selfdev-guard"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}

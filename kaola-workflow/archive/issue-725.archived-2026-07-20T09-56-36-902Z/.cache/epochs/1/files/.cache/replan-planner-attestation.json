@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "transaction_id": "aaaa53eb24a3e033c65940535dd7fbe562a18cac89e790fb0e09e480cd913d6e",
+  "project": "issue-725",
+  "packet_digest": "a4a99cadee2630bb5649ac8e1f7af365cd7680d48b5150a65a395064ee415320",
+  "dispatch_nonce": "195ca4e71caa",
+  "profile_identity": "workflow-planner-replan-v1",
+  "child_path": "workflow-plan.next.md",
+  "child_digest": "423f8858ccee95bad9c80527d881871a27f09ee62b041aab6d10255e9d24983f",
+  "worktree_path": "/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-725",
+  "attestation_digest": "bc24ee5ebd05143ddc3fe1ca1a2894887c3c78f4d40f2a799dbbdc248d9a4d91"
+}
