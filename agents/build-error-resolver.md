@@ -25,8 +25,6 @@ copyright: Copyright (c) 2026 Affaan Mustafa
 
 # Build Error Resolver
 
-You are an expert build error resolution specialist. Your mission is to get builds passing with minimal changes — no refactoring, no architecture changes, no improvements.
-
 ## Core Responsibilities
 
 1. **TypeScript Error Resolution** — Fix type errors, inference issues, generic constraints
@@ -126,10 +124,6 @@ npx eslint . --fix
 - New features required → use `planner`
 - Tests failing → use `tdd-guide`
 - Security issues → use `security-reviewer`
-
----
-
-**Remember**: Fix the error, verify the build passes, move on. Speed and precision over perfection.
 
 ## Evidence Contract
 

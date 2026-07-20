@@ -18403,6 +18403,29 @@ function rtHarness(initialFiles, opts) {
       assert(p.ok === true && p.runtime === 'opencode' && p.path === path.join(ocAgents, 'code-reviewer.md'),
         '#712/#717[opencode-unchanged]: opencode layout detection + resolution is unchanged — got ' + JSON.stringify(p));
     }
+
+    // #736 — self-dev guard: a checkout cloned into a directory literally named `kaola-workflow`
+    // (the repo's own name) is structurally identical to an opencode install's
+    // <config>/kaola-workflow/scripts/ layout (both are "…/kaola-workflow/scripts" with no
+    // /plugins/ segment). The sibling package.json (name: kaola-workflow — the same self-dev
+    // predicate the kaola_script resolvers use) must disambiguate it back to claude; a genuine
+    // opencode config dir carries no such sibling repo package.json, so this guard cannot
+    // swallow it.
+    {
+      const selfDevRoot = path.join(layoutTmp, 'kaola-workflow');
+      const scriptsDir = path.join(selfDevRoot, 'scripts');
+      seedScripts(scriptsDir);
+      fs.writeFileSync(path.join(selfDevRoot, 'package.json'),
+        JSON.stringify({ name: 'kaola-workflow' }, null, 2));
+      const selfDevAgents = path.join(selfDevRoot, 'agents');
+      fs.mkdirSync(selfDevAgents, { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '..', 'agents', 'code-reviewer.md'),
+        path.join(selfDevAgents, 'code-reviewer.md'));
+      const p = probeReviewer(scriptsDir, 'code-reviewer');
+      assert(p.ok === true && p.runtime === 'claude' && p.path === path.join(selfDevAgents, 'code-reviewer.md'),
+        '#736[selfdev-named-kaola-workflow]: a checkout dir literally named kaola-workflow with a '
+          + 'sibling package.json of the same name must resolve claude (not opencode) — got ' + JSON.stringify(p));
+    }
   } finally {
     fs.rmSync(layoutTmp, { recursive: true, force: true });
   }

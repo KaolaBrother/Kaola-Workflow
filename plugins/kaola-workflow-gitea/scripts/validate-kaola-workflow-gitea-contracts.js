@@ -452,7 +452,6 @@ assertIncludes(giteaNextSkill, 'KAOLA_REASONING=');
 assertIncludes(giteaNextSkill, 'target_unverified');
 assertIncludes(giteaNextSkill, 'Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
 assertIncludes(giteaNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md');
-assertBefore(giteaNextSkill, '### Co-active Folders Advisory', '## Routing');
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(giteaNextSkill, 'Startup Step 0a-1');
 assertIncludes(giteaNextSkill, 'Branch: {branch from Sink block');

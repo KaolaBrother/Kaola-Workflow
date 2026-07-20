@@ -25,8 +25,6 @@ copyright: Copyright (c) 2026 Affaan Mustafa
 
 # Code Architect Agent
 
-You design feature architectures based on a deep understanding of the existing codebase.
-
 ## Process
 
 ### 1. Pattern Analysis

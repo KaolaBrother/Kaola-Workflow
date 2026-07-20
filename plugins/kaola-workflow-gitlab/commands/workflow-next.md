@@ -87,28 +87,14 @@ Use `$ARGUMENTS` as either:
 
 ## Goal-Driven Autonomy
 
-Use `/goal` or equivalent prompt-based Stop-hook wording so the router and each
-phase keep going until the active phase objective and completion audit pass.
-Treat nonessential workflow bookkeeping as autonomous: generated project names,
-collision suffixes like `-2`, cache paths, and harmless ordering choices.
-Decide essential technical decisions with your own judgment, apply the chosen
-answer, and record it under `.cache/` or the phase artifact.
-Ask only for true external authorization or materially user-owned choices.
+Keep going (via `/goal` or equivalent Stop-hook wording) until the phase objective and completion
+audit pass. Decide nonessential bookkeeping autonomously; ask only for true external authorization or
+materially user-owned choices. The `/goal` template must NOT imply cross-issue continuation — each run
+targets exactly one issue or one selected same-scope bundle.
 
-The `/goal` template must NOT use "next issue in line" or similar phrasing that
-implies cross-issue continuation. Each run targets exactly one issue or one
-explicitly selected same-scope bundle; auto-routing to an unselected issue after
-closure is still forbidden.
-
-**Finishing an issue INCLUDES capturing its run-discovered defects.** A run that
-surfaces a defect — a reviewer finding deferred to follow-up, an in-run
-repair/reopen, a deferred or waived chain, a flake — is not "done" until each
-such gap is either FILED as a follow-up issue (recorded `filed: #N` in
-`finalization-summary.md`'s `## Run gaps` section) or explicitly justified as
-`noise: <reason>`. Filing the follow-up SATISFIES the goal; silently deferring a
-known defect without filing or justifying it VIOLATES the goal, and the
-`gaps_unswept` finalize gate will refuse. "Loop until criteria pass" includes
-this capture step. Use the forge's issue tracker to file follow-ups.
+**Finishing an issue INCLUDES capturing its run-discovered defects** — each gap is FILED (`filed: #N`
+in `finalization-summary.md`'s `## Run gaps`) or justified `noise: <reason>`, else the `gaps_unswept`
+finalize gate refuses.
 
 ## Startup Step 0 - Agent Issue Selection (Required Before Startup)
 
@@ -163,23 +149,11 @@ set (see below).
 
 ### Explicit-bundle entry
 
-When the user names several issues together (e.g., "finish issues #N #N #N
-together"), route through the bundle lane:
-
-- Set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces) before calling startup.
-- The startup script validates the exact set — it does NOT substitute or reorder issues.
-- Project name and active folder: `bundle-42-47-53` (sorted ascending, deduplicated).
-- Branch: `workflow/bundle-42-47-53`.
-- Bundle lane is **adaptive-path only** (`workflow_path: adaptive` is required). A
-  bundle request with an explicit `KAOLA_PATH=fast`/`full` is refused with
-  `bundle_requires_adaptive`; do not silently downgrade to a single issue.
-- In the startup call, pass `--target-issues 42,47,53` (instead of `--target-issue N`)
-  and `--workflow-path adaptive`.
-
-Compatibility rule: `KAOLA_TARGET_ISSUE` / `--target-issue` keep current one-issue
-behavior UNCHANGED. `KAOLA_TARGET_ISSUES` / `--target-issues` are the ONLY
-multi-issue startup path. If BOTH are set, the script refuses with
-`target_ambiguity`; never set both.
+When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
+and pass `--target-issues 42,47,53 --workflow-path adaptive` (project/branch `bundle-42-47-53`, sorted
++ deduplicated; the script validates the exact set, never reorders). The bundle lane is adaptive-only
+(`workflow_path: adaptive`; a `fast`/`full` request is refused with `bundle_requires_adaptive`).
+`--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
 
 ### Auto-bundle entry
 
@@ -232,16 +206,10 @@ issue-scout's ENTIRE JSON reply verbatim, fenced, to
 automatically with the project when the run finalizes. Skip this step entirely on the
 user-named-issue branch — a user-named claim legitimately has no selection evidence.
 
-Auto-bundle mode emits a bundle only when:
-- all candidate issues are open and unclaimed;
-- no dependency is unresolved outside the bundle;
-- the issues share a coherent scope signal (same subsystem, same label, same
-  failing area, or an explicit dependency relation);
-- issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 4).
-
-**Fallback rule:** when no high-confidence same-scope bundle exists, the scout
-returns a single `primary_issue` (or `confidence: low`) → fall back to single-issue
-selection via `KAOLA_TARGET_ISSUE`. Do not manufacture a bundle.
+Auto-bundle emits a bundle only when all candidates are open + unclaimed, no dependency is unresolved
+outside the set, they share a coherent scope signal, and the count is ≤ `KAOLA_BUNDLE_MAX_ISSUES`
+(default 4). Otherwise the scout returns a single `primary_issue` → single-issue selection via
+`KAOLA_TARGET_ISSUE`; do not manufacture a bundle.
 
 ### Bundle closure
 
@@ -261,24 +229,10 @@ Keyword matching is agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Adaptive is the unconditional default and the only installable workflow path —
-there is nothing to resolve and nothing to deliberate. `export KAOLA_PATH=adaptive`
-and proceed to Step 0a-2. The export is the action (it makes Step 0b skip and the
-adaptive front end fire). Adaptive just runs.
-
-If `KAOLA_PATH` is somehow already exported to a non-adaptive value (residual
-environment state, a direct script invocation, or similar), honor it verbatim and
-hand it to the claim — do NOT re-derive a rubric and do NOT check whether the path
-is installed. The claim's `path_not_installed` typed refusal is the single
-authority: if the named path isn't installed the run surfaces that refusal (a hard
-stop), it does NOT silently fall to adaptive. There is no automatic fallback. For a
-normal fresh-start draft that never froze, the recourse stays inside adaptive
-(bounded planner repair → discard+restart a fresh adaptive run → stop+ask), per
-   `plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md`.
-This startup fallback is forbidden while `replan_in_progress`; the re-plan fence
-permits only the edition-local `resume --project {project} --json` mutation.
-
-State the chosen path aloud before Step 0b:
+Adaptive is the unconditional default and only installable path: `export KAOLA_PATH=adaptive` and
+proceed to Step 0a-2 (this makes Step 0b skip and the adaptive front end fire). Honor an already-set
+non-adaptive `KAOLA_PATH` verbatim and hand it to the claim — its `path_not_installed` typed refusal
+is the single authority (no silent fall to adaptive, no automatic fallback). State the chosen path:
 
 ```text
 Path: adaptive (default)
@@ -318,42 +272,11 @@ Non-adaptive paths (`fast` | `full`) fall through to Step 0b unchanged.
 **Skip this entire step when `KAOLA_PATH=adaptive`** — the adaptive front end (Step 0a-2) claims via
 the `workflow-planner`, not here. Step 0b runs for the `fast` and `full` paths only.
 
-If `kaola-gitlab-workflow-claim.js` and `kaola-gitlab-workflow-classifier.js` are available,
-run the startup transaction with the agent-selected target. The startup script
-validates the explicit target, refreshes MR-backed folders with `watch-mr`, and
-atomically creates `kaola-workflow/{project}/workflow-state.md`.
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"
-if [ -f "$CLAIM_JS" ]; then
-  node "$CLAIM_JS" watch-mr >/dev/null 2>&1 || true
-  KAOLA_SINK_FLAG=""
-  [ -n "${KAOLA_SINK:-}" ] && KAOLA_SINK_FLAG="--sink $KAOLA_SINK"
-  KAOLA_TARGET_FLAG=""
-  [ -n "${KAOLA_TARGET_ISSUE:-}" ] && KAOLA_TARGET_FLAG="--target-issue $KAOLA_TARGET_ISSUE"
-  STARTUP_OUT=$(node "$CLAIM_JS" startup \
-    --runtime claude \
-    $KAOLA_SINK_FLAG \
-    $KAOLA_TARGET_FLAG 2>/dev/null) || true
-  KAOLA_WORKTREE_PATH="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).worktree_path||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
-  KAOLA_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
-  KAOLA_CLAIM="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).claim||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
-  KAOLA_VERDICT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).verdict||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
-  KAOLA_REASONING="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).reasoning||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
-  [ -n "$KAOLA_WORKTREE_PATH" ] && [ -d "$KAOLA_WORKTREE_PATH" ] && export KAOLA_WORKTREE_PATH
-else
-  echo "BLOCKED: kaola-workflow startup unavailable; cannot select issue-backed work." >&2
-  exit 1
-fi
-```
-
-If `STARTUP_OUT` is JSON, a verdict of `owned` routes the single active folder
-and a verdict of `acquired` routes the newly created folder. If startup returns
-`verdict: no_target`, the agent must select a target issue per Step 0 and re-run.
-If startup returns `claim: "none"`, normal routing must stop; do not adopt
-unrelated active folders unless the user explicitly names that project. Before
-stopping, print the refusal diagnostics:
+For `fast`/`full` only, run `node "$CLAIM_JS" startup --runtime claude` with the agent-selected
+`--target-issue` (and `--sink` when set); it atomically creates
+`kaola-workflow/{project}/workflow-state.md`. Verdict `owned`/`acquired` routes the folder,
+`no_target` re-selects per Step 0, `claim: "none"` stops normal routing (do not adopt an unrelated
+folder). Print the refusal diagnostics:
 
 ```text
 Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
@@ -376,45 +299,15 @@ with the typed `path_not_installed` refusal.
 
 ## Startup Step 1 - Git Freshness
 
-Before selecting work, classify local/remote state:
-
-```bash
-git rev-parse --is-inside-work-tree
-git status --short --branch
-git remote -v
-git rev-parse --abbrev-ref --symbolic-full-name @{u}
-git fetch --prune
-git status --short --branch
-git rev-list --left-right --count @{u}...HEAD
-```
-
-Continue when:
-- local/upstream are synchronized
-- local is ahead only
-- no remote/upstream exists
-- Git is unavailable and the user accepts local-only context
-
-If local is behind only and the worktree is clean, run `git pull --ff-only`,
-then re-check. Stop and ask before any merge, rebase, stash, reset, conflict
-resolution, or dirty-worktree sync.
-
-### Git Freshness Block Recovery
-
-If startup succeeds (folder claimed, worktree provisioned) but the subsequent Git freshness check in Startup Step 1 blocks (local is behind remote, dirty worktree, or merge/rebase required), run:
-
-```bash
-git fetch --prune
-git pull --ff-only
-git status --short --branch
-```
-
-If the freshness check now passes, continue to Startup Step 2. If the block persists (merge/rebase required, dirty worktree), release the claimed folder before stopping:
+Classify local/remote state (`git status --short --branch`, `git fetch --prune`,
+`git rev-list --left-right --count @{u}...HEAD`). Continue when synchronized, ahead-only, or with no
+remote; fast-forward (`git pull --ff-only`) when clean and behind-only. Stop before any merge, rebase,
+stash, reset, or dirty-worktree sync. If a claimed folder cannot fast-forward, release it before
+stopping:
 
 ```bash
 [ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$KAOLA_PROJECT" ] && node "$CLAIM_JS" release --project "$KAOLA_PROJECT" --reason git-freshness-block
 ```
-
-Stop and ask the user to resolve the Git state manually before retrying `/workflow-next`. Do not proceed to Startup Step 2 or adopt any active folder after this release.
 
 ## Startup Step 2 - Roadmap
 
@@ -462,44 +355,18 @@ ask the user what to implement. New work starts with:
 /kaola-workflow-adapt <task description or issue>
 ```
 
-### Co-active Folders Advisory
-
-If multiple active folders exist from prior sessions, they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
-
-**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Finalization sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
-
 ## Co-active Folders
 
-Parallel work is represented by distinct active folders. `issue-63` and
-`issue-65` can both be active when each has its own
-`kaola-workflow/{project}/workflow-state.md` and branch/worktree metadata.
-The pre-commit guard blocks only commits that stage multiple workflow project
-folders together.
+Distinct active folders run independently, each with its own `workflow-state.md` and branch/worktree
+metadata. Do NOT merge, interleave, or batch commits across folders; the pre-commit guard blocks
+staging multiple project folders together. If the same file appears in multiple active write sets,
+stop and resolve the conflict.
 
 ## Resume Detection
 
-Read `kaola-workflow/{project}/workflow-state.md` first if it exists.
-
-Validate the state file:
-- `current_phase` agrees with the highest completed phase artifact
-- `next_command` is `/kaola-workflow-plan-run` (the adaptive route)
-- pending gates match the latest `Required Agent Compliance` table
-- referenced `phase_file` and `cache_file` paths exist when present
-
-If valid, use it as authoritative.
-
-Before manual reconstruction, run the state repair helper if available, then
-read `workflow-state.md` again:
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-REPAIR_JS="$(kaola_script kaola-gitlab-workflow-repair-state.js)"
-[ -f "$REPAIR_JS" ] && node "$REPAIR_JS" "$ARGUMENTS"
-```
-
-If the helper writes or validates `workflow-state.md`, route from that state.
-
-If missing or invalid, reconstruct:
+Read `workflow-state.md` first; if valid (its `next_command` is `/kaola-workflow-plan-run`, pending
+gates match the `Required Agent Compliance` table), use it as authoritative. Otherwise run the repair
+helper (`node "$REPAIR_JS" "$ARGUMENTS"` when available), then reconstruct:
 
 ```text
 finalization-summary.md exists -> workflow complete; show summary and stop
@@ -509,29 +376,12 @@ no workflow-plan.md and no finalization-summary.md -> /kaola-workflow-adapt <tas
 
 ## State Bootstrap And Repair
 
-If `workflow-state.md` is valid, use it as authoritative.
-
-If `workflow-state.md` is missing, stale, or invalid, and reconstruction from
-phase artifacts or `fast-summary.md` identifies exactly one safe next command, write repaired `workflow-state.md`
-before routing.
-
-The repaired state must be conservative:
-- `phase`, `phase_name`, and `next_command` match the reconstructed route
-- `step: router-reconstructed`
-- `task: N/A` unless the phase artifact proves a specific task
-- pending gates mirror unresolved `Required Agent Compliance` rows
-- `phase_file` points to the artifact used for reconstruction
-- `last_result: state_repaired_from_artifacts`
-
-Phase commands must refine `step`, `task`, pending gates, and evidence before
-doing phase work.
-
-Do not create `workflow-state.md` for brand-new work, no selected project, no
-phase artifacts, multiple ambiguous active projects, contradictory phase files,
-or unresolved compliance gates that make the next command unsafe.
-
-Phase commands own exact intra-phase step detection. The router must not infer
-more detail than the phase artifacts prove.
+When `workflow-state.md` is missing/stale/invalid but phase artifacts identify exactly one safe next
+command, write a conservative repaired state (`step: router-reconstructed`, `task: N/A` unless proven,
+pending gates mirroring unresolved `Required Agent Compliance` rows,
+`last_result: state_repaired_from_artifacts`) before routing. Do NOT fabricate state for brand-new
+work, ambiguous/contradictory projects, or unresolved compliance gates. Phase commands own exact
+intra-phase step detection.
 
 ## Required Output Before Routing
 

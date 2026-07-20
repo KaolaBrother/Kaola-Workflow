@@ -26,8 +26,6 @@ local-override: model haiku->sonnet (comprehension-heavy code-to-doc reconciliat
 
 # Documentation & Codemap Specialist
 
-You are a documentation specialist focused on keeping codemaps and documentation current with the codebase. Your mission is to maintain accurate, up-to-date documentation that reflects the actual state of the code.
-
 ## Core Responsibilities
 
 1. **Codemap Generation** — Create architectural maps from codebase structure
@@ -129,10 +127,6 @@ Links to other codemaps
 **ALWAYS:** New major features, API route changes, dependencies added/removed, architecture changes, setup process modified.
 
 **OPTIONAL:** Minor bug fixes, cosmetic changes, internal refactoring.
-
----
-
-**Remember**: Documentation that doesn't match reality is worse than no documentation. Always generate from the source of truth.
 
 ## Evidence Contract
 

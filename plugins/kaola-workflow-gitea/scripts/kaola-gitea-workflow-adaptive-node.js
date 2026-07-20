@@ -813,6 +813,20 @@ function detectReviewRuntime() {
   // candidates. The -gitlab/-gitea claude-forge dirs (~/.claude/kaola-workflow-gitlab/scripts/)
   // never matched the opencode pattern and keep falling through to the claude default below.
   if (/[/\\]\.claude[/\\]kaola-workflow[/\\]scripts$/.test(__dirname)) return 'claude';
+  // #736: a self-dev checkout cloned into a directory literally named `kaola-workflow` (the
+  // repo's own name) is structurally identical to an opencode install's
+  // <config>/kaola-workflow/scripts/ layout, so the pattern below would otherwise swallow it and
+  // bind a wrong-runtime reviewer identity. Disambiguate BEFORE that check via the sibling
+  // package.json one level up from scripts/ — the same self-dev predicate the kaola_script
+  // resolvers use (sync-opencode-edition.js / sync-kimi-edition.js). A genuine opencode config
+  // dir has no sibling repo package.json at that path, so this guard cannot swallow it.
+  {
+    const fs = require('fs');
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+      if (pkg && pkg.name === 'kaola-workflow') return 'claude';
+    } catch (_) { /* no sibling package.json (or unreadable) — not a self-dev checkout */ }
+  }
   // #708: opencode installs support scripts at <opencode-config>/kaola-workflow/scripts/ (no
   // plugins/ segment — opencode is a runtime, not a forge). Detect that layout so reviewer
   // profile resolution and review-receipt binding use opencode-native paths instead of falling

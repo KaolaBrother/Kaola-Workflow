@@ -207,6 +207,23 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    // Mirror-before-dispatch: the operator applies the returned taskTransitions to the visible
+    // task list BEFORE spawning the role agent, so the live view never lags the ledger. Raw
+    // skeleton text at the step-3 dispatch seam (no SLOT/SPLICE divergence), so it obligates all
+    // six plan-run surfaces identically. The distinctive tokens are interior prose, not substrings
+    // of the marker.
+    block_id: 'pr-mirror-before-dispatch',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: mirror-before-dispatch -->',
+      'Apply the returned `taskTransitions` to the visible task list BEFORE',
+      'the ledger stays authoritative',
+      "the mirror is the operator's only live view",
+    ],
+  },
+  {
     block_id: 'pr-replan-control-plane',
     topic: 'plan-run',
     runtime_tag: 'both',
