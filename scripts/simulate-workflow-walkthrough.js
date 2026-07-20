@@ -1618,26 +1618,14 @@ function testAdaptiveValidatorGovernance() {
         && schema.dispatchEffort('sonnet').codex_model_source === 'parent_session',
         '#610: legacy sonnet inherits the same parent pair as neutral standard');
 
-      // #611 AC2/AC5: the Codex join protocol's tier→wait-budget derivation and the typed
-      // delegation-outcome evidence contract. Budgets: reasoning=40m, standard=20m, untiered=role-default
-      // 20m (never null — every dispatch card carries a number). Delegation outcomes: `completed` (default
-      // when the token is absent) and the interrupted paths pass; an unknown token is a typed refusal.
-      const an611 = require('./kaola-workflow-adaptive-node');
+      // #611 AC2: the Codex join protocol's tier→wait-budget derivation. Budgets: reasoning=40m,
+      // standard=20m, untiered=role-default 20m (never null — every dispatch card carries a number).
+      // AC5's delegation-outcome evidence-shape checks live at higher altitude in test-adaptive-node.js.
       assert(schema.waitBudgetMinutes('reasoning').wait_budget_minutes === 40
         && schema.waitBudgetMinutes('standard').wait_budget_minutes === 20
         && schema.waitBudgetMinutes(null).wait_budget_minutes === 20
         && schema.waitBudgetMinutes(null).wait_budget_source === 'role_default',
         '#611 AC2: waitBudgetMinutes reasoning=40 / standard=20 / untiered=role-default 20');
-      // `completed` (absent-default and explicit) + at least one interrupted path pass evidence-shape.
-      assert(an611.checkEvidenceShape('tdd-guide', 'jn', 'RED: r\nGREEN: g').ok === true,
-        '#611 AC5: evidence with NO delegation_outcome token defaults to completed (unaffected)');
-      assert(an611.checkEvidenceShape('tdd-guide', 'jn', 'delegation_outcome: completed\nRED: r\nGREEN: g').ok === true,
-        '#611 AC5: delegation_outcome: completed passes');
-      assert(an611.checkEvidenceShape('implementer', 'jn', 'delegation_outcome: interrupted_unresponsive\nnon_tdd_reason: x\nbuild-green: pass').ok === true,
-        '#611 AC5: an interrupted-path outcome (interrupted_unresponsive) passes with role tokens present');
-      const jnBad = an611.checkEvidenceShape('tdd-guide', 'jn', 'delegation_outcome: made_up\nRED\nGREEN');
-      assert(jnBad.ok === false && jnBad.missingTokenClass === 'delegation_outcome',
-        '#611 AC5: an unknown delegation_outcome token is a typed refusal, got ' + JSON.stringify(jnBad));
     }
 
     // #597: speculative_open_policy tier acceptance at freeze. off / consent / auto (the new default
@@ -16012,29 +16000,9 @@ function testReviewOutcomeTransport699() {
 function testReviewerContractV2Conformance() {
   const schema = require('./kaola-workflow-adaptive-schema');
   const validator = require('./kaola-workflow-plan-validator');
-  const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts', 'reviewer-conformance-fixtures.json'), 'utf8'));
-  // R6: the corpus is executable rows driven through the real classifier/reducer/parser, not coverage labels.
-  assert(fixture.gate_modes.length >= 3 && fixture.outcomes.length >= 6
-    && fixture.reducers.length >= 4 && fixture.validation.length >= 6
-    && Array.isArray(fixture.validation_policy) && fixture.validation_policy.length >= 6
-    && fixture.anchors.length >= 5,
-  'review-v2 walkthrough loads a data-driven executable conformance corpus (not coverage labels)');
-  assert(typeof schema.deriveGateMode === 'function'
-    && typeof schema.reduceReviewReceipts === 'function'
-    && typeof validator.resolvePlanContract === 'function'
-    && typeof validator.buildPlanView === 'function',
-  'review-v2 walkthrough reaches the shared classifier/reducer/version/plan-view APIs');
-  const change = fixture.gate_modes[0];
-  const node = change.plan.nodes.find(n => n.id === change.node_id);
-  assert(schema.deriveGateMode(change.plan, node) === 'change_gate',
-    'review-v2 walkthrough preserves forward-reachability change-gate semantics');
-  const investigation = schema.reduceReviewReceipts({
-    aggregation: 'sequence', role: 'adversarial-verifier', gate_mode: 'investigation',
-    expected_members: ['av'], expected_surfaces: ['claim'],
-    receipts: [{ node_id: 'av', surface: 'claim', execution_status: 'complete', domain_outcome: 'indeterminate', blocking_findings: 0 }],
-  });
-  assert(investigation.complete === true && investigation.gate_effect === 'none',
-    'review-v2 walkthrough accepts a complete bound indeterminate investigation analytically');
+  // R6's data-driven corpus load + classifier/reducer/plan-view API reach + deriveGateMode/
+  // reduceReviewReceipts conformance checks live at higher altitude in test-adaptive-node.js's
+  // review-v2 block.
 
   // R5 — every schema-2 gate role has ONE runtime-neutral behavior identity, or fails the open identically.
   // A contract-2 context requires behavior contract version 2 exactly; a v1/absent identity is a silent
