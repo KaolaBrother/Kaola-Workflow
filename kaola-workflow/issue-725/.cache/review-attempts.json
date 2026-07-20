@@ -1,0 +1,467 @@
+{
+  "schema_version": 2,
+  "contract_version": 2,
+  "plan_hash": "ca05e3d9d5b4c9112341deb5bd6067d698593507794c567ea08dfaf2cac23905",
+  "attempts": [
+    {
+      "attempt_id": "review2-c651558339a6f42c:1",
+      "ordinal": 1,
+      "plan_hash": "ca05e3d9d5b4c9112341deb5bd6067d698593507794c567ea08dfaf2cac23905",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n4-bundle-claim-consolidate"
+        ],
+        "claim_digest": "b39174da5cb4cebc43b8672dd38c1c60be35b52d564c673d6cd9824ca092d160",
+        "key": "c651558339a6f42c261771e054cd87f47a531e21195b4e7b4468bb5557d2a9c6",
+        "kind": "sequence",
+        "members": [
+          "n5-falsify-bundle-consolidate"
+        ],
+        "surface_digests": [
+          "4e8ad768c618c5dab19cf3da209dcabd7510a498bfd6ba86230201d54d2a54c9"
+        ]
+      },
+      "transaction_key": "17bec7748a5c6b7e115d9638c5cf10a5fff72e79ba463194807ac711b384a243",
+      "candidate_digest": "5ea56aeed36eb8b74a32bf40cc41da2f9fb502ac51974839c0840ccbf60f6ad5",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 cff4592bdb6eb49eeaa3058116bd7d3093e0d66c",
+        "docs/conventions.md": "100644 9399f9d737f2d5477de23f3256100a084f22953c",
+        "scripts/simulate-workflow-walkthrough.js": "100755 732f2973c98961cefcd69c6969891810eb553f12",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-bundle-state.js": "100644 56b215590566e87aab3080e7e9cb9dcc63d09933",
+        "scripts/test-claim-hardening.js": "100644 6229432164492f5dd72530d15be68a1720b032a3"
+      },
+      "candidate_residue_digest": "89f596974a51c1b12aab0f743d0db7282faa66191d055e5ceb86f11098352c94",
+      "epoch_lineage_id": "90fcae2c9acaaffaf2557e8a4dd643c6c767c038e307c066e4ac065debd1854a",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "a2edab7ea72e5f41f4d1795b32466c847db76ca677621f78dc613739371e606e",
+      "context_hashes": [
+        "51f9d2c4e14cd2084500b860281de34caa94eccc3624a6e81424354beabfb762"
+      ],
+      "profile_hashes": [
+        "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b",
+          "blocking_findings": 0,
+          "candidate_digest": "5ea56aeed36eb8b74a32bf40cc41da2f9fb502ac51974839c0840ccbf60f6ad5",
+          "certifier_digest": "5ea56aeed36eb8b74a32bf40cc41da2f9fb502ac51974839c0840ccbf60f6ad5",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n5-falsify-bundle-consolidate",
+          "raw_evidence_sha256": "79b08cd36779cc790968cbe34b52064d996c2a158deeb09b55bad8bcc1344e67",
+          "resolutions": [],
+          "resolved_profile_hash": "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce",
+          "review_context_hash": "51f9d2c4e14cd2084500b860281de34caa94eccc3624a6e81424354beabfb762",
+          "schema_version": 2,
+          "surface": "the accumulated diff on test-bundle-state.js and test-claim-hardening.js vs run base 3907fb18, cross-checked against test-bundle-claim.js and the walkthrough bundle-lane journey retained as the single keeper",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-node",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n4-bundle-claim-consolidate": {
+          "baseline": "6859243b6b47e76666617e0b53ddd2e4a4844a12",
+          "anchored_ref": "6859243b6b47e76666617e0b53ddd2e4a4844a12",
+          "open_token": "3907fb18d39d3eab6966450e992a6c9423bf950e",
+          "generation": "6859243b6b47",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n4-bundle-claim-consolidate"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-16edad4d1bb61487:1",
+      "ordinal": 1,
+      "plan_hash": "ca05e3d9d5b4c9112341deb5bd6067d698593507794c567ea08dfaf2cac23905",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n2-overlap-prune"
+        ],
+        "claim_digest": "2223d6ea9bce2975dfeefe803c15bcf9b8eba13486fa0df15b23269977141b93",
+        "key": "16edad4d1bb61487ac99fc2aa9c123e41ec6f58f921475e9980aef8b96bd00ce",
+        "kind": "sequence",
+        "members": [
+          "n3-falsify-overlap-prune"
+        ],
+        "surface_digests": [
+          "cf739aa0022778def8fbe100749690d6402aa62507dc98d1551a6b498dc04c2d"
+        ]
+      },
+      "transaction_key": "ea1e57caa12ba765d5e6b516883df7e5feefaa630939b990594b1512397c8084",
+      "candidate_digest": "5ea56aeed36eb8b74a32bf40cc41da2f9fb502ac51974839c0840ccbf60f6ad5",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 cff4592bdb6eb49eeaa3058116bd7d3093e0d66c",
+        "docs/conventions.md": "100644 9399f9d737f2d5477de23f3256100a084f22953c",
+        "scripts/simulate-workflow-walkthrough.js": "100755 732f2973c98961cefcd69c6969891810eb553f12",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-bundle-state.js": "100644 56b215590566e87aab3080e7e9cb9dcc63d09933",
+        "scripts/test-claim-hardening.js": "100644 6229432164492f5dd72530d15be68a1720b032a3"
+      },
+      "candidate_residue_digest": "89f596974a51c1b12aab0f743d0db7282faa66191d055e5ceb86f11098352c94",
+      "epoch_lineage_id": "854ffedf654296bef788882c310a0889beeb27b37d3d68b90ed135b5e679dcb3",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "a70dcf2a2298159fe40db920f7fa3774f93f015b7b29b368423b04746a1fe33b",
+      "context_hashes": [
+        "41276c02949c0a218d4b2475b5c2dbdc65196f2682edfe14676bf0fbfc6b0cfa"
+      ],
+      "profile_hashes": [
+        "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b",
+          "blocking_findings": 0,
+          "candidate_digest": "5ea56aeed36eb8b74a32bf40cc41da2f9fb502ac51974839c0840ccbf60f6ad5",
+          "certifier_digest": "5ea56aeed36eb8b74a32bf40cc41da2f9fb502ac51974839c0840ccbf60f6ad5",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n3-falsify-overlap-prune",
+          "raw_evidence_sha256": "6c08dbd465c549a807ee9fbda1202cd303783a0436d1621700d5f96462988540",
+          "resolutions": [],
+          "resolved_profile_hash": "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce",
+          "review_context_hash": "41276c02949c0a218d4b2475b5c2dbdc65196f2682edfe14676bf0fbfc6b0cfa",
+          "schema_version": 2,
+          "surface": "the accumulated diff on test-adaptive-node.js and simulate-workflow-walkthrough.js vs run base 3907fb18, cross-checked against the n1 dedup map's invariant to other-altitude file:line citations and the recorded pre-prune overlap-band measurement",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-node",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n2-overlap-prune": {
+          "baseline": "c5205c75b0d9321e312b8b1d425dbf6c2e07b6a5",
+          "anchored_ref": "c5205c75b0d9321e312b8b1d425dbf6c2e07b6a5",
+          "open_token": "3907fb18d39d3eab6966450e992a6c9423bf950e",
+          "generation": "c5205c75b0d9",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n2-overlap-prune"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-fc3253945b3d37b8:1",
+      "ordinal": 1,
+      "plan_hash": "ca05e3d9d5b4c9112341deb5bd6067d698593507794c567ea08dfaf2cac23905",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [
+          "n6-mutation-spotcheck"
+        ],
+        "claim_digest": "539245a30794522721f64a7b708cf118ee50297f74d5c4360b7b618d06df44eb",
+        "key": "fc3253945b3d37b8905790bef1a6f66d2b58e8d330d0da161fcb71f114293bff",
+        "kind": "sequence",
+        "members": [
+          "n7-falsify-mutation"
+        ],
+        "surface_digests": [
+          "00f80a10cb79ec10a7ba9fdd320313ef792d93d9769eed92fe9a4c28a55be00d"
+        ]
+      },
+      "transaction_key": "03b97c3691a73bd42f03ef472618dedfa53f525ca5033e4915fa8176e4f8a4d9",
+      "candidate_digest": "e5f53b0749c5b492e0cf4a8f32185292a60ddb30921e07c4d21ed861bbabc065",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 cff4592bdb6eb49eeaa3058116bd7d3093e0d66c",
+        "docs/conventions.md": "100644 9399f9d737f2d5477de23f3256100a084f22953c",
+        "scripts/simulate-workflow-walkthrough.js": "100755 732f2973c98961cefcd69c6969891810eb553f12",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-bundle-state.js": "100644 56b215590566e87aab3080e7e9cb9dcc63d09933",
+        "scripts/test-claim-hardening.js": "100644 6229432164492f5dd72530d15be68a1720b032a3",
+        "scripts/test-mega-mutation-spotcheck.js": "100644 e565d6989cdd0e9a1c06a95b3caecf97a172b6c2"
+      },
+      "candidate_residue_digest": "89f596974a51c1b12aab0f743d0db7282faa66191d055e5ceb86f11098352c94",
+      "epoch_lineage_id": "11224594f9c2778936c4877bc8c82a32da2ac263b033b6bddb21ddd4f641b2a2",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "23048f0a5a75bfe4b8a6c404c5a105f177ef8c90df0b6d13b56bd592652c3aa3",
+      "context_hashes": [
+        "ddec18bcfddd466f1efd11ffd2f69ca66b5efbd711a0e9ea5de1d2df5b4be559"
+      ],
+      "profile_hashes": [
+        "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "adversarial-verifier",
+        "complete": true,
+        "domain_outcome": "not_refuted",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "0ad9331a05da66b2b18f4eb67facd1b686bd9dd3e8b5398399d4738cafed6e9b",
+          "blocking_findings": 0,
+          "candidate_digest": "e5f53b0749c5b492e0cf4a8f32185292a60ddb30921e07c4d21ed861bbabc065",
+          "certifier_digest": "e5f53b0749c5b492e0cf4a8f32185292a60ddb30921e07c4d21ed861bbabc065",
+          "contract_version": 2,
+          "domain_outcome": "not_refuted",
+          "evidence_binding": null,
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n7-falsify-mutation",
+          "raw_evidence_sha256": "cd54c7e26e9e55d215592c13471918376b2537afc4e521e61beb2f24c7fc1212",
+          "resolutions": [],
+          "resolved_profile_hash": "14c89a924b21c9291cf8a00759202b8846a5dac4e891bb8a3e625e85efc7b2ce",
+          "review_context_hash": "ddec18bcfddd466f1efd11ffd2f69ca66b5efbd711a0e9ea5de1d2df5b4be559",
+          "schema_version": 2,
+          "surface": "scripts/test-mega-mutation-spotcheck.js and its execution: each reintroduced bug shape, the isolated-copy mutation mechanism, and proof that removing any single pruned-away invariant's coverage would flip a mutation from red to green",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n6-mutation-spotcheck": {
+          "baseline": "285f0b82afae7dc0b7bd441d8f2ac456d631e99d",
+          "anchored_ref": "285f0b82afae7dc0b7bd441d8f2ac456d631e99d",
+          "open_token": "53178ba0f504080fea03ddb79c50c93bf528cd3b",
+          "generation": "285f0b82afae",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n6-mutation-spotcheck"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "review2-419b3cc756ab9ebd:1",
+      "ordinal": 1,
+      "plan_hash": "ca05e3d9d5b4c9112341deb5bd6067d698593507794c567ea08dfaf2cac23905",
+      "contract_version": 2,
+      "logical_gate": {
+        "aggregation": "sequence",
+        "certified_producers": [],
+        "claim_digest": "0fc272d6d59460aab23770764121fbbc2398b1e6d9e0a0f56f58b8aa6d241406",
+        "key": "419b3cc756ab9ebd64f01fba5d316815643ecb8e412665429b3b04f753a407c2",
+        "kind": "sequence",
+        "members": [
+          "n9-code-certify"
+        ],
+        "surface_digests": [
+          "919ae803b0e884d728e33e7829df4cc87595ec76bd977887ef8a2f77e490e243"
+        ]
+      },
+      "transaction_key": "ae128838ebd7e732eeeb96a14cd83c8cb9b1240de7ee75c05ba6c80b7d42a3a0",
+      "candidate_digest": "0c1bc1dbf043e8db17c312ee5a9cc1f8811d73d1940a3673ae85e83de82f1b16",
+      "candidate_declared": {
+        "CHANGELOG.md": "100644 b24be0020d10924f3582be9ed9c90fc8f60af3df",
+        "docs/conventions.md": "100644 9b0474a8594f1aec66326d259cca5f6dccd6a86b",
+        "scripts/simulate-workflow-walkthrough.js": "100755 732f2973c98961cefcd69c6969891810eb553f12",
+        "scripts/test-adaptive-node.js": "100644 d00f8019cf6b9054ef7f1a5e1d5553397dbeb994",
+        "scripts/test-bundle-state.js": "100644 56b215590566e87aab3080e7e9cb9dcc63d09933",
+        "scripts/test-claim-hardening.js": "100644 6229432164492f5dd72530d15be68a1720b032a3",
+        "scripts/test-mega-mutation-spotcheck.js": "100644 e565d6989cdd0e9a1c06a95b3caecf97a172b6c2"
+      },
+      "candidate_residue_digest": "89f596974a51c1b12aab0f743d0db7282faa66191d055e5ceb86f11098352c94",
+      "epoch_lineage_id": "5232a62767b82e57f53f89034b0cb69724c49153182a0c9f2cd69a12584028c0",
+      "gate_mode": "change_gate",
+      "scope_lineage_id": "249d35625fa0d27fbd770c63bcf786eac7b718ecc434f42722d13e7bd201db30",
+      "context_hashes": [
+        "bbed41af524a7a7b68e79de370389fe0723c92e837cf2894b743f9db920a85d4"
+      ],
+      "profile_hashes": [
+        "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a"
+      ],
+      "review_phase": "discovery",
+      "prior_open_uids": [],
+      "current_open_uids": [],
+      "current_findings": [],
+      "findings": [],
+      "resolutions": [],
+      "route_candidates": [],
+      "repair_delta": null,
+      "validation_obligations": [],
+      "validation_vectors": [],
+      "progress": {
+        "progress": null,
+        "reason": null,
+        "stop_reason": null,
+        "replan_required": false,
+        "consecutive_nonprogress": 0,
+        "idempotency_key": null,
+        "previous_open_uids": [],
+        "current_open_uids": []
+      },
+      "reducer": {
+        "role": "code-reviewer",
+        "complete": true,
+        "domain_outcome": "approved",
+        "gate_effect": "pass",
+        "blocking_findings": 0
+      },
+      "receipts": [
+        {
+          "behavior_contract_hash": "42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789",
+          "blocking_findings": 0,
+          "candidate_digest": "0c1bc1dbf043e8db17c312ee5a9cc1f8811d73d1940a3673ae85e83de82f1b16",
+          "certifier_digest": "0c1bc1dbf043e8db17c312ee5a9cc1f8811d73d1940a3673ae85e83de82f1b16",
+          "contract_version": 2,
+          "domain_outcome": "approved",
+          "evidence_binding": {
+            "node_id": "n9-code-certify",
+            "nonce": "d49b89a7a722"
+          },
+          "execution_status": "complete",
+          "findings": [],
+          "gate_effect": "pass",
+          "node_id": "n9-code-certify",
+          "raw_evidence_sha256": "1d441f13fb38c822484f321f05e153673ba84bbd75bce430647aa2c086c7cbd3",
+          "resolutions": [],
+          "resolved_profile_hash": "4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a",
+          "review_context_hash": "bbed41af524a7a7b68e79de370389fe0723c92e837cf2894b743f9db920a85d4",
+          "schema_version": 2,
+          "surface": "the entire Phase E accumulated diff vs run base 3907fb18 — both altitude test files, the two bundle-claim consolidation files, the new mutation spot-check script, and the CHANGELOG/conventions documentation — validated by running the recorded validation_command end to end",
+          "validation_vectors": []
+        }
+      ],
+      "outcome": "pass",
+      "reason": null,
+      "settlement_command": "close-and-open-next",
+      "lifecycle_settled": true,
+      "producer_bindings": {
+        "n2-overlap-prune": {
+          "baseline": "c5205c75b0d9321e312b8b1d425dbf6c2e07b6a5",
+          "anchored_ref": "c5205c75b0d9321e312b8b1d425dbf6c2e07b6a5",
+          "open_token": "3907fb18d39d3eab6966450e992a6c9423bf950e",
+          "generation": "c5205c75b0d9",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n2-overlap-prune"
+        },
+        "n4-bundle-claim-consolidate": {
+          "baseline": "6859243b6b47e76666617e0b53ddd2e4a4844a12",
+          "anchored_ref": "6859243b6b47e76666617e0b53ddd2e4a4844a12",
+          "open_token": "3907fb18d39d3eab6966450e992a6c9423bf950e",
+          "generation": "6859243b6b47",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n4-bundle-claim-consolidate"
+        },
+        "n6-mutation-spotcheck": {
+          "baseline": "285f0b82afae7dc0b7bd441d8f2ac456d631e99d",
+          "anchored_ref": "285f0b82afae7dc0b7bd441d8f2ac456d631e99d",
+          "open_token": "53178ba0f504080fea03ddb79c50c93bf528cd3b",
+          "generation": "285f0b82afae",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n6-mutation-spotcheck"
+        },
+        "n8-docs": {
+          "baseline": "475e1d2880ad62aff7cf23b678c2716c34b5faf0",
+          "anchored_ref": "475e1d2880ad62aff7cf23b678c2716c34b5faf0",
+          "open_token": "53178ba0f504080fea03ddb79c50c93bf528cd3b",
+          "generation": "475e1d2880ad",
+          "ref": "refs/kaola-workflow/barrier/issue-725/n8-docs"
+        }
+      },
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ]
+}
