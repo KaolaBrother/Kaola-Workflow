@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "140d43789b0697665993b79ef3f872ea26998cbef0f152d007473e31ac5ecaa0",
+  "tasks": [
+    {
+      "id": "r1-hook-assert-repair",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r2-code-certify",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r3-security-certify",
+      "role": "security-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "r4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-20T01:43:28.219Z"
+}

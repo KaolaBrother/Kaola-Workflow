@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "plan_hash": "140d43789b0697665993b79ef3f872ea26998cbef0f152d007473e31ac5ecaa0",
+  "attempts": [
+    {
+      "attempt_id": "r2-code-certify:1",
+      "ordinal": 1,
+      "plan_hash": "140d43789b0697665993b79ef3f872ea26998cbef0f152d007473e31ac5ecaa0",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"r1-hook-assert-repair\"],\"members\":[\"r2-code-certify\"]}",
+        "kind": "sequence",
+        "id": "r2-code-certify",
+        "origin": [
+          "r1-hook-assert-repair"
+        ],
+        "members": [
+          "r2-code-certify"
+        ]
+      },
+      "transaction_key": "d53e918eb3f69068980e5592c2184150466dbb1592e0b61af92cf74f64e458f6",
+      "candidate_digest": "44a8a905d62313503778520c9783838d95a46c6bc6ef4e4c3cd93d6d19fe6ff3",
+      "candidate_declared": {
+        "plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js": "100644 954187ad368ff336bceb322cfafe59e85e38a6e6",
+        "plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js": "100644 93ebaee21ee94d07c64c03612c7b22425c87ddd0",
+        "plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js": "100755 1c20bb182e01eddd27d366d01e1675590a96255d",
+        "scripts/sync-opencode-edition.js": "100644 598d72451f89996ca1ab64e23fc0cd0b6222d134",
+        "scripts/test-validate-script-sync.js": "100644 218ff70bc605e54d80f83c2f7be11ea9a716ba08"
+      },
+      "candidate_residue_digest": "6d6b15fce3c204451a5ad3495e77c86a651c6cfa8cefe76425d3c988d45ddd49",
+      "generations": [
+        {
+          "member": "r2-code-certify",
+          "nonce": "2bce2139e21f"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "r2-code-certify",
+          "generation": "2bce2139e21f",
+          "receipt_sha256": "75456da9445b594ee86079598f9f27c066b1d62dd803c4edbd2fd87def426c67",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: r2-code-certify 2bce2139e21f\n\ncontract_version: 2\nplan_schema_version: 2\nbehavior_contract_version: 2\nreview_context_hash: fcc324274c98dc74a582a3ad07bd190222c33b0b9208a1564df98226b3f57951\nbehavior_contract_hash: 42b6332c311ce07c511d67d3c7fb02cf874ab94872aaee87fadae2d0577fa789\nresolved_profile_hash: 4f9e7c9aad33216895b1e618d06ad1bfb3beeea55af7094643af59ec927c8b6a\ncandidate_digest: d60a39a80d1b90115128818a753b74478f8f2965b505e6d58194dd2348f771ba\ngate_mode: change_gate\ngate_aggregation: sequence\n\nupstream_read: r1-hook-assert-repair e1060655efe5\n\ngate_claim: the epoch-2 repair makes all four edition chains green over the full accumulated Phase C candidate and introduces no new code defect across the four editions: the gitlab and gitea fresh-install hooks.json assertions no longer require a PreToolUse event, the script-sync drift-plant fixture plants onto a surviving event instead of the removed PreToolUse key, sync-opencode-edition.js HOOK_SCRIPTS no longer lists the two deleted hook basenames so the in-chain install-opencode.sh regeneration stops ENOENT-ing, and the codex walkthrough #409 managed-hook-command count matches the surviving two managed commands; every surviving hook, assertion, and behavior is preserved and only the five diagnosed surfaces changed\ngate_surface: the full accumulated Phase C candidate vs run base 0a9f652a across all four editions — the epoch-1 guard-dedup + two-hook-deletion frontier plus the epoch-2 five-file assertion repair — reviewed against AC-C and the recorded four-chain-green evidence\n\ndomain_outcome: approved\nverdict: pass\nfindings_blocking: 0\nreview_summary: no_blocking_findings\nfindings_none: true\n\n\n## Re-execution evidence (single sequential four-chain run over the certified tree)\n\nOne invocation of `npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea`, run in background and polled to completion, exited `FOUR_CHAIN_EXIT=0`. All four chains ran in order with their terminal pass lines present: claude — \"Workflow walkthrough simulation passed\" and \"test-generate-routing-surfaces: all 280 assertions passed.\"; codex — \"Kaola-Workflow Codex contract validation passed\", \"test409StableHomeSurvivesDirDeletion (#409): PASSED\", \"Kaola-Workflow walkthrough simulation passed\"; gitlab — \"Kaola-Workflow GitLab contract validation passed\", \"GitLab workflow walkthrough simulation passed\", \"GitLab Codex workflow walkthrough simulation passed\"; gitea — \"Kaola-Workflow Gitea contract validation passed\", \"Gitea workflow walkthrough simulation passed\", \"Gitea Codex workflow walkthrough simulation passed\". Full-log sweep for `AssertionError`, `ENOENT`, `npm error`, `throw err;`, `Node.js v`, `at Object.<anonymous>`, `^Error:` — zero hits.\n\nAll five epoch-1 reproductions are green in-chain over the certified tree: R1 and R2 via the forge test scripts shelled by the passing walkthroughs (`plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-workflow-walkthrough.js:1643` runs test-gitlab-workflow-scripts.js before its pass line; gitea equivalent at :1723); R3 via the in-chain \"validate-script-sync guard tests passed (51 assertions; 2 canonicalOnly exclusions machine-guarded)\"; R4 via the in-chain \"Install adaptive-config tests passed\" (install-opencode.sh regeneration, no ENOENT anywhere in the log); R5 via \"test409StableHomeSurvivesDirDeletion (#409): PASSED\". The five n7 findings are all observed resolved.\n\n## Repair-delta verification (byte-level, barrier baselines)\n\nThe barrier baselines are git trees: e1060655efe5acf88a71e15f6ccc82e85935a1f6 (r1 open, epoch-1 final candidate) and 2bce2139e21f09add533fa1c1fe54264f2ae6a26 (r2 open, post-repair). Their product diff (excluding kaola-workflow/issue-725/ orchestrator state) is exactly five files carrying seven one-line narrowings, all inside r1's declared write set (plan row, workflow-plan.md line 97): plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js (:2005 #409 gl count 4->2, :2063 event array drops PreToolUse), plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js (:1971 #409 gt count 4->2, :2027 requiredEvents drops PreToolUse), plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js (:736 #409 count 4->2 only), scripts/sync-opencode-edition.js (HOOK_SCRIPTS drops exactly the two deleted basenames, nothing else), scripts/test-validate-script-sync.js (:141-142 drift plant retargeted PreToolUse->SubagentStart with matching comment; planted id/matcher/fixture-comment intact). No other product path differs between the two trees. The worktree at certification time is byte-identical to tree 2bce2139 for all product paths, with zero untracked product files — the tree I re-executed is the bound candidate.\n\n## Per-claim-element verification\n\n1. gitlab/gitea fresh-install hooks.json assertions no longer require PreToolUse — PASS (repair delta above; both forge test files re-executed green in-chain).\n2. script-sync drift-plant onto a surviving event — PASS (SubagentStart plant; RED-PROOF still reds every port; 51 assertions green in-chain).\n3. sync-opencode HOOK_SCRIPTS narrowing stops the in-chain ENOENT — PASS (two-line removal only; test-install-adaptive-config green in-chain; no ENOENT in the log; no wider opencode/kimi edit — the repair delta touches no .opencode/, opencode.json, adapter, or kimi path).\n4. codex walkthrough #409 count matches the surviving two managed commands — PASS (:736 narrowed; #409 PASSED in-chain; the canonical scripts/simulate-workflow-walkthrough.js is absent from the repair delta, i.e. untouched by the repair).\n5. Every surviving hook, assertion, behavior preserved; only the five diagnosed surfaces changed — PASS. Surviving compact-context + subagent-dispatch-log hook scripts are byte-identical to base 0a9f652a in all editions; all six hooks.json parse to exactly [\"SessionStart\",\"SubagentStart\"]; no PreToolUse re-added anywhere (repo grep: remaining hits are comments, docs describing the removal, the codex walkthrough's intended negative assertion at :249-250 that hooks.json must NOT carry PreToolUse, the plan-declared adaptive-schema comment x4, and the Phase-D-deferred additive kimi/opencode surfaces, none in the four chains).\n6. All four chains green over the full accumulated candidate — PASS (re-execution evidence above). AC-C standing intact: the epoch-2 delta touches no docs, so the epoch-1-verified CHANGELOG/dedup/integrity elements are unperturbed.\n\n## Context notes and non-blocking observations\n\nThe canonical review context carries review_phase discovery with prior_findings [] and repair_delta null, so this is a full-scope discovery review over the accumulated candidate (a superset of the closure delta); the epoch-1 finding resolutions are recorded in prose above, and no closure accounting rows or validation-runner receipts are owed (validation_obligations empty). Non-blocking, not admitted as findings: (a) scripts/test-validate-script-sync.js:133 section comment and the :159 assertion-message string still say \"PreToolUse\" in prose while the plant now targets SubagentStart — message/comment text only, no behavioral effect; (b) scripts/sync-kimi-edition.js, scripts/test-kimi-edition.js, and the kimi/opencode docs still reference the deleted hook basenames — plan-declared Phase D deferral, additive editions outside the four chains, re-confirmed unexercised by this green run.\n\nreview_attestation: full_review_completed\nreview_conclusion: The epoch-2 five-file repair is exactly the surviving-two-hook narrowing it claims — seven one-line edits proven byte-level via the barrier-baseline tree diff with zero stray product writes, no PreToolUse re-added, and the surviving hooks byte-identical to base — and a fresh single sequential four-chain re-execution over the certified tree exited 0 with every terminal pass line present and all five epoch-1 reproductions green, so the accumulated Phase C candidate is certified with zero findings.\ncertifier_kind: code\ncertifier_aggregation: sequence\ncertifier_gate_digest: 8c891bfaf7488ec5cbf627a4ed5c89a6540642f20a36023fc8408b33eda4c032\ncertifier_epoch_lineage_id: 9dd20b195b0efe673f16fe6a1264b0173ee3574c9ec6c49e344dbbc817cb3627\ncertifier_inherited_frontier_digest: 103c4d1707f6f85f1ebd2bd571f3311cfbaa8e8386dcca346f5229b6525b2394\ncertified_candidate_digest: 48619143aecb2ed96bdc2b9a0b0462bfdcf9f0ef42debcb075c60af99af8cd49\n"
+        }
+      ],
+      "findings": [],
+      "route_candidates": [],
+      "producer_bindings": {
+        "r1-hook-assert-repair": {
+          "baseline": "e1060655efe5acf88a71e15f6ccc82e85935a1f6",
+          "anchored_ref": "e1060655efe5acf88a71e15f6ccc82e85935a1f6",
+          "open_token": "0a9f652a79c57165281c9ad40c65f11a9a5a3f0e",
+          "generation": "e1060655efe5",
+          "ref": "refs/kaola-workflow/barrier/issue-725/r1-hook-assert-repair"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    },
+    {
+      "attempt_id": "r3-security-certify:1",
+      "ordinal": 1,
+      "plan_hash": "140d43789b0697665993b79ef3f872ea26998cbef0f152d007473e31ac5ecaa0",
+      "logical_gate": {
+        "key": "{\"kind\":\"sequence\",\"origin\":[\"r2-code-certify\"],\"members\":[\"r3-security-certify\"]}",
+        "kind": "sequence",
+        "id": "r3-security-certify",
+        "origin": [
+          "r2-code-certify"
+        ],
+        "members": [
+          "r3-security-certify"
+        ]
+      },
+      "transaction_key": "f1cf12d6294613029097396e2757169b3c30c2d062bde6b7f218c1a400463cf3",
+      "candidate_digest": "44a8a905d62313503778520c9783838d95a46c6bc6ef4e4c3cd93d6d19fe6ff3",
+      "candidate_declared": {
+        "plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js": "100644 954187ad368ff336bceb322cfafe59e85e38a6e6",
+        "plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js": "100644 93ebaee21ee94d07c64c03612c7b22425c87ddd0",
+        "plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js": "100755 1c20bb182e01eddd27d366d01e1675590a96255d",
+        "scripts/sync-opencode-edition.js": "100644 598d72451f89996ca1ab64e23fc0cd0b6222d134",
+        "scripts/test-validate-script-sync.js": "100644 218ff70bc605e54d80f83c2f7be11ea9a716ba08"
+      },
+      "candidate_residue_digest": "6d6b15fce3c204451a5ad3495e77c86a651c6cfa8cefe76425d3c988d45ddd49",
+      "generations": [
+        {
+          "member": "r3-security-certify",
+          "nonce": "c46c6860bd4c"
+        }
+      ],
+      "settlement_command": "close-and-open-next",
+      "outcome": "pass",
+      "reason": null,
+      "receipts": [
+        {
+          "node_id": "r3-security-certify",
+          "generation": "c46c6860bd4c",
+          "receipt_sha256": "6b7b8f13e38a0c6e3f8ba3a320804f1f6487113a5f02fc23df55c44f84de5fac",
+          "effective_pass": true,
+          "verdict": "pass",
+          "findings_blocking": 0,
+          "body": "evidence-binding: r3-security-certify c46c6860bd4c\n\ncontract_version: 2\nplan_schema_version: 2\nbehavior_contract_version: 2\nreview_context_hash: 408b95154205cb7d4841959f5b06acea87d4bfa79e5523d68e3ed46332e2954d\nbehavior_contract_hash: 1c9771f6f29f9a130b65aaf491dff9cf1691402dbdce489254a6248361026584\nresolved_profile_hash: a6f7566a03d5ccdc8d890da743b41915e2d18ff36e30e7058bfdd41459cf041d\ncandidate_digest: d60a39a80d1b90115128818a753b74478f8f2965b505e6d58194dd2348f771ba\ngate_mode: change_gate\ngate_aggregation: sequence\n\nupstream_read: r2-code-certify 2bce2139e21f\n\ngate_claim: the full accumulated Phase C candidate introduces no security regression against the inherited security frontier: deleting the two advisory guard hooks removes only best-effort advisory guidance with no enforced security boundary while the fail-closed barriers, gate-role post-dominance, and per-mutation plan-integrity check remain the real controls, and the epoch-2 repair only narrows test assertions and one generation hook list with no change to any security-relevant runtime path and no exposed secret, credential, or trust surface\ngate_surface: the full accumulated Phase C candidate vs run base 0a9f652a, security dimension — the inherited security frontier plus the epoch-2 repair, reviewed for any weakened enforcement, exposed secret, or trust-boundary regression\n\ndomain_outcome: approved\nverdict: pass\nfindings_blocking: 0\nreview_summary: no_blocking_findings\nfindings_none: true\n\n## Review basis and candidate binding\n\nHEAD equals run base 0a9f652a79c57165281c9ad40c65f11a9a5a3f0e, so the accumulated Phase C candidate is the uncommitted worktree state vs HEAD: 46 product files (226 insertions, 1791 deletions), with the orchestrator state dir kaola-workflow/issue-725/ the only untracked path. The worktree product tree at certification time has ZERO paths differing from the r2-open barrier baseline tree 2bce2139e21f09add533fa1c1fe54264f2ae6a26 (git diff against that tree, kaola-workflow/issue-725/ excluded, returns empty) — this certification covers the same bytes r2-code-certify certified. Read before reviewing: the canonical review context (validation_obligations empty — no validation-runner receipts owed; review_phase discovery, prior_findings empty, repair_delta null), r2-code-certify (nonce 2bce2139e21f, recorded above), r1-hook-assert-repair (evidence-binding e1060655efe5), and the epoch-1 n5-hook-deletion evidence (evidence-binding bc92adfeddf3) from the epochs archive at kaola-workflow/issue-725/.cache/epochs/1/files/.cache/n5-hook-deletion.md.\n\n## Advisory-hook deletion weakens no enforced control\n\nBoth deleted hook scripts were read in full at base 0a9f652a. hooks/kaola-workflow-pre-commit.sh is commit-hygiene guidance only: it blocks (exit 2) solely a commit staging MULTIPLE kaola-workflow project folders, is fail-open on every unparseable or unrecognized input by design, and touches no auth, secret, or trust surface. hooks/kaola-workflow-write-lane.sh has two arms: the lane-containment arm is gated on KAOLA_LANE_CONTAINMENT, fail-closed default OFF — dormant in every default install; the gate-window fence arm was default-ON but intercepts ONLY Write|Edit tool calls and carries a plain env opt-out (KAOLA_GATE_WINDOW_FENCE=0). Its own header states the honest layering: Bash-mediated writes were never covered by this hook, and the fail-closed accounting (per-node --barrier-check own-lane allowlist, seal vacuity, close-time evidence tokens) is the backstop, not the hook. A layer that any co-located actor bypasses via the always-available Bash tool or a one-line env var is best-effort advisory guidance, not an enforced security boundary — the project's trust model already placed the boundary in the barrier machinery.\n\nThe enforced controls named in the claim are verified intact: scripts/kaola-workflow-plan-validator.js (post-dominance gates, --barrier-check, --gate-verify), scripts/kaola-workflow-commit-node.js, scripts/kaola-workflow-next-action.js, scripts/kaola-workflow-adaptive-handoff.js, and scripts/kaola-workflow-adaptive-schema.js are all ABSENT from the diff in all editions. In scripts/kaola-workflow-adaptive-node.js (and its three plugin twins) the diff is a single hunk in mutationGuardPrologue's Layer-1 integrity check only — the consent-halt fence and live-coordination mutual-exclusion layers are untouched. No runtime consumer still invokes the deleted scripts: all six hooks.json are pure removals of the two PreToolUse entries (numstat 0 added / 26 deleted each, no additions anywhere), SUPPORT_HOOKS is narrowed in both install manifests, sync-opencode-edition.js HOOK_SCRIPTS drops exactly the two basenames, and install.sh adds two fixed-literal-path rm -f lines under the install-owned SUPPORT_HOOKS_DIR mirroring the existing retired-hook sweep precedent (no user-controlled expansion). The docs and CHANGELOG updates honestly record KAOLA_LANE_CONTAINMENT and KAOLA_GATE_WINDOW_FENCE as \"read by no runtime consumer\" — no phantom control is claimed anywhere in the candidate.\n\n## The one enforcement-adjacent runtime change: the guard-prologue integrity fast path\n\nThe accumulated candidate's only change to a security-relevant runtime path is the Layer-1 plan-integrity fast path in kaola-workflow-adaptive-node.js (x4 editions). It recomputes the plan hash IN-PROCESS by calling the validator's exported computePlanHash (module side-effect-free: require.main guard at scripts/kaola-workflow-plan-validator.js:5143; per-edition require paths verified co-located with each edition's own validator, x4) and compares against the embedded frozen marker. On a MATCH it skips the shell --resume-check; on a mismatch, missing marker, or ANY thrown error it falls back to the authoritative shell --resume-check and refuses plan_integrity_failed with zero mutation — fail-closed is preserved, and a wrong require path or read failure degrades to the pre-change behavior, never to a pass. Soundness of the skip: revalidateForResume's checks beyond the hash comparison (plan contract, node parse, MAX_NODES, epoch compliance, dangling depends_on, cycle, unique sink) are pure functions of the hash-covered body — computePlanHash covers Meta + Nodes + Briefs, and parseEpochContract / resolvePlanContract read only the ## Meta section (plan-validator.js:528-585) — all established at freeze and vouched by the byte match. The plan_hash itself is a plain unkeyed SHA-256 restampable by anyone with plan-file write access, so it was never an adversarial-grade control in either path; the tamper-detection trust model is unchanged. The behavior is test-pinned in scripts/test-adaptive-node.js: new case #725a proves the clean-match skip, and #725b proves a post-freeze tamper with a stale marker recomputes, mismatches, falls back, and refuses plan_integrity_failed with the node not opened.\n\n## Epoch-2 repair delta\n\nThe repair delta (r1-open baseline tree e1060655e vs r2-open baseline tree 2bce2139e, byte-verified by r2 and re-confirmed against the identical current worktree) is exactly five files carrying seven one-line narrowings: two forge test-script assertion sets, the codex walkthrough #409 count, the script-sync drift-plant retarget (PreToolUse to SubagentStart), and the sync-opencode HOOK_SCRIPTS two-line list removal. Every touched surface is a test assertion or a generation input list; none is an auth, secret, credential, session, or trust-boundary runtime path.\n\n## Secret, credential, and provenance sweep\n\nAdded-line scan across the full product diff for credential-pattern material (password/secret/api-key/credential/private-key/PEM headers/ghp_/gho_/github_pat/AKIA/xox/Bearer): zero hits. Long-token scan (40+ chars) over added lines: only a comment ruler and two install-path fragments — no high-entropy material. No hardcoded secret, no plaintext credential comparison, no new external fetch, no shell built from user input (the install.sh additions are fixed literals). No secret value from any evidence file is reproduced here. Docs/CHANGELOG carry the provenance, as sanctioned; no new agent-facing prompt surface is introduced.\n\n## Non-blocking observations (no security delta, not admitted)\n\n(a) On a hash match the fast path no longer re-runs installedRoles per mutation (previously inside --resume-check) — a mid-run role-library removal now surfaces at dispatch rather than the guard prologue; environment-availability robustness only, and an actor able to mutate the installed role library already owns the host. (b) adaptive-node's planHashFromContent matches the marker case-insensitively while the validator's readStoredHash is lowercase-only; freeze always stamps lowercase hex, so the divergence is unreachable via any legal path and confers nothing to an actor who already has plan-file write access.\n\n\nreview_attestation: full_review_completed\nreview_conclusion: The accumulated Phase C candidate certified against the same byte tree r2 certified introduces no security regression on the inherited security frontier: both deleted hooks are proven advisory by their own source (fail-open commit hygiene; Write|Edit-only interception with an env opt-out and the barrier accounting as its documented backstop), every enforced control is byte-untouched except the guard-prologue integrity fast path, which is fail-closed by construction, sound over the hash-covered body, and tamper-test-pinned, the epoch-2 repair touches only test assertions and one generation list, and the full diff contains no secret, credential, or trust-surface exposure — zero findings, security certification granted.\ncertifier_kind: security\ncertifier_aggregation: sequence\ncertifier_gate_digest: 41f81fa44b9b7a888298e54fe32b6aa0ae6623f83ce2872cc764359432b06c8c\ncertifier_epoch_lineage_id: 9dd20b195b0efe673f16fe6a1264b0173ee3574c9ec6c49e344dbbc817cb3627\ncertifier_inherited_frontier_digest: 103c4d1707f6f85f1ebd2bd571f3311cfbaa8e8386dcca346f5229b6525b2394\ncertified_candidate_digest: 48619143aecb2ed96bdc2b9a0b0462bfdcf9f0ef42debcb075c60af99af8cd49\n"
+        }
+      ],
+      "findings": [],
+      "route_candidates": [],
+      "producer_bindings": {
+        "r1-hook-assert-repair": {
+          "baseline": "e1060655efe5acf88a71e15f6ccc82e85935a1f6",
+          "anchored_ref": "e1060655efe5acf88a71e15f6ccc82e85935a1f6",
+          "open_token": "0a9f652a79c57165281c9ad40c65f11a9a5a3f0e",
+          "generation": "e1060655efe5",
+          "ref": "refs/kaola-workflow/barrier/issue-725/r1-hook-assert-repair"
+        }
+      },
+      "lifecycle_settled": true,
+      "repair": {
+        "selected_writer": null,
+        "settled": null
+      },
+      "rebind": [],
+      "consumed_by": null
+    }
+  ],
+  "epoch_lineage_id": "9dd20b195b0efe673f16fe6a1264b0173ee3574c9ec6c49e344dbbc817cb3627",
+  "claim_identity_digest": "ee1f5ca29bd7499fd76e084c2196fe6d272d5b409ef14acd59cb91cb52006a09",
+  "plan_epoch": 2,
+  "legacy_import": {
+    "schema_version": 1,
+    "epoch_lineage_id": "9dd20b195b0efe673f16fe6a1264b0173ee3574c9ec6c49e344dbbc817cb3627",
+    "claim_identity_digest": "ee1f5ca29bd7499fd76e084c2196fe6d272d5b409ef14acd59cb91cb52006a09",
+    "parent_plan_hash": "b3342240ee6e72feb892915ac45a0d984ebd6920f09cb09fb073f4bd25904748",
+    "parent_plan_epoch": 1,
+    "transaction_id": "71c44729862cc3eefd7bce0b7d2518ac84eb3e01dcca68b42c122d3b28fd836c",
+    "snapshot_manifest_digest": "586915660ed5d58d849dcbd85b877a7a5e6fccc7ddf5dca422a2bf8dd07a6e76",
+    "snapshot_path": ".cache/epochs/1/files/.cache/review-attempts.json",
+    "journal_digest": "da1c2fac84a47a9fa813d2a42dc9c94caf6f10f07ca1d36d1a2d3b1e7afb809b",
+    "attempt_ids": [
+      "review2-1cbbd3d31097b963:1",
+      "review2-30db8ac8b3f4a7cc:1",
+      "review2-c85802c3ae7c158e:1"
+    ],
+    "attempts_digest": "af3e4ecee8f31e8868781665d747349fdb9b3c96c44f46d431149208239911ce",
+    "consumed_attempt_ids": [
+      "review2-c85802c3ae7c158e:1"
+    ]
+  }
+}
