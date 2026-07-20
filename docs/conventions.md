@@ -111,6 +111,22 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
 - A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
 - **Edition behavioral coverage (issue #342).** A green forge chain certifies *structure* (registries, forbidden tokens, file existence) — it is **insufficient evidence of forge behavioral parity** unless an edition-level test exercises the feature. A cross-edition feature that adds or changes behavior in a HAND-PORTED edition script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`) MUST add behavioral scenarios to that edition's walkthrough (`simulate-{gitlab,gitea}-workflow-walkthrough.js`) driving the real edition CLI, mirroring the root coverage modulo forge nouns. Byte-synced scripts (the codex mirrors under `plugins/kaola-workflow/scripts/`, enforced by `validate-script-sync.js`) inherit root behavioral coverage and need no duplicate scenarios. A throwaway `$TMPDIR` smoke proves a repair but is not coverage — commit the scenarios (the #328 CR1/CR2 lesson: the gitlab/gitea bundle-finalization half shipped under four green chains because the chains certified structure only).
 
+- **Two-altitude division of labor between the mega-test files.** `scripts/test-adaptive-node.js`
+  owns refusal seams, envelope shapes, and fault injection for `kaola-workflow-adaptive-node.js`
+  and its aggregator composition (schema conformance, fixture-driven corpus loops, "real
+  subprocess" fence-parity blocks) — the deep single-module altitude. `scripts/simulate-workflow-walkthrough.js`
+  owns end-to-end journeys (claim → freeze → nodes → barrier → sink) and cross-process/cross-edition
+  behavior — the shallow integration altitude. Do not duplicate a single-module invariant at both
+  altitudes; author it once at the altitude that owns it. The bundle-claim entrypoint has exactly
+  one keeper — `scripts/test-bundle-claim.js` plus the walkthrough's own bundle-lane E2E journey —
+  a VALUE re-assert at another bundle-state call site duplicates that keeper and should be pruned,
+  not added to. `scripts/test-mega-mutation-spotcheck.js` is the standing regression floor proving
+  this division loses no real coverage: it reintroduces historical bug shapes into isolated
+  `$TMPDIR` copies of `scripts/` (never the working tree) and must stay red on each reintroduced
+  shape — re-run it (`node scripts/test-mega-mutation-spotcheck.js`, exit 0 = all caught) after any
+  further prune at either altitude. It is a persistent, on-demand gate, not wired into `npm test`
+  or any `test:kaola-workflow:*` chain.
+
 - **Lifecycle and boundary coverage for frozen dispatch fields.** A field added to `## Nodes` must
   be tested through the real validator and every descriptor/opener that consumes it, durable
   running-set persistence, rolling top-up, and crash reconciliation. Pin exact lower/upper bounds,
