@@ -4343,7 +4343,9 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// T18: runWriteHalt — consent writes BOTH markers; idempotent
+// T18: runWriteHalt — consent writes ONE cause marker; idempotent
+// (#743) A consent halt is an in-place stop-and-ask; it records only its cause
+// (escalated_to_full: consent). The vestigial `escalated_to_full: security` half is gone.
 // ---------------------------------------------------------------------------
 {
   let writtenFiles = {};
@@ -4380,11 +4382,11 @@ function makeState(opts) {
   assert(result.result === 'ok', 'T18: write-halt result===ok');
   assert(result.halt === 'written', 'T18: halt===written');
 
-  // Both markers in state
+  // Exactly one cause marker in state
   const writtenState = writtenFiles['/fake/kaola-workflow/test-project/workflow-state.md'];
   assert(writtenState !== undefined, 'T18: state was written');
   assert(writtenState.includes('escalated_to_full: consent'), 'T18: escalated_to_full:consent written to state');
-  assert(writtenState.includes('escalated_to_full: security'), 'T18: escalated_to_full:security written to state (consent writes both)');
+  assert(!/^escalated_to_full:[ \t]*security[ \t]*$/m.test(writtenState), 'T18: consent halt does NOT write escalated_to_full:security (single cause marker)');
 
   // Plan has consent_halt: pending
   const writtenPlan = writtenFiles['/fake/kaola-workflow/test-project/workflow-plan.md'];
@@ -4394,7 +4396,7 @@ function makeState(opts) {
   // Markers are in result.markers
   assert(Array.isArray(result.markers), 'T18: markers is array');
   assert(result.markers.includes('escalated_to_full:consent'), 'T18: markers includes consent');
-  assert(result.markers.includes('escalated_to_full:security'), 'T18: markers includes security');
+  assert(!result.markers.includes('escalated_to_full:security'), 'T18: markers does NOT include the retired security half');
   assert(result.markers.includes('consent_halt:pending'), 'T18: markers includes consent_halt');
 
   // Idempotent: run again with same state
@@ -4422,7 +4424,7 @@ function makeState(opts) {
   const consentCount = (stateAfterRun2.match(/escalated_to_full: consent/g) || []).length;
   const securityCount = (stateAfterRun2.match(/escalated_to_full: security/g) || []).length;
   assert(consentCount === 1, 'T18: escalated_to_full:consent appears exactly once after idempotent run, got ' + consentCount);
-  assert(securityCount === 1, 'T18: escalated_to_full:security appears exactly once after idempotent run, got ' + securityCount);
+  assert(securityCount === 0, 'T18: escalated_to_full:security never appears, got ' + securityCount);
 }
 
 // ---------------------------------------------------------------------------
@@ -6073,11 +6075,13 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 
 // ---------------------------------------------------------------------------
 // T-360 (#360): clear-halt — the script-owned inverse of write-halt.
-//   (a) write-halt(consent) → durable halt present; clear-halt(consent) → halt gone +
-//       both escalated_to_full markers removed (consent⇒security coupling).
+//   (a) write-halt(consent) → durable halt present + a SINGLE escalated_to_full: consent cause
+//       marker (#743: no security half); clear-halt(consent) → halt gone + no marker lingers.
 //   (b) clear-halt with NO halt present → typed refuse no_halt_present, ZERO mutation.
 //   (c) a decoy `consent_halt: pending` OUTSIDE the ## Node Ledger is NOT a real halt:
 //       clear-halt refuses no_halt_present and leaves the decoy untouched.
+//   (d) #743 legacy tolerance: a state file written by an OLDER runtime carries BOTH
+//       escalated_to_full: consent and escalated_to_full: security; clear-halt still removes both.
 // ---------------------------------------------------------------------------
 {
   // (a) round-trip
@@ -6093,13 +6097,13 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(wh.result === 'ok', 'T-360a: write-halt(consent) ok');
   assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === true, 'T-360a: durable consent_halt present after write-halt');
   assert(/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360a: state has escalated_to_full: consent');
-  assert(/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360a: state has escalated_to_full: security (coupling)');
+  assert(!/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360a: state has NO escalated_to_full: security half (single cause marker)');
 
   const ch = runClearHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', reason: 'consent', shell: shellStub, readFile: rf, writeFile: wf });
   assert(ch.result === 'ok' && ch.halt === 'cleared', 'T-360a: clear-halt(consent) ok/cleared');
   assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === false, 'T-360a: durable consent_halt GONE after clear-halt');
   assert(!/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360a: escalated_to_full: consent removed');
-  assert(!/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360a: escalated_to_full: security removed (coupling)');
+  assert(!/^escalated_to_full:/m.test(files['/p/workflow-state.md']), 'T-360a: NO escalation marker lingers after a cleared consent halt');
 }
 {
   // (b) no halt present → typed refuse, zero mutation
@@ -6129,6 +6133,31 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   });
   assert(r.result === 'refuse' && r.reason === 'no_halt_present', 'T-360c: decoy line → refuse no_halt_present');
   assert(wrote === false, 'T-360c: decoy line left untouched (no mutation)');
+}
+{
+  // (d) #743 LEGACY TOLERANCE — a halt written by a PRE-#743 runtime carries the dual marker
+  // (escalated_to_full: consent AND escalated_to_full: security) on disk. Seed that file directly
+  // (NOT via write-halt, which no longer produces it) and prove clear-halt still clears it fully.
+  const legacyState = makeState({ escalated: 'consent' })
+    .replace('escalated_to_full: consent\n', 'escalated_to_full: consent\nescalated_to_full: security\n');
+  assert(/^escalated_to_full:[ \t]*consent[ \t]*$/m.test(legacyState) && /^escalated_to_full:[ \t]*security[ \t]*$/m.test(legacyState),
+    'T-360d: seeded state really carries the legacy DUAL marker');
+
+  const files = {
+    '/p/workflow-plan.md': makePlan(['| impl-core | in_progress | |', '| finalize | pending | |'])
+      .replace('## Node Ledger\n', '## Node Ledger\nconsent_halt: pending\n'),
+    '/p/workflow-state.md': legacyState,
+  };
+  const rf = (f) => { if (files[f] !== undefined) return files[f]; throw new Error('ENOENT ' + f); };
+  const wf = (f, c) => { files[f] = c; };
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === true, 'T-360d: seeded plan carries a durable ledger consent_halt');
+
+  const ch = runClearHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', reason: 'consent', shell: () => ({ status: 'skipped' }), readFile: rf, writeFile: wf });
+  assert(ch.result === 'ok' && ch.halt === 'cleared', 'T-360d: clear-halt(consent) clears a LEGACY dual-marker halt, got ' + JSON.stringify(ch.result));
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === false, 'T-360d: durable consent_halt GONE');
+  assert(!/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360d: legacy escalated_to_full: consent removed');
+  assert(!/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360d: legacy escalated_to_full: security half STILL stripped (tolerate-legacy-on-read)');
+  assert(!/^escalated_to_full:/m.test(files['/p/workflow-state.md']), 'T-360d: no escalation marker lingers from the legacy file');
 }
 
 // ---------------------------------------------------------------------------
