@@ -103,6 +103,353 @@ try {
   try { fs.rmSync(repo, { recursive: true, force: true }); } catch (_) {}
 }
 
+// ---------------------------------------------------------------------------------------------
+// #724: the WHOLE-PLAN barrier must union the SEALED parent-epoch write sets into the declared
+// allowlist. A schema-2 child produced by repair->replan carries an ACCUMULATED candidate: files a
+// parent epoch legitimately declared, wrote, and gated are still on the branch at finalize, but the
+// child plan (a fresh, narrower DAG) does not declare them — so the child-only allowlist refused
+// write_set_overflow on legitimate work.
+//
+// The union WIDENS a safety allowlist, so the parent snapshots become load-bearing evidence. They
+// live under .cache/** which is inside the barrier's OWN exempt allowband, i.e. a hand-edited parent
+// snapshot is invisible to the barrier. The fix therefore verifies the whole on-disk lineage
+// (replan.verifyAllEpochSnapshots — manifest seals, authority projection recomputed from the
+// archived plan bytes, contiguity, lineage id, claim root, active manifest digest, live plan hash)
+// BEFORE unioning, and refuses `epoch_lineage_unverified` at the CLI when it does not verify.
+//
+// Fixtures are driven through the REAL replan transaction (prepareReplan -> resumeReplan -> commit)
+// so the snapshot seals are genuine, never hand-written to look sealed.
+{
+  const crypto = require('crypto');
+  const schema = require('./kaola-workflow-adaptive-schema');
+  const replan = require('./kaola-workflow-replan');
+  const validator = require('./kaola-workflow-plan-validator');
+  const { generateMirror } = require('./kaola-workflow-task-mirror');
+  const liveFixture = require('./replan-conformance-fixtures.json');
+  const SOURCE_ATTEMPT_ID = liveFixture.source.attempt_id;
+
+  const gitEnv = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  });
+  const fgit = (root, xs) => execFileSync('git', ['-C', root, ...xs], {
+    encoding: 'utf8', env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const sha256 = b => crypto.createHash('sha256').update(b).digest('hex');
+
+  function frozenPlan(project, meta, nodes, ledger) {
+    const s2 = Number(meta && meta.plan_schema_version) === 2;
+    const rows = nodes.map(n => s2
+      ? `| ${n.id} | ${n.role} | ${n.depends_on || '—'} | ${n.write_set || '—'} | 1 | sequence | ${n.model || 'standard'} | ${n.gate_claim || '—'} | ${n.gate_surface || '—'} | ${n.gate_aggregation || '—'} | — |`
+      : `| ${n.id} | ${n.role} | ${n.depends_on || '—'} | ${n.write_set || '—'} | 1 | sequence | ${n.model || 'standard'} |`).join('\n');
+    const ledgerRows = nodes.map(n => `| ${n.id} | ${ledger[n.id] || 'pending'} |`).join('\n');
+    const complianceRows = nodes.map(n => {
+      const status = ledger[n.id] || 'pending';
+      if (status === 'complete') return `| ${n.role} (${n.id}) | invoked | .cache/${n.id}.md | |`;
+      if (status === 'n/a') return `| ${n.role} (${n.id}) | n/a | | topology skip |`;
+      return `| ${n.role} (${n.id}) | pending | | |`;
+    }).join('\n');
+    let text = [
+      `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
+      'labels: enhancement', 'speculative_open_policy: auto',
+      'validation_command: node scripts/test-replan.js',
+      ...(s2 ? ['validation_timeout_minutes: 30'] : []),
+      ...Object.entries(meta || {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(',') : v}`),
+      '', '## Nodes', '',
+      s2 ? '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |'
+        : '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+      s2 ? '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+        : '| --- | --- | --- | --- | --- | --- | --- |', rows,
+      '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows,
+      '', '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
+      '| --- | --- | --- | --- |', complianceRows, '',
+    ].join('\n');
+    const hash = validator.computePlanHash(text);
+    return { text: text.replace(/^# Workflow Plan[^\n]*\n/, m => m + `\n<!-- plan_hash: ${hash} -->\n`), hash };
+  }
+
+  // A committed epoch-2 project whose SEALED epoch-1 parent declares two paths the child does not:
+  //   legacy.js  — parent owner `impl`    with ledger status `complete` (legitimate parent work)
+  //   stale.js   — parent owner `skipped` with ledger status `n/a`      (never produced)
+  function buildLineageFixture() {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-724-')));
+    fgit(root, ['init', '-b', 'main']);
+    fgit(root, ['config', 'user.name', 'Test']);
+    fgit(root, ['config', 'user.email', 't@example.com']);
+    fgit(root, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
+    fs.writeFileSync(path.join(root, 'legacy.js'), 'module.exports = "legacy";\n');
+    fs.writeFileSync(path.join(root, 'stale.js'), 'module.exports = "stale";\n');
+    fs.writeFileSync(path.join(root, 'README.md'), '# fixture\n');
+    fgit(root, ['add', '-A']);
+    fgit(root, ['commit', '-m', 'root']);
+    fgit(root, ['checkout', '-b', 'workflow/issue-699']);
+    const commit = fgit(root, ['rev-parse', 'HEAD']);
+    const tree = fgit(root, ['rev-parse', 'HEAD^{tree}']);
+    const project = 'issue-699';
+    const projectDir = path.join(root, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const parent = frozenPlan(project, {}, [
+      { id: 'impl', role: 'tdd-guide', write_set: 'product.js,legacy.js' },
+      { id: 'skipped', role: 'tdd-guide', depends_on: 'impl', write_set: 'stale.js' },
+      { id: 'review', role: 'code-reviewer', depends_on: 'impl', model: 'reasoning' },
+      { id: 'finalize', role: 'finalize', depends_on: 'review,skipped', model: '—' },
+    ], { impl: 'complete', skipped: 'n/a', review: 'complete', finalize: 'pending' });
+    const identity = schema.buildClaimIdentity({
+      schema_version: 2, repository_id: 'local:' + root, issue_numbers: [699], primary_issue: 699,
+      bundle_id: null, closure_policy: 'all_or_nothing', branch: 'workflow/issue-699',
+      worktree_path: root, claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
+    });
+    const rootBase = schema.buildClaimRootBase({ schema_version: 2,
+      object_format: commit.length === 64 ? 'sha256' : 'sha1', commit, tree, branch: 'workflow/issue-699' });
+    const lineage = schema.buildEpochLineage(identity, rootBase);
+    const legacyState = [
+      '# Kaola-Workflow State', '', '## Project', `name: ${project}`, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+      'step: start', `next_command: /kaola-workflow-plan-run ${project}`,
+      `next_skill: kaola-workflow-plan-run ${project}`, '', '## Planning Evidence',
+      `plan_hash: ${parent.hash}`, 'decision: auto-run',
+      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
+      'first_node_id: impl', 'first_node_role: tdd-guide', '', '## Sink', 'branch: workflow/issue-699',
+      'issue_number: 699', 'sink: merge', `main_root: ${root}`, 'session_marker: test-session',
+      'claim_ts: 2026-07-16T00:00:00.000Z', `worktree_path: ${root}`,
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), schema.writeEpochStateBlock(legacyState, {
+      epoch_schema_version: 2, claim_repository_id: identity.repository_id,
+      claim_identity_digest: lineage.claim_identity_digest,
+      claim_root_object_format: rootBase.object_format, claim_root_base_commit: rootBase.commit,
+      claim_root_base_tree: rootBase.tree, claim_root_base_digest: lineage.claim_root_base_digest,
+      epoch_lineage_id: lineage.epoch_lineage_id, plan_epoch: 1, active_plan_hash: parent.hash,
+      inherited_frontier_digest: 'none', inherited_frontier_classes: 'none',
+      automatic_review_replans: 0, authorized_epoch_ceiling: 2, case_b_exemption_consumed: false,
+      replan_status: 'none', replan_transaction_id: 'none', replan_phase: 'none',
+      active_snapshot_manifest_digest: 'none',
+    }));
+    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), parent.text);
+    fs.writeFileSync(path.join(projectDir, 'workflow-tasks.json'), JSON.stringify(
+      generateMirror({ planContent: parent.text, now: '2026-07-16T00:00:00.000Z' }), null, 2) + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-open-impl'), commit + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-impl'), commit + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'impl.md'), 'evidence-binding: impl abc123\nGREEN: fixture\n');
+    const generation = liveFixture.source.generation_nonce;
+    const findingLines = liveFixture.source.findings.map(f =>
+      `finding: id=${f.id} scope=${f.scope} action=${f.action} status=${f.status} severity=${f.severity} file=product.js fix_role=tdd-guide`);
+    const reviewBody = [`evidence-binding: review ${generation}`, 'verdict: fail',
+      `findings_blocking: ${findingLines.length}`, ...findingLines, ''].join('\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'), reviewBody);
+    const logicalGate = schema.canonicalLogicalGateIdentity({
+      kind: 'sequence', id: 'review', origin: ['impl'], members: ['review'] });
+    const generations = [{ member: 'review', nonce: generation }];
+    fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 2;\n');
+    const candidateDigest = replan.computeReviewCandidateDigest(root, project);
+    const parsedFindings = schema.parseNodeFindings(reviewBody).map(f => ({ source_node: 'review', ...f }));
+    const journal = {
+      schema_version: 1, plan_hash: parent.hash,
+      attempts: [{
+        attempt_id: SOURCE_ATTEMPT_ID, ordinal: liveFixture.source.ordinal, plan_hash: parent.hash,
+        logical_gate: logicalGate, candidate_digest: candidateDigest, candidate_declared: {},
+        candidate_residue_digest: liveFixture.source.candidate_residue_digest,
+        lifecycle_settled: true, outcome: 'fail', reason: 'verdict_not_pass',
+        repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null,
+        producer_bindings: { impl: { baseline: commit, anchored_ref: commit, open_token: commit,
+          generation: commit.slice(0, 12), ref: 'refs/kaola-workflow/barrier/issue-699/impl' } },
+        findings: parsedFindings,
+        route_candidates: parsedFindings.map(f => ({ source_node: 'review', finding_id: f.id, id: f.id,
+          scope: f.scope, action: f.action, status: f.status, severity: f.severity, file: f.file,
+          ownership_candidates: ['impl'], owning_node: 'impl', fix_role: f.fix_role, raw: f.raw })),
+        receipts: [{ node_id: 'review', generation, body: reviewBody,
+          receipt_sha256: sha256(Buffer.from(reviewBody)), effective_pass: false, verdict: 'fail',
+          findings_blocking: findingLines.length }],
+        generations, settlement_command: 'close-node',
+        transaction_key: sha256(Buffer.from(JSON.stringify({ plan_hash: parent.hash,
+          logical_gate_key: logicalGate.key, candidate_digest: candidateDigest, generations }))),
+      }],
+    };
+    fs.writeFileSync(path.join(cacheDir, 'review-attempts.json'), JSON.stringify(journal, null, 2) + '\n');
+    const attempt = journal.attempts[0];
+    const state = replan.parseStateFields(fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8'));
+    const payload = {
+      schema_version: 2, kind: 'repair_outcome', result: 'repair_requires_replan',
+      attempt_id: attempt.attempt_id, reason: 'dependent_producer_replay_required',
+      producer_slice: ['impl'], parent_plan_hash: parent.hash,
+      epoch_lineage_id: state.epoch_lineage_id, claim_identity_digest: state.claim_identity_digest,
+      claim_root_base_digest: state.claim_root_base_digest,
+      review_journal_digest: sha256(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'))),
+      review_attempt_digest: sha256(Buffer.from(schema.canonicalJson(attempt), 'utf8')),
+      effective_candidate_digest: schema.effectiveCandidate(attempt).digest,
+    };
+    fs.writeFileSync(path.join(cacheDir, 'replan-source.json'), schema.canonicalJson({ ...payload,
+      outcome_digest: schema.sha256Canonical(payload), persisted_at: '2026-07-16T00:30:00.000Z' }) + '\n');
+
+    // Drive the REAL replan transaction to `committed` (this is what seals .cache/epochs/1).
+    const common = { repoRoot: root, project, now: () => '2026-07-16T03:00:00.000Z' };
+    let result = replan.prepareReplan({ ...common, sourceAttemptId: SOURCE_ATTEMPT_ID,
+      transitionReason: 'review_repair_requires_replan' });
+    for (let turn = 0; turn < 20 && !['committed', 'already_committed'].includes(result && result.result); turn++) {
+      if (result && result.reason === 'replan_planner_dispatch_required') {
+        const tx = JSON.parse(fs.readFileSync(path.join(cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+        const childPath = path.join(projectDir, schema.REPLAN_PLAN_NEXT_NAME);
+        if (!fs.existsSync(childPath) || fs.statSync(childPath).size === 0) {
+          const child = frozenPlan(project, {
+            plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
+            epoch_lineage_id: tx.epoch_lineage_id, plan_epoch: tx.parent.plan_epoch + 1,
+            parent_plan_hash: tx.parent.plan_hash,
+            parent_snapshot_manifest_digest: (tx.snapshot && tx.snapshot.authority_digest) || 'pending',
+            claim_root_base_digest: tx.cas.prepare.claim_root_base_digest,
+            inherited_frontier_digest: tx.cas.prepare.inherited_frontier_digest,
+            inherited_frontier_classes: tx.source.inherited_frontier_classes.length
+              ? tx.source.inherited_frontier_classes : 'none',
+            transition_reason: tx.transition_reason,
+            source_evidence_digest: tx.source.source_evidence_digest,
+            planner_binding: tx.planner.dispatch_nonce,
+            code_certifier: 'child-review', security_certifier: 'child-security',
+          }, [
+            { id: 'child-impl', role: 'tdd-guide', write_set: 'product.js' },
+            { id: 'child-review', role: 'code-reviewer', depends_on: 'child-impl', model: 'reasoning',
+              gate_claim: 'current code candidate is approved', gate_surface: 'full code candidate',
+              gate_aggregation: 'sequence' },
+            { id: 'child-security', role: 'security-reviewer', depends_on: 'child-review', model: 'reasoning',
+              gate_claim: 'current security candidate is approved', gate_surface: 'full security candidate',
+              gate_aggregation: 'sequence' },
+            { id: 'child-finalize', role: 'finalize', depends_on: 'child-security', model: '—' },
+          ], {});
+          fs.writeFileSync(childPath, child.text);
+          fs.appendFileSync(path.join(cacheDir, 'dispatch-log.jsonl'), JSON.stringify({
+            ts: tx.planner.pending_at || new Date().toISOString(), agent_type: 'workflow-planner',
+            cwd: root, project, transaction_id: tx.transaction_id,
+            dispatch_nonce: tx.planner.dispatch_nonce }) + '\n');
+          const attestation = { schema_version: 1, transaction_id: tx.transaction_id, project,
+            worktree_path: root, packet_digest: sha256(fs.readFileSync(path.join(cacheDir, 'replan-planner-packet.json'))),
+            dispatch_nonce: tx.planner.dispatch_nonce, profile_identity: 'workflow-planner-replan-v1',
+            child_path: 'workflow-plan.next.md', child_digest: sha256(fs.readFileSync(childPath)) };
+          attestation.attestation_digest = schema.sha256Canonical(attestation);
+          fs.writeFileSync(path.join(cacheDir, 'replan-planner-attestation.json'),
+            schema.canonicalJson(attestation) + '\n');
+        }
+      }
+      result = replan.resumeReplan(common);
+    }
+    if (!['committed', 'already_committed'].includes(result && result.result)) {
+      throw new Error('#724 fixture: replan did not commit: ' + JSON.stringify(result));
+    }
+    // The ledger is NOT hash-covered, so closing the child producer keeps plan_hash (and therefore
+    // the state binding verifyAllEpochSnapshots asserts) intact.
+    const livePath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(livePath, fs.readFileSync(livePath, 'utf8')
+      .replace('| child-impl | pending |', '| child-impl | complete |'));
+    return { root, project, projectDir, cacheDir, planPath: livePath };
+  }
+
+  // The whole-plan barrier diffs `git diff --name-only <merge-base>`, which never lists UNTRACKED
+  // paths — stage every fixture write so a brand-new file is actually visible to the gate.
+  const touch = (root, rel, body) => {
+    fs.writeFileSync(path.join(root, rel), body);
+    fgit(root, ['add', rel]);
+  };
+  const wholePlan = fx => val(fx.root, fx.planPath, ['--barrier-check', '--base', 'main', '--json']);
+  const withFixture = fn => {
+    const fx = buildLineageFixture();
+    try { fn(fx); } finally { try { fs.rmSync(fx.root, { recursive: true, force: true }); } catch (_) {} }
+  };
+
+  // #724 T1: a production write declared ONLY by a sealed parent-epoch node whose PARENT ledger row
+  // is `complete` passes the whole-plan barrier. This is the reported regression.
+  withFixture(fx => {
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    const r = wholePlan(fx);
+    assert(r.exitCode === 0 && r.json.result === 'pass',
+      '#724 T1: a parent-epoch-declared, parent-complete write passes the whole-plan barrier '
+      + '(got ' + r.json.result + '/' + r.json.reason + ' outOfAllow=' + JSON.stringify(r.json.outOfAllow) + ')');
+  });
+
+  // #724 T2: a production write declared by NOBODY in the whole lineage still refuses
+  // write_set_overflow — the union widens the allowlist, it does not disable the gate.
+  withFixture(fx => {
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    touch(fx.root, 'orphan.js', 'module.exports = "orphan";\n');
+    const r = wholePlan(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'write_set_overflow'
+      && (r.json.outOfAllow || []).includes('orphan.js') && !(r.json.outOfAllow || []).includes('legacy.js'),
+      '#724 T2: a write declared by no epoch in the lineage still refuses write_set_overflow '
+      + '(got ' + r.json.reason + ' outOfAllow=' + JSON.stringify(r.json.outOfAllow) + ')');
+  });
+
+  // #724 T3: a path declared by a parent-epoch node whose PARENT ledger row is `n/a` is unioned into
+  // the allowlist but lands on the EXISTING rank-4 unattributed floor — the producer claims it never
+  // ran, so the write is unreviewed. Proves anyCompleteOwner was extended, not just `declared`.
+  withFixture(fx => {
+    touch(fx.root, 'stale.js', 'module.exports = "stale-touched";\n');
+    const r = wholePlan(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'unattributed_write'
+      && (r.json.unattributed || []).includes('stale.js'),
+      '#724 T3: a parent-declared path whose parent owner is n/a refuses unattributed_write '
+      + '(got ' + r.json.reason + ' unattributed=' + JSON.stringify(r.json.unattributed) + ')');
+  });
+
+  // #724 T4 (the security argument): a TAMPERED parent snapshot plan that widens the parent write set
+  // to an attacker-chosen path must refuse `epoch_lineage_unverified` — never accept the path, and
+  // never mislabel it write_set_overflow (whose documented operator response, revert-overflow, would
+  // destroy legitimate parent-epoch work).
+  withFixture(fx => {
+    const snapPlan = path.join(fx.cacheDir, 'epochs', '1', 'files', 'workflow-plan.md');
+    fs.writeFileSync(snapPlan, fs.readFileSync(snapPlan, 'utf8')
+      .replace('| product.js,legacy.js |', '| product.js,legacy.js,attacker.js |'));
+    touch(fx.root, 'attacker.js', 'module.exports = "pwn";\n');
+    const r = wholePlan(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'epoch_lineage_unverified',
+      '#724 T4: a tampered parent snapshot plan refuses epoch_lineage_unverified '
+      + '(got ' + r.json.reason + ' outOfAllow=' + JSON.stringify(r.json.outOfAllow) + ')');
+    assert(r.json.result === 'refuse' && !(r.json.outOfAllow || []).length,
+      '#724 T4: the attacker-widened path is never accepted, and the refusal is NOT the '
+      + 'write_set_overflow lie (result=' + r.json.result + ')');
+    assert(typeof r.json.lineage_reason === 'string' && r.json.lineage_reason.length > 0,
+      '#724 T4: the verbatim lineage verifier reason travels in a sibling field '
+      + '(got ' + JSON.stringify(r.json.lineage_reason) + ')');
+  });
+
+  // #724 T5: a tampered snapshot MANIFEST refuses epoch_lineage_unverified.
+  withFixture(fx => {
+    const manifestPath = path.join(fx.cacheDir, 'epochs', '1', 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files[0].digest = 'f'.repeat(64);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    const r = wholePlan(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'epoch_lineage_unverified',
+      '#724 T5: a tampered snapshot manifest refuses epoch_lineage_unverified (got ' + r.json.reason + ')');
+  });
+
+  // #724 T6: a MISSING parent snapshot refuses epoch_lineage_unverified (never a silent child-only
+  // allowlist, which would report write_set_overflow — a lie about the real fault).
+  withFixture(fx => {
+    fs.rmSync(path.join(fx.cacheDir, 'epochs', '1'), { recursive: true, force: true });
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    const r = wholePlan(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'epoch_lineage_unverified',
+      '#724 T6: a missing parent snapshot refuses epoch_lineage_unverified (got ' + r.json.reason + ')');
+  });
+
+  // #724 T7: opts.lineagePlans ABSENT is byte-identical for every existing caller — the pure
+  // barrierCheck keeps refusing a parent-only path when no lineage is supplied.
+  withFixture(fx => {
+    const childContent = fs.readFileSync(fx.planPath, 'utf8');
+    const bare = validator.barrierCheck(childContent, ['product.js', 'legacy.js'], { project: fx.project });
+    assert(bare.result === 'refuse' && bare.reason === 'write_set_overflow'
+      && (bare.outOfAllow || []).includes('legacy.js'),
+      '#724 T7: barrierCheck without lineagePlans is unchanged (got ' + bare.reason + ')');
+    const parentContent = fs.readFileSync(
+      path.join(fx.cacheDir, 'epochs', '1', 'files', 'workflow-plan.md'), 'utf8');
+    const withLineage = validator.barrierCheck(childContent, ['product.js', 'legacy.js'], {
+      project: fx.project,
+      lineagePlans: [{ epoch: 1, nodes: validator.parseNodes(parentContent),
+        ledger: validator.parseLedger(parentContent) }],
+    });
+    assert(withLineage.result === 'pass',
+      '#724 T7: the same call WITH lineagePlans passes (got ' + withLineage.reason + ')');
+  });
+}
+
 if (failed > 0) {
   console.error('barrier-base-integrity tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -89,6 +89,13 @@ const OPERATOR_HINT_REGISTRY = {
   sensitive_write_unreviewed: () => 'A sensitive file was written without a completed security-reviewer node. Add a security-reviewer gate to the plan.',
   unattributed_write: (ctx) => `File "${ctx.file || '(unknown)'}" was written but not attributed to any node\'s write set. Add it to a node\'s declared write set.`,
   unattributed_change: () => 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node or run revert-overflow.',
+  // #724: the whole-plan barrier unions the SEALED parent-epoch write sets into the allowlist, so the
+  // epoch snapshots are load-bearing safety evidence. When the on-disk lineage does not verify, the
+  // barrier refuses HERE rather than falling through to a child-only allowlist — that fallthrough
+  // would report write_set_overflow, which is a LIE (it names an authoring error when the real fault
+  // is snapshot tampering) and whose documented response, revert-overflow, would DESTROY legitimate
+  // parent-epoch work. The verbatim verifier reason travels in a sibling `lineage_reason` field.
+  epoch_lineage_unverified: (ctx) => `The epoch lineage under .cache/epochs/ did not verify (${ctx.reason || 'unknown'}), so the whole-plan barrier cannot safely union the parent-epoch write sets. Do NOT run revert-overflow — this is not an overflow. Restore the sealed snapshots (they are the replan transaction's own output) or investigate tampering, then re-run the barrier.`,
   barrier_base_mismatch: (ctx) => `Barrier baseline mismatch for node "${ctx.nodeId || '(unknown)'}". Use repair-node to restore the baseline ref, or reset the node to pending and re-open to record a fresh baseline.`,
   no_group_base: (ctx) => `No recorded group baseline for "${ctx.nodeId || '(unknown)'}". Run --record-base --node-id <group_id> at group open.`,
   running_set_unreadable: () => 'Cannot read running-set.json — the group barrier needs the live lane_group. Check the file exists and is valid JSON.',
@@ -2575,7 +2582,23 @@ function barrierCheck(content, actualPaths, opts) {
       if (n) for (const p of n.writeSet) declared.add(p);
     }
   } else if (ownNode) { for (const p of ownNode.writeSet) declared.add(p); }
-  else { for (const n of nodes) for (const p of n.writeSet) declared.add(p); }
+  else {
+    for (const n of nodes) for (const p of n.writeSet) declared.add(p);
+    // #724: EPOCH LINEAGE union. `nodes` is the CHILD plan only. A schema-2 child produced by
+    // repair->replan carries an ACCUMULATED candidate: a file a PARENT epoch legitimately declared,
+    // wrote and gated is still on the branch at the whole-plan (finalize) barrier, but the child's
+    // fresh, narrower DAG never declares it — so the child-only allowlist refused write_set_overflow
+    // on legitimate, already-reviewed work. opts.lineagePlans ([{ epoch, nodes, ledger }], ONE entry
+    // per sealed ancestor epoch) is supplied ONLY by the --barrier-check CLI, and ONLY after
+    // replan.verifyAllEpochSnapshots has proven the whole on-disk lineage (the union WIDENS a safety
+    // allowlist, and .cache/** is inside the barrier's own exempt allowband, so an unverified parent
+    // snapshot would be an allowlist-widening primitive). ABSENT => byte-identical to the prior
+    // behavior for every existing caller. PER-NODE and GROUP modes deliberately do NOT union: a node
+    // writing a parent-epoch file is still that node's own overflow.
+    for (const lp of (opts.lineagePlans || [])) {
+      for (const n of (lp.nodes || [])) for (const p of n.writeSet) declared.add(p);
+    }
+  }
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
   const archiveProj = opts.project || null;
   // #463 Slice 4: delegate to the module-level predicates (lifted so --parent-clean-check reuses the
@@ -2642,6 +2665,18 @@ function barrierCheck(content, actualPaths, opts) {
     for (const n of nodes) for (const p of n.writeSet) {
       if (!anyCompleteOwner.has(p)) anyCompleteOwner.set(p, false);
       if (ledger.get(n.id) === 'complete') anyCompleteOwner.set(p, true);
+    }
+    // #724: extend the ownership map with the SEALED parent-epoch nodes, each keyed to its OWN
+    // epoch's ledger status. This is load-bearing, not bookkeeping: without it a parent-declared path
+    // enters `declared` and then bypasses this floor entirely (the floor only walks child nodes), so
+    // a parent node that never ran would launder its declared file through the union. With it, a
+    // parent-declared-but-never-complete path lands in the EXISTING unattributed_write arm — same
+    // teeth, no new reason code, no new precedence rank.
+    for (const lp of (opts.lineagePlans || [])) {
+      for (const n of (lp.nodes || [])) for (const p of n.writeSet) {
+        if (!anyCompleteOwner.has(p)) anyCompleteOwner.set(p, false);
+        if (lp.ledger && lp.ledger.get(n.id) === 'complete') anyCompleteOwner.set(p, true);
+      }
     }
     unattributed = production.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
     if (unattributed.length) {
@@ -4534,6 +4569,7 @@ function main() {
       }
     }
     let actualPaths;
+    let lineagePlans;
     if (nodeId) {
       // PER-NODE (#239, v3.21.0): tree-diff the CURRENT full-worktree snapshot against THIS node's
       // recorded node-start snapshot — exactly this node's own changes, checked against its OWN
@@ -4580,8 +4616,70 @@ function main() {
       const mergeBase = execFileSync('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).trim();
       const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+      // #724: EPOCH LINEAGE union (WHOLE-PLAN only). A schema-2 child at plan_epoch >= 2 measures a
+      // cumulative diff that includes parent-epoch writes; without the parent write sets the union
+      // allowlist is child-only and refuses legitimate, already-gated work write_set_overflow.
+      // barrierCheck is IO-free by contract, so ALL of the lineage IO lives here.
+      //
+      // The activation conditions are deliberately narrow: an epoch-1 schema-2 plan has no snapshots
+      // at all and must NOT take this path (it would refuse on an empty lineage), and a plan with no
+      // parent_plan_hash is not a child.
+      const epochContract = parseEpochContract(content);
+      const planEpoch = Number(epochContract.fields.plan_epoch);
+      if (epochContract.active && Number.isFinite(planEpoch) && planEpoch >= 2
+          && String(epochContract.fields.parent_plan_hash || '').trim()) {
+        // Lazily required INSIDE the function body, exactly as validateCommittedEpochBinding does — a
+        // top-level require would cycle (replan requires this module).
+        const replan = require('./kaola-gitea-workflow-replan');
+        const projectDir = path.dirname(path.resolve(planPath));
+        const refuseLineage = (lineageReason, detail) => {
+          const out = { result: 'refuse', reason: 'epoch_lineage_unverified',
+            lineage_reason: String(lineageReason || 'unknown'),
+            operator_hint: getOperatorHint('epoch_lineage_unverified', { reason: lineageReason }),
+            errors: ['the epoch lineage under .cache/epochs/ did not verify (' + lineageReason + ')'
+              + (detail ? ': ' + detail : '')
+              + ' — the whole-plan barrier unions the SEALED parent-epoch write sets into the declared'
+              + ' allowlist, so an unverified lineage cannot be trusted to widen it; this is NOT a'
+              + ' write_set_overflow and must not be answered with revert-overflow'] };
+          process.stdout.write((json ? JSON.stringify(out)
+            : 'typed refusal: epoch_lineage_unverified (' + lineageReason + ')') + '\n');
+          process.exitCode = 1;
+        };
+        // The lineage chain (contiguity, lineage id, claim root, active manifest digest, live plan
+        // hash) is only BOUND when the state carries a current epoch envelope. A legacy (envelope-
+        // absent) state leaves verifyAllEpochSnapshots unbound, which would let an unbound snapshot
+        // set widen the allowlist — refuse instead. This is the verifier's OWN binding precondition,
+        // read the same way it reads it.
+        let stateAuthority;
+        try {
+          stateAuthority = schema.validateEpochStateAuthority(
+            replan.parseStateFields(fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8')));
+        } catch (_) { stateAuthority = { ok: false, reason: 'snapshot_state_binding_unreadable' }; }
+        if (!stateAuthority.ok) { refuseLineage(stateAuthority.reason); return; }
+        if (stateAuthority.legacy) { refuseLineage('state_epoch_schema_missing'); return; }
+        // ONE walker, reused: verifyAllEpochSnapshots enumerates every .cache/epochs/<N>, verifies
+        // each manifest seal, recomputes the authority projection FROM the archived plan bytes, and
+        // binds the chain. Once it returns ok the union is a plain enumeration.
+        const lineage = replan.verifyAllEpochSnapshots(projectDir);
+        if (!lineage.ok) { refuseLineage(lineage.reason, lineage.detail || lineage.path || lineage.epoch); return; }
+        const rows = lineage.snapshots || [];
+        // Defense in depth over the walker's own contiguity proof: select ancestor epochs by INTEGER
+        // INDEX (parent_plan_hash covers only Meta + Nodes + Node Briefs, so it is NOT a unique pin
+        // and must never be used to identify a lineage member).
+        if (rows.length !== planEpoch - 1 || rows.some((row, i) => row.epoch !== i + 1)) {
+          refuseLineage('snapshot_epoch_sequence_invalid'); return;
+        }
+        lineagePlans = [];
+        for (const row of rows) {
+          const snapPlanPath = path.join(projectDir, '.cache', 'epochs', String(row.epoch), 'files', 'workflow-plan.md');
+          let snapContent;
+          try { snapContent = fs.readFileSync(snapPlanPath, 'utf8'); }
+          catch (_) { refuseLineage('snapshot_plan_unreadable', 'epoch ' + row.epoch); return; }
+          lineagePlans.push({ epoch: row.epoch, nodes: parseNodes(snapContent), ledger: parseLedger(snapContent) });
+        }
+      }
     }
-    const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag });
+    const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag, lineagePlans });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;
