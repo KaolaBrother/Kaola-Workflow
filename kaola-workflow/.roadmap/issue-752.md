@@ -1,5 +1,0 @@
-issue: #752
-title: bug(scheduler): read-only predicate unification lets a node declaring none/n-a co-open without a disjointness proof — unpinned behavior widening
-status: ready — filed 2026-07-21 by adversarial verification of our own predicate unification; low risk, non-blocking, UNPINNED
-workflow_project: —
-next_step: WAVE 3 — ACCEPT + PIN (option 1), decided from code: parseWriteSetCell has no case for none/n-a and returns a one-element Set of a FICTIONAL path, so the old behavior was strictly worse (a lane group whose allowlist was ["none","n/a",...] plus real worktrees for nodes writing nothing). No protection is skipped: write-set truthfulness is enforced unconditionally by the close barrier, and the plan-validator already picked the folded side. TEST-ONLY, one file (simulate-workflow-walkthrough.js, not edition-mirrored) -> claude chain alone, no four-chain obligation. Test must discriminate under mutation: reverting isReadOnlyNode flips the none/n-a nodes to kind=write and leaves the real-write-set node unchanged.

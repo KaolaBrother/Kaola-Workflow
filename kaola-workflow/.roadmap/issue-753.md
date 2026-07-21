@@ -1,0 +1,5 @@
+issue: #753
+title: bug(plan-validator): --finalize-check attribution sweep ignores the epoch lineage — the other half of the multi-epoch finalize block
+status: ready — filed 2026-07-21 from adversarial verification of the #724 barrier fix; confirmed by code read, not yet reproduced end-to-end
+workflow_project: —
+next_step: Mirror the #724 barrier fix into the finalize attribution sweep: completeDeclared is built from parseNodes(content) — the CHILD plan only — and refuses unattributed_change on parent-epoch paths, so a replanned run now clears the barrier and is refused at finalize on the SAME paths. Reuse verifyAllEpochSnapshots (do not write a second lineage walker), select epochs by INTEGER INDEX (parent_plan_hash is not a unique byte pin), fail closed with a typed lineage reason. CRITICAL: extend the attribution floor the same way the barrier's was — fold parent nodes keyed to THEIR OWN epoch ledger status, or the union becomes a laundering primitive. Blocked in practice on #754 (the archived repro artifact fails snapshot verification for the unrelated mode-drift reason), so either fix #754 first or build a synthetic fixture with genuine seals.
