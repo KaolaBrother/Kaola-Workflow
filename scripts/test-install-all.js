@@ -2,12 +2,16 @@
 'use strict';
 // Contract test for install-all.sh — the one entrypoint that reinstalls all four
 // runtime editions. Two jobs:
-//   1. GUARD: assert install-all.sh references every KNOWN runtime installer, from
-//      a single source-of-truth list cross-checked against the tree. When a 5th
-//      runtime edition is added later, this fails red until install-all.sh names
-//      it — so a runtime can never again be silently dropped from "install
+//   1. GUARD: assert install-all.sh references every runtime installer, checked in
+//      BOTH directions — the hand-maintained list must exist in the tree, AND the
+//      installer set DERIVED FROM THE TREE (top-level install*.sh minus documented
+//      non-runtime entries, plus the codex installer script) must be referenced in
+//      install-all.sh and present in the list. So a 5th runtime edition added later
+//      fails red until install-all.sh names it, with no human required to grow a
+//      literal first — a runtime can never be silently dropped from "install
 //      everything" (the machine-enforced form of the operator note that let Kimi
-//      slip repeatedly). A synthetic 5th-installer fixture proves the guard bites.
+//      slip repeatedly). A filesystem-backed synthetic 5th-installer fixture proves
+//      the derivation actually scans the tree and reports an unwired installer.
 //   2. BEHAVIOR: drive install-all.sh against STUB installers (via the
 //      KAOLA_INSTALL_ALL_ROOT seam) and assert the per-runtime PASS/FAIL summary,
 //      non-zero-on-any-failure, --strict fail-fast, --skip, and --check no-mutation.
@@ -35,9 +39,32 @@ const KNOWN_INSTALLERS = [
   { runtime: 'kimi',     file: 'install-kimi.sh',                                             ref: 'install-kimi.sh' },
 ];
 
-// Guard: which known installers are NOT referenced in the wrapper source.
+// ---- tree-derived installer set (so the list above can never go stale) ----
+// The codex installer is the one non-globbable entry: it is .js and lives in the
+// plugin tree, so it is carried as a fixed known path.
+const CODEX_INSTALLER = 'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js';
+const WRAPPER_BASENAME = 'install-all.sh';
+// Documented exclusions: top-level install*.sh files that are deliberately NOT a
+// per-runtime installer. install-all.sh IS the orchestrator, not a runtime. Any
+// other new install*.sh is presumed a runtime installer until it is added here.
+const NON_RUNTIME_INSTALLERS = new Set([WRAPPER_BASENAME]);
+
+// Scan `root` for runtime installers. `/^install.*\.sh$/` matches install.sh and
+// install-*.sh and never matches uninstall.sh (leading "u").
+function discoverInstallers(root) {
+  const out = fs.readdirSync(root)
+    .filter(f => /^install.*\.sh$/.test(f) && !NON_RUNTIME_INSTALLERS.has(f))
+    .sort()
+    .map(f => ({ runtime: f, file: f, ref: f }));
+  if (fs.existsSync(path.join(root, CODEX_INSTALLER))) {
+    out.push({ runtime: 'codex', file: CODEX_INSTALLER, ref: path.basename(CODEX_INSTALLER) });
+  }
+  return out;
+}
+
+// Guard: which installers are NOT referenced in the wrapper source.
 function missingFromWrapper(installers, wrapperSrc) {
-  return installers.filter(i => !wrapperSrc.includes(i.ref)).map(i => i.runtime);
+  return installers.filter(i => !wrapperSrc.includes(i.ref)).map(i => i.runtime || i.ref);
 }
 
 // ---- 1. GUARD assertions against the real install-all.sh ----
@@ -54,12 +81,53 @@ for (const i of KNOWN_INSTALLERS) {
 assert(missingFromWrapper(KNOWN_INSTALLERS, wrapperSrc).length === 0,
   'guard: all four known installers are referenced in install-all.sh');
 
-// Negative proof: a synthetic 5th installer NOT wired into the wrapper must be
-// reported missing — this is what fails red when a new runtime is dropped.
-const synthetic5th = { runtime: 'phantom', file: 'install-phantom.sh', ref: 'install-phantom.sh' };
-const missingWithPhantom = missingFromWrapper(KNOWN_INSTALLERS.concat([synthetic5th]), wrapperSrc);
-assert(missingWithPhantom.length === 1 && missingWithPhantom[0] === 'phantom',
-  'guard proof: an unwired 5th installer is reported missing (guard would fail red)');
+// The other direction: every installer DISCOVERED IN THE TREE must be wired into
+// install-all.sh and accounted for in KNOWN_INSTALLERS. This is what fails red for
+// a new install-*.sh that nobody remembered to add to the list above.
+const discovered = discoverInstallers(REPO);
+const knownRefs = new Set(KNOWN_INSTALLERS.map(i => i.ref));
+for (const inst of discovered) {
+  assert(wrapperSrc.includes(inst.ref),
+    `guard(tree-derived): install-all.sh references discovered installer ${inst.ref}`);
+  assert(knownRefs.has(inst.ref),
+    `guard(tree-derived): discovered installer ${inst.ref} is present in KNOWN_INSTALLERS`);
+}
+
+// Negative proof, filesystem-backed: build a fixture tree holding the four real
+// installers PLUS an unwired synthetic 5th, and a wrapper source that names only
+// the four. The derivation must SCAN THE TREE, surface the phantom, and report it
+// missing — this is what fails red when a new runtime is dropped.
+{
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-all-guard-'));
+  try {
+    const touch = (rel) => {
+      const abs = path.join(fixtureRoot, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, '');
+    };
+    ['install.sh', 'install-opencode.sh', 'install-kimi.sh', 'install-phantom.sh',
+     'install-all.sh', 'uninstall.sh'].forEach(touch);
+    touch(CODEX_INSTALLER);
+    const fixtureWrapperSrc = KNOWN_INSTALLERS.map(i => i.ref).join('\n');
+
+    const disc = discoverInstallers(fixtureRoot);
+    const discRefs = disc.map(i => i.ref);
+    assert(discRefs.includes('install-phantom.sh'),
+      'guard proof: derivation scans the tree and finds a new install-*.sh');
+    assert(!discRefs.includes('install-all.sh'),
+      'guard proof: derivation excludes the install-all.sh wrapper itself');
+    assert(!discRefs.includes('uninstall.sh'),
+      'guard proof: derivation excludes uninstall.sh');
+    assert(discRefs.includes(path.basename(CODEX_INSTALLER)),
+      'guard proof: derivation includes the codex installer script');
+    assert(missingFromWrapper(disc, fixtureWrapperSrc).includes('install-phantom.sh'),
+      'guard proof: an unwired discovered installer is reported missing (guard would fail red)');
+    assert(missingFromWrapper(disc.filter(i => i.ref !== 'install-phantom.sh'), fixtureWrapperSrc).length === 0,
+      'guard proof: fully wired installers are reported as complete');
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
 
 // The RUNTIMES source-of-truth array in the wrapper lists exactly the four.
 assert(/RUNTIMES=\(claude opencode codex kimi\)/.test(wrapperSrc),
