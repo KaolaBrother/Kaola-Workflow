@@ -1,5 +1,5 @@
 issue: #743
 title: chore(adaptive): retire the escalated_to_full halt-marker vestige — the full path it references no longer exists
-status: ready — filed 2026-07-21 (post-v6.24.0 audit; clearly-redundant retirement residue)
+status: PARTIALLY SHIPPED — the dual-marker retirement landed (0308f78f, merged 35e4800d); the naming half is deliberately unimplemented
 workflow_project: —
-next_step: BATCH 2 (prunes+papercuts) — single-marker halt record, legacy marker tolerated on read, write-halt/clear-halt symmetric; 4-edition mirror
+next_step: SHIPPED: write-halt no longer co-writes the vestigial escalated_to_full:security half beside consent; all four halt reasons share one marker-splice path (net -123 lines). Proven dead first (zero security_halt hits repo-wide; every live reader takes the FIRST marker line). clear-halt stays a superset and still strips the legacy half, pinned by T-360d, because the four installed v6.24.0 runtimes can still write the dual marker. REMAINING (value call, not deferred work): retiring the escalated_to_full NAME. The key is read by repair-state, orient and per-edition codex-compact-resume and appears in in-flight workflow-state.md, so a rename needs a dual-name tolerance path — ADDING a compatibility mechanism to buy a cosmetic rename, which is the wrong direction against the reduce-redundancy objective. Re-scope to the naming question with that cost stated, or close as satisfied-in-substance.
