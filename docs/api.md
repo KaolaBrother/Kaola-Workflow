@@ -3327,9 +3327,22 @@ but the live folder being archived no longer holds it, or the #676 lossy-copy fa
 copied archive dropped a file the source held. Both name the lost files in `missing`. The refusal
 fires BEFORE any archive mutation — the live folder is not deleted — and the `finalize` step is
 left NOT done so a re-run retries it after the operator restores the run's `.cache` evidence
-(from the worktree copy, if it still exists). The benign snapshot family (`missing: []`, e.g. a
-journal-only live dir holding nothing but the sink's own receipt) keeps its historical silent
-skip.
+(from the worktree copy, if it still exists).
+
+**Empty-`missing[]` authority refusals also refuse (issue #746).** `archiveProjectDir` collapses
+every epoch-authority refusal into one shape whose signal is a reason string, not a file list:
+`{archive_incomplete: true, missing: [], snapshot_error: "<reason>"}`. Keying the loud-fail on
+`missing.length > 0` alone therefore swallowed real post-run incompleteness — e.g.
+`state_compliance_progress_invalid` (a `## Required Agent Compliance` row still `pending` while its
+ledger row is `complete`) — and reported `status:"sinked"` with the project never archived and the
+roadmap never reconciled. The discriminator is now allowlist-narrowed: the sink refuses on ANY
+`archive_incomplete` that either loses evidence (`missing.length > 0`) OR carries a `snapshot_error`
+outside the benign allowlist. That allowlist holds exactly one reason — `state_missing`, the
+journal-only live dir holding nothing but the sink's own receipt, where nothing was recorded and
+therefore nothing can be lost. Every other reason (`state_ledger_progress_invalid`,
+`state_active_plan_hash_mismatch`, `state_task_mirror_mismatch`, `snapshot_authority_invalid`,
+`snapshot_verifier_unavailable`, …) fails closed and surfaces as `archive_refusal` with
+`missing: []`.
 
 ```json
 {
