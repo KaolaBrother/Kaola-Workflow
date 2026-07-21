@@ -2095,6 +2095,30 @@ freezing a stale number into durable history:
 
 Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
 
+### Legacy-claim freeze admission (#749)
+
+A **fresh freeze may only run over a claim that carries the epoch lineage envelope.** Immediately
+before the validator `--freeze-checked` spawn (after the replan fence and the bundle-coherence
+check, so no mutation has happened yet), `kaola-workflow-adaptive-handoff.js` requires
+`workflow-state.md` to carry an `epoch_schema_version:` line.
+
+- **Why:** a pre-envelope (legacy) claim cannot be inherited by the claim-preserving re-plan
+  transaction — its historical claim root is unprovable (`legacy_claim_root_unprovable`) as soon as
+  the run's node opens span more than one commit. Freezing a current plan over such a claim
+  produces a run that is unreplannable the moment a gate demands a re-plan, so admission is refused
+  up front instead.
+- **Refusal shape:** `handoff_status:'plan_invalid'`, `result:'refuse'`,
+  `reason:'legacy_claim_upgrade_required'`, one `errors[]` entry naming the recovery, and
+  `validator_verdict:null`. Exit non-zero; nothing mutated — plan and state stay byte-identical and
+  no validator/roadmap/mirror spawn is issued.
+- **Recovery:** release the claim (`kaola-workflow-claim.js release --project <name>`) and re-claim
+  the issue — claiming writes the complete envelope — then re-author and freeze the plan. The
+  handoff never promotes a claim in place: reconstructing a historical claim root after the fact is
+  not decidable.
+- **Scope:** the fresh-freeze path only. The committed-replan branch keeps its own
+  `verifyCurrentEpochAuthority` check, and the archive/finalize legacy tolerance (`authority_kind:
+  'legacy'`) is unchanged, so already-frozen legacy runs still resume and finalize.
+
 ### Worktree project-folder mirror (#335)
 
 A fresh adaptive worktree is provisioned at claim time (before any plan exists) and the planner

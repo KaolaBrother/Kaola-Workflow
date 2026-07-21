@@ -108,12 +108,23 @@ function makeFrozenInProgressPlan(planHash) {
   ].join('\n') + '\n';
 }
 
+// The epoch lineage envelope every current claim writes. A state file WITHOUT it
+// is a legacy (pre-envelope) claim, which the handoff refuses to freeze over.
+const EPOCH_ENVELOPE_LINES = [
+  '## Epoch Lineage',
+  'epoch_schema_version: 2',
+  'plan_epoch: 1',
+  'active_plan_hash: none',
+  '',
+];
+
 // Minimal workflow-state.md content with ## Sink trailing fields.
 function makeStateContent(opts) {
   opts = opts || {};
   const issueNumber = opts.issueNumber !== undefined ? opts.issueNumber : 42;
   const hasSink = opts.hasSink !== false;
   const hasPlanningEvidence = opts.hasPlanningEvidence || false;
+  const hasEpochEnvelope = opts.hasEpochEnvelope !== false;
   const extraSinkFields = opts.extraSinkFields || '';
 
   const lines = [
@@ -135,6 +146,8 @@ function makeStateContent(opts) {
     'last_command: claim',
     '',
   ];
+
+  if (hasEpochEnvelope) lines.push(...EPOCH_ENVELOPE_LINES);
 
   if (hasPlanningEvidence) {
     lines.push('## Planning Evidence');
@@ -690,6 +703,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'phase_file: N/A',
     'last_command: claim',
     '',
+    ...EPOCH_ENVELOPE_LINES,
   ].join('\n');
 
   const shellStub5b = makeShellStub({
@@ -782,6 +796,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'phase_file: N/A',
     'last_command: claim',
     '',
+    ...EPOCH_ENVELOPE_LINES,
     '## Last Updated',
     '2026-06-01T00:00:00.000Z',
     '',
@@ -2071,6 +2086,82 @@ function runMirrorHandoffCase(mirrorResponse) {
   assert(!(inertDoc.errors || []).some(e => /g4_common_certifier_uncovered/.test(e)),
     'R3 G4 green control: an inert doc (docs/decisions/**) is not a code producer and G4 stays covered, got '
       + JSON.stringify({ result: inertDoc.result, errors: inertDoc.errors }));
+}
+
+// ---------------------------------------------------------------------------
+// R1 — legacy-claim freeze admission. A claim state that carries NO epoch lineage
+// envelope (a pre-envelope claim) must not be admitted to a fresh freeze: the
+// claim-preserving re-plan path cannot later inherit such a claim, so a plan frozen
+// over it is unreplannable. The handoff refuses with the typed reason
+// legacy_claim_upgrade_required BEFORE the validator freeze chain — zero validator
+// spawn, zero plan/state mutation. Recovery is release + re-claim (claiming writes
+// the complete envelope). The envelope-carrying control still reaches ready_to_run.
+// ---------------------------------------------------------------------------
+{
+  const HASH = PLAN_HASH_64;
+  const planContent = makeUnfrozenPlan('auto-run');
+
+  const responses = {
+    'kaola-workflow-plan-validator.js:--freeze-checked': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: HASH, frozen: false,
+      risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+      governance: { decision: 'auto-run', risk: {} },
+    },
+    'kaola-workflow-plan-validator.js:--freeze': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: HASH, frozen: true,
+      resumeOk: true, risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+    },
+    'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true },
+    'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'exists', dest: '/wt/kaola-workflow/test-project' },
+  };
+
+  function runOverState(stateContent) {
+    const spawned = [];
+    const writes = [];
+    const baseShell = makeShellStub(responses);
+    const result = runHandoff({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      json: true,
+      shell: (scriptPath, scriptArgs) => {
+        spawned.push(path.basename(scriptPath) + ' ' + (scriptArgs || []).join(' '));
+        return baseShell(scriptPath, scriptArgs);
+      },
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return stateContent;
+        return '';
+      },
+      writeFile: (fpath, content) => { writes.push({ path: fpath, content }); },
+      stateMtime: undefined,
+    });
+    return { result, spawned, writes };
+  }
+
+  const legacy = runOverState(makeStateContent({ hasEpochEnvelope: false }));
+  assert(legacy.result.handoff_status === 'plan_invalid' && legacy.result.result === 'refuse'
+    && legacy.result.reason === 'legacy_claim_upgrade_required',
+  'R1: envelope-less claim state must refuse with typed reason legacy_claim_upgrade_required, got '
+    + JSON.stringify({ handoff_status: legacy.result.handoff_status, result: legacy.result.result,
+      reason: legacy.result.reason }));
+  assert(Array.isArray(legacy.result.errors)
+    && legacy.result.errors.some(e => /release/.test(e) && /claim/.test(e)),
+  'R1: refusal must carry an operator hint naming release + re-claim, got '
+    + JSON.stringify(legacy.result.errors));
+  assert(legacy.writes.length === 0,
+    'R1: legacy-claim refusal must not write plan or state, got ' + JSON.stringify(legacy.writes.map(w => w.path)));
+  assert(legacy.spawned.length === 0,
+    'R1: legacy-claim refusal must precede every shelled spawn (validator/roadmap/mirror), got '
+      + JSON.stringify(legacy.spawned));
+
+  const current = runOverState(makeStateContent({}));
+  assert(current.result.handoff_status === 'ready_to_run',
+    'R1 green control: an envelope-carrying claim state still freezes to ready_to_run, got '
+      + JSON.stringify({ handoff_status: current.result.handoff_status, errors: current.result.errors }));
 }
 
 // Summary
