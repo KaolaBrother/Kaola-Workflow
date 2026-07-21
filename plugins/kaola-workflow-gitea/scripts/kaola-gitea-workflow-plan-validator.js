@@ -2888,6 +2888,70 @@ function finalizeReplanEnvelope(fence) {
   };
 }
 
+// #724 + #753: resolve the SEALED parent-epoch plans of a schema-2 child, for the TWO gates that must
+// widen a child-only allowlist with the lineage: the whole-plan `--barrier-check` (declared write-set
+// union) and the `--finalize-check` attribution sweep. ONE resolver, ONE walker — the lineage proof is
+// replan.verifyAllEpochSnapshots (manifest seals, authority projection recomputed FROM the archived plan
+// bytes, contiguity, lineage id, claim root, active manifest digest, live plan hash); this function
+// never re-derives any of it. Both consumers WIDEN a safety set from evidence living under .cache/**,
+// which is inside their own exempt allowband — so an unverified lineage is an allowlist-widening
+// primitive and every failure mode returns { ok: false, reason } for the caller to refuse on.
+//
+// Returns:
+//   { applicable: false }                        — not a schema-2 child; the caller stays child-only
+//   { applicable: true, ok: false, reason, detail? }
+//   { applicable: true, ok: true, lineagePlans } — [{ epoch, nodes, ledger }], ONE per sealed ancestor
+//
+// The activation conditions are deliberately narrow: an epoch-1 schema-2 plan has no snapshots at all
+// and must NOT take this path (it would refuse on an empty lineage), and a plan with no
+// parent_plan_hash is not a child.
+function resolveEpochLineagePlans(content, planPath) {
+  const epochContract = parseEpochContract(content);
+  const planEpoch = Number(epochContract.fields.plan_epoch);
+  if (!(epochContract.active && Number.isFinite(planEpoch) && planEpoch >= 2
+      && String(epochContract.fields.parent_plan_hash || '').trim())) {
+    return { applicable: false };
+  }
+  // Lazily required INSIDE the function body, exactly as validateCommittedEpochBinding does — a
+  // top-level require would cycle (replan requires this module).
+  const replan = require('./kaola-gitea-workflow-replan');
+  const projectDir = path.dirname(path.resolve(planPath));
+  // The lineage chain (contiguity, lineage id, claim root, active manifest digest, live plan hash) is
+  // only BOUND when the state carries a current epoch envelope. A legacy (envelope-absent) state leaves
+  // verifyAllEpochSnapshots unbound, which would let an unbound snapshot set widen the set — refuse
+  // instead. This is the verifier's OWN binding precondition, read the same way it reads it.
+  let stateAuthority;
+  try {
+    stateAuthority = schema.validateEpochStateAuthority(
+      replan.parseStateFields(fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8')));
+  } catch (_) { stateAuthority = { ok: false, reason: 'snapshot_state_binding_unreadable' }; }
+  if (!stateAuthority.ok) return { applicable: true, ok: false, reason: stateAuthority.reason };
+  if (stateAuthority.legacy) return { applicable: true, ok: false, reason: 'state_epoch_schema_missing' };
+  const lineage = replan.verifyAllEpochSnapshots(projectDir);
+  if (!lineage.ok) {
+    return { applicable: true, ok: false, reason: lineage.reason,
+      detail: lineage.detail || lineage.path || lineage.epoch };
+  }
+  const rows = lineage.snapshots || [];
+  // Defense in depth over the walker's own contiguity proof: select ancestor epochs by INTEGER INDEX
+  // (parent_plan_hash covers only Meta + Nodes + Node Briefs, so it is NOT a unique pin and must never
+  // be used to identify a lineage member).
+  if (rows.length !== planEpoch - 1 || rows.some((row, i) => row.epoch !== i + 1)) {
+    return { applicable: true, ok: false, reason: 'snapshot_epoch_sequence_invalid' };
+  }
+  const lineagePlans = [];
+  for (const row of rows) {
+    const snapPlanPath = path.join(projectDir, '.cache', 'epochs', String(row.epoch), 'files', 'workflow-plan.md');
+    let snapContent;
+    try { snapContent = fs.readFileSync(snapPlanPath, 'utf8'); }
+    catch (_) {
+      return { applicable: true, ok: false, reason: 'snapshot_plan_unreadable', detail: 'epoch ' + row.epoch };
+    }
+    lineagePlans.push({ epoch: row.epoch, nodes: parseNodes(snapContent), ledger: parseLedger(snapContent) });
+  }
+  return { applicable: true, ok: true, lineagePlans };
+}
+
 function readFinalizeReplanFence(planPath) {
   const projectDir = path.dirname(path.resolve(planPath));
   const statePath = path.join(projectDir, 'workflow-state.md');
@@ -4708,19 +4772,10 @@ function main() {
       // #724: EPOCH LINEAGE union (WHOLE-PLAN only). A schema-2 child at plan_epoch >= 2 measures a
       // cumulative diff that includes parent-epoch writes; without the parent write sets the union
       // allowlist is child-only and refuses legitimate, already-gated work write_set_overflow.
-      // barrierCheck is IO-free by contract, so ALL of the lineage IO lives here.
-      //
-      // The activation conditions are deliberately narrow: an epoch-1 schema-2 plan has no snapshots
-      // at all and must NOT take this path (it would refuse on an empty lineage), and a plan with no
-      // parent_plan_hash is not a child.
-      const epochContract = parseEpochContract(content);
-      const planEpoch = Number(epochContract.fields.plan_epoch);
-      if (epochContract.active && Number.isFinite(planEpoch) && planEpoch >= 2
-          && String(epochContract.fields.parent_plan_hash || '').trim()) {
-        // Lazily required INSIDE the function body, exactly as validateCommittedEpochBinding does — a
-        // top-level require would cycle (replan requires this module).
-        const replan = require('./kaola-gitea-workflow-replan');
-        const projectDir = path.dirname(path.resolve(planPath));
+      // barrierCheck is IO-free by contract, so ALL of the lineage IO lives in resolveEpochLineagePlans
+      // (the ONE resolver this gate shares with the --finalize-check attribution sweep).
+      const lineage = resolveEpochLineagePlans(content, planPath);
+      if (lineage.applicable) {
         const refuseLineage = (lineageReason, detail) => {
           const out = { result: 'refuse', reason: 'epoch_lineage_unverified',
             lineage_reason: String(lineageReason || 'unknown'),
@@ -4734,38 +4789,8 @@ function main() {
             : 'typed refusal: epoch_lineage_unverified (' + lineageReason + ')') + '\n');
           process.exitCode = 1;
         };
-        // The lineage chain (contiguity, lineage id, claim root, active manifest digest, live plan
-        // hash) is only BOUND when the state carries a current epoch envelope. A legacy (envelope-
-        // absent) state leaves verifyAllEpochSnapshots unbound, which would let an unbound snapshot
-        // set widen the allowlist — refuse instead. This is the verifier's OWN binding precondition,
-        // read the same way it reads it.
-        let stateAuthority;
-        try {
-          stateAuthority = schema.validateEpochStateAuthority(
-            replan.parseStateFields(fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8')));
-        } catch (_) { stateAuthority = { ok: false, reason: 'snapshot_state_binding_unreadable' }; }
-        if (!stateAuthority.ok) { refuseLineage(stateAuthority.reason); return; }
-        if (stateAuthority.legacy) { refuseLineage('state_epoch_schema_missing'); return; }
-        // ONE walker, reused: verifyAllEpochSnapshots enumerates every .cache/epochs/<N>, verifies
-        // each manifest seal, recomputes the authority projection FROM the archived plan bytes, and
-        // binds the chain. Once it returns ok the union is a plain enumeration.
-        const lineage = replan.verifyAllEpochSnapshots(projectDir);
-        if (!lineage.ok) { refuseLineage(lineage.reason, lineage.detail || lineage.path || lineage.epoch); return; }
-        const rows = lineage.snapshots || [];
-        // Defense in depth over the walker's own contiguity proof: select ancestor epochs by INTEGER
-        // INDEX (parent_plan_hash covers only Meta + Nodes + Node Briefs, so it is NOT a unique pin
-        // and must never be used to identify a lineage member).
-        if (rows.length !== planEpoch - 1 || rows.some((row, i) => row.epoch !== i + 1)) {
-          refuseLineage('snapshot_epoch_sequence_invalid'); return;
-        }
-        lineagePlans = [];
-        for (const row of rows) {
-          const snapPlanPath = path.join(projectDir, '.cache', 'epochs', String(row.epoch), 'files', 'workflow-plan.md');
-          let snapContent;
-          try { snapContent = fs.readFileSync(snapPlanPath, 'utf8'); }
-          catch (_) { refuseLineage('snapshot_plan_unreadable', 'epoch ' + row.epoch); return; }
-          lineagePlans.push({ epoch: row.epoch, nodes: parseNodes(snapContent), ledger: parseLedger(snapContent) });
-        }
+        if (!lineage.ok) { refuseLineage(lineage.reason, lineage.detail); return; }
+        lineagePlans = lineage.lineagePlans;
       }
     }
     const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag, lineagePlans });
@@ -5277,6 +5302,29 @@ function main() {
       boundCandidateHash = currentCandidate;
     }
     // ---- (B) attribution sweep (#424) ----
+    // #753: EPOCH LINEAGE resolution — the OTHER HALF of #724. The sweep below attributes against the
+    // CHILD plan only, so a schema-2 child at plan_epoch >= 2 clears the whole-plan barrier (which
+    // unions the lineage) and is then refused `unattributed_change` at finalize on EXACTLY the same
+    // parent-epoch paths. Resolved with the SAME resolver + the SAME single walker the barrier uses,
+    // and BEFORE the diff so an unverified lineage fails closed on its own reason regardless of what
+    // the tree looks like. Note validateCommittedEpochBinding above also consumes
+    // verifyAllEpochSnapshots, but ONLY while the replan transaction journal is present and committed
+    // (its first line short-circuits to ok otherwise) — that fence is not this gate's proof.
+    const lineage = resolveEpochLineagePlans(content, planPath);
+    if (lineage.applicable && !lineage.ok) {
+      const out = { result: 'refuse', reason: 'epoch_lineage_unverified',
+        lineage_reason: String(lineage.reason || 'unknown'),
+        operator_hint: getOperatorHint('epoch_lineage_unverified', { reason: lineage.reason }),
+        errors: ['the epoch lineage under .cache/epochs/ did not verify (' + lineage.reason + ')'
+          + (lineage.detail ? ': ' + lineage.detail : '')
+          + ' — the finalize attribution sweep unions the SEALED parent-epoch declarations (each keyed'
+          + ' to its OWN epoch\'s ledger status) into the attributed set, so an unverified lineage'
+          + ' cannot be trusted to widen it; this is NOT an unattributed_change and must not be'
+          + ' answered by deleting the files'] };
+      process.stdout.write((json ? JSON.stringify(out)
+        : 'typed refusal: epoch_lineage_unverified (' + lineage.reason + ')') + '\n');
+      process.exitCode = 1; return;
+    }
     // Enumerate every file changed since the branch diverged from main (`git diff <base>...HEAD`).
     const base = flagVal('--base') || 'main';
     let changed = [];
@@ -5295,6 +5343,20 @@ function main() {
     const completeDeclared = new Set();
     for (const n of nodes) {
       if (ledger.get(n.id) === 'complete') for (const p of (n.writeSet || [])) completeDeclared.add(p);
+    }
+    // #753: extend the attributed set with the SEALED parent-epoch nodes, each keyed to ITS OWN epoch's
+    // ledger status — the same complete-only rule the child walk above applies, read from the archived
+    // plan the node actually ran under. Unioning DECLARATIONS without ATTRIBUTION would be a laundering
+    // primitive: a parent node that never ran (`n/a`/pending) would carry its declared file through the
+    // union, and its write would go out unreviewed. A parent-declared path whose parent row was never
+    // `complete` therefore still lands in the EXISTING unattributed_change arm — same teeth, no new
+    // reason code. Reached ONLY after resolveEpochLineagePlans proved the whole on-disk lineage.
+    for (const lp of (lineage.ok ? lineage.lineagePlans : [])) {
+      for (const n of (lp.nodes || [])) {
+        if (lp.ledger && lp.ledger.get(n.id) === 'complete') {
+          for (const p of (n.writeSet || [])) completeDeclared.add(p);
+        }
+      }
     }
     const unattributed = changed.filter(p =>
       !isBarrierInvisible(p, projTag) && !/^kaola-workflow\//.test(p) && !completeDeclared.has(p));
