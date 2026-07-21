@@ -276,7 +276,10 @@ function routeAdaptive(root, workflowDir, project) {
   const cacheDir = path.join(projectDir, '.cache');
   const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
   const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
-  const verdict = planValidator.verifyVerdictBlock(content, { readCache, globCache });
+  // Thread root/planPath so interior-gate seal corroboration can resolve the per-member
+  // barrier baseline. Without them `gateBarrierBaseCommit` short-circuits, corroboration
+  // always reports false, and every interior gate is reported as stale in THIS view only.
+  const verdict = planValidator.verifyVerdictBlock(content, { readCache, globCache, root, planPath: planFile });
   if (!verdict.ok) { for (const f of verdict.failures) { pendingGates.push({
     requirement: (check.contract_version === 2 ? 'review receipt ' : 'verdict gate ') + f.nodeId + ' (' + f.role + ')',
     status: check.contract_version === 2 ? 'missing-or-stale-review-receipt' : 'missing-verdict',
