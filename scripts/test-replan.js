@@ -3174,4 +3174,212 @@ function initPendingGateFixture() {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// ---------------------------------------------------------------------------
+// #737: the planner attests the image it AUTHORED. `resume` owns the freeze that
+// stamps plan_hash (and, for schema-2, seeds Required Agent Compliance), so the
+// frozen bytes legally differ from the attested bytes. The transaction records the
+// authored witness pair (`child_authored.digest` / `.frozen_digest`) at freeze time
+// and every downstream identity seam is then pure digest arithmetic over bytes that
+// are already recorded. No seam may re-derive the stamp by calling freezePlan /
+// validatePlan / reading the live worktree: the declared_write_set walls are
+// deliberately freeze-only "so a legacy in-flight plan never bricks", and
+// re-applying them at audit time would retroactively invalidate sealed epochs.
+// ---------------------------------------------------------------------------
+
+// Writes the UNSTAMPED image a planner authors plus a fresh attestation over exactly
+// those bytes. Every call re-attests, which is what makes the bounded child-repair
+// loop (invalid child -> repair -> re-attest, all inside one transaction) testable.
+function authoredChild(fx, tx, mutate) {
+  const stamped = childFor(tx, fx.project);
+  let text = stamped.text.replace(/\n\n<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->\n/, '\n');
+  if (typeof mutate === 'function') text = mutate(text);
+  fs.writeFileSync(path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME), text);
+  const attestation = writePlannerAttestationForExistingChild(fx, tx);
+  return { text, attestation, stamped_plan_hash: stamped.hash };
+}
+
+// A forged image that shares the frozen child's plan_hash but differs in bytes.
+// computePlanHash covers only Meta + Nodes (+ Node Briefs), so a trailing edit is
+// hash-neutral — any seam that compared plan hashes instead of digests would admit it.
+function hashPreservingForgery(text) {
+  return String(text) + '<!-- forged authored image -->\n';
+}
+
+// (a) Re-attestation inside ONE live transaction converges. The planner's first
+// authored image is invalid; it repairs and RE-ATTESTS without a new transaction.
+// (c) rides on the same fixture: the sealed epoch must stay verifiable after the
+// live worktree is mutated in a way that would fail a freeze-mode revalidation.
+{
+  const fx = initFixture();
+  try {
+    const tx = advanceToAttestedChild(fx);
+    const childPath = path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME);
+
+    authoredChild(fx, tx, text => text.replace('| child-impl | tdd-guide |', '| child-impl | not-a-role |'));
+    const invalid = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(invalid.reason, 'replan_child_invalid',
+      'an invalid unstamped authored child refuses: ' + JSON.stringify(invalid));
+    const pendingTx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(pendingTx.phase, 'planner_pending', 'the refused child leaves planner_pending authoritative');
+    equal(pendingTx.cas.pre_freeze.result, 'match', 'the pre-freeze CAS receipt is already durable');
+
+    const repaired = authoredChild(fx, pendingTx);
+    const authoredDigest = sha256(fs.readFileSync(childPath));
+    equal(repaired.attestation.child_digest, authoredDigest,
+      're-attestation signs exactly the repaired authored image');
+
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed',
+      'a re-authored + re-attested unstamped child converges in the same transaction: '
+        + JSON.stringify(committed));
+
+    const sealed = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    ok(sealed.child.digest !== authoredDigest,
+      'the freeze genuinely moved the attested bytes (otherwise this test pins nothing)');
+    equal(sealed.child_authored.digest, authoredDigest,
+      'the transaction records the authored image digest the planner signed');
+    equal(sealed.child_authored.frozen_digest, sealed.child.digest,
+      'the transaction records the frozen witness digest produced by that same freeze');
+    equal(sealed.child_authored.attestation_digest, repaired.attestation.attestation_digest,
+      'the authored record is bound to the attestation that signed it');
+    equal(sha256(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'))), sealed.child.digest,
+      'the promoted plan is the frozen image, not the authored one');
+
+    const snapshots = replan.verifyAllEpochSnapshots(fx.projectDir);
+    ok(snapshots.ok, 'the sealed epoch verifies with an authored attestation: ' + JSON.stringify(snapshots));
+
+    // (c) ARCHIVE PURITY. `product.js` is a declared_write_set token of the sealed
+    // child; turning it into a directory reds the freeze-only `directory_shaped_bare`
+    // wall. The archive is immutable, so a seam that re-derived the stamp here would
+    // brick a committed epoch with no repair path.
+    fs.unlinkSync(path.join(fx.root, 'product.js'));
+    fs.mkdirSync(path.join(fx.root, 'product.js'));
+    ok(validator.freezePlan(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'),
+      { root: fx.root }).frozen !== true,
+    'the mutated live tree really does fail a freeze-mode revalidation of the sealed child');
+    const afterMutation = replan.verifyAllEpochSnapshots(fx.projectDir);
+    ok(afterMutation.ok,
+      'a sealed epoch snapshot stays verifiable when the live worktree changes — identity seams '
+        + 'are pure digest arithmetic and never re-derive the stamp: ' + JSON.stringify(afterMutation));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// (d) The freeze MOVES bytes on disk before the child_frozen journal is durable.
+// A crash in that gap must roll forward from the recorded authored image, not wedge
+// on an attestation that no longer matches the file.
+{
+  const fx = initFixture();
+  try {
+    const tx = advanceToAttestedChild(fx);
+    const childPath = path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME);
+    const authored = authoredChild(fx, tx);
+    const authoredDigest = sha256(fs.readFileSync(childPath));
+
+    let crash = null;
+    try {
+      replan.resumeReplan({ repoRoot: fx.root, project: fx.project,
+        failpoint(name) { if (name === 'after_child_frozen_bytes') throw new Error('stop_after_handoff_freeze'); } });
+    } catch (error) { crash = error.message; }
+    equal(crash, 'stop_after_handoff_freeze', 'the authored-child freeze crash seam fires before journaling');
+    const midTx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(midTx.phase, 'planner_pending', 'the crash leaves planner_pending authoritative');
+    equal(midTx.child_authored.digest, authoredDigest,
+      'the authored image is durable before any freeze can move the bytes');
+    ok(sha256(fs.readFileSync(childPath)) !== authoredDigest,
+      'the crash really did leave frozen bytes where the attested image used to be');
+
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed',
+      'the freeze/journal gap rolls forward from the recorded authored image: ' + JSON.stringify(committed));
+    const sealed = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(sealed.child_authored.attestation_digest, authored.attestation.attestation_digest,
+      'the replay commits under the original planner attestation');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// (b) FORGED AUTHORED IMAGE. The recorded authored bytes are byte-pinned to their own
+// digest and to the attestation. A forgery that only preserves plan_hash is refused.
+for (const variant of ['forged_bytes', 'unbound_digest']) {
+  const fx = initFixture();
+  try {
+    const tx = advanceToAttestedChild(fx);
+    const childPath = path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME);
+    authoredChild(fx, tx);
+    try {
+      replan.resumeReplan({ repoRoot: fx.root, project: fx.project,
+        failpoint(name) { if (name === 'after_child_frozen_bytes') throw new Error('stop'); } });
+    } catch (_) {}
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    const midTx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+    equal(midTx.phase, 'planner_pending', variant + ' fixture stops in the freeze/journal gap');
+    const realAuthored = Buffer.from(midTx.child_authored.bytes_base64, 'base64').toString('utf8');
+    const forged = hashPreservingForgery(realAuthored);
+    equal(validator.computePlanHash(forged), validator.computePlanHash(realAuthored),
+      variant + ' forgery shares the authored image plan_hash (the non-hash-covered edit is real)');
+    ok(sha256(Buffer.from(forged, 'utf8')) !== midTx.child_authored.digest,
+      variant + ' forgery is a genuinely different image');
+    // forged_bytes: the recorded image no longer hashes to its own recorded digest.
+    // unbound_digest: a self-consistent forged record that the attestation never signed.
+    midTx.child_authored.bytes_base64 = Buffer.from(forged, 'utf8').toString('base64');
+    if (variant === 'unbound_digest') midTx.child_authored.digest = sha256(Buffer.from(forged, 'utf8'));
+    fs.writeFileSync(txPath, JSON.stringify(midTx, null, 2) + '\n');
+    const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(result.reason, 'replan_planner_attestation_invalid',
+      variant + ' forged authored image is refused, not admitted on a shared plan_hash: '
+        + JSON.stringify(result));
+    ok(fs.existsSync(childPath), variant + ' refusal leaves the child path in place');
+    equal(authorityCardinalities(fx).snapshots, 0, variant + ' forgery creates no epoch snapshot');
+    equal(authorityCardinalities(fx).epoch, 1, variant + ' forgery advances no epoch');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// (b, archive seam) The sealed epoch binds the authored attestation through the exact
+// frozen witness digest. A forged witness that only preserves the sealed child's
+// plan_hash is refused — the seam compares digests, never plan hashes.
+{
+  const fx = initFixture();
+  try {
+    const tx = advanceToAttestedChild(fx);
+    authoredChild(fx, tx);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      'the archive-forgery fixture commits an authored-attestation epoch');
+    ok(replan.verifySnapshotManifest(path.join(fx.cacheDir, 'epochs', '1')).ok,
+      'the authored-attestation epoch seals cleanly before tampering');
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-737-forge-'));
+    try {
+      const projectDir = path.join(root, fx.project);
+      fs.cpSync(fx.projectDir, projectDir, { recursive: true });
+      const epochDir = path.join(projectDir, '.cache', 'epochs', '1');
+      const frozenChild = fs.readFileSync(path.join(epochDir, 'files', schema.REPLAN_PLAN_NEXT_NAME), 'utf8');
+      const forged = hashPreservingForgery(frozenChild);
+      equal(validator.computePlanHash(forged), validator.computePlanHash(frozenChild),
+        'the forged frozen witness shares the sealed child plan_hash');
+
+      const txRel = '.cache/' + schema.REPLAN_TRANSACTION_NAME;
+      const txFile = path.join(epochDir, 'files', '.cache', schema.REPLAN_TRANSACTION_NAME);
+      const archived = JSON.parse(fs.readFileSync(txFile, 'utf8'));
+      ok(archived.child_authored && archived.child_authored.digest !== archived.child.digest
+        && archived.child_authored.frozen_digest === archived.child.digest,
+      'the sealed transaction carries the authored/frozen witness pair');
+      archived.child_authored.frozen_digest = sha256(Buffer.from(forged, 'utf8'));
+      const bytes = Buffer.from(JSON.stringify(archived, null, 2) + '\n', 'utf8');
+      fs.writeFileSync(txFile, bytes);
+
+      const manifestPath = path.join(epochDir, 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const row = manifest.files.find(file => file.path === txRel);
+      ok(!!row, 'the sealed manifest indexes the archived transaction');
+      row.digest = sha256(bytes);
+      row.size = bytes.length;
+      manifest.manifest_self_digest = schema.snapshotManifestDigest(manifest);
+      fs.writeFileSync(manifestPath, schema.canonicalJson(manifest) + '\n');
+
+      const result = replan.verifySnapshotManifest(epochDir);
+      equal(result.reason, 'snapshot_child_binding_invalid',
+        'a forged frozen witness sharing the sealed plan_hash is refused: ' + JSON.stringify(result));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);

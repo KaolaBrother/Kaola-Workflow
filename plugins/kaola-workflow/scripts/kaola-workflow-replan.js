@@ -1339,6 +1339,9 @@ function buildTransaction(paths, opts, parentPlan, parentState, lineage, source,
       freeze_time: null,
       bytes_base64: null,
     },
+    // #737: the image the planner actually signed, plus the frozen witness the freeze
+    // produced from it. Recorded at planner_pending / freeze time; read only as digests.
+    child_authored: null,
     snapshot: {
       epoch_path: '.cache/epochs/' + parentEpoch,
       authority_projection: null,
@@ -1912,6 +1915,20 @@ function plannerDispatchRecord(paths, transaction) {
   return null;
 }
 
+// #737: the planner attests the image it AUTHORED; `resume` owns the freeze that stamps
+// plan_hash (and, for schema-2, seeds Required Agent Compliance), so the frozen bytes may
+// legally differ from the attested bytes. The freeze records the witness pair on the
+// transaction (`child_authored.digest` -> `child_authored.frozen_digest`), and every
+// child-identity seam below is therefore PURE DIGEST ARITHMETIC over bytes that were
+// already recorded. A seam must never re-derive the stamp by calling freezePlan /
+// validatePlan or by reading the live worktree: the declared_write_set walls are
+// deliberately freeze-only so a legacy in-flight plan never bricks, and re-applying them
+// at audit time would retroactively invalidate an immutable, unrepairable sealed epoch.
+function attestedChildBinds(attestedDigest, frozenDigest, authored) {
+  if (attestedDigest === frozenDigest) return true;
+  return !!authored && authored.digest === attestedDigest && authored.frozen_digest === frozenDigest;
+}
+
 function verifyPlannerAttestation(paths, transaction) {
   let child;
   let attestation;
@@ -1931,6 +1948,24 @@ function verifyPlannerAttestation(paths, transaction) {
   const claimedDigest = attestation.attestation_digest;
   const semantic = Object.assign({}, attestation);
   delete semantic.attestation_digest;
+  // #737: the freeze writes the stamped bytes over the authored image BEFORE the
+  // child_frozen journal is durable, so replay after a crash in that gap reads frozen
+  // bytes under an authored attestation. The recorded authored image is the only
+  // admissible substitute — it is byte-pinned to its own digest and to the attestation
+  // that signed it. Digest arithmetic only; the live bytes are never re-derived.
+  let attested = child;
+  if (attestation.child_digest !== schema.sha256Hex(child)) {
+    const record = transaction.child_authored;
+    const recorded = record && typeof record.bytes_base64 === 'string'
+      ? Buffer.from(record.bytes_base64, 'base64') : null;
+    if (!recorded || !recorded.length
+        || schema.sha256Hex(recorded) !== record.digest
+        || record.digest !== attestation.child_digest
+        || record.attestation_digest !== claimedDigest) {
+      return { ok: false, reason: 'replan_planner_attestation_invalid' };
+    }
+    attested = recorded;
+  }
   if (!HEX64_RE.test(String(claimedDigest || '')) || schema.sha256Canonical(semantic) !== claimedDigest
       || attestation.schema_version !== 1
       || attestation.transaction_id !== transaction.transaction_id
@@ -1940,7 +1975,7 @@ function verifyPlannerAttestation(paths, transaction) {
       || attestation.dispatch_nonce !== transaction.planner.dispatch_nonce
       || attestation.profile_identity !== transaction.planner.profile_identity
       || attestation.child_path !== schema.REPLAN_PLAN_NEXT_NAME
-      || attestation.child_digest !== schema.sha256Hex(child)) {
+      || attestation.child_digest !== schema.sha256Hex(attested)) {
     return { ok: false, reason: 'replan_planner_attestation_invalid' };
   }
   let worktree;
@@ -1948,8 +1983,8 @@ function verifyPlannerAttestation(paths, transaction) {
   if (worktree !== fs.realpathSync(paths.repoRoot) || !plannerDispatchRecord(paths, transaction)) {
     return { ok: false, reason: 'replan_planner_attestation_invalid' };
   }
-  return { ok: true, attestation, attestation_digest: claimedDigest, child,
-    child_digest: schema.sha256Hex(child), attestation_file_digest: exactDigest(paths.attestationPath) };
+  return { ok: true, attestation, attestation_digest: claimedDigest, child: attested,
+    child_digest: schema.sha256Hex(attested), attestation_file_digest: exactDigest(paths.attestationPath) };
 }
 
 function metaFields(planContent) {
@@ -2125,7 +2160,7 @@ function verifyFrozenChildAuthority(paths, transaction) {
       || !childBytes.equals(storedChild)
       || child.plan_hash !== transaction.child.plan_hash
       || attestation.transaction_id !== transaction.transaction_id
-      || attestation.child_digest !== childDigest
+      || !attestedChildBinds(attestation.child_digest, childDigest, transaction.child_authored)
       || attestation.attestation_digest !== transaction.planner.attestation_digest
       || schema.sha256Canonical(semanticAttestation) !== attestation.attestation_digest
       || exactDigest(paths.attestationPath) !== transaction.planner.attestation_file_digest) {
@@ -2472,7 +2507,8 @@ function verifySchema2SnapshotBinding(epochDir, manifest, manifestBytes) {
   delete attestationSemantic.attestation_digest;
   if (!childRow || !attestationRow
       || childRow.digest !== childDigest || childDigest !== manifest.child.digest
-      || childDigest !== archivedTx.child.digest || attestation.child_digest !== childDigest
+      || childDigest !== archivedTx.child.digest
+      || !attestedChildBinds(attestation.child_digest, childDigest, archivedTx.child_authored)
       || validator.readStoredHash(childBytes.toString('utf8')) !== manifest.child.plan_hash
       || manifest.child.plan_hash !== archivedTx.child.plan_hash
       || (archivedTx.schema_version === 2 && (!childNodes.length
@@ -3150,6 +3186,7 @@ function resumeReplanUnlocked(paths, opts) {
     if (!attested.ok) return schema.refuse(attested.reason, { detail: attested.detail || null });
     const observed = observeCas(paths, transaction, 'pre_freeze', opts);
     if (!observed.ok) return schema.refuse(observed.reason);
+    let journalPreFreeze = false;
     if (transaction.cas.pre_freeze) {
       if (transaction.cas.pre_freeze.seam !== 'pre_freeze'
           || transaction.cas.pre_freeze.result !== 'match'
@@ -3162,8 +3199,28 @@ function resumeReplanUnlocked(paths, opts) {
     } else {
       transaction.cas.pre_freeze = observed;
       if (observed.result !== 'match') return candidateChanged(paths, transaction, observed, opts);
-      // The matching CAS receipt is durable before the child handoff can freeze
-      // any bytes. A crash after this write replays the same authority tuple.
+      journalPreFreeze = true;
+    }
+    // #737: the record of the image the planner signed is refreshed on EVERY pass through
+    // this phase, in BOTH CAS arms. A planner that repairs an invalid child and RE-ATTESTS
+    // inside the same transaction must never be judged against the draft it replaced —
+    // recording it once would permanently wedge that documented bounded repair loop.
+    const priorAuthored = transaction.child_authored;
+    if (!priorAuthored || priorAuthored.digest !== attested.child_digest
+        || priorAuthored.attestation_digest !== attested.attestation_digest) {
+      transaction.child_authored = {
+        schema_version: 1,
+        digest: attested.child_digest,
+        attestation_digest: attested.attestation_digest,
+        bytes_base64: attested.child.toString('base64'),
+        frozen_digest: null,
+      };
+      journalPreFreeze = true;
+    }
+    if (journalPreFreeze) {
+      // The matching CAS receipt and the attested authored image are durable before the
+      // child handoff can freeze any bytes. A crash after this write replays the same
+      // authority tuple against the same attested image.
       updateTransaction(paths, transaction, opts, 'after_tx_pre_freeze_cas');
     }
     const handoff = freezeAttestedChildWithHandoff(paths, transaction, attested, opts);
@@ -3175,6 +3232,11 @@ function resumeReplanUnlocked(paths, opts) {
     if (child.plan_hash !== handoff.child_plan_hash) return schema.refuse('replan_child_integrity_failure');
     transaction.planner.attestation_digest = attested.attestation_digest;
     transaction.planner.attestation_file_digest = attested.attestation_file_digest;
+    // #737: record the frozen witness the freeze already returned and verified against the
+    // bytes on disk. Every later seam compares this digest instead of re-deriving the stamp,
+    // which is what keeps the sealed archive pure arithmetic over immutable bytes.
+    transaction.child_authored = Object.assign({}, transaction.child_authored,
+      { frozen_digest: handoff.frozen_child_digest });
     transaction.child = {
       contract_version: 2,
       digest: handoff.frozen_child_digest,
