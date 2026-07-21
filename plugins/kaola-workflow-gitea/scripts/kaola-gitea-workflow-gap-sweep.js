@@ -273,8 +273,34 @@ function parseGapSection(summaryPath) {
 
     // Grammar: "- <reasonClass> (<sample>): filed: #N"
     //       OR "- <reasonClass> (<sample>): noise: <text>"
-    const m = l.match(/^-\s+(\S+)\s+\(([^)]+)\):\s+(filed:\s*#(\d+)|noise:\s+(.+))$/);
-    if (!m) continue;
+    //
+    // The sample group is LAZY — (.+?) — and that quantifier is load-bearing in BOTH directions:
+    //   * a negated class ([^)]+) rejects any sample that itself contains ")" (e.g. an API symbol
+    //     like "retryAfter(from:)"), so a correctly-written mapping row never parses and the gate
+    //     refuses gaps_unswept for a gap the operator did map;
+    //   * a GREEDY (.+) backtracks to the LAST "): " in the line, so a legal free-text noise
+    //     justification that happens to contain "): filed: #N" is mis-carved into the sample and
+    //     the gate refuses observed_gap_unseeded quoting a sample the operator never wrote.
+    // Lazy takes the LEFTMOST "): " followed by a valid filed:/noise: tail, which disambiguates
+    // both shapes. Do not "simplify" this quantifier.
+    const m = l.match(/^-\s+(\S+)\s+\((.+?)\):\s+(filed:\s*#(\d+)|noise:\s+(.+))$/);
+    if (!m) {
+      // A line that looks like a mapping attempt but fails the strict grammar used to be dropped
+      // silently, and then surfaced far away as a gaps_unswept / observed_gap_unseeded refusal with
+      // nothing pointing at the offending line. Warn on that population only: a parenthesised
+      // sample immediately followed by a filed:/noise: tail marker. Free-text bullets ("- none",
+      // prose notes) are ignored by design for back-compat and must never warn — they carry no
+      // "(<sample>): filed:|noise:" shape, so they cannot reach this branch's condition. The
+      // warning is advisory: it goes to stderr, never changes the parse result or the exit code,
+      // and never contaminates the single --json line on stdout.
+      if (/^-\s+.*\(.*\):\s*(filed:|noise:)/.test(l)) {
+        process.stderr.write(
+          'gap-sweep: ignoring malformed ## Run gaps mapping line (expected ' +
+          '"- <class> (<sample>): filed: #N" or "- <class> (<sample>): noise: <text>"): ' + l + '\n'
+        );
+      }
+      continue;
+    }
     const reasonClass = m[1];
     const sample      = m[2];
     const full        = m[3];
