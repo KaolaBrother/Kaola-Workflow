@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "6.23.1",
+  "version": "6.24.0",
   "description": "Adaptive Kaola-Workflow for Claude Code and Codex — a GitHub-issue-driven, task-shaped DAG of role nodes run node-by-node by the running-set scheduler. Multi-model orchestration with resumable per-node evidence.",
   "repository": {
     "type": "git",
