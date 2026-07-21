@@ -6653,56 +6653,20 @@ function computeTriage(barrierOut, cacheDir, nodeId, readFile) {
 function runWriteHalt(opts) {
   const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut } = opts;
 
-  // #463 (write-overlap): `merge_conflict` joins the allowlist. It flows through the generic
-  // `else` branch below (escalated_to_full: merge_conflict + consent_halt: pending) — a consent-
-  // style, resumable halt, NOT the consent dual-marker escalation.
+  // #463 (write-overlap): `merge_conflict` joins the allowlist — a consent-style, resumable halt.
   const validReasons = ['consent', 'security', 'test_thrash', 'merge_conflict'];
   if (!validReasons.includes(reason)) {
     return { result: 'refuse', reason: 'invalid_reason', validReasons };
   }
 
-  // Determine markers to write.
-  const stateMarkers = [];  // { key, value } pairs for workflow-state.md
-  const planMarkers  = [];  // lines for ## Node Ledger (in plan)
-
-  // #360 (documented coupling): a consent halt escalates the run to the FULL path, and
-  // `escalated_to_full: security` is the marker that records that escalation — so a consent halt
-  // intentionally writes BOTH `escalated_to_full: consent` (the cause) and `escalated_to_full:
-  // security` (the full-escalation state). clear-halt --reason consent clears both in lockstep.
-  if (reason === 'consent') {
-    stateMarkers.push({ key: 'escalated_to_full', value: 'consent' });
-    stateMarkers.push({ key: 'escalated_to_full', value: 'security' });
-  } else {
-    stateMarkers.push({ key: 'escalated_to_full', value: reason });
-  }
-  planMarkers.push('consent_halt: pending');
-
-  // Write state markers — each marker may need a separate line.
+  // #743: a halt is an IN-PLACE stop-and-ask — the run stays where it is and waits for the
+  // operator. It records exactly ONE marker, the CAUSE (`escalated_to_full: <reason>`), for every
+  // reason including `consent`. (The retired second `escalated_to_full: security` line that a
+  // consent halt used to co-write recorded a hand-off to the removed full path; nothing reads it —
+  // every reader takes the FIRST escalated_to_full line, which is the cause.) clear-halt still
+  // strips the legacy security half so a halt written by an older runtime clears cleanly.
   let stateContent = readFile(statePath);
-
-  if (reason === 'consent') {
-    // Both markers needed — use multi-line insertion.
-    // Insert 'escalated_to_full: consent' and 'escalated_to_full: security'.
-    // First check for existing markers.
-    const hasConsent  = /^escalated_to_full:\s*consent\s*$/m.test(stateContent);
-    const hasSecurity = /^escalated_to_full:\s*security\s*$/m.test(stateContent);
-
-    if (!hasConsent || !hasSecurity) {
-      // Remove any existing escalated_to_full lines first.
-      stateContent = stateContent.replace(/^escalated_to_full:.*\n?/mg, '');
-      // Insert both before ## Last Updated or at EOF.
-      const luMarker = '\n## Last Updated';
-      const luIdx = stateContent.indexOf(luMarker);
-      const insertion = 'escalated_to_full: consent\nescalated_to_full: security\n';
-      if (luIdx >= 0) {
-        stateContent = stateContent.slice(0, luIdx) + '\n' + insertion + stateContent.slice(luIdx);
-      } else {
-        stateContent = stateContent.trimEnd() + '\n' + insertion;
-      }
-    }
-  } else {
-    stateContent = spliceStateMarker(stateContent, 'escalated_to_full', reason);
-  }
+  stateContent = spliceStateMarker(stateContent, 'escalated_to_full', reason);
 
   // Write consent_halt: pending into plan ## Node Ledger FIRST (durable marker).
   // This line is placed below the ledger header, not as a row — it's a freeform marker.
@@ -6733,13 +6697,8 @@ function runWriteHalt(opts) {
   // #373: best-effort telemetry — the node halted.
   appendNodeTiming(planPath, nodeId, 'halted');
 
-  // Build markers list for output.
-  const markers = [];
-  if (reason === 'consent') {
-    markers.push('escalated_to_full:consent', 'escalated_to_full:security', 'consent_halt:pending');
-  } else {
-    markers.push('escalated_to_full:' + reason, 'consent_halt:pending');
-  }
+  // Build markers list for output — one cause marker + the durable ledger marker.
+  const markers = ['escalated_to_full:' + reason, 'consent_halt:pending'];
 
   // #317: the halted node STAYS in_progress (write-halt adds a consent_halt marker, no ledger
   // flip); surface that with a halt note + refresh the mirror (AC4 lists write-halt).
@@ -6817,11 +6776,14 @@ function runClearHalt(opts) {
   // escalated_to_full with no script recovery.
   if (reason === 'consent') {
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*consent[ \t]*\n?/mg, '');
+    // #743 LEGACY TOLERANCE — write-halt(consent) no longer emits a `security` half, but a halt
+    // written by an OLDER runtime carries it on disk. Keep stripping it so such a state file still
+    // clears; removing this line would wedge any in-flight pre-#743 halt.
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
     // #463: a `merge_conflict` halt is a RESUMABLE consent-style halt (it raises
     // consent_halt: pending, cleared here via --reason consent). Strip its cause marker too,
-    // so the run resumes ADAPTIVELY with clean state — it did NOT escalate to the full path.
-    // (Contrast test_thrash, a one-way full escalation deliberately left in place.)
+    // so the run resumes with clean state. (Contrast test_thrash, a terminal halt whose cause
+    // marker is deliberately left in place.)
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*merge_conflict[ \t]*\n?/mg, '');
   } else {
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
