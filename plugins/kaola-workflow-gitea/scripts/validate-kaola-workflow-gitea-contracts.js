@@ -845,9 +845,10 @@ assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispa
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
 // Current Codex adapter: all known role profiles inherit the parent-session runtime pair.
+// Omission plus the profile-freshness preflight are the structural guarantee, so the surface
+// documents parent-session inheritance without a runtime child probe.
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-equals-child inheritance proof');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'installed profile path');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'current parent session');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Codex 0.144 durable-result override');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'dispatch.codex_profile_mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Omit both `model`');
@@ -855,8 +856,11 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'mode
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_tier_mismatch');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_runtime_mismatch');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-equals-child inheritance proof');
+// Retirement lock: the runtime parent-equals-child child-JSONL probe is retired; a reintroduced
+// probe must fail closed here.
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_runtime_mismatch');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-equals-child inheritance proof');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'installed profile path');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'declarative reasoning/wait-budget metadata');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'child inherits the current parent session');
