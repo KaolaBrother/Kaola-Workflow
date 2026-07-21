@@ -1203,7 +1203,7 @@ const OPTIMIZE_WALLCLOCK_CAP = 120;
 // HALT for an unresolvable write-leg convergence (the synthesizer commit barrier): after
 // the bounded-repair cap it raises a consent-style halt (reuses `consent_halt: pending`),
 // cleared via `clear-halt --reason consent` and RESUMED adaptively — unlike `test_thrash`,
-// which is a one-way escalation to the full path. The synthesizer RAISES it: a real conflict bails
+// which is TERMINAL (clear-halt accepts only consent|security, so it never resumes). The synthesizer RAISES it: a real conflict bails
 // (Slice 4), and after the MERGE_CONFLICT_REPAIR_LIMIT bounded-repair cap the orchestrator escalates to
 // this halt (Slice 5). First-detection refusals (member_vacuity for a no-op leg / write_set_overflow / the
 // octopus bail) are repaired FIRST; merge_conflict is what they escalate TO after the cap.
