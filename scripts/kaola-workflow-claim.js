@@ -2099,6 +2099,36 @@ function verifyArchiveEpochAuthority(projectPath) {
   return { ok: true, current, snapshots };
 }
 
+// #735: the RUN-STATE PROGRESS half of the archive authority. These five reasons are the
+// only ones the composed check emits about artifacts a run PRODUCES as it executes — the
+// `## Required Agent Compliance` receipt table, the mutable `## Node Ledger` progress
+// table, and the derived `workflow-tasks.json` mirror. Every OTHER reason it can emit is
+// about the epoch envelope, the immutable frozen plan, the replan transaction, or the
+// snapshot tree, and stays fail-closed for every archive.
+//
+// A `closed` archive is the input to archiveEpochLineagePreserved, whose `preserved`
+// token asserts on the closure receipt that the lineage really was intact — so for a
+// closure the progress artifacts remain load-bearing and this set is NOT consulted.
+//
+// An `abandoned` archive asserts nothing of the sort: it is stamped `abandoned`, lands at
+// `archive/<project>.discarded-<ts>`, and produces no closure receipt and no lineage
+// token. Demanding progress artifacts there made discard structurally unavailable to
+// exactly the projects most in need of it — one frozen by a runtime that did not pre-seed
+// the compliance section, one mid-run whose section still carried the legacy
+// row-per-closed-node partial set, and one whose best-effort freeze-time task-mirror
+// generation never landed. All three are ABSENT or INCOMPLETE run product on a project the
+// user has explicitly asked to abandon, not evidence of tampering, and the refusal was
+// total: no worktree, branch, or claim-label cleanup was attempted either. The reason is
+// recorded on the result as `authority_downgraded` and surfaced by the caller rather than
+// silently dropped.
+const ABANDON_DOWNGRADABLE_AUTHORITY_REASONS = new Set([
+  'state_compliance_authority_invalid',
+  'state_compliance_progress_invalid',
+  'state_ledger_authority_invalid',
+  'state_ledger_progress_invalid',
+  'state_task_mirror_mismatch',
+]);
+
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
@@ -2109,9 +2139,16 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     return { archived: false, reason: 'archive_forced_refusal' };
   }
   const snapshots = verifyArchiveEpochAuthority(src);
+  // #735: an ABANDON downgrades a run-state-progress authority failure to a recorded note;
+  // every other reason, and every `closed` archive, still refuses before any mutation.
+  let authorityDowngraded = null;
   if (!snapshots.ok) {
-    return { skipped: undefined, archived: false, archive_incomplete: true,
-      missing: [], snapshot_error: snapshots.reason || snapshots.detail || 'snapshot_invalid' };
+    const reason = snapshots.reason || snapshots.detail || 'snapshot_invalid';
+    if (statusValue !== 'abandoned' || !ABANDON_DOWNGRADABLE_AUTHORITY_REASONS.has(reason)) {
+      return { skipped: undefined, archived: false, archive_incomplete: true,
+        missing: [], snapshot_error: reason };
+    }
+    authorityDowngraded = reason;
   }
   // #707: fail-closed node-evidence floor for the archive-owning sink (opts.requireNodeEvidence).
   // Both archive branches below (linked-run copy AND in-place rename) destroy the last live copy;
@@ -2290,7 +2327,10 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     roadmap_source_removed: roadmapSourceRemoved,
     roadmap_regenerated: roadmapRegenerated,
     roadmap_sources_removed: removedSources,
-    roadmap_staged_reconciled: stagedReconciled
+    roadmap_staged_reconciled: stagedReconciled,
+    // #735: present ONLY when an abandon proceeded past a run-state-progress authority
+    // failure, so the outcome is never silently laundered as a fully-verified archive.
+    ...(authorityDowngraded ? { authority_downgraded: authorityDowngraded } : {}),
   };
 }
 
@@ -3445,6 +3485,14 @@ function cmdRelease() {
   if (claimLabelRemoved !== 'removed' && claimLabelRemoved !== 'skipped_offline') {
     releaseWarnings.push('claim label removal status: ' + claimLabelRemoved +
       ' — the workflow:in-progress label may still be on the issue; the next claim could hit user_target_blocked.');
+  }
+  // #735: an abandon that proceeded past a run-state-progress authority failure says so out
+  // loud. The discard was still the right outcome (the user asked to abandon, and the archive
+  // asserts no closure), but the archived folder is not a fully-verified lineage record.
+  if (result.authority_downgraded) {
+    releaseWarnings.push('run-state authority downgraded: ' + result.authority_downgraded +
+      ' — the discard archive is a user-consented abandon, not a verified lineage record; it carries ' +
+      'incomplete run-state progress artifacts (compliance/ledger/task-mirror).');
   }
   // #715: a failed discard-archive commit must not strand the release — surface it loudly.
   if (!discardCommit.committed) {

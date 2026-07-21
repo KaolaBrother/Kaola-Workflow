@@ -3880,6 +3880,224 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// ---------------------------------------------------------------------------
+// #735: a user-consented ABANDON must not demand run-state artifacts the project
+// never produced. archiveProjectDir gates EVERY archive on the composed epoch
+// authority (verifyCurrentEpochAuthority + verifyAllEpochSnapshots). For a
+// `closed` archive that gate is load-bearing (the closure receipt's
+// epoch_lineage_preserved token is derived from re-verifying the archived dest).
+// For an `abandoned` archive nothing downstream consumes the run-state progress
+// artifacts, yet a project frozen by a pre-seed runtime (no `## Required Agent
+// Compliance` section at all, or a legacy row-per-closed-node partial set) or one
+// whose best-effort freeze-time `workflow-tasks.json` never landed refused with
+// `state_compliance_authority_invalid` / `state_task_mirror_mismatch` — and the
+// refusal is total: "worktree, branch, and claim-label cleanup was not attempted".
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync, spawnSync } = require('child_process');
+  const schema735 = require('./kaola-workflow-adaptive-schema.js');
+  const validator735 = require('./kaola-workflow-plan-validator.js');
+  const { generateMirror: generateMirror735 } = require('./kaola-workflow-task-mirror.js');
+
+  const gitEnv735 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  });
+  const git735 = (root, args) => execFileSync('git', ['-C', root, ...args],
+    { encoding: 'utf8', env: gitEnv735, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  // Build a frozen schema-2 adaptive plan. `complianceFor` selects which nodes get a
+  // compliance row: undefined = every node (the current pre-seeding freeze), an array =
+  // a legacy row-per-closed-node partial set, null = no section at all (a pre-seed freeze).
+  function plan735(project, nodes, ledger, opts) {
+    const options = opts || {};
+    const rows = nodes.map(n => `| ${n.id} | ${n.role} | ${n.depends_on || '—'} | ${n.write_set || '—'} | 1 | ${n.shape || 'sequence'} | ${n.model || 'standard'} | — | — | — | — |`).join('\n');
+    const ledgerRows = nodes.map(n => `| ${n.id} | ${ledger[n.id] || 'pending'} |`).join('\n');
+    const which = options.complianceFor === undefined ? nodes.map(n => n.id) : options.complianceFor;
+    let text = [
+      `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
+      'labels: enhancement', 'speculative_open_policy: auto',
+      'validation_command: node scripts/simulate-workflow-walkthrough.js',
+      'validation_timeout_minutes: 30', 'plan_schema_version: 2', 'contract_version: 2',
+      '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |', rows,
+      '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows, '',
+    ].join('\n');
+    if (which !== null) {
+      const complianceRows = nodes.filter(n => which.includes(n.id)).map(n =>
+        (ledger[n.id] || 'pending') === 'complete'
+          ? `| ${n.role} (${n.id}) | subagent-invoked | .cache/${n.id}.md | |`
+          : `| ${n.role} (${n.id}) | pending | | |`).join('\n');
+      text += ['## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |',
+        '| --- | --- | --- | --- |', complianceRows, ''].join('\n');
+    }
+    const hash = validator735.computePlanHash(text);
+    return { text: text.replace(/^# Workflow Plan[^\n]*\n/, m => m + `\n<!-- plan_hash: ${hash} -->\n`), hash };
+  }
+
+  // A frozen, claimed, schema-2 adaptive project with a real linked worktree and a real
+  // feature branch, so the post-archive cleanup (worktree removal, branch delete, claim
+  // label clear) is observable rather than asserted in the abstract.
+  function fixture735(ledger, opts) {
+    const options = opts || {};
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw735-')));
+    git735(root, ['init', '-b', 'main']);
+    git735(root, ['config', 'user.name', 'Test']);
+    git735(root, ['config', 'user.email', 't@example.com']);
+    git735(root, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
+    git735(root, ['add', 'product.js']);
+    git735(root, ['commit', '-m', 'root']);
+    const commit = git735(root, ['rev-parse', 'HEAD']);
+    const tree = git735(root, ['rev-parse', 'HEAD^{tree}']);
+    const project = 'issue-735';
+    const branch = 'workflow/issue-735';
+    const worktreePath = path.join(root, '.kw', 'worktrees', project);
+    git735(root, ['worktree', 'add', '-b', branch, worktreePath]);
+    const projectDir = path.join(root, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const nodes = [
+      { id: 'impl', role: 'tdd-guide', write_set: 'product.js' },
+      { id: 'review', role: 'code-reviewer', depends_on: 'impl', model: 'reasoning' },
+      { id: 'finalize', role: 'finalize', depends_on: 'review', model: '—' },
+    ];
+    const plan = plan735(project, nodes, ledger, options);
+    const identity = schema735.buildClaimIdentity({
+      schema_version: 2, repository_id: 'local:' + root, issue_numbers: [735], primary_issue: 735,
+      bundle_id: null, closure_policy: 'all_or_nothing', branch, worktree_path: worktreePath,
+      claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
+    });
+    const rootBase = schema735.buildClaimRootBase({
+      schema_version: 2, object_format: commit.length === 64 ? 'sha256' : 'sha1',
+      commit, tree, branch,
+    });
+    const lineage = schema735.buildEpochLineage(identity, rootBase);
+    const stateText = [
+      '# Kaola-Workflow State', '', '## Project', `name: ${project}`, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+      'step: start', `next_command: /kaola-workflow-plan-run ${project}`,
+      `next_skill: kaola-workflow-plan-run ${project}`,
+      '', '## Planning Evidence', `plan_hash: ${plan.hash}`, 'decision: auto-run',
+      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
+      'first_node_id: impl', 'first_node_role: tdd-guide', '', '## Sink',
+      `branch: ${branch}`, 'issue_number: 735', 'sink: merge', `main_root: ${root}`,
+      'session_marker: test-session', 'claim_ts: 2026-07-16T00:00:00.000Z',
+      `worktree_path: ${worktreePath}`,
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
+      schema735.writeEpochStateBlock(stateText, {
+        epoch_schema_version: 2,
+        claim_repository_id: identity.repository_id,
+        claim_identity_digest: lineage.claim_identity_digest,
+        claim_root_object_format: rootBase.object_format,
+        claim_root_base_commit: rootBase.commit,
+        claim_root_base_tree: rootBase.tree,
+        claim_root_base_digest: lineage.claim_root_base_digest,
+        epoch_lineage_id: lineage.epoch_lineage_id,
+        plan_epoch: 1, active_plan_hash: plan.hash,
+        inherited_frontier_digest: 'none', inherited_frontier_classes: 'none',
+        automatic_review_replans: 0, authorized_epoch_ceiling: 2,
+        case_b_exemption_consumed: false, replan_status: 'none',
+        replan_transaction_id: 'none', replan_phase: 'none',
+        active_snapshot_manifest_digest: 'none',
+      }));
+    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'),
+      options.tamperPlan ? plan.text.replace('labels: enhancement', 'labels: tampered') : plan.text);
+    if (!options.dropMirror) {
+      fs.writeFileSync(path.join(projectDir, 'workflow-tasks.json'), JSON.stringify(
+        generateMirror735({ planContent: plan.text, now: '2026-07-16T00:00:00.000Z' }), null, 2) + '\n');
+    }
+    for (const [id, status] of Object.entries(ledger)) {
+      if (status === 'complete') fs.writeFileSync(path.join(cacheDir, id + '.md'), 'evidence-binding: ' + id + ' abc\n');
+    }
+    return { root, project, projectDir, branch, worktreePath };
+  }
+
+  function runRelease735(fx) {
+    const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
+      '--project', fx.project, '--json'], {
+      cwd: fx.root, encoding: 'utf8',
+      env: Object.assign({}, gitEnv735, { KAOLA_WORKFLOW_OFFLINE: '1' }),
+    });
+    let json = null;
+    try { json = JSON.parse((r.stdout || '').trim()); } catch (_) {}
+    return { status: r.status, json, raw: (r.stdout || '') + (r.stderr || '') };
+  }
+
+  const abandonWindows = [
+    ['frozen-never-run, plan frozen with NO ## Required Agent Compliance section',
+      { impl: 'pending', review: 'pending', finalize: 'pending' }, { complianceFor: null },
+      'state_compliance_authority_invalid'],
+    ['mid-run, compliance rows only for the CLOSED node (legacy row-by-row append)',
+      { impl: 'complete', review: 'pending', finalize: 'pending' }, { complianceFor: ['impl'] },
+      'state_compliance_authority_invalid'],
+    ['frozen-never-run, best-effort freeze-time workflow-tasks.json never landed',
+      { impl: 'pending', review: 'pending', finalize: 'pending' }, { dropMirror: true },
+      'state_task_mirror_mismatch'],
+  ];
+  for (const [label, ledger, opts, downgraded] of abandonWindows) {
+    const fx = fixture735(ledger, opts);
+    try {
+      const r = runRelease735(fx);
+      assert(r.status === 0 && r.json && r.json.released === true,
+        '#735: discard succeeds for a user-consented abandon (' + label + '), got ' + r.raw.trim());
+      assert(r.json && r.json.authority_downgraded === downgraded,
+        '#735: the abandon records the downgraded run-state authority reason (' + label + '), got '
+          + JSON.stringify(r.json && r.json.authority_downgraded));
+      assert(!fs.existsSync(fx.projectDir) && r.json && r.json.dest && fs.existsSync(r.json.dest),
+        '#735: the live folder is archived, not left in place (' + label + ')');
+      assert(!fs.existsSync(fx.worktreePath),
+        '#735: worktree cleanup actually ran (' + label + ')');
+      assert(git735(fx.root, ['branch', '--list', fx.branch]) === '',
+        '#735: feature-branch cleanup actually ran (' + label + ')');
+      assert(r.json && r.json.claim_label_removed === 'skipped_offline',
+        '#735: claim-label cleanup was attempted (' + label + '), got '
+          + JSON.stringify(r.json && r.json.claim_label_removed));
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // CONTROL 1 — the relaxation is ABANDON-only. The same never-produced compliance
+  // artifact must still fail the `closed` archive closed: a closed archive is the
+  // input to archiveEpochLineagePreserved, whose `preserved` token asserts the
+  // lineage really was intact. Nothing about a user-consented abandon claims that.
+  {
+    const fx = fixture735({ impl: 'pending', review: 'pending', finalize: 'pending' },
+      { complianceFor: null });
+    try {
+      const claim735 = require('./kaola-workflow-claim.js');
+      const closed = claim735.archiveProjectDir(fx.root, fx.project, 'closed', undefined, {});
+      assert(closed && closed.archived === false
+        && closed.snapshot_error === 'state_compliance_authority_invalid',
+        '#735 control: a CLOSED archive still fails closed on the same missing compliance section, got '
+          + JSON.stringify(closed));
+      assert(fs.existsSync(fx.projectDir),
+        '#735 control: the refused CLOSED archive left the live folder untouched');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // CONTROL 2 — the relaxation covers ABSENT/INCOMPLETE run-state product only, never
+  // a TAMPER signal on the frozen artifacts themselves. A plan edited after freeze
+  // (plan_hash no longer matches its bytes) still refuses the abandon: that is not an
+  // artifact the project "never produced", it is one that no longer verifies, and a
+  // discard would erase the only live copy of the evidence.
+  {
+    const fx = fixture735({ impl: 'pending', review: 'pending', finalize: 'pending' },
+      { tamperPlan: true });
+    try {
+      const r = runRelease735(fx);
+      assert(r.status === 1 && r.json && r.json.released === false
+        && r.json.reason === 'state_active_plan_invalid',
+        '#735 control: a post-freeze plan TAMPER still refuses the abandon fail-closed, got ' + r.raw.trim());
+      assert(fs.existsSync(fx.projectDir) && fs.existsSync(fx.worktreePath),
+        '#735 control: the refused abandon left the live folder and worktree untouched');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
