@@ -13711,10 +13711,17 @@ function makeHandoffPlan(nodesRows, ledgerRows, labels) {
 }
 
 // Helper: plant a workflow-state.md stub (no issue_number → vacuous roadmap_staged).
-function plantHandoffState(projectDir, projectName) {
+// The epoch lineage envelope every current claim writes. Omitting it (legacy claim)
+// makes the handoff refuse admission to a fresh freeze — see
+// testAdaptiveHandoffLegacyClaimRefusesFreeze.
+function plantHandoffState(projectDir, projectName, opts) {
+  const withEnvelope = !(opts && opts.legacyClaim === true);
   const stateContent = [
     '## Project', 'name: ' + projectName, 'status: active',
     'workflow_path: adaptive', '',
+    ...(withEnvelope
+      ? ['## Epoch Lineage', 'epoch_schema_version: 2', 'plan_epoch: 1', 'active_plan_hash: none', '']
+      : []),
   ].join('\n');
   fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), stateContent);
 }
@@ -13934,6 +13941,72 @@ function testAdaptiveHandoffRefuseNoMutation() {
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveHandoffRefuseNoMutation: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffLegacyClaimRefusesFreeze — a claim state with NO epoch lineage
+// envelope (pre-envelope legacy claim) must not be admitted to a fresh freeze: a plan
+// frozen over it cannot later be inherited by the claim-preserving re-plan path, so the
+// run would be unreplannable. Assert the typed legacy_claim_upgrade_required refusal,
+// exit≠0, and byte-identical plan + state (no freeze, no Planning Evidence).
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffLegacyClaimRefusesFreeze() {
+  const tmp = adaptiveTmp('handoff-legacy-claim');
+  try {
+    initGitRepo(tmp);
+    const projectName = 'issue-legacy-claim';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // In-grammar plan — the ONLY defect is the legacy (envelope-less) claim state.
+    const planText = makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |', '| impl | pending |', '| review | pending |', '| done | pending |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    plantHandoffState(projectDir, projectName, { legacyClaim: true });
+
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    const planBytesBefore = fs.readFileSync(planPath);
+    const stateBytesBefore = fs.readFileSync(statePath);
+
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'legacy-claim fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r.status !== 0,
+      'legacy-claim handoff must exit non-zero, got exit ' + r.status + '\nstdout: ' + r.stdout);
+    const result = JSON.parse(r.stdout);
+    assert(result.handoff_status === 'plan_invalid' && result.result === 'refuse'
+      && result.reason === 'legacy_claim_upgrade_required',
+    'legacy-claim handoff must refuse with reason legacy_claim_upgrade_required, got: ' + JSON.stringify(result));
+    assert(Array.isArray(result.errors) && result.errors.some(e => /release/.test(e) && /claim/.test(e)),
+      'legacy-claim refusal must name release + re-claim recovery, got: ' + JSON.stringify(result.errors));
+
+    // Zero mutation: plan NOT frozen, state untouched.
+    assert(fs.readFileSync(planPath).equals(planBytesBefore),
+      'workflow-plan.md must be byte-identical after the legacy-claim refusal');
+    assert(fs.readFileSync(statePath).equals(stateBytesBefore),
+      'workflow-state.md must be byte-identical after the legacy-claim refusal');
+
+    // Green control: the SAME plan with a current (envelope-carrying) claim freezes.
+    plantHandoffState(projectDir, projectName);
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'current-claim fixture'], { cwd: tmp, encoding: 'utf8' });
+    const ok = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(ok.status === 0,
+      'current-claim control must exit 0, got ' + ok.status + '\nstderr: ' + ok.stderr + '\nstdout: ' + ok.stdout);
+    const okResult = JSON.parse(ok.stdout);
+    assert(okResult.handoff_status === 'ready_to_run',
+      'current-claim control must reach ready_to_run, got: ' + JSON.stringify(okResult));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffLegacyClaimRefusesFreeze: PASSED');
 }
 
 // ---------------------------------------------------------------------------
@@ -16758,6 +16831,7 @@ function buildRegistry() {
   add('testAdaptiveHandoffInGrammarReady',                testAdaptiveHandoffInGrammarReady);
   add('testAdaptiveHandoffAskFreezesNotApproval',         testAdaptiveHandoffAskFreezesNotApproval);
   add('testAdaptiveHandoffRefuseNoMutation',              testAdaptiveHandoffRefuseNoMutation);
+  add('testAdaptiveHandoffLegacyClaimRefusesFreeze',      testAdaptiveHandoffLegacyClaimRefusesFreeze);
   add('testAdaptiveHandoffIdempotentReRun',               testAdaptiveHandoffIdempotentReRun);
   add('testAdaptiveHandoffFreezeChainTwoSpawns',          testAdaptiveHandoffFreezeChainTwoSpawns);
   add('testFreezeCheckedGovernanceAckStale',              testFreezeCheckedGovernanceAckStale);

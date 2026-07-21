@@ -26,6 +26,8 @@
 //   invalid: { handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict }
 //            #337 decision-id preflight refusals carry errors prefixed
 //            'decision_id_conflict:' plus an additive `conflicts` field ([{id, hits}]).
+//            #749 legacy-claim admission refusals carry an additive typed
+//            `reason:'legacy_claim_upgrade_required'` (state lacks the epoch lineage envelope).
 //
 // 2-state only: branch on validator --json `result` ('in-grammar'|'refuse'), NEVER on `decision`.
 // decision:ask is audit METADATA that freezes-and-proceeds — NO needs_user_approval, NO --authorized.
@@ -387,6 +389,32 @@ function runHandoff(opts) {
         validator_verdict: null,
       };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Legacy-claim admission fence (before step 1, no mutation). A fresh freeze may
+  // only run over a claim that carries the epoch lineage envelope. A pre-envelope
+  // (legacy) claim cannot be inherited by the claim-preserving re-plan transaction
+  // — its historical claim root is unprovable — so a plan frozen over it would be
+  // unreplannable the moment a gate demands a re-plan. Refuse admission instead of
+  // freezing into that dead end; claiming writes the complete envelope, so the
+  // recovery is release + re-claim. The committed-replan branch above already
+  // verified current-epoch authority, and the archive/finalize legacy tolerance is
+  // unaffected — this fence binds ONLY the fresh-freeze path.
+  // -------------------------------------------------------------------------
+  if (!/^epoch_schema_version:/m.test(stateContent)) {
+    return {
+      handoff_status: 'plan_invalid',
+      result: 'refuse',
+      reason: 'legacy_claim_upgrade_required',
+      errors: ['legacy_claim_upgrade_required: workflow-state.md carries no epoch lineage ' +
+        'envelope (no epoch_schema_version) — this claim predates the epoch contract and a plan ' +
+        'frozen over it could never be re-planned while preserving the claim. Release the claim ' +
+        '(node scripts/kaola-gitlab-workflow-claim.js release --project ' + (project || '<project>') + ') ' +
+        'and re-claim the issue, then re-author and freeze the plan; a fresh claim writes the ' +
+        'complete envelope.'],
+      validator_verdict: null,
+    };
   }
 
   // -------------------------------------------------------------------------
