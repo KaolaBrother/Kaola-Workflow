@@ -448,6 +448,132 @@ try {
     assert(withLineage.result === 'pass',
       '#724 T7: the same call WITH lineagePlans passes (got ' + withLineage.reason + ')');
   });
+
+  // -------------------------------------------------------------------------------------------
+  // #753: the FINALIZE attribution sweep (`--finalize-check` section B) is the OTHER HALF of #724.
+  // It builds `completeDeclared` from parseNodes(content) — the CHILD plan only — so a replanned
+  // (schema-2, plan_epoch >= 2) run now clears the whole-plan barrier and is then refused
+  // `unattributed_change` at finalize on EXACTLY the same parent-epoch paths.
+  //
+  // The sweep must union the SEALED parent-epoch declarations, each keyed to ITS OWN epoch's ledger
+  // status: unioning DECLARATIONS without unioning ATTRIBUTION would turn the fix into a laundering
+  // primitive (a parent node that never ran would carry its declared file through the union).
+  //
+  // Fixture mechanics: the sweep enumerates `git diff main...HEAD`, which lists COMMITTED content
+  // only, so every fixture write is committed. The fixture repo has NO package.json => CONSUMER mode
+  // (#475), whose (A') gate needs `.cache/final-validation.md` with a column-0 `verdict: pass` plus a
+  // `validated_candidate_hash` (#653) bound to the CURRENT code tree — produced here by the
+  // validator's own --candidate-hash mode AFTER the last landable edit.
+  // --finalize-check ALSO runs replan.verifyCurrentEpochAuthority (via validateCommittedEpochBinding),
+  // which cross-checks the live child plan's `## Required Agent Compliance` table and workflow-tasks.json
+  // against the ledger. buildLineageFixture closes `child-impl` in the LEDGER only (the ledger is not
+  // hash-covered, so the state binding survives); align the other two authority surfaces the same way a
+  // real close would, or the run refuses state_compliance_progress_invalid before the sweep is reached.
+  const alignChildAuthority = fx => {
+    const live = fs.readFileSync(fx.planPath, 'utf8')
+      .replace('| tdd-guide (child-impl) | pending | | |',
+        '| tdd-guide (child-impl) | invoked | .cache/child-impl.md | |');
+    fs.writeFileSync(fx.planPath, live);
+    fs.writeFileSync(path.join(fx.projectDir, 'workflow-tasks.json'), JSON.stringify(
+      generateMirror({ planContent: live, now: '2026-07-16T04:00:00.000Z' }), null, 2) + '\n');
+    fs.writeFileSync(path.join(fx.cacheDir, 'child-impl.md'),
+      'evidence-binding: child-impl fixture\nGREEN: fixture\n');
+  };
+  // The replan transaction journal is a CRASH-RESUME artifact under .cache/**; once it is gone (or the
+  // state no longer points at it) validateCommittedEpochBinding — the OTHER finalize-time consumer of
+  // verifyAllEpochSnapshots — short-circuits to ok on its very first line. Disposing it is what isolates
+  // the SWEEP's own lineage gate, so the tamper tests below measure this fix and not the fence.
+  const disposeReplanJournal = fx => {
+    fs.rmSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), { force: true });
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    fs.writeFileSync(statePath, fs.readFileSync(statePath, 'utf8')
+      .replace(/^replan_transaction_id: .*$/m, 'replan_transaction_id: none')
+      .replace(/^replan_phase: .*$/m, 'replan_phase: none'));
+  };
+  const commitAll = (root, msg) => { fgit(root, ['add', '-A']); fgit(root, ['commit', '-m', msg]); };
+  const recordAgentValidation = fx => {
+    const h = val(fx.root, fx.planPath, ['--candidate-hash', '--json']);
+    if (!h.json || !h.json.validated_candidate_hash) {
+      throw new Error('#753 fixture: --candidate-hash failed: ' + JSON.stringify(h.json));
+    }
+    fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'),
+      'verdict: pass\nvalidated_candidate_hash: ' + h.json.validated_candidate_hash + '\n');
+  };
+  const finalizeCheck = fx => {
+    alignChildAuthority(fx);
+    commitAll(fx.root, 'fixture work');
+    recordAgentValidation(fx);
+    return val(fx.root, fx.planPath, ['--finalize-check', '--base', 'main', '--json']);
+  };
+
+  // #753 F1: a path declared ONLY by a sealed parent-epoch node whose PARENT ledger row is `complete`
+  // must PASS the finalize sweep. This is the reported second-half regression.
+  withFixture(fx => {
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    const r = finalizeCheck(fx);
+    assert(r.exitCode === 0 && r.json.result === 'pass',
+      '#753 F1: a parent-epoch-declared, parent-complete write passes --finalize-check '
+      + '(got ' + r.json.result + '/' + r.json.reason + ' unattributed='
+      + JSON.stringify(r.json.unattributed) + ')');
+  });
+
+  // #753 F2: a path declared by NOBODY in the lineage still refuses `unattributed_change` — the union
+  // WIDENS the attributed set, it does not disable the sweep.
+  withFixture(fx => {
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    touch(fx.root, 'orphan.js', 'module.exports = "orphan";\n');
+    const r = finalizeCheck(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'unattributed_change'
+      && (r.json.unattributed || []).includes('orphan.js')
+      && !(r.json.unattributed || []).includes('legacy.js'),
+      '#753 F2: a write declared by no epoch in the lineage still refuses unattributed_change '
+      + '(got ' + r.json.reason + ' unattributed=' + JSON.stringify(r.json.unattributed) + ')');
+  });
+
+  // #753 F3 (the load-bearing half): a path declared ONLY by a parent node whose PARENT ledger row is
+  // `n/a` is NOT attributed — the producer claims it never ran, so the write is unreviewed and must
+  // still refuse. Proves the ATTRIBUTION (ledger) extension, not just the DECLARATION union.
+  withFixture(fx => {
+    touch(fx.root, 'stale.js', 'module.exports = "stale-touched";\n');
+    const r = finalizeCheck(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'unattributed_change'
+      && (r.json.unattributed || []).includes('stale.js'),
+      '#753 F3: a parent-declared path whose parent owner is n/a still refuses unattributed_change '
+      + '(got ' + r.json.reason + ' unattributed=' + JSON.stringify(r.json.unattributed) + ')');
+  });
+
+  // #753 F4 (the security argument): a TAMPERED parent snapshot plan that widens the parent write set
+  // to an attacker-chosen path must fail CLOSED with the lineage reason — never accept the path, and
+  // never mislabel it `unattributed_change` (whose documented operator response is to delete the file).
+  withFixture(fx => {
+    disposeReplanJournal(fx);
+    const snapPlan = path.join(fx.cacheDir, 'epochs', '1', 'files', 'workflow-plan.md');
+    fs.writeFileSync(snapPlan, fs.readFileSync(snapPlan, 'utf8')
+      .replace('| product.js,legacy.js |', '| product.js,legacy.js,attacker.js |'));
+    touch(fx.root, 'attacker.js', 'module.exports = "pwn";\n');
+    const r = finalizeCheck(fx);
+    assert(r.exitCode === 1 && r.json.result === 'refuse' && r.json.reason === 'epoch_lineage_unverified',
+      '#753 F4: a tampered parent snapshot plan refuses epoch_lineage_unverified at finalize '
+      + '(got ' + r.json.result + '/' + r.json.reason + ')');
+    assert(!(r.json.unattributed || []).length && r.json.reason !== 'unattributed_change',
+      '#753 F4: the attacker-widened path is never accepted and never mislabelled unattributed_change '
+      + '(got ' + r.json.reason + ' unattributed=' + JSON.stringify(r.json.unattributed) + ')');
+    assert(typeof r.json.lineage_reason === 'string' && r.json.lineage_reason.length > 0,
+      '#753 F4: the verbatim lineage verifier reason travels in a sibling field '
+      + '(got ' + JSON.stringify(r.json.lineage_reason) + ')');
+  });
+
+  // #753 F5: a MISSING parent snapshot fails closed the same way — never a silent child-only sweep
+  // (which would report unattributed_change, a lie about the real fault).
+  withFixture(fx => {
+    disposeReplanJournal(fx);
+    fs.rmSync(path.join(fx.cacheDir, 'epochs', '1'), { recursive: true, force: true });
+    touch(fx.root, 'legacy.js', 'module.exports = "legacy-fixed";\n');
+    const r = finalizeCheck(fx);
+    assert(r.exitCode === 1 && r.json.reason === 'epoch_lineage_unverified',
+      '#753 F5: a missing parent snapshot refuses epoch_lineage_unverified at finalize '
+      + '(got ' + r.json.reason + ')');
+  });
 }
 
 if (failed > 0) {
