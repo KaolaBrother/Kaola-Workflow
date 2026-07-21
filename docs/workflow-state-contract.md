@@ -566,6 +566,18 @@ not a fallback. This row is distinct from the Finalization-phase mechanical book
 delegated to the `contractor` and attested separately via the closure receipt's
 `finalize_contractor_attested` field.
 
+**Freeze pre-seeds the compliance set (schema 2).** The producer completes this artifact at its
+authoring boundary: freezing a `plan_schema_version: 2` plan that carries no
+`## Required Agent Compliance` section appends it with exactly one `pending` row per node, in
+`## Nodes` order, including the `finalize` sink node. The lifecycle then advances each pre-seeded
+row in place at its node's close — presence of a row is never proof of completion. The pre-seed is
+inject-if-absent (a plan already carrying the section, such as a re-plan child or a mid-run
+re-freeze with advanced rows, is left byte-identical) and never applies to a legacy v1 plan. It is
+`plan_hash`-neutral: the compliance table sits outside the hashed `Meta`/`Nodes`/`Node Briefs`
+surface, so governance-ack and resume-check are unaffected. This is what lets the shared
+epoch-authority check stay strict — it validates the section unconditionally for an epoch-planned
+claim, so any absence it sees is genuine corruption rather than a normal fresh-plan state.
+
 ## Epoch Lineage and Re-plan State (schema 2; #699 / D-699-01)
 
 Fresh claims persist an `## Epoch Lineage` block in `workflow-state.md`. It is claim-scoped rather

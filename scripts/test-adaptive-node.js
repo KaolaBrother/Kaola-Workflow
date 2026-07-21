@@ -7643,6 +7643,55 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// E3-SINK-COMPLIANCE: the pre-seeded finalize/sink row auto-advances at its own
+// close-node. Freeze now seeds one PENDING row per node INCLUDING the sink, so a
+// run that closes the sink through the running-set scheduler must leave ZERO
+// pending rows — otherwise the follow-on epoch-authority check would see a
+// `complete` finalize ledger status against a `pending` compliance row and trip.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| seed | complete | |', '| rev | complete | |', '| finalize | in_progress | |'], [
+    '| seed | code-explorer | — | — | 1 | sequence |',
+    '| rev | code-reviewer | seed | — | 1 | sequence |',
+    '| finalize | finalize | rev | CHANGELOG.md | 1 | sequence |',
+  ]) + [
+    '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '| --- | --- | --- | --- |',
+    '| code-explorer (seed) | subagent-invoked | evidence-binding: seed seednonce123 | |',
+    '| code-reviewer (rev) | subagent-invoked | evidence-binding: rev revnonce1234 | |',
+    '| finalize (finalize) | pending | | |', '',
+  ].join('\n');
+  const startSet = JSON.stringify({ state: 'open', nodes: [
+    { id: 'finalize', role: 'finalize', kind: 'write', baseline: 'recorded' },
+  ] });
+  const h = rsHarness({
+    [RS_PLAN_PATH]: plan,
+    [RS_SET_PATH]: startSet,
+    '/p/.cache/finalize.md': 'evidence-binding: finalize finalnonce12\nfinalization bookkeeping complete\n',
+  }, (base) => {
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: true, readyPending: [] };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'finalize',
+    shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(r.result === 'ok' && r.closed === 'finalize',
+    'E3-SINK-COMPLIANCE: close-node closes the sink, got ' + JSON.stringify(r));
+  const closedPlan = h.files[RS_PLAN_PATH];
+  assert(/\| finalize \(finalize\) \| main-session-direct \| evidence-binding: finalize finalnonce12/.test(closedPlan),
+    'E3-SINK-COMPLIANCE: the pre-seeded finalize row auto-advances to main-session-direct at its close');
+  assert(!/\| pending \|/.test(closedPlan.slice(closedPlan.indexOf('## Required Agent Compliance'))),
+    'E3-SINK-COMPLIANCE: no compliance row is left pending once the sink closes');
+  const sinkCompliance = planValidator.validateRequiredAgentCompliance(closedPlan, planValidator.parseNodes(closedPlan));
+  assert(sinkCompliance.ok === true,
+    'E3-SINK-COMPLIANCE: the closed plan still satisfies the epoch-authority compliance check, got '
+      + JSON.stringify(sinkCompliance));
+  assert((closedPlan.match(/\| finalize \(finalize\) \|/g) || []).length === 1,
+    'E3-SINK-COMPLIANCE: the sink advance is in-place — never a duplicate appended row');
+}
+
+// ---------------------------------------------------------------------------
 // S392 (#392): evidence-binding nonce.
 //   - 3-arg checkEvidenceShape (no opts) is byte-identical (BACKWARD-COMPAT: ~40 callers).
 //   - expectedNonce present + correct header → passes.

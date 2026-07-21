@@ -3668,6 +3668,41 @@ function revalidateForResume(content, opts) {
     plan_schema_version: contract.plan_schema_version, contract_version: contract.contract_version };
 }
 
+// #719: PRODUCER-COMPLETES the compliance artifact at its authoring boundary.
+//
+// A FRESH epoch-1 schema-2 plan carries `plan_schema_version: 2` but NOT
+// `epoch_schema_version` (that field only appears on replan CHILD plans), so the freeze
+// wall (validatePlan) and the resume wall (revalidateForResume) — both gated on
+// `parseEpochContract(content).active` — skipped the compliance check and the plan froze
+// with NO `## Required Agent Compliance` section at all. The runtime epoch-authority
+// check is NOT gated that way: for an epoch-planned state it validates the section
+// unconditionally, so it refused a perfectly legitimate mid-run plan (replan prepare,
+// finalize archive, discard/release). Complete the artifact HERE instead of teaching the
+// shared authority check to tolerate an absent section — tolerance would blind it to
+// genuine mid-run corruption, which is a LOOSER gate, not an equivalent one.
+//
+// Emits exactly one `pending` row per node, in `## Nodes` order, INCLUDING the
+// finalize/sink node, using the exact canonical `role (node-id)` requirement cell that
+// addCloseCompliance advances IN PLACE (so a mid-run close/replay stays idempotent and
+// never appends a duplicate). INJECT-IF-ABSENT only: a plan that already carries the
+// section — a replan CHILD, or a re-freeze of a mid-run plan with advanced rows — is left
+// byte-identical, and a legacy v1 plan is never seeded at all. The section is outside
+// computePlanHash, so this is plan_hash-NEUTRAL: `--governance-ack`'s hash assertion and
+// `--resume-check` are unaffected.
+function seedRequiredAgentCompliance(content, parsedNodes) {
+  if (schema.locateSection(content, 'Required Agent Compliance').start >= 0) return content;
+  const nodes = Array.isArray(parsedNodes) ? parsedNodes : parseNodes(content);
+  if (!nodes.length) return content;
+  let seeded = content;
+  for (const node of nodes) {
+    // Reuse the shared row/section producer so the seeded bytes can never drift from the
+    // header/separator the lifecycle appender emits.
+    seeded = schema.spliceComplianceSection(seeded,
+      '| ' + node.role + ' (' + node.id + ') | pending | | |');
+  }
+  return seeded;
+}
+
 // Freeze: validate, and if in-grammar, inject/update the plan_hash comment.
 // #340: opts thread the repo root so Check 1's anchor-gated agent-registration surface
 // resolves against the validated root (not process.cwd()); backward-compatible (opts optional).
@@ -3681,7 +3716,12 @@ function freezePlan(content, opts) {
   const v = validatePlan(content, opts || {});
   if (v.result !== 'in-grammar') return { ...v, frozen: false };
   const stamped = injectHash(content, v.planHash);
-  return { ...v, frozen: true, content: stamped };
+  // #719: seed AFTER the hash is computed and stamped (hash-neutral by construction), and
+  // ONLY for schema-2 — a legacy v1 plan must stay byte-identical for resume back-compat.
+  const seeded = contract.plan_schema_version === 2
+    ? seedRequiredAgentCompliance(stamped, parseNodes(stamped))
+    : stamped;
+  return { ...v, frozen: true, content: seeded };
 }
 function injectHash(content, hash) {
   const marker = `<!-- plan_hash: ${hash} -->`;
