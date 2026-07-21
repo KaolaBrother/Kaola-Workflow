@@ -892,6 +892,16 @@ const SINK_ABORT_AFTER = process.env.KAOLA_WORKFLOW_SINK_ABORT_AFTER || '';
 // happens inline in the 'merge' step, BEFORE the worktree is removed (see the merge step below).
 const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'finalize', 'stash_restore', 'archive_commit', 'push_main', 'closure'];
 
+// #746: the ONLY archive `snapshot_error` the finalize step may silently skip over. A journal-only
+// live dir (no workflow-state.md — it holds nothing but the sink's own receipt) recorded nothing
+// the archive could lose, so skipping it is benign and refusing would brick resumes. Every other
+// authority/snapshot refusal — state_compliance_progress_invalid, state_ledger_progress_invalid,
+// state_active_plan_hash_mismatch, state_task_mirror_mismatch, snapshot_authority_invalid,
+// snapshot_verifier_unavailable, … — is a real post-run incompleteness and must fail the sink
+// loudly rather than be laundered into status:sinked over an un-archived project. Default is
+// fail-closed: an unrecognized reason refuses.
+const BENIGN_ARCHIVE_SKIP_REASONS = new Set(['state_missing']);
+
 function writeSinkReceipt(receiptPath, receipt) {
   fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
   const tmp2 = receiptPath + '.tmp.' + process.pid;
@@ -1421,14 +1431,26 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         // stepDone/closure over it. Covers the node_evidence_missing refusal (ledger proves
         // evidence was recorded during the run but the live folder being archived no longer holds
         // it — the worktree-postured loss) and the #676 lossy-copy refusal; both name the lost
-        // files in `missing`, the discriminator used here. The snapshot_error family (missing:[]
-        // — e.g. state_missing on a journal-only live dir that holds nothing but the sink's own
-        // receipt) keeps its historical silent skip: there is no recorded evidence to lose there,
-        // and refusing would brick benign resumes. The finalize step is left NOT done so a re-run
-        // retries it after the operator restores the evidence; nothing was deleted (the refusal
-        // fires before any archive mutation).
+        // files in `missing`.
+        // #746: `missing.length > 0` alone was NOT a sound discriminator. archiveProjectDir
+        // collapses EVERY epoch-authority refusal into one shape with a HARD-CODED `missing: []`
+        // (its signal is a reason string, not a file list), so a real post-run incompleteness such
+        // as state_compliance_progress_invalid was indistinguishable from the one benign shape the
+        // historical silent skip was scoped for — and the sink reported status:sinked with the
+        // project never archived and the roadmap never reconciled. Loud-fail now covers BOTH an
+        // evidence-losing refusal AND any snapshot_error outside the benign allowlist. The
+        // allowlist holds exactly the documented shape: state_missing on a journal-only live dir
+        // that holds nothing but the sink's own receipt — nothing was recorded there, so there is
+        // nothing to lose and refusing would brick benign resumes. Everything else fails closed.
+        // The finalize step is left NOT done so a re-run retries it after the operator restores
+        // the evidence / reconciles the state; nothing was deleted (the refusal fires before any
+        // archive mutation).
+        const evidenceLosing = archiveResult
+          && Array.isArray(archiveResult.missing) && archiveResult.missing.length > 0;
+        const swallowedAuthorityRefusal = archiveResult && archiveResult.snapshot_error
+          && !BENIGN_ARCHIVE_SKIP_REASONS.has(String(archiveResult.snapshot_error));
         if (archiveResult && archiveResult.archive_incomplete === true
-            && Array.isArray(archiveResult.missing) && archiveResult.missing.length > 0) {
+            && (evidenceLosing || swallowedAuthorityRefusal)) {
           receipt.archive_refusal = archiveResult.reason || archiveResult.snapshot_error || 'archive_incomplete';
           receipt.updated_at = new Date().toISOString();
           writeSinkReceipt(receiptPath, receipt);
@@ -1442,7 +1464,9 @@ function runSinkTransaction(args, mainRoot, defBranch) {
             default_branch: defBranch,
             detail: 'archiving kaola-workflow/' + args.project + '/ was refused ('
               + (archiveResult.reason || archiveResult.snapshot_error || 'archive_incomplete') + '): '
-              + (archiveResult.detail || 'the archive would have lost evidence the run recorded')
+              + (archiveResult.detail || (evidenceLosing
+                ? 'the archive would have lost evidence the run recorded'
+                : 'the live project state failed its epoch/authority verification, so nothing was archived'))
               + ' Refusing to report status:sinked. The finalize step is left NOT done so a re-run retries it; '
               + 'the live project folder was not deleted.',
           }) + '\n');

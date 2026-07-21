@@ -45,6 +45,12 @@
 //       (sink-receipt.json.tmp, a nested x/.cache/sink-receipt.json, a sink-receipt.json
 //       DIRECTORY) stay bucket-3 foreign dirt and refuse sink_blocked with ZERO mutation.
 //   (m) #715/#518 — regression lock: THIS sink's own live + archive receipts remain exempt.
+//   (n) #746 — an archive refusal whose signal is a snapshot_error REASON rather than a file list
+//       (empty missing[] — e.g. state_compliance_progress_invalid from the schema-2 epoch-authority
+//       gate) must fail the sink LOUDLY: the old missing.length-only discriminator swallowed it and
+//       reported status:sinked with the project never archived and the roadmap never reconciled.
+//   (o) #746 — over-tighten guard: the ONE documented benign shape (a journal-only live dir with no
+//       workflow-state.md → snapshot_error:'state_missing') must STILL silently skip and sink.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -57,6 +63,9 @@ const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
+const schema = require('./kaola-workflow-adaptive-schema');
+const validator = require('./kaola-workflow-plan-validator');
+const { generateMirror } = require('./kaola-workflow-task-mirror');
 
 let passed = 0;
 let failed = 0;
@@ -993,12 +1002,213 @@ function buildBranchlessFixture(project, issue) {
   }
 })();
 
+// --------------------------------------------------------------------------- (n)/(o) #746
+
+// A schema-2 (epoch-envelope) frozen plan whose `## Required Agent Compliance` row for a
+// LEDGER-COMPLETE node is still `pending` — the post-run out-of-sync shape that makes
+// verifyCurrentEpochAuthority refuse `state_compliance_progress_invalid`. The compliance +
+// ledger sections sit OUTSIDE computePlanHash coverage, so the stored hash stays valid and the
+// project is a genuine schema-2 authority (never the legacy short-circuit).
+function schema2PlanWithCompliance(nodeRows) {
+  const lines = [
+    '# Workflow Plan — sink-test', '', '## Meta', 'project: sink-test', 'labels: test', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+  ];
+  let previous = null;
+  for (const row of nodeRows) {
+    lines.push('| ' + row.id + ' | ' + row.role + ' | ' + (previous || '—') + ' | — | 1 | sequence | standard |');
+    previous = row.id;
+  }
+  lines.push('', '## Node Ledger', '', '| id | status |', '| --- | --- |');
+  for (const row of nodeRows) lines.push('| ' + row.id + ' | ' + row.status + ' |');
+  lines.push('', '## Required Agent Compliance', '',
+    '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |');
+  for (const row of nodeRows) {
+    lines.push(row.compliance === 'pending'
+      ? '| ' + row.role + ' (' + row.id + ') | pending | | |'
+      : '| ' + row.role + ' (' + row.id + ') | invoked | .cache/' + row.id + '.md | |');
+  }
+  lines.push('');
+  let text = lines.join('\n');
+  const hash = validator.computePlanHash(text);
+  text = text.replace(/^# Workflow Plan[^\n]*\n/, m => m + '\n<!-- plan_hash: ' + hash + ' -->\n');
+  return { text, hash };
+}
+
+// Sole-archiver fixture whose live folder is a genuine schema-2 project with the
+// compliance/ledger drift above. archiveProjectDir therefore returns the empty-`missing[]`
+// authority refusal shape { archive_incomplete:true, missing:[], snapshot_error:<reason> }.
+function buildSchema2AuthorityDriftFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const nodeRows = [
+    { id: 'n1-impl', role: 'implementer', status: 'complete', compliance: 'pending' },
+    { id: 'n2-finalize', role: 'finalize', status: 'in_progress', compliance: 'pending' },
+  ];
+  const plan = schema2PlanWithCompliance(nodeRows);
+  const claimTs = '2026-07-21T00:00:00.000Z';
+  const identity = schema.buildClaimIdentity({
+    schema_version: 2, repository_id: 'local:' + tmpRoot, issue_numbers: [issue], primary_issue: issue,
+    bundle_id: null, closure_policy: 'all_or_nothing', branch, worktree_path: tmpRoot,
+    claim_ts: claimTs, session_marker: 'test-session',
+  });
+  const rootBase = schema.buildClaimRootBase({
+    schema_version: 2, object_format: 'sha1', commit: 'a'.repeat(40), tree: 'b'.repeat(40), branch,
+  });
+  const lineage = schema.buildEpochLineage(identity, rootBase);
+  const baseState = [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'runtime: claude', 'step: start', '',
+    '## Planning Evidence', 'plan_hash: ' + plan.hash, 'decision: auto-run',
+    'first_node_id: ' + nodeRows[0].id, 'first_node_role: ' + nodeRows[0].role, '',
+    '## Sink',
+    'branch: ' + branch,
+    'issue_number: ' + issue,
+    'sink: merge',
+    'run_posture: in-place',
+    'main_root: (test)',
+    'session_marker: test-session',
+    'claim_ts: ' + claimTs,
+    '',
+  ].join('\n');
+  const state = schema.writeEpochStateBlock(baseState, {
+    epoch_schema_version: 2,
+    claim_repository_id: identity.repository_id,
+    claim_identity_digest: lineage.claim_identity_digest,
+    claim_root_object_format: rootBase.object_format,
+    claim_root_base_commit: rootBase.commit,
+    claim_root_base_tree: rootBase.tree,
+    claim_root_base_digest: lineage.claim_root_base_digest,
+    epoch_lineage_id: lineage.epoch_lineage_id,
+    plan_epoch: 1,
+    active_plan_hash: plan.hash,
+    inherited_frontier_digest: 'none',
+    inherited_frontier_classes: 'none',
+    automatic_review_replans: 0,
+    authorized_epoch_ceiling: 2,
+    case_b_exemption_consumed: false,
+    replan_status: 'none',
+    replan_transaction_id: 'none',
+    replan_phase: 'none',
+    active_snapshot_manifest_digest: 'none',
+  });
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), plan.text);
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), state);
+  fs.writeFileSync(path.join(liveDir, 'workflow-tasks.json'),
+    JSON.stringify(generateMirror({ planContent: plan.text, now: claimTs }), null, 2) + '\n');
+  // The ledger-proven node evidence IS present, so the #707 evidence floor is satisfied and only
+  // the epoch-authority (empty-missing[]) path is exercised.
+  fs.writeFileSync(path.join(liveDir, '.cache', 'n1-impl.md'), 'evidence-binding: n1-impl\nverdict: pass\n');
+  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: deliverable + live state']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project };
+}
+
+// The one documented benign shape: a journal-only live dir with NO workflow-state.md at all
+// (snapshot_error:'state_missing', missing:[]) — nothing was recorded, so there is nothing to
+// lose and the historical silent skip must survive the narrowing.
+function buildJournalOnlyLiveDirFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(liveDir, '.cache', 'notes.md'), 'journal residue only — no workflow-state.md\n');
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: deliverable + journal-only folder']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project };
+}
+
+(function testSwallowedEpochAuthorityRefusalFailsLoud() {
+  console.log('Test (#746 n): an archive refusal that carries an EMPTY missing[] but a real snapshot_error (state_compliance_progress_invalid) must fail the sink LOUDLY — never status:sinked over a silently skipped archive');
+  const project = 'issue-74601';
+  const issue = 74601;
+  const fx = buildSchema2AuthorityDriftFixture(project, issue);
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 1, '#746 n: a swallowed epoch-authority refusal must exit 1; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'finalize',
+      '#746 n: must be a typed finalize-step refusal; got ' + JSON.stringify(out));
+    assert(out && out.archive_refusal === 'state_compliance_progress_invalid',
+      '#746 n: the empty-missing[] authority refusal must surface as archive_refusal; got ' + JSON.stringify(out && out.archive_refusal));
+
+    // Fail-closed: nothing deleted, nothing archived, the issue is NOT closed.
+    assert(fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project, 'workflow-state.md')),
+      '#746 n: the live project folder must SURVIVE the refusal (fail-closed, nothing deleted)');
+    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', 'archive', project, 'workflow-state.md')),
+      '#746 n: no archived copy of the project may exist after the refusal');
+    const calls = readLog(fx.logFile);
+    assert(!calls.includes('close:' + issue), '#746 n: the issue must NOT be closed on a refused sink; calls=' + JSON.stringify(calls));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+(function testJournalOnlyLiveDirKeepsHistoricalSilentSkip() {
+  console.log('Test (#746 o): the ONE benign shape — a journal-only live dir with no workflow-state.md (snapshot_error:state_missing) — must STILL silently skip the archive and reach status:sinked (over-tighten guard)');
+  const project = 'issue-74602';
+  const issue = 74602;
+  const fx = buildJournalOnlyLiveDirFixture(project, issue);
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#746 o: the benign journal-only shape must still exit 0; got ' + result.status
+      + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#746 o: the benign journal-only shape must still reach status:sinked; got ' + JSON.stringify(out));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715/#746) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715/#746) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }
