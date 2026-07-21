@@ -12,6 +12,7 @@ const schema = require('./kaola-workflow-adaptive-schema');
 const replan = require('./kaola-workflow-replan');
 const validator = require('./kaola-workflow-plan-validator');
 const adaptiveNode = require('./kaola-workflow-adaptive-node');
+const validationRunner = require('./kaola-workflow-validation-runner');
 const { generateMirror } = require('./kaola-workflow-task-mirror');
 const liveFixture = require('./replan-conformance-fixtures.json');
 const SOURCE_ATTEMPT_ID = liveFixture.source.attempt_id;
@@ -29,6 +30,10 @@ let passed = 0;
 function ok(value, message) { assert.ok(value, message); passed++; }
 function equal(actual, expected, message) { assert.strictEqual(actual, expected, message); passed++; }
 function deepEqual(actual, expected, message) { assert.deepStrictEqual(actual, expected, message); passed++; }
+function notEqualReason(result, reason, message) {
+  assert.notStrictEqual(result && result.reason, reason, message + ': ' + JSON.stringify(result));
+  passed++;
+}
 function rejects(fn, reason, message) {
   let got = null;
   try { fn(); } catch (error) { got = error && error.message; }
@@ -539,6 +544,116 @@ function installSchema2ReviewSource(fx, config = {}) {
   fs.writeFileSync(path.join(fx.cacheDir, reviewId + '.md'), body);
   writeSchema2RepairSource(fx, state.journal, attempt, { producerSlice: [producerId] });
   return { attempt, state };
+}
+
+// A PRODUCTION-SHAPED schema-2 review journal source (`schema_version: 2` + `contract_version: 2`,
+// per-attempt `contract_version: 2`, and receipts that bind their evidence with `raw_evidence_sha256`
+// and carry no embedded `body`). Every other journal fixture in this file is schema-1: they seal the
+// LEGACY raw ls-tree candidate digest and legacy `body`/`receipt_sha256` receipts, so they exercise
+// the legacy lane only. This helper is the schema-2 lane's live coverage — the candidate identity it
+// seals is the validation runner's landable-tree digest, exactly what the schema-2 close path records.
+function installReviewJournalV2Source(fx, config = {}) {
+  const planPath = path.join(fx.projectDir, 'workflow-plan.md');
+  const planContent = fs.readFileSync(planPath, 'utf8');
+  const planHash = validator.readStoredHash(planContent);
+  const reviewId = config.reviewId || 'review';
+  const producerId = config.producerId || 'impl';
+  const nonce = config.generation || 'v2gen0001';
+  const surface = config.surface || 'product.js';
+  const body = [`evidence-binding: ${reviewId} ${nonce}`, 'verdict: fail', 'findings_blocking: 1', ''].join('\n');
+  const candidateDigest = validationRunner.computeLandableTreeDigest(fx.root,
+    { test_consumed_paths: validator.parseValidationTestConsumes(planContent) });
+  ok(/^[0-9a-f]{64}$/.test(String(candidateDigest || '')),
+    'schema-2 replan source fixture seals the landable-tree candidate digest: ' + candidateDigest);
+  const scopeLineageId = sha256(Buffer.from('scope:' + fx.project + ':' + reviewId));
+  const contextHash = sha256(Buffer.from('review-context:' + reviewId));
+  const profileHash = sha256(Buffer.from('resolved-profile:' + reviewId));
+  const normalized = schema.normalizeFindingSet([{
+    failure_class: 'correctness',
+    trigger: {
+      precondition_digest: sha256(Buffer.from('pre')), input_digest: sha256(Buffer.from('in')),
+      expected_digest: sha256(Buffer.from('expected')), observed_digest: sha256(Buffer.from('observed')),
+    },
+    primary_anchor: {
+      kind: 'evidence_observation',
+      producer_evidence_digest: sha256(Buffer.from('producer-evidence:' + producerId)),
+      observation_key: 'product/regression',
+    },
+    secondary_anchors: [],
+    severity: 'high', scope: 'product', action: 'fix', status: 'open', fix_role: 'tdd-guide',
+  }], { scope_lineage_id: scopeLineageId });
+  ok(normalized.ok, 'schema-2 replan source fixture normalizes its finding set: ' + JSON.stringify(normalized));
+  const findings = normalized.findings;
+  const openUids = findings.filter(finding => finding.status !== 'resolved').map(finding => finding.uid).sort();
+  const gateIdentity = {
+    kind: 'sequence', members: [reviewId], claim_digest: sha256(Buffer.from('claim:' + reviewId)),
+    surface_digests: [schema.sha256Hex(surface)], aggregation: 'sequence',
+    certified_producers: [producerId],
+  };
+  const gate = { ...gateIdentity, key: schema.sha256Hex(schema.canonicalJson(gateIdentity)) };
+  const receipt = {
+    schema_version: 2, contract_version: 2, node_id: reviewId,
+    evidence_binding: { node_id: reviewId, nonce },
+    review_context_hash: contextHash,
+    behavior_contract_hash: sha256(Buffer.from('behavior:' + reviewId)),
+    resolved_profile_hash: profileHash, candidate_digest: candidateDigest,
+    execution_status: 'complete', domain_outcome: 'changes_requested',
+    gate_effect: schema.deriveGateEffect('code-reviewer', 'change_gate', 'changes_requested', findings.length),
+    surface, findings, resolutions: [], blocking_findings: findings.length,
+    validation_vectors: [], certifier_digest: candidateDigest,
+    raw_evidence_sha256: schema.sha256Hex(body),
+  };
+  const reduced = schema.reduceReviewReceipts({
+    aggregation: gate.aggregation, role: 'code-reviewer', gate_mode: 'change_gate',
+    expected_members: gate.members, expected_surfaces: [surface], receipts: [receipt],
+  });
+  ok(reduced.complete, 'schema-2 replan source fixture reduces its gate receipts: ' + JSON.stringify(reduced.reason));
+  const attempt = {
+    attempt_id: 'review2-' + gate.key.slice(0, 16) + ':1',
+    ordinal: 1, plan_hash: planHash, contract_version: 2, logical_gate: gate,
+    transaction_key: schema.sha256Hex(schema.canonicalJson({
+      plan_hash: planHash, logical_gate_key: gate.key,
+      candidate_digest: candidateDigest, context_hash: contextHash,
+    })),
+    candidate_digest: candidateDigest, candidate_declared: {},
+    candidate_residue_digest: sha256(Buffer.from('residue:' + reviewId)),
+    epoch_lineage_id: fx.lineage.epoch_lineage_id, gate_mode: 'change_gate',
+    scope_lineage_id: scopeLineageId,
+    context_hashes: [contextHash], profile_hashes: [profileHash], review_phase: 'discovery',
+    prior_open_uids: [], current_open_uids: openUids,
+    current_findings: findings, findings, resolutions: [],
+    route_candidates: findings.map(finding => ({
+      source_node: reviewId, finding_id: finding.uid, id: finding.uid, scope: finding.scope,
+      action: finding.action, status: finding.status, severity: finding.severity,
+      fix_role: finding.fix_role, ownership_candidates: [producerId], owning_node: producerId, raw: '',
+    })),
+    repair_delta: null, validation_obligations: [], validation_vectors: [],
+    progress: {
+      progress: null, reason: null, stop_reason: null, replan_required: false,
+      consecutive_nonprogress: 0, idempotency_key: null,
+      previous_open_uids: [], current_open_uids: openUids,
+    },
+    reducer: { role: 'code-reviewer', complete: reduced.complete, domain_outcome: reduced.domain_outcome,
+      gate_effect: reduced.gate_effect, blocking_findings: reduced.blocking_findings },
+    receipts: [receipt], outcome: 'fail', reason: 'review_gate_failed',
+    settlement_command: 'close-node', lifecycle_settled: true,
+    producer_bindings: { [producerId]: { baseline: fx.commit, anchored_ref: fx.commit,
+      open_token: fx.commit, generation: fx.commit.slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/' + fx.project + '/' + producerId } },
+    repair: { selected_writer: null, settled: null }, rebind: [], consumed_by: null,
+  };
+  const journal = { schema_version: 2, contract_version: 2, plan_hash: planHash, attempts: [attempt] };
+  // Fixture self-guard: if this refuses, the FIXTURE is wrong, not the code under test — a journal
+  // the production validator rejects would never reach the source-evidence check at all.
+  const journalCheck = schema.validateReviewJournal(journal, planHash, 2);
+  ok(journalCheck.ok, 'schema-2 replan source fixture is a production-valid review journal: '
+    + JSON.stringify(journalCheck));
+  ok(receipt.body === undefined && receipt.receipt_sha256 === undefined,
+    'schema-2 replan source fixture receipt embeds no legacy body/receipt_sha256 pair');
+  fs.writeFileSync(path.join(fx.cacheDir, 'review-attempts.json'), JSON.stringify(journal, null, 2) + '\n');
+  fs.writeFileSync(path.join(fx.cacheDir, reviewId + '.md'), body);
+  writeSchema2RepairSource(fx, journal, attempt, { producerSlice: [producerId] });
+  return { journal, attempt, receipt, body, candidateDigest, reviewId };
 }
 
 function fanoutJournalFixture(config = {}) {
@@ -2958,6 +3073,105 @@ function initPendingGateFixture() {
     equal(closed.result, 'ok', '#706(ii) the post-dominating gate close SUCCEEDS after the manifest-less '
       + 'reconcile: ' + JSON.stringify(closed));
   } finally { fs.rmSync(h.fx.root, { recursive: true, force: true }); }
+}
+
+// Schema-2 replan source authority. `readSource` verifies TWO bindings on the parent review
+// attempt: the sealed candidate identity, and the per-node evidence receipts. Both are shape-
+// dependent, and both must accept the schema-2 shape without ever accepting a genuine divergence:
+//   * candidate — a contract-2 attempt seals the validation runner's LANDABLE tree digest; only a
+//     contract-1 attempt sealed the legacy raw ls-tree digest.
+//   * evidence  — a schema-2 receipt binds its bytes with `raw_evidence_sha256` and embeds no body;
+//     only a schema-1 receipt carries the `body` + `receipt_sha256` pair.
+{
+  const fx = initFixture();
+  try {
+    const v2 = installReviewJournalV2Source(fx);
+    const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: v2.attempt.attempt_id, transitionReason: 'review_repair_requires_replan' });
+    notEqualReason(prepared, 'replan_source_candidate_changed',
+      'an unmutated schema-2 candidate is verified against the digest algorithm that sealed it');
+    notEqualReason(prepared, 'replan_source_evidence_mismatch',
+      'a schema-2 receipt binding unmutated evidence through raw_evidence_sha256 verifies');
+    equal(prepared.result, 'prepared',
+      'a production-shaped schema-2 review source reaches the planner handoff: ' + JSON.stringify(prepared));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+{
+  // Anti-loosening: a genuine change inside the reviewed candidate band still refuses.
+  const fx = initFixture();
+  try {
+    const v2 = installReviewJournalV2Source(fx);
+    fs.writeFileSync(path.join(fx.root, 'product.js'), 'module.exports = 99;\n');
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: v2.attempt.attempt_id, transitionReason: 'review_repair_requires_replan' }).reason,
+    'replan_source_candidate_changed',
+    'a genuine landable-band code change still refuses the schema-2 candidate');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+{
+  // The reviewed candidate band is the landable tree: validation-invisible prose the reviewer never
+  // bound must not masquerade as a candidate change.
+  const fx = initFixture();
+  try {
+    const v2 = installReviewJournalV2Source(fx);
+    fs.writeFileSync(path.join(fx.root, 'README.md'), '# fixture CHANGED\n');
+    notEqualReason(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: v2.attempt.attempt_id, transitionReason: 'review_repair_requires_replan' }),
+    'replan_source_candidate_changed',
+    'a validation-invisible prose edit does not fake a schema-2 candidate change');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+{
+  // Anti-loosening: one mutated evidence byte still refuses under the schema-2 raw-digest binding.
+  const fx = initFixture();
+  try {
+    const v2 = installReviewJournalV2Source(fx);
+    fs.appendFileSync(path.join(fx.cacheDir, v2.reviewId + '.md'), 'x');
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: v2.attempt.attempt_id, transitionReason: 'review_repair_requires_replan' }).reason,
+    'replan_source_evidence_mismatch',
+    'a single mutated evidence byte still refuses under the schema-2 raw-digest binding');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+// LEGACY-LANE REGRESSION PIN. The schema-1 lane is not dead code: it still seals the raw ls-tree
+// candidate digest and legacy body/receipt_sha256 receipts, and its attempts carry NO
+// `contract_version` key. This block exists so a future refactor cannot quietly collapse the two
+// shapes into one — remove it only together with the schema-1 producer.
+{
+  const fx = initFixture();
+  try {
+    const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+    equal(journal.schema_version, 1, 'the legacy fixture journal stays schema-1');
+    ok(!Object.prototype.hasOwnProperty.call(journal.attempts[0], 'contract_version'),
+      'the legacy fixture attempt carries no contract_version, so the raw-digest comparison keeps a live test');
+    ok(typeof journal.attempts[0].receipts[0].body === 'string'
+      && typeof journal.attempts[0].receipts[0].receipt_sha256 === 'string'
+      && journal.attempts[0].receipts[0].raw_evidence_sha256 === undefined,
+    'the legacy fixture receipt keeps the embedded body/receipt_sha256 binding');
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
+    'prepared', 'a contract-1 attempt still verifies against the legacy raw candidate digest');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+{
+  const fx = initFixture();
+  try {
+    fs.writeFileSync(path.join(fx.root, 'product.js'), 'module.exports = 99;\n');
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).reason,
+    'replan_source_candidate_changed',
+    'a contract-1 attempt still refuses a genuinely changed raw candidate');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+{
+  const fx = initFixture();
+  try {
+    fs.appendFileSync(path.join(fx.cacheDir, 'review.md'), 'x');
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).reason,
+    'replan_source_evidence_mismatch',
+    'a contract-1 attempt still refuses a mutated legacy receipt body');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
 console.log(`test-replan: PASSED (${passed} assertions)`);
