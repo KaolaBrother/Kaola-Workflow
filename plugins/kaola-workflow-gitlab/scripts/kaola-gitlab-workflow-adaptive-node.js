@@ -4927,6 +4927,42 @@ function beginSchema2ReviewAttempt(opts, ctx, review, receipts, reduced) {
     || !/^[0-9a-f]{64}$/.test(String(partition.residue_digest || ''))) {
     return { ok: false, reason: 'candidate_partition_unavailable' };
   }
+  // #728 — SETTLEMENT INVARIANT: a review attempt whose REDUCED AGGREGATE verdict is a gate
+  // FAILURE may never be recorded with an EMPTY canonical frontier.
+  //
+  // `findings` / `current_findings` / `current_open_uids` are the only durable record of WHAT
+  // failed, and assessReviewProgress compares SUCCESSIVE frontiers by UID — so a failing aggregate
+  // with an empty frontier is indistinguishable from "nothing left to fix": the next attempt sees
+  // [] vs [] as `review_frontier_nonprogress`, two of those settle `review_nonconvergent` +
+  // replan_required, and the run is pushed into a replan carrying no record of the defect at all.
+  // The gap is reachable because a schema-1 flat `finding: id=... scope=...` row is invisible to
+  // parseReviewEvidence (only `finding_json:` is canonical) and requiredReviewTokens never asks an
+  // adversarial-verifier for a finding token, so `domain_outcome: refuted` with zero canonical
+  // findings parses clean.
+  //
+  // This binds the AGGREGATE, never the member. A member receipt whose own deriveGateEffect is
+  // 'fail' — an abstaining `indeterminate` replica, a minority refutation — that the reduction
+  // absorbs into a PASSING aggregate stays legal and closes normally, with no new obligation on
+  // that reviewer; refusing per member would hard-block a legal majority fan-out and could only be
+  // cleared by fabricating a failure_class, four trigger digests and an anchor for a defect the
+  // reviewer explicitly could not determine. The condition is therefore keyed on
+  // `reduced.gate_effect`, not on `outcome`: a closure attempt that fails only on progress
+  // (validation drift, missing resolution proof) legitimately carries an empty frontier because its
+  // findings really were all resolved.
+  //
+  // Refusal — not promotion of the flat row — is the only sound remedy: a canonical finding's UID
+  // is sha256(scope_lineage_id + primary_anchor) over a normalized anchor, and normalizeFindingSet
+  // additionally demands a closed-vocabulary failure_class plus four 64-hex trigger digests. A flat
+  // row carries none of them, so a promoted finding could not be given a stable UID without
+  // inventing evidence; and validateReviewJournal recomputes attempt.findings from the receipts, so
+  // a finding promoted here (into an immutable receipt set) would red the very next journal read.
+  if (reduced.gate_effect === 'fail' && currentOpen.length === 0) {
+    return { ok: false, reason: 'review_settlement_missing_findings',
+      domain_outcome: reduced.domain_outcome,
+      incoherent_members: receipts.filter(receipt => receipt && receipt.gate_effect === 'fail'
+        && !(receipt.findings || []).some(finding => finding && finding.status !== 'resolved'))
+        .map(receipt => String(receipt.node_id)).sort() };
+  }
   attempt = {
     attempt_id: attemptId,
     ordinal,
@@ -5012,8 +5048,12 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
     return { handled: false, begun: null, schema2: true, receipt: review.receipt, reduced };
   }
   const begun = beginSchema2ReviewAttempt(opts, ctx, review, group.receipts, reduced);
+  // #728: forward the settlement-coherence operands when present, so the refusal names WHICH member
+  // receipts declared a gate failure with no canonical finding and the re-emit is actionable.
   if (!begun.ok) return { handled: true, result: { result: 'refuse', reason: begun.reason,
-    detail: begun.detail || null } };
+    detail: begun.detail || null,
+    ...(begun.incoherent_members ? { domain_outcome: begun.domain_outcome,
+      incoherent_members: begun.incoherent_members } : {}) } };
   if (begun.attempt.progress && begun.attempt.progress.replan_required) {
     begun.attempt.lifecycle_settled = true;
     writeReviewJournal(opts, begun.state);

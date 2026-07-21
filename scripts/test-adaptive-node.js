@@ -20556,6 +20556,317 @@ function rtHarness(initialFiles, opts) {
   } finally { fs.rmSync(tmp713, { recursive: true, force: true }); }
 }
 
+// ===========================================================================
+// #728 — a schema-2 change gate must never SETTLE a failed/refuted review
+// attempt with an EMPTY canonical frontier.
+//
+// The defect (reproduced live below): an adversarial-verifier change gate may
+// legally emit `domain_outcome: refuted` with no `finding_json:` row at all —
+// requiredReviewTokens never asks an AV for a finding token, and the schema-1
+// flat `finding: id=... scope=...` row is invisible to parseReviewEvidence. The
+// attempt then settles outcome:fail with findings:[] / current_open_uids:[], and
+// assessReviewProgress compares SUCCESSIVE FRONTIERS BY UID — so [] vs [] is
+// `review_frontier_nonprogress`, twice over is `review_nonconvergent`, and the
+// run is pushed into a replan carrying zero record of what actually failed.
+//
+// The invariant is bound at the AGGREGATE/SETTLEMENT seam, never at the member:
+// a member receipt whose own deriveGateEffect is 'fail' but which a majority
+// reduction absorbs into a PASSING aggregate must still close normally. Block A
+// is that pin.
+// ===========================================================================
+{
+  const { spawnSync: spawn728 } = require('child_process');
+  const reviewSchema728 = require('./kaola-workflow-adaptive-schema');
+  const NODE_CLI_728 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_CLI_728 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const baseEnv728 = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_')));
+  const env728 = { ...baseEnv728, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    KAOLA_WORKFLOW_OFFLINE: '1' };
+  const lastJson728 = result => {
+    const line = String(result.stdout || '').trim().split('\n').filter(row => row.trim().startsWith('{')).pop();
+    return line ? JSON.parse(line) : null;
+  };
+
+  const tmp728 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-728-empty-frontier-')));
+  const run728 = (script, args, input) => spawn728(process.execPath, [script, ...args],
+    { cwd: tmp728, encoding: 'utf8', env: env728, input, timeout: 120000 });
+  try {
+    spawn728('git', ['init', '-b', 'main'], { cwd: tmp728, encoding: 'utf8', env: env728 });
+    spawn728('git', ['config', 'user.email', 'kw@test'], { cwd: tmp728, encoding: 'utf8', env: env728 });
+    spawn728('git', ['config', 'user.name', 'kw'], { cwd: tmp728, encoding: 'utf8', env: env728 });
+
+    // One frozen schema-2 project per scenario, all inside the same repo: a serial writer
+    // certified by an adversarial-verifier gate (sequence or replicated_majority fan-out),
+    // then a code-reviewer certifier and the sink.
+    const setup728 = (project, aggregation) => {
+      const avIds = aggregation === 'sequence' ? ['av-a'] : ['av-a', 'av-b', 'av-c'];
+      const shape = aggregation === 'sequence' ? 'sequence' : 'fanout(red)';
+      const projectDir = path.join(tmp728, 'kaola-workflow', project);
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const implPath = path.join(tmp728, project + '-impl.js');
+      fs.writeFileSync(implPath, 'module.exports = 0;\n');
+      const implRel = project + '-impl.js';
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — ' + project, '',
+        '## Meta',
+        'plan_schema_version: 2',
+        'labels: enhancement',
+        'code_certifier: codegate',
+        'security_certifier: none',
+        'inherited_frontier_digest: none',
+        'inherited_frontier_classes: none',
+        'validation_command: node --check ' + implRel,
+        'validation_timeout_minutes: 5', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '|---|---|---|---|---|---|---|---|---|---|',
+        '| writer | tdd-guide | — | ' + implRel + ' | 1 | sequence | — | — | — | — |',
+        ...avIds.map(id => '| ' + id + ' | adversarial-verifier | writer | — | 1 | ' + shape
+          + ' | change is sound | code-tree | ' + aggregation + ' | writer |'),
+        '| codegate | code-reviewer | ' + avIds.join(',') + ' | — | 1 | sequence | review-change | code-tree | sequence | — |',
+        '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
+        '## Node Ledger', '',
+        '| id | status |', '|---|---|',
+        '| writer | pending |', ...avIds.map(id => '| ' + id + ' | pending |'),
+        '| codegate | pending |', '| finalize | pending |', '',
+        '## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+        '| tdd-guide (writer) | pending | | |',
+        ...avIds.map(id => '| adversarial-verifier (' + id + ') | pending | | |'),
+        '| code-reviewer (codegate) | pending | | |', '| finalize (finalize) | pending | | |', '',
+      ].join('\n'));
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+      const freeze = run728(VALIDATOR_CLI_728, [planPath, '--freeze', '--json']);
+      assert(freeze.status === 0 && lastJson728(freeze) && lastJson728(freeze).frozen === true,
+        '#728: the schema-2 AV-gate plan (' + aggregation + ') freezes: ' + freeze.stdout + freeze.stderr);
+      spawn728('git', ['add', '-A'], { cwd: tmp728, encoding: 'utf8', env: env728 });
+      spawn728('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp728, encoding: 'utf8', env: env728 });
+      return { project, projectDir, cacheDir, planPath, implPath, avIds };
+    };
+
+    // Drives the writer and returns the opened AV dispatch map (fan-out enters a batch;
+    // a sequence gate opens directly off the writer close).
+    const openGate728 = (fixture, body, writerNonce) => {
+      let nonce = writerNonce;
+      if (!nonce) {
+        const opened = run728(NODE_CLI_728, ['open-next', '--project', fixture.project, '--json']);
+        assert(opened.status === 0 && lastJson728(opened) && lastJson728(opened).nonce,
+          '#728: the writer opens: ' + opened.stdout + opened.stderr);
+        nonce = lastJson728(opened).nonce;
+      }
+      fs.writeFileSync(fixture.implPath, body);
+      const rec = run728(NODE_CLI_728, ['record-evidence', '--project', fixture.project,
+        '--node-id', 'writer', '--stdin', '--json'],
+        'evidence-binding: writer ' + nonce + '\nRED: reproduced\nGREEN: passes\n');
+      assert(rec.status === 0, '#728: writer evidence records: ' + rec.stdout + rec.stderr);
+      const closed = run728(NODE_CLI_728, ['close-and-open-next', '--project', fixture.project,
+        '--node-id', 'writer', '--json']);
+      assert(closed.status === 0, '#728: the writer closes: ' + closed.stdout + closed.stderr);
+      const payload = lastJson728(closed) || {};
+      const map = {};
+      if (payload.opened) map[payload.opened.id] = payload.opened;
+      if (payload.enterBatch) {
+        const batch = run728(NODE_CLI_728, ['open-ready', '--project', fixture.project, '--json']);
+        assert(batch.status === 0, '#728: the AV fan-out batch opens: ' + batch.stdout + batch.stderr);
+        for (const row of ((lastJson728(batch) || {}).opened || [])) map[row.id] = row;
+      }
+      return { map, writerNonce: nonce };
+    };
+
+    const gateEvidence728 = (opened, domainOutcome, aggregation, extraRows) => [
+      'evidence-binding: ' + opened.id + ' ' + opened.nonce,
+      'contract_version: 2',
+      'review_context_hash: ' + opened.dispatch.review_context_hash,
+      'behavior_contract_hash: ' + opened.dispatch.behavior_contract_hash,
+      'resolved_profile_hash: ' + opened.dispatch.resolved_profile_hash,
+      'candidate_digest: ' + opened.dispatch.candidate_digest,
+      'domain_outcome: ' + domainOutcome,
+      'claim_outcome: ' + domainOutcome,
+      'gate_mode: change_gate',
+      'gate_claim: change is sound',
+      'gate_surface: code-tree',
+      'gate_aggregation: ' + aggregation,
+      ...(extraRows || []), '',
+    ].join('\n');
+
+    const journal728 = fixture => {
+      const file = path.join(fixture.cacheDir, 'review-attempts.json');
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { attempts: [] };
+    };
+
+    // -- Block A (MANDATORY, the anti-false-block pin) -------------------------
+    // replicated_majority AV fan-out: two replicas not_refuted, one indeterminate.
+    // The minority's OWN deriveGateEffect is 'fail'; the reduction absorbs it into a
+    // PASSING aggregate. Every replica must close normally and the gate must PASS —
+    // a per-MEMBER empty-frontier refusal would hard-block this legal run, and the
+    // only way to clear such a block would be for the abstaining replica to FABRICATE
+    // a failure_class + four trigger digests + an anchor for a defect it could not
+    // determine, planting an invented UID in the frontier of a PASSING gate.
+    {
+      const fx = setup728('issue-728-majority', 'replicated_majority');
+      const gate = openGate728(fx, 'module.exports = 1;\n');
+      const closes = fx.avIds.map((id, index) => {
+        const outcome = index === 2 ? 'indeterminate' : 'not_refuted';
+        const rec = run728(NODE_CLI_728, ['record-evidence', '--project', fx.project,
+          '--node-id', id, '--stdin', '--json'],
+          gateEvidence728(gate.map[id], outcome, 'replicated_majority'));
+        assert(rec.status === 0, '#728A: ' + id + ' (' + outcome + ') evidence records: ' + rec.stdout + rec.stderr);
+        return run728(NODE_CLI_728, ['close-node', '--project', fx.project, '--node-id', id, '--json']);
+      });
+      assert(closes.every(result => result.status === 0
+        && lastJson728(result) && lastJson728(result).result === 'ok'),
+        '#728A: EVERY replica of a replicated_majority AV fan-out closes normally when the '
+        + 'minority abstains (indeterminate) and the majority is not_refuted — the empty-frontier '
+        + 'invariant binds the AGGREGATE, never the member, got '
+        + closes.map(result => String(result.stdout).trim().split('\n').pop()).join(' | '));
+      const attemptsA = journal728(fx).attempts;
+      assert(attemptsA.length === 1 && attemptsA[0].outcome === 'pass'
+        && attemptsA[0].reducer.gate_effect === 'pass'
+        && attemptsA[0].reducer.domain_outcome === 'not_refuted',
+        '#728A: the absorbed minority still reduces to a PASSING aggregate, got '
+        + JSON.stringify(attemptsA.map(a => ({ outcome: a.outcome, reducer: a.reducer }))));
+      const minority = attemptsA[0].receipts.find(receipt => receipt.node_id === 'av-c');
+      assert(minority && minority.domain_outcome === 'indeterminate' && minority.gate_effect === 'fail'
+        && minority.findings.length === 0,
+        '#728A: the absorbed member receipt is individually gate_effect:fail with ZERO findings and '
+        + 'stays LEGAL — that member combination is exactly what a per-member refusal false-blocks, got '
+        + JSON.stringify(minority && { d: minority.domain_outcome, g: minority.gate_effect, f: minority.findings }));
+      assert(attemptsA[0].current_open_uids.length === 0,
+        '#728A: a PASSING gate with zero findings stays legal — an empty frontier is only '
+        + 'incoherent behind a FAILING aggregate (the over-refusal trap)');
+      const planA = fs.readFileSync(fx.planPath, 'utf8');
+      const ledgerA = planA.slice(planA.indexOf('## Node Ledger'));
+      assert(fx.avIds.every(id => new RegExp('\\| ' + id + ' \\| complete \\|').test(ledgerA)),
+        '#728A: the whole fan-out reaches complete (the gate PASSED, nothing folded), got:\n' + ledgerA);
+    }
+
+    // -- Block B (the defect) --------------------------------------------------
+    // A refuted sequence AV change gate whose only finding is a schema-1 FLAT
+    // `finding:` row (plus a `## finding-anchor-v1` prose anchor and a
+    // `findings_blocking: 1` row — the exact live consumer receipt shape). The
+    // canonical frontier is empty, so the settlement is verdictless and must refuse.
+    {
+      const fx = setup728('issue-728-flat', 'sequence');
+      const gate = openGate728(fx, 'module.exports = 1;\n');
+      const flatRows = [
+        'finding: id=R8 scope=in_scope action=fix status=open severity=high fix_role=tdd-guide',
+        'findings_blocking: 1',
+        '## finding-anchor-v1',
+        'the change regresses the documented behavior',
+      ];
+      const rec = run728(NODE_CLI_728, ['record-evidence', '--project', fx.project,
+        '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence728(gate.map['av-a'], 'refuted', 'sequence', flatRows));
+      assert(rec.status === 0, '#728B: the flat-row refuted evidence records: ' + rec.stdout + rec.stderr);
+      const close = run728(NODE_CLI_728, ['close-node', '--project', fx.project,
+        '--node-id', 'av-a', '--json']);
+      const payload = lastJson728(close) || {};
+      assert(payload.result === 'refuse' && payload.reason === 'review_settlement_missing_findings',
+        '#728B: a FAILING aggregate (refuted) whose canonical frontier is EMPTY must be refused at '
+        + 'the settlement seam — pre-fix it settles review_failed with findings:[] and poisons '
+        + 'convergence, got ' + JSON.stringify(payload));
+      assert(Array.isArray(payload.incoherent_members) && payload.incoherent_members.includes('av-a'),
+        '#728B: the refusal names the member receipt(s) that declared a gate failure without a '
+        + 'canonical finding, so the re-emit is actionable, got ' + JSON.stringify(payload.incoherent_members));
+      assert(journal728(fx).attempts.length === 0,
+        '#728B: NOTHING is written to the review journal — the verdictless attempt never becomes '
+        + 'durable, so it can never advance the nonprogress counter, got '
+        + JSON.stringify(journal728(fx).attempts.map(a => ({ o: a.outcome, u: a.current_open_uids }))));
+    }
+
+    // -- Blocks C + E (unchanged behavior + convergence) ------------------------
+    // A properly-formed `finding_json:` refutation settles exactly as before, and the
+    // SAME underlying finding re-presented after a repair keeps a NON-EMPTY frontier on
+    // both attempts (pre-fix the flat-row equivalent yields [] then [] -> nonprogress).
+    {
+      const fx = setup728('issue-728-canonical', 'sequence');
+      const gate = openGate728(fx, 'module.exports = 1;\n');
+      const writerEvidenceDigest = reviewSchema728.sha256Hex(
+        fs.readFileSync(path.join(fx.cacheDir, 'writer.md'), 'utf8'));
+      const finding728 = {
+        failure_class: 'correctness',
+        trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+          expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+        primary_anchor: { kind: 'evidence_observation',
+          producer_evidence_digest: writerEvidenceDigest,
+          observation_key: 'writer:issue-728-regression' },
+        secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
+        status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+      };
+      let rec = run728(NODE_CLI_728, ['record-evidence', '--project', fx.project,
+        '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence728(gate.map['av-a'], 'refuted', 'sequence',
+          ['finding_json: ' + JSON.stringify(finding728)]));
+      assert(rec.status === 0, '#728C: the canonical refuted evidence records: ' + rec.stdout + rec.stderr);
+      const close1 = run728(NODE_CLI_728, ['close-node', '--project', fx.project,
+        '--node-id', 'av-a', '--json']);
+      const payload1 = lastJson728(close1) || {};
+      assert(payload1.result === 'review_failed' && payload1.reason === 'review_gate_failed',
+        '#728C: a properly-formed finding_json refutation still settles review_failed, byte-for-byte '
+        + 'the pre-fix behavior, got ' + JSON.stringify(payload1));
+      const attempt1 = journal728(fx).attempts[0];
+      assert(attempt1 && attempt1.outcome === 'fail' && attempt1.current_open_uids.length === 1
+        && attempt1.findings.length === 1,
+        '#728C: the settled failure carries a NON-empty canonical frontier, got '
+        + JSON.stringify(attempt1 && { o: attempt1.outcome, u: attempt1.current_open_uids }));
+
+      // E: repair, re-present the SAME finding, and prove the second failed attempt is
+      // also frontier-bearing — the pair a nonconvergence verdict is computed from.
+      const repair = run728(NODE_CLI_728, ['repair-node', '--project', fx.project,
+        '--attempt-id', attempt1.attempt_id, '--node-id', 'writer', '--json']);
+      assert(repair.status === 0 && lastJson728(repair).result === 'ok',
+        '#728E: repair-node consumes the failed attempt: ' + repair.stdout + repair.stderr);
+      const gate2 = openGate728(fx, 'module.exports = 2;\n', gate.writerNonce);
+      rec = run728(NODE_CLI_728, ['record-evidence', '--project', fx.project,
+        '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence728(gate2.map['av-a'], 'refuted', 'sequence',
+          ['finding_json: ' + JSON.stringify(finding728)]));
+      assert(rec.status === 0, '#728E: the re-presented finding records: ' + rec.stdout + rec.stderr);
+      const close2 = run728(NODE_CLI_728, ['close-node', '--project', fx.project,
+        '--node-id', 'av-a', '--json']);
+      assert((lastJson728(close2) || {}).result === 'review_failed',
+        '#728E: the second attempt settles as a review failure: ' + close2.stdout + close2.stderr);
+      const attempts = journal728(fx).attempts;
+      assert(attempts.length === 2
+        && attempts.every(attempt => attempt.outcome === 'fail' && attempt.current_open_uids.length === 1)
+        && attempts[0].current_open_uids[0] === attempts[1].current_open_uids[0],
+        '#728E: TWO successive failed attempts carrying the same underlying finding both keep a '
+        + 'non-empty frontier and agree on its UID — the pre-fix flat-row path yields [] then [], '
+        + 'which assessReviewProgress reads as review_frontier_nonprogress, got '
+        + JSON.stringify(attempts.map(a => ({ o: a.outcome, u: a.current_open_uids }))));
+      assert(reviewSchema728.validateReviewJournal(journal728(fx),
+        journal728(fx).plan_hash, 2).ok === true,
+        '#728E: the two-attempt journal round-trips the strict V2 validator unchanged');
+    }
+
+    // -- Block D (over-refusal trap, sequence form) -----------------------------
+    // A not_refuted sequence AV change gate with zero findings PASSES. The invariant
+    // must not touch it: an empty frontier is only incoherent behind a FAILING aggregate.
+    {
+      const fx = setup728('issue-728-clean', 'sequence');
+      const gate = openGate728(fx, 'module.exports = 1;\n');
+      const rec = run728(NODE_CLI_728, ['record-evidence', '--project', fx.project,
+        '--node-id', 'av-a', '--stdin', '--json'],
+        gateEvidence728(gate.map['av-a'], 'not_refuted', 'sequence'));
+      assert(rec.status === 0, '#728D: the clean evidence records: ' + rec.stdout + rec.stderr);
+      const close = run728(NODE_CLI_728, ['close-and-open-next', '--project', fx.project,
+        '--node-id', 'av-a', '--json']);
+      const payload = lastJson728(close) || {};
+      assert(close.status === 0 && payload.result === 'ok' && payload.closed === 'av-a'
+        && payload.opened && payload.opened.id === 'codegate',
+        '#728D: a PASSING change gate with zero findings closes and advances, untouched by the '
+        + 'empty-frontier invariant, got ' + JSON.stringify(payload));
+      const attempts = journal728(fx).attempts;
+      assert(attempts.length === 1 && attempts[0].outcome === 'pass'
+        && attempts[0].current_open_uids.length === 0,
+        '#728D: its settled attempt is a PASS with an empty frontier — legal, got '
+        + JSON.stringify(attempts.map(a => ({ o: a.outcome, u: a.current_open_uids }))));
+    }
+  } finally { fs.rmSync(tmp728, { recursive: true, force: true }); }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
