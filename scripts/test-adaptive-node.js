@@ -59,6 +59,10 @@ const {
   schema2RouteCandidates,
   findingOwnershipSummary,
   completedNonGateWriterDescendants,
+  // #739: in-plan descendant-replay helpers.
+  structuralNonGateWriterDescendants,
+  replayConeSafety,
+  validatedReplayExempt,
   reviewJournalBlocker,
   reduceLogicalReviewAttempt,
   uniqueMaximalReviewProducer,
@@ -1362,6 +1366,55 @@ for (const selected of ['arm-a', 'arm-b']) {
     '#701-L2H: completed non-gate writer descendants excludes gates + incomplete + the start node, got ' + JSON.stringify(desc));
 }
 
+{
+  // #739-U: in-plan descendant-replay pure helpers — structural cone bound, cone safety, and the
+  // anti-laundering journal replay-record validation (the security surface of the exemption).
+  const chain = [
+    { id: 'w1', role: 'tdd-guide', declared_write_set: 'a.js', dependsOn: [] },
+    { id: 'w2', role: 'implementer', declared_write_set: 'b.js', dependsOn: ['w1'] },
+    { id: 'rev', role: 'code-reviewer', declared_write_set: '—', dependsOn: ['w2'] },
+    { id: 'done', role: 'finalize', declared_write_set: 'CHANGELOG.md', dependsOn: ['rev'] },
+  ];
+  // structuralNonGateWriterDescendants is status-INDEPENDENT (unlike completedNonGateWriterDescendants),
+  // so a replay's exempt cone can be bounded even while its members sit at pending mid-replay.
+  assert(JSON.stringify(structuralNonGateWriterDescendants(chain, 'w1')) === JSON.stringify(['done', 'w2']),
+    '#739-U: structural descendants ignore status + exclude gates/self, got ' + JSON.stringify(structuralNonGateWriterDescendants(chain, 'w1')));
+  assert(replayConeSafety(chain, 'w1').ok === true, '#739-U: a clean serial cone is replayable');
+  // A synthesizer (parallel-leg boundary) in the cone is NOT mechanically replayable → tighten-only refusal.
+  const withSynth = chain.concat([{ id: 'synth', role: 'synthesizer', declared_write_set: 's.js', dependsOn: ['w1'] }]);
+  const cs = replayConeSafety(withSynth, 'w1');
+  assert(cs.ok === false && cs.reason === 'replay_cone_synthesis_boundary',
+    '#739-U: a synthesizer in the cone refuses the replay (tighten-only), got ' + JSON.stringify(cs));
+  // validatedReplayExempt: a sound record validates and returns the exempt cone.
+  const soundAttempt = { route_candidates: [{ finding_id: 'f', status: 'open', ownership_candidates: ['w1'] }],
+    replay: { owner: 'w1', descendants: ['w2'] } };
+  const okv = validatedReplayExempt(soundAttempt, chain);
+  assert(okv.ok === true && okv.owner === 'w1' && okv.replayExempt instanceof Set && okv.replayExempt.has('w2'),
+    '#739-U: a sound replay record validates + returns the exempt cone, got ' + JSON.stringify({ ok: okv.ok, owner: okv.owner }));
+  // FORGED (anti-laundering): a descendant OUTSIDE the owner structural cone cannot be exempted.
+  assert(validatedReplayExempt({ route_candidates: soundAttempt.route_candidates, replay: { owner: 'w1', descendants: ['nowhere'] } }, chain).ok === false,
+    '#739-U: a replay descendant outside the owner structural cone is refused (bound to the frozen graph)');
+  // FORGED (anti-laundering): an owner that does not UNIQUELY own the still-open findings is refused.
+  assert(validatedReplayExempt({ route_candidates: [{ finding_id: 'f', status: 'open', ownership_candidates: ['w2'] }], replay: { owner: 'w1', descendants: ['w2'] } }, chain).ok === false,
+    '#739-U: a replay owner that does not own the findings is refused (no forged-owner exemption)');
+  // FORGED (defense-in-depth): the attempt's bound writer (selected_writer / consumed_by) must equal
+  // replay.owner — a record naming a DIFFERENT reopened writer is refused.
+  assert(validatedReplayExempt({ route_candidates: soundAttempt.route_candidates, consumed_by: 'w2', replay: { owner: 'w1', descendants: ['w2'] } }, chain).ok === false,
+    '#739-U: a replay whose consumed_by != owner is refused');
+  assert(validatedReplayExempt({ route_candidates: soundAttempt.route_candidates, repair: { selected_writer: 'w2' }, replay: { owner: 'w1', descendants: ['w2'] } }, chain).ok === false,
+    '#739-U: a replay whose repair.selected_writer != owner is refused');
+  // The legit shape (bound writer === owner) still validates.
+  assert(validatedReplayExempt({ route_candidates: soundAttempt.route_candidates, repair: { selected_writer: 'w1' }, consumed_by: 'w1', replay: { owner: 'w1', descendants: ['w2'] } }, chain).ok === true,
+    '#739-U: a replay whose bound writer === owner validates');
+  // FORGED: a malformed replay record (non-array descendants / missing owner) is refused.
+  assert(validatedReplayExempt({ route_candidates: soundAttempt.route_candidates, replay: { owner: 'w1' } }, chain).ok === false,
+    '#739-U: a malformed replay record is refused');
+  // Legacy path: no replay record ⇒ replayExempt null (byte-identical to pre-#739 behavior).
+  assert(validatedReplayExempt({ route_candidates: [] }, chain).ok === true
+    && validatedReplayExempt({ route_candidates: [] }, chain).replayExempt === null,
+    '#739-U: an attempt with no replay record returns {ok:true, replayExempt:null}');
+}
+
 // #701-INT: Layer-2 integration through runRepairNode over a real close-produced journal. Chain
 // impl(owner) -> tail(graph-maximal writer) -> review(code-reviewer). A finding anchored to impl's file
 // makes tail the maximal producer that owns NOTHING.
@@ -1424,15 +1477,84 @@ for (const selected of ['arm-a', 'arm-b']) {
     } finally { f.cleanup(); }
   }
 
-  // #701-D: the operator names the non-maximal SEMANTIC OWNER impl → dependent_producer_replay_required.
+  // #701-D/#739: the operator names the non-maximal SEMANTIC OWNER impl on a mechanically-replayable serial
+  // chain → the IN-PLAN descendant replay fires (reopen impl, reset the [tail] cone + fold review, consume
+  // the attempt, ZERO epochs) instead of escalating to replan. The crown-jewel check is that the journal
+  // RE-VALIDATES on the next read (the reverted first attempt wedged here with review_journal_repair_identity_mismatch).
   {
     const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js');
     try {
+      const planPath = path.join(f.tmp, 'kaola-workflow', 'issue-701', 'workflow-plan.md');
+      const epochsBefore = fs.readFileSync(planPath, 'utf8');
       const r = f.runRepair('impl');
-      assert(r.result === 'repair_requires_replan' && r.reason === 'dependent_producer_replay_required'
-        && r.semantic_owner === 'impl' && JSON.stringify(r.blocking_descendants) === JSON.stringify(['tail'])
-        && typeof r.operator_hint === 'string',
-        '#701-D: repair-node of the non-maximal owner impl returns dependent_producer_replay_required naming impl + [tail], got ' + JSON.stringify(r));
+      assert(r.result === 'ok' && r.repaired === 'impl' && r.consumed_by === 'impl'
+        && r.replay && r.replay.owner === 'impl'
+        && JSON.stringify(r.replay.descendants_reset) === JSON.stringify(['tail'])
+        && JSON.stringify(r.gatesReset) === JSON.stringify(['review']) && r.baselineReused === true,
+        '#701-D/#739: repair-node of the non-maximal owner impl performs the in-plan descendant replay, got ' + JSON.stringify(r));
+      const statuses = readLedgerStatuses(fs.readFileSync(planPath, 'utf8'));
+      assert(statuses.impl === 'in_progress' && statuses.tail === 'pending' && statuses.review === 'pending'
+        && statuses.done === 'pending',
+        '#701-D/#739: impl reopened in_progress; the [tail] cone + review gate folded to pending, got ' + JSON.stringify(statuses));
+      // The descendant cone's stale evidence + baseline are removed; the OWNER's barrier-base is REUSED (kept).
+      const cacheDir = path.join(f.tmp, 'kaola-workflow', 'issue-701', '.cache');
+      assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-tail')) && fs.existsSync(path.join(cacheDir, 'barrier-base-impl')),
+        '#701-D/#739: the reset descendant baseline is removed but the owner baseline is reused (kept)');
+      // CROWN JEWEL: the consumed replay attempt must re-validate on the next journal read (no wedge). A second
+      // repair on the same, now-consumed attempt short-circuits idempotently — which requires readReviewJournal
+      // (the anti-laundering identity validators) to ACCEPT the post-replay journal against the live ledger.
+      const reread = f.runRepair('impl');
+      assert(reread.result === 'ok' && reread.idempotent === true,
+        '#701-D/#739: the post-replay journal re-validates on read; a re-repair is idempotent, got ' + JSON.stringify(reread));
+      // ZERO epochs: no automatic_review_replans / epoch lineage mutation appeared in the plan.
+      const epochsAfter = fs.readFileSync(planPath, 'utf8');
+      const epochField = c => (c.match(/automatic_review_replans:\s*(\d+)/) || [])[1] || '0';
+      assert(epochField(epochsBefore) === epochField(epochsAfter),
+        '#701-D/#739: the replay consumes ZERO epochs (automatic_review_replans unchanged)');
+    } finally { f.cleanup(); }
+  }
+
+  // #701-D2/#739: crash-prefix idempotent resume across the replay cascade. A crash at each durable
+  // failpoint, resumed by re-running the SAME command with no failpoint, converges to the identical
+  // committed result and leaves the journal re-validating (no half-open frontier, no wedge).
+  for (const failAt of ['repair_selected_written', 'repair_plan_written', 'repair_settled_written']) {
+    const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js');
+    try {
+      let threw = false;
+      try { runRepairNode({ ...f.common, nodeId: 'impl', attemptId: f.attempt.attempt_id, reviewFailpoint: failAt }); }
+      catch (_) { threw = true; }
+      assert(threw, '#701-D2/#739: the injected failpoint ' + failAt + ' aborts the replay');
+      // Resume with no failpoint.
+      const resumed = runRepairNode({ ...f.common, nodeId: 'impl', attemptId: f.attempt.attempt_id });
+      assert(resumed.result === 'ok' && resumed.consumed_by === 'impl',
+        '#701-D2/#739: resume after ' + failAt + ' converges to ok, got ' + JSON.stringify(resumed));
+      const planPath = path.join(f.tmp, 'kaola-workflow', 'issue-701', 'workflow-plan.md');
+      const statuses = readLedgerStatuses(fs.readFileSync(planPath, 'utf8'));
+      assert(statuses.impl === 'in_progress' && statuses.tail === 'pending' && statuses.review === 'pending',
+        '#701-D2/#739: resume after ' + failAt + ' lands the full reset frontier, got ' + JSON.stringify(statuses));
+      // Journal re-validates + a further re-repair is idempotent (the anti-laundering identity check accepts it).
+      const again = runRepairNode({ ...f.common, nodeId: 'impl', attemptId: f.attempt.attempt_id });
+      assert(again.result === 'ok' && again.idempotent === true,
+        '#701-D2/#739: after resume from ' + failAt + ' the journal re-validates (idempotent re-repair), got ' + JSON.stringify(again));
+    } finally { f.cleanup(); }
+  }
+
+  // #701-D3/#739: tighten-only — a non-COMPLETE descendant (here tail in_progress) means the completed
+  // descendant cone is empty, so the replay does NOT fire and the request falls to the existing replan
+  // path (zero mutation). The replay only ever activates on a fully-completed, mechanically-replayable cone.
+  {
+    const f = makeRepairFixture('finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js');
+    try {
+      const planPath = path.join(f.tmp, 'kaola-workflow', 'issue-701', 'workflow-plan.md');
+      let plan = fs.readFileSync(planPath, 'utf8');
+      plan = plan.replace('| tail | complete | |', '| tail | in_progress | |');
+      fs.writeFileSync(planPath, plan);
+      const r = f.runRepair('impl');
+      assert(r.result === 'repair_requires_replan' && !r.replay,
+        '#701-D3/#739: an incomplete cone (tail in_progress ⇒ no completed descendants) falls to replan, no replay, got ' + JSON.stringify(r));
+      const statuses = readLedgerStatuses(fs.readFileSync(planPath, 'utf8'));
+      assert(statuses.impl === 'complete' && statuses.tail === 'in_progress',
+        '#701-D3/#739: the replan decision is ZERO-mutation (impl stays complete, tail untouched)');
     } finally { f.cleanup(); }
   }
 
@@ -1464,6 +1586,63 @@ for (const selected of ['arm-a', 'arm-b']) {
         '#701-F: an unroutable-file (empty-ownership) journal degrades to a generic replan, got ' + JSON.stringify(rImpl));
     } finally { f.cleanup(); }
   }
+}
+
+// #739-DIAMOND: the write-diamond liveness guard (surfaced by adversarial verification of #739). A finding
+// owned by the shared owner of two parallel disjoint writer branches, each with its own COMPLETE interior
+// gate, plus a common certifier that failed. Neither interior gate post-dominates the owner, so a replay
+// that resets both branches would strand ga+gb stale-and-unfolded and wedge finalize. repair-node must
+// DECLINE the in-plan replay and route to the existing replan path (tighten-only, zero mutation).
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-739-diamond-'));
+  const projectDir = path.join(tmp, 'kaola-workflow', 'issue-739d');
+  const cacheDir = path.join(projectDir, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const body = makePlan([
+    '| owner | complete | |', '| wa | complete | |', '| wb | complete | |',
+    '| ga | complete | |', '| gb | complete | |', '| cert | in_progress | |', '| done | pending | |',
+  ], [
+    '| owner | tdd-guide | — | scripts/owner.js | 1 | sequence |',
+    '| wa | implementer | owner | scripts/wa.js | 1 | sequence |',
+    '| wb | implementer | owner | scripts/wb.js | 1 | sequence |',
+    '| ga | adversarial-verifier | wa | — | 1 | sequence |',
+    '| gb | adversarial-verifier | wb | — | 1 | sequence |',
+    '| cert | code-reviewer | ga,gb | — | 1 | sequence |',
+    '| done | finalize | cert | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const hash = planValidator.computePlanHash(body);
+  const planPath = path.join(projectDir, 'workflow-plan.md');
+  const journalPath = path.join(cacheDir, 'review-attempts.json');
+  const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+    open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12), ref: 'refs/kaola-workflow/barrier/issue-739d/' + id });
+  const identities = { owner: identityFor('o'), wa: identityFor('a'), wb: identityFor('b') };
+  fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+  for (const id of ['owner', 'wa', 'wb']) fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + id), identities[id].baseline + '\n');
+  fs.writeFileSync(path.join(cacheDir, 'barrier-base-cert'), 'cccccccccccc-rest\n');
+  fs.writeFileSync(path.join(cacheDir, 'cert.md'),
+    'evidence-binding: cert cccccccccccc\nverdict: fail\nfindings_blocking: 1\nfinding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/owner.js\n');
+  fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [{ id: 'cert', role: 'code-reviewer', kind: 'read' }] }));
+  const common = { planPath, project: 'issue-739d',
+    shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+    readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+    cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+    computeReviewCandidateDigest: () => '9'.repeat(64), captureWriterBarrierIdentity: id => identities[id] || null };
+  try {
+    const closed = runCloseNode({ ...common, nodeId: 'cert' });
+    const journal = fs.existsSync(journalPath) ? JSON.parse(fs.readFileSync(journalPath, 'utf8')) : { attempts: [] };
+    const attempt = journal.attempts[0];
+    assert(closed.result === 'review_failed' && attempt,
+      '#739-DIAMOND: close of the certifier produces a repairable failed attempt, got ' + JSON.stringify(closed));
+    const planAfterClose = fs.readFileSync(planPath, 'utf8');
+    const r = runRepairNode({ ...common, nodeId: 'owner', attemptId: attempt && attempt.attempt_id });
+    assert(r.result === 'repair_requires_replan' && r.replay_declined === 'nonpostdominating_gate_in_cone'
+      && Array.isArray(r.stranded_gates) && r.stranded_gates.join(',') === 'ga,gb',
+      '#739-DIAMOND: the write-diamond replay is declined (would strand ga,gb) → replan, got ' + JSON.stringify(r));
+    // The decline is zero-mutation: the repair refuses BEFORE any durable write, so the plan is unchanged
+    // from the post-close state (and the owner is definitely never reopened).
+    assert(fs.readFileSync(planPath, 'utf8') === planAfterClose && readLedgerStatuses(planAfterClose).owner === 'complete',
+      '#739-DIAMOND: the replay decline is byte-for-byte ZERO-mutation (owner never reopened)');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
 // R21: sibling gates over one candidate form one repair invalidation set even though neither

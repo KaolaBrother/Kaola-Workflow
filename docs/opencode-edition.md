@@ -408,6 +408,14 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 `install-opencode.sh` is a standalone, additive installer (it does not modify
 `install.sh`):
 
+> The opencode runtime is also covered by the top-level **`./install-all.sh`**
+> ("install/refresh every runtime" — see [README](../README.md#installation)),
+> which invokes this installer unchanged (`--global` by default) as one leg of
+> its four-runtime sequence. `install-all.sh` is a thin orchestrator: it does
+> **not** fold opencode into `install.sh`/`edition-sync.js`/`npm test` — the
+> additive-edition boundary (D-530-02) is preserved.
+
+
 ```bash
 ./install-opencode.sh                         # adaptive-core only (default, and currently the only outcome)
 ./install-opencode.sh --with-fast             # opt-in flag still parsed; no fast source left to deploy (#725)

@@ -1533,6 +1533,25 @@ record; a competing payload refuses `replan_source_conflict`. `prepare` never ac
 operator-authored bootstrap substitute: it re-reads the exact failed, lifecycle-settled, unconsumed
 attempt and verifies the journal/evidence/candidate bindings.
 
+**In-plan descendant replay (#739).** Before escalating a `dependent_producer_replay_required` case
+to the replan epoch above, `repair-node` first attempts an in-place descendant replay — consuming ZERO
+epochs. When the flagged finding's unique semantic owner is a non-maximal COMPLETED writer whose
+descendant cone is mechanically replayable, `repair-node` reopens the owner (seeded with the
+digest-bound repair brief), resets that owner's completed non-gate writer descendants (ledger rows +
+evidence + baselines) to pending, folds the post-dominating gates via the existing reopen machinery, and
+consumes the failed attempt — recording a durable `replay: {owner, descendants}` marker on the attempt
+and returning `result:"ok"` with a `replay` block (`{owner, descendants_reset}`). The reset cone then
+re-runs through the normal lifecycle and the gate re-reviews the whole owner-modified candidate as a
+closure attempt in the same scope lineage. The transaction is crash-prefix idempotent (the replay marker
+is written in the first repair mutation; the reset frontier lands atomically with the owner reopen). It
+is **tighten-only**: an incomplete cone, a parallel-leg synthesis boundary in the cone, an in_progress
+non-gate descendant (orphan guard), ambiguous/cross-writer ownership, or a finding outside every
+writer's declared write set keeps the existing `repair_requires_replan` path. The anti-laundering journal
+identity validators recompute and bound the `replay` marker against the frozen graph on every read — the
+descendant set must be a subset of the owner's structural non-gate-writer cone and the owner must
+uniquely own the attempt's frozen findings — so the producer-proof exemption can never be pointed at an
+unrelated or already-certified producer. Replays count against `REVIEW_REPAIR_LIMIT`.
+
 `prepare` validates the frozen parent, durable source authority, claim lineage, candidate, inherited
 frontier, and transition budget under the existing project
 `.cache/scheduler.lock`. It writes `.cache/replan-transaction.json` and the state fence before any

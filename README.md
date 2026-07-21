@@ -261,6 +261,8 @@ Kaola-Workflow installs along two independent axes:
 | **opencode** | `./install-opencode.sh` | — (runtime-only; no forge axis) |
 | **Kimi Code** | `./install-kimi.sh` | — (runtime-only; no forge axis) |
 
+**Install/refresh every runtime at once — `./install-all.sh`.** To reinstall all four runtimes from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--profile=higher`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
+
 Forge editions:
 
 - **GitHub**: default. GitHub issues, pull requests, `gh`.

@@ -3086,7 +3086,13 @@ function nodeWriteSetNonempty(node) {
   return raw != null && !['', '-', '—', 'none', 'n/a'].includes(String(raw).trim().toLowerCase());
 }
 
-function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerStatuses, preservedProducers) {
+// replayExempt (#739, OPTIONAL last arg — a Set/array of node ids): the descendant cone of an in-plan
+// descendant replay. An exempt producer is kept in the slice at ANY status (so bindingKeys still matches),
+// never counted history-invalid, and excluded from the graph-maximal `every` check — because the replay
+// legitimately reopened+reset exactly those descendants under the owner, which the identity validators
+// bound to structuralNonGateWriterDescendants(owner) before ever passing them here. With no replayExempt
+// (every pre-#739 caller) `replay` is empty and every branch degenerates to the exact prior behavior.
+function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerStatuses, preservedProducers, replayExempt) {
   const byId = new Map((Array.isArray(nodes) ? nodes : []).map(n => [n.id, n]));
   const ancestors = id => {
     const out = new Set();
@@ -3104,6 +3110,7 @@ function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerS
   for (const set of memberSets.slice(1)) common = new Set([...common].filter(x => set.has(x)));
   const staticProducers = [...common].filter(id => nodeWriteSetNonempty(byId.get(id))).sort();
   const preserved = new Set(Array.isArray(preservedProducers) ? preservedProducers : []);
+  const replay = new Set(replayExempt instanceof Set ? replayExempt : (Array.isArray(replayExempt) ? replayExempt : []));
   const producer_slice = [];
   const invalid_producers = [];
   for (const id of staticProducers) {
@@ -3112,13 +3119,13 @@ function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerS
       continue;
     }
     const status = ledgerStatuses[id];
-    if (status === 'complete' || (status === 'in_progress' && preserved.has(id))) producer_slice.push(id);
+    if (status === 'complete' || (status === 'in_progress' && preserved.has(id)) || replay.has(id)) producer_slice.push(id);
     else if (status !== 'n/a') invalid_producers.push(id);
   }
   const history_valid = invalid_producers.length === 0;
   const selectedAncestors = ancestors(selectedWriter);
   const ok = history_valid && producer_slice.includes(selectedWriter)
-    && producer_slice.every(id => id === selectedWriter || selectedAncestors.has(id));
+    && producer_slice.every(id => id === selectedWriter || selectedAncestors.has(id) || replay.has(id));
   return { ok, history_valid, invalid_producers, selected_writer: selectedWriter, producer_slice };
 }
 
@@ -3184,6 +3191,104 @@ function completedNonGateWriterDescendants(nodes, ledgerStatuses, startId) {
     for (const c of (fwd.get(cur) || [])) q.push(c);
   }
   return out.sort();
+}
+
+// #739 — the STRUCTURAL non-gate writer descendants of startId in the frozen DAG, status-INDEPENDENT.
+// completedNonGateWriterDescendants (above) filters on ledger status to pick the descendants a replay
+// must reset; THIS variant drops the status filter so the review-journal identity validators can bound a
+// recorded replay record's descendant set against the frozen graph. During an active replay those
+// descendants sit at pending, so a status-filtered recompute would return nothing to check the journal's
+// list against — the exemption could then be pointed at an unrelated producer. Bounding to this
+// status-independent cone makes the replay exemption provably confined to the owner's real descendants.
+function structuralNonGateWriterDescendants(nodes, startId) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const byId = new Map(list.map(n => [n.id, n]));
+  const fwd = new Map(list.map(n => [n.id, []]));
+  for (const n of list) for (const d of (n.dependsOn || [])) if (fwd.has(d)) fwd.get(d).push(n.id);
+  const seen = new Set();
+  const q = [...(fwd.get(startId) || [])];
+  const out = [];
+  while (q.length) {
+    const cur = q.shift();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    const node = byId.get(cur);
+    if (node && !GATE_ROLES.has(node.role) && nodeWriteSetNonempty(node)) out.push(cur);
+    for (const c of (fwd.get(cur) || [])) q.push(c);
+  }
+  return out.sort();
+}
+
+// #739 — validate an attempt's in-plan descendant-replay record and return its BOUNDED exempt cone.
+// A replay record lets the attempt bind its producer proof to a NON-maximal upstream owner with the
+// reopened descendant cone exempt (uniqueMaximalReviewProducer's replayExempt arg). To keep the
+// anti-laundering guarantee, the identity validators RECOMPUTE the bound rather than trust the record:
+//   - owner must be a real node with a nonempty write set;
+//   - every listed descendant must lie in structuralNonGateWriterDescendants(owner) — the frozen graph
+//     cone, so the exemption can never be pointed at an unrelated / already-certified producer;
+//   - owner must UNIQUELY own the attempt's own frozen blocking findings (its immutable route_candidates —
+//     stable whether the attempt is active or resolved history), i.e. exactly the ownership adjudication
+//     repair-node used to AUTHORIZE the replay. A forged record pointed at a non-owner is refused.
+// Returns { ok:true, replayExempt:null } for an attempt with no replay; { ok:true, replayExempt:Set, owner }
+// for a sound one; { ok:false, reason } for a present-but-unsound record (fails the journal read closed).
+function validatedReplayExempt(attempt, nodes) {
+  const replay = attempt && attempt.replay;
+  if (replay == null) return { ok: true, replayExempt: null };
+  if (typeof replay !== 'object' || typeof replay.owner !== 'string' || !replay.owner
+    || !Array.isArray(replay.descendants)) {
+    return { ok: false, reason: 'review_journal_replay_identity_mismatch' };
+  }
+  const byId = new Map((Array.isArray(nodes) ? nodes : []).map(n => [n.id, n]));
+  const ownerNode = byId.get(replay.owner);
+  if (!ownerNode || !nodeWriteSetNonempty(ownerNode)) {
+    return { ok: false, reason: 'review_journal_replay_identity_mismatch' };
+  }
+  const cone = new Set(structuralNonGateWriterDescendants(nodes, replay.owner));
+  for (const d of replay.descendants) {
+    if (typeof d !== 'string' || !cone.has(d)) {
+      return { ok: false, reason: 'review_journal_replay_identity_mismatch' };
+    }
+  }
+  const own = findingOwnershipSummary(attempt, replay.owner);
+  if (!own.anyOwned || own.uniqueOwner !== replay.owner) {
+    return { ok: false, reason: 'review_journal_replay_identity_mismatch' };
+  }
+  // The reopened writer of a replay attempt IS the owner (the legit flow always equates them — repair-node
+  // binds repair.selected_writer / consumed_by to the owner). A record whose bound writer names a DIFFERENT
+  // node is illegitimate: refuse so the exemption can only ever attach to the exact shape it was proven for.
+  const selectedWriter = attempt.repair && attempt.repair.selected_writer;
+  if ((selectedWriter != null && selectedWriter !== replay.owner)
+    || (attempt.consumed_by != null && attempt.consumed_by !== replay.owner)) {
+    return { ok: false, reason: 'review_journal_replay_identity_mismatch' };
+  }
+  return { ok: true, replayExempt: new Set(replay.descendants), owner: replay.owner };
+}
+
+// #739 — is the owner's descendant cone mechanically replayable in-plan? Tighten-only: returns
+// {ok:false, reason} for any shape the reopen cascade cannot safely re-run, so the existing replan path
+// stays correct there. The reset set is completedNonGateWriterDescendants (complete non-gate writers) and
+// the post-dominating gates fold via the existing machinery; this guard rejects what those two cannot
+// mechanically handle — a parallel-leg synthesis boundary in the cone (reopening across a synthesizer is
+// not a mechanical re-run). in_progress non-gate rows are caught by the downstream (3b) orphan guard;
+// ambiguous ownership and scope-expansion findings are caught at the ownership decision before this runs.
+function replayConeSafety(nodes, ownerId) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const byId = new Map(list.map(n => [n.id, n]));
+  const fwd = new Map(list.map(n => [n.id, []]));
+  for (const n of list) for (const d of (n.dependsOn || [])) if (fwd.has(d)) fwd.get(d).push(n.id);
+  const cone = new Set();
+  const q = [...(fwd.get(ownerId) || [])];
+  while (q.length) {
+    const cur = q.shift();
+    if (cone.has(cur)) continue;
+    cone.add(cur);
+    for (const c of (fwd.get(cur) || [])) q.push(c);
+  }
+  for (const id of cone) {
+    const node = byId.get(id);
+    if (node && node.role === 'synthesizer') return { ok: false, reason: 'replay_cone_synthesis_boundary' };
+  }
+  return { ok: true };
 }
 
 function foldSelectorArms(planContent, selectorCheck) {
@@ -3648,11 +3753,16 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
     const writer = selectedWriter || consumedWriter;
     const hasProducerBindings = Object.prototype.hasOwnProperty.call(attempt, 'producer_bindings');
     const bindingKeys = hasProducerBindings ? Object.keys(attempt.producer_bindings || {}).sort() : [];
+    // #739: an in-plan descendant-replay record lets this attempt bind to a NON-maximal upstream owner with
+    // its reopened descendant cone exempt from the graph-maximal + all-complete requirements. Recompute and
+    // bound the cone against the frozen graph (never trust the record); an unsound record fails the read.
+    const replayCheck = validatedReplayExempt(attempt, nodes);
+    if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
     // A settled historical attempt owns its immutable attempt-time producer proof. If a later gate
     // legitimately reopens that producer, retain the older executed slice from its bindings. The
     // actively repaired attempt remains narrower: only its proven selected writer may be nonterminal.
     const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledgerStatuses,
-      writer ? [writer] : bindingKeys);
+      writer ? [writer] : bindingKeys, replayCheck.replayExempt);
     if (hasProducerBindings) {
       if (!proof.history_valid || JSON.stringify(bindingKeys) !== JSON.stringify(proof.producer_slice)) {
         return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
@@ -3957,11 +4067,16 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
       return { ok: false, reason: 'review_journal_gate_identity_mismatch' };
     }
     const bindingKeys = Object.keys(attempt.producer_bindings || {}).sort();
+    // #739: validate any in-plan descendant-replay record (fail closed on a forged one) and, for a
+    // derived (certified_producers-empty) gate, keep the reset descendant cone in the expected slice so
+    // bindingKeys still matches while those descendants sit at pending mid-replay.
+    const replayCheck = validatedReplayExempt(attempt, nodes);
+    if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
     const expectedBindings = expectedGate.certified_producers.length
       ? expectedGate.certified_producers.slice().sort()
       : uniqueMaximalReviewProducer(nodes, expectedGate.members,
         (attempt.repair && attempt.repair.selected_writer) || attempt.consumed_by || '',
-        ledger, bindingKeys).producer_slice.sort();
+        ledger, bindingKeys, replayCheck.replayExempt).producer_slice.sort();
     if (reviewSchema.canonicalJson(bindingKeys) !== reviewSchema.canonicalJson(expectedBindings)) {
       return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
     }
@@ -7240,6 +7355,11 @@ function runRepairNodeCore(opts) {
   // A proven-admissible rebind, held across the P0 orphan guard (see STEP 13). null on every path that
   // does not need one — which is every pre-existing path.
   let pendingRebind = null;
+  // #739 — an admissible in-plan descendant replay: { owner, descendants }. Set at the ownership-proof
+  // decision (below) when the finding owner is a non-maximal upstream writer whose completed descendant
+  // cone is mechanically replayable; null on every direct-repair path. When set, the writer being
+  // reopened IS the owner and the tail additionally resets the descendant cone + records the replay.
+  let replayMode = null;
   if (hasReviewJournal) {
     if (!attemptId) return { result: 'refuse', errors: ['--attempt-id required for repair-node'] };
     repairJournalState = readReviewJournal(opts, initialPlan);
@@ -7329,14 +7449,40 @@ function runRepairNodeCore(opts) {
         if (own.anyOwned && own.uniqueOwner === nodeId) {
           const blocking = completedNonGateWriterDescendants(proofNodes, proofLedger, nodeId);
           if (blocking.length) {
-            return { result: 'repair_requires_replan', reason: 'dependent_producer_replay_required',
-              attempt_id: attemptId, producer_slice: proof.producer_slice,
-              semantic_owner: nodeId, blocking_descendants: blocking,
-              operator_hint: getOperatorHint('dependent_producer_replay_required',
-                { semantic_owner: nodeId, blocking_descendants: blocking }) };
+            // #739 — the finding owner is a non-maximal upstream writer that UNIQUELY owns the still-open
+            // findings and has completed non-gate writer descendants. Perform the IN-PLAN descendant
+            // replay (reopen the owner + reset its completed descendant cone + fold the post-dominating
+            // gates, consuming ZERO epochs) when the cone is mechanically replayable AND every still-open
+            // finding is owned inside it. Otherwise keep the existing claim-preserving replan path — the
+            // decision is tighten-only: an unownable (scope-expansion) finding or a non-mechanical cone
+            // member (e.g. a parallel-leg synthesis boundary) still routes to replan.
+            const anyUnownedFinding = own.openFindings.some(f =>
+              !(Array.isArray(f.ownership_candidates) && f.ownership_candidates.length > 0));
+            const coneSafety = replayConeSafety(proofNodes, nodeId);
+            // The owner must be a GRAPH producer of the gate (a common-ancestor writer in the slice), not
+            // merely a write-set-path match. A malformed out-of-surface finding routed to a non-ancestor
+            // writer would otherwise record a replay that later wedges the identity proof (owner ∉ slice);
+            // requiring slice membership here routes that shape to the existing replan path instead.
+            const ownerIsProducer = proof.producer_slice.includes(nodeId);
+            if (!anyUnownedFinding && coneSafety.ok && ownerIsProducer) {
+              replayMode = { owner: nodeId, descendants: blocking };
+              // Fall through into the repair transaction on the owner; the tail (STEP 5b) additionally
+              // resets the descendant cone and records the durable replay decision. No return here.
+            } else {
+              return { result: 'repair_requires_replan', reason: 'dependent_producer_replay_required',
+                attempt_id: attemptId, producer_slice: proof.producer_slice,
+                semantic_owner: nodeId, blocking_descendants: blocking,
+                replay_declined: anyUnownedFinding ? 'finding_outside_cone'
+                  : !ownerIsProducer ? 'owner_not_gate_producer' : coneSafety.reason,
+                operator_hint: getOperatorHint('dependent_producer_replay_required',
+                  { semantic_owner: nodeId, blocking_descendants: blocking }) };
+            }
+          } else {
+            return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
           }
+        } else {
+          return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
         }
-        return { result: 'repair_requires_replan', attempt_id: attemptId, producer_slice: proof.producer_slice };
       }
       // proof.ok — nodeId is graph-maximal. When ownership is RESOLVABLE (≥1 open finding routed to a
       // writer) it must ALSO own ≥1 of them, else reopening it cannot repair the flagged code (the #701
@@ -7349,6 +7495,15 @@ function runRepairNodeCore(opts) {
           operator_hint: getOperatorHint('repair_writer_ownership_mismatch',
             { nodeId, owners: own.ownersUnionSorted }) };
       }
+    }
+    // #739 — on a repair RESUME (repair already selected, so the proof block above was skipped) re-derive
+    // the replay mode from the DURABLE replay record. It is written into the same first-durable-mutation as
+    // repair.selected_writer, so either both survived a crash (and this rebuilds replayMode) or neither did
+    // (repairAlreadySelected is false and the proof block re-runs the decision against the unchanged
+    // ledger). Both branches converge on the identical replayMode — the crash-idempotence invariant.
+    if (!replayMode && repairAttempt && repairAttempt.replay && typeof repairAttempt.replay === 'object'
+      && typeof repairAttempt.replay.owner === 'string' && Array.isArray(repairAttempt.replay.descendants)) {
+      replayMode = { owner: repairAttempt.replay.owner, descendants: repairAttempt.replay.descendants.slice() };
     }
     // ---- STEP 10: the current candidate TRIPLE (hoisted above the reconcile, which decides crash
     // convergence on the CANDIDATE — the exempt-filtered content address — not on a raw commit sha).
@@ -7401,47 +7556,63 @@ function runRepairNodeCore(opts) {
         attempt_id: attemptId, producer_slice: proof.producer_slice };
     }
 
-    // ---- STEP 11: the writer's foreign delta (exactly what the barrier would call outOfAllow). --
-    const cand = effectiveCandidate(repairAttempt);
-    const foreignProbe = computeWriterForeignPaths(opts, initialPlan, nodeId, currentIdentity.baseline);
-    const foreign = foreignProbe ? foreignProbe.foreign : [];
+    // #739 — a descendant REPLAY skips STEP 11-15. Those steps verify the writer's CURRENT tree is
+    // barrier-clean before consuming a direct repair; they are built for a graph-MAXIMAL writer with no
+    // completed writer descendants. For an upstream owner the descendant cone's disjoint outputs read as
+    // "foreign" to the owner's baseline (the barrier would fail), yet those descendants are exactly what
+    // the replay is about to RESET and re-run. STEP 9's baseline-identity check (above, run for both
+    // paths) still proves the owner is legitimately repairable (no swapped baseline); the whole-candidate
+    // re-review after the cascade re-certifies the modified tree, which is the real gate. No barrier
+    // replay / rebind is meaningful here, so none is performed.
+    if (!replayMode) {
+      // ---- STEP 11: the writer's foreign delta (exactly what the barrier would call outOfAllow). --
+      const cand = effectiveCandidate(repairAttempt);
+      const foreignProbe = computeWriterForeignPaths(opts, initialPlan, nodeId, currentIdentity.baseline);
+      const foreign = foreignProbe ? foreignProbe.foreign : [];
 
-    // ---- STEP 12: FAST PATH — nothing foreign and the candidate is exactly what was reviewed. ---
-    // Byte-identical to the pre-rebind behavior: the barrier replays HERE and `original_barrier_failed`
-    // keeps its exact precedence over every downstream guard.
-    const rebindNeeded = !(foreign.length === 0 && now.digest === cand.digest);
-    if (rebindNeeded) {
-      // ---- STEP 13: THE REBIND PROOF (P1 -> P2 -> P3 -> P4). Any failure = typed refusal, ZERO
-      // durable mutation. `candidate_digest_changed` stays the fail-closed RESIDUAL: an unclassified
-      // divergence still refuses, exactly as it does today.
-      const proofOut = proveRebindAdmissible({
-        attempt: repairAttempt, attempts: repairJournalState.journal.attempts,
-        nodes: proofNodes, nodeId, writerPaths, now, cand, foreign, declaredUnion,
-        ledgerStatuses: proofLedger,
-      });
-      if (!proofOut.ok) {
-        return proofOut.reason === 'rebind_limit_reached'
-          ? { result: 'rebind_limit_reached', attempt_id: attemptId,
-            rebinds: nonAbortedRebinds(repairAttempt).length, limit: REVIEW_REBIND_LIMIT }
-          : { result: 'repair_requires_replan', reason: proofOut.reason, attempt_id: attemptId,
-            producer_slice: proof.producer_slice, ...(proofOut.detail ? { detail: proofOut.detail } : {}),
-            ...(proofOut.paths ? { paths: proofOut.paths } : {}) };
-      }
-      // P5 + the rebind TRANSACTION are deferred to just below the P0 orphan guard: P0 (repairs stay
-      // strictly serialized — one reopened writer at a time) is a PRECONDITION of this proof's soundness,
-      // not a peer of it. With two repair writers concurrently live in the parent worktree there is no
-      // leg containment, so a foreign path would not be attributable to EITHER of them. Serialization is
-      // what makes per-path attribution sound, so nothing may be rebound until P0 has held.
-      pendingRebind = { proofOut, now, currentIdentity, writerPaths, producer_slice: proof.producer_slice };
-    } else {
-      // ---- STEP 15 (fast path): the original-barrier replay, unchanged. ------------------------
-      const barrierProof = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
-      if (!barrierProof || barrierProof.exitCode !== 0 || barrierProof.result !== 'ok') {
-        return { result: 'repair_requires_replan', reason: 'original_barrier_failed', producer_slice: proof.producer_slice, barrierProof };
+      // ---- STEP 12: FAST PATH — nothing foreign and the candidate is exactly what was reviewed. ---
+      // Byte-identical to the pre-rebind behavior: the barrier replays HERE and `original_barrier_failed`
+      // keeps its exact precedence over every downstream guard.
+      const rebindNeeded = !(foreign.length === 0 && now.digest === cand.digest);
+      if (rebindNeeded) {
+        // ---- STEP 13: THE REBIND PROOF (P1 -> P2 -> P3 -> P4). Any failure = typed refusal, ZERO
+        // durable mutation. `candidate_digest_changed` stays the fail-closed RESIDUAL: an unclassified
+        // divergence still refuses, exactly as it does today.
+        const proofOut = proveRebindAdmissible({
+          attempt: repairAttempt, attempts: repairJournalState.journal.attempts,
+          nodes: proofNodes, nodeId, writerPaths, now, cand, foreign, declaredUnion,
+          ledgerStatuses: proofLedger,
+        });
+        if (!proofOut.ok) {
+          return proofOut.reason === 'rebind_limit_reached'
+            ? { result: 'rebind_limit_reached', attempt_id: attemptId,
+              rebinds: nonAbortedRebinds(repairAttempt).length, limit: REVIEW_REBIND_LIMIT }
+            : { result: 'repair_requires_replan', reason: proofOut.reason, attempt_id: attemptId,
+              producer_slice: proof.producer_slice, ...(proofOut.detail ? { detail: proofOut.detail } : {}),
+              ...(proofOut.paths ? { paths: proofOut.paths } : {}) };
+        }
+        // P5 + the rebind TRANSACTION are deferred to just below the P0 orphan guard: P0 (repairs stay
+        // strictly serialized — one reopened writer at a time) is a PRECONDITION of this proof's soundness,
+        // not a peer of it. With two repair writers concurrently live in the parent worktree there is no
+        // leg containment, so a foreign path would not be attributable to EITHER of them. Serialization is
+        // what makes per-path attribution sound, so nothing may be rebound until P0 has held.
+        pendingRebind = { proofOut, now, currentIdentity, writerPaths, producer_slice: proof.producer_slice };
+      } else {
+        // ---- STEP 15 (fast path): the original-barrier replay, unchanged. ------------------------
+        const barrierProof = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
+        if (!barrierProof || barrierProof.exitCode !== 0 || barrierProof.result !== 'ok') {
+          return { result: 'repair_requires_replan', reason: 'original_barrier_failed', producer_slice: proof.producer_slice, barrierProof };
+        }
       }
     }
     if (!repairAlreadySelected) {
       repairAttempt.repair = { selected_writer: nodeId, settled: false };
+      // #739 — record the durable replay decision in the SAME object as the selected-writer marker, so it
+      // is persisted by the first-durable-mutation journal write below (before any ledger reset). The
+      // identity validators recompute+bound this record's cone against the frozen graph on every read.
+      if (replayMode) {
+        repairAttempt.replay = { owner: replayMode.owner, descendants: replayMode.descendants.slice().sort() };
+      }
     }
   }
 
@@ -7605,6 +7776,27 @@ function runRepairNodeCore(opts) {
     };
   }
 
+  // #739 (write-diamond guard): a replay reopens the owner, so EVERY completed gate that is a descendant of
+  // the owner is stale against the reset candidate and MUST be folded. gatesReset folds the post-dominating
+  // gates (and adversarial fan-out GROUPS). A completed descendant gate that is NOT folded — e.g. a parallel
+  // non-fanout branch gate in a write-diamond (owner→W2→G_a, owner→W3→G_b, no synthesizer), which
+  // post-dominates neither owner-to-sink path — would be left stale-and-unfolded and would wedge finalize
+  // (a #740-class stale-receipt dead-end). Refuse the in-plan replay for that shape; the existing replan
+  // re-runs the whole plan cleanly. Tighten-only, ZERO durable mutation (before the first journal write).
+  if (replayMode) {
+    const strandedGates = [...desc].filter(gid => {
+      const gn = nodes.find(n => n.id === gid);
+      return gn && GATE_ROLES.has(gn.role) && ledgerStatuses[gid] === 'complete' && !gateSet.has(gid);
+    }).sort();
+    if (strandedGates.length) {
+      return { result: 'repair_requires_replan', reason: 'dependent_producer_replay_required',
+        attempt_id: attemptId, semantic_owner: nodeId, blocking_descendants: replayMode.descendants,
+        replay_declined: 'nonpostdominating_gate_in_cone', stranded_gates: strandedGates,
+        operator_hint: getOperatorHint('dependent_producer_replay_required',
+          { semantic_owner: nodeId, blocking_descendants: replayMode.descendants }) };
+    }
+  }
+
   // ---- STEPS 14-15 (deferred): P0 has now held — repairs are strictly serialized, so every foreign path
   // is attributable. Perform the proven rebind (P5 asserted inside, before any durable byte moves), then
   // replay the original barrier, whose input is now EXACT rather than poisoned by a sibling's writes.
@@ -7715,7 +7907,18 @@ function runRepairNodeCore(opts) {
   for (const gid of completedJournalGates) removeEvidenceName(gid + '.md');
 
   // (5) Transition writer: complete→pending→in_progress.
+  const replayDescendantsReset = [];
   if (!resumingReopenedWriter) {
+    // #739 — reset the descendant cone (complete→pending) in the SAME durable plan write as the owner
+    // reopen. A crash leaves either the intact pre-replay tree (owner still complete) or the full reset
+    // frontier (owner in_progress + cone pending) — never a half-open one. Ledger-only here; the stale
+    // descendant evidence + barrier baselines are unlinked below, after the rows are durably pending.
+    if (replayMode) {
+      for (const did of replayMode.descendants) {
+        const r = spliceLedgerNode(planContent, did, 'pending', { allowFrom: ['complete', 'in_progress'] });
+        if (r.changed) { planContent = r.content; replayDescendantsReset.push(did); }
+      }
+    }
     const resetWriter = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
     if (!resetWriter.changed) {
       return { result: 'refuse', reason: 'ledger_splice_failed', nodeId, detail: 'could not reset writer to pending' };
@@ -7735,6 +7938,18 @@ function runRepairNodeCore(opts) {
   if (typeof unlink === 'function') {
     for (const name of deletedDownstreamBaselines) unlink(path.join(cacheDir, name));
     for (const name of evidenceRemoved) unlink(path.join(cacheDir, name));
+    // #739 — the reset descendant cone re-runs from scratch, so its stale evidence + barrier baselines are
+    // removed (unlike the OWNER's barrier-base, which is REUSED — the anti-laundering invariant). Each
+    // descendant records a fresh baseline + evidence when the scheduler re-opens it via the normal path.
+    // Driven from replayMode (not the just-reset list) so a resume re-attempts it idempotently; unlink is
+    // guarded because on resume the files are already gone.
+    if (replayMode) {
+      for (const did of replayMode.descendants) {
+        const safe = String(did).replace(/[^A-Za-z0-9_-]/g, '_');
+        try { unlink(path.join(cacheDir, safe + '.md')); } catch (_) {}
+        try { unlink(path.join(cacheDir, 'barrier-base-' + safe)); } catch (_) {}
+      }
+    }
   }
   reviewFailpoint(opts, 'repair_artifacts_removed');
 
@@ -7772,8 +7987,12 @@ function runRepairNodeCore(opts) {
     baselineReused: true,
     resumed: resumingReopenedWriter || undefined,
     ...(repairAttempt ? { attempt_id: repairAttempt.attempt_id, consumed_by: nodeId } : {}),
+    // #739 — an in-plan descendant replay: the owner is reopened and the descendant cone is reset to
+    // pending (zero epochs consumed). Absent on a direct (graph-maximal) repair.
+    ...(replayMode ? { replay: { owner: replayMode.owner, descendants_reset: replayDescendantsReset } } : {}),
     taskTransitions: [
       ...gatesFolded.map(g => buildTransition(g, 'pending', 'repair-node')),
+      ...replayDescendantsReset.map(d => buildTransition(d, 'pending', 'repair-node')),
       buildTransition(nodeId, 'in_progress', 'repair-node'),
     ],
     taskMirror: refreshTaskMirror(project, shell),
@@ -11675,6 +11894,10 @@ module.exports = {
   schema2RouteCandidates,
   findingOwnershipSummary,
   completedNonGateWriterDescendants,
+  // #739: in-plan descendant-replay helpers (structural cone bound, cone safety, journal replay validation).
+  structuralNonGateWriterDescendants,
+  replayConeSafety,
+  validatedReplayExempt,
   reviewJournalBlocker,
   readReviewJournal,
   reviewJournalAttempts,

@@ -2087,6 +2087,75 @@ function verifyVerdictBlock(content, opts) {
     } catch (_) { schema2Candidate = null; }
     return schema2Candidate;
   };
+  // Member ids of the plan's designated final certifier(s). These keep WHOLE-candidate
+  // binding (they certify the entire candidate last); every OTHER change-gate is
+  // "interior" and its freshness is scoped to its own surface (see interiorSurfaceFresh).
+  let finalCertifierIdSet;
+  const finalCertifierIds = () => {
+    if (finalCertifierIdSet) return finalCertifierIdSet;
+    finalCertifierIdSet = new Set();
+    for (const [field, role] of [['code_certifier', 'code-reviewer'], ['security_certifier', 'security-reviewer']]) {
+      const ref = (metaFieldValues(content, field)[0] || '').trim();
+      const resolved = ref && ref !== 'none' ? resolveNamedCertifier(nodes, ref, role) : null;
+      if (resolved) for (const member of resolved.members) finalCertifierIdSet.add(member.id);
+    }
+    return finalCertifierIdSet;
+  };
+  let journalAttemptsMemo;
+  const journalAttempts = () => {
+    if (journalAttemptsMemo !== undefined) return journalAttemptsMemo;
+    journalAttemptsMemo = null;
+    try {
+      const raw = readCache('review-attempts.json'); // matches adaptive-node REVIEW_JOURNAL_NAME
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && Array.isArray(parsed.attempts)) journalAttemptsMemo = parsed.attempts;
+    } catch (_) { journalAttemptsMemo = null; }
+    return journalAttemptsMemo;
+  };
+  // An INTERIOR change-gate whose OWN certified surface is byte-unchanged since it
+  // sealed is still fresh, even when a disjoint downstream write moved the whole
+  // candidate. Scope freshness to the gate's certified-producer write sets and
+  // compare the seal-time per-path blobs (the attempt's candidate_declared) against
+  // the current tree. Tighten-only: any shape we cannot prove safe (the final
+  // certifier, a non-adversarial gate, no resolvable certifies, no seal attempt,
+  // git failure) returns false and keeps the whole-candidate binding.
+  function interiorSurfaceFresh(node, group, receipts) {
+    const finalIds = finalCertifierIds();
+    if (group.some(member => finalIds.has(member.id))) return false;
+    // Only the explicit-producer shape: an adversarial-verifier change-gate carries
+    // `certifies`. Reviewer gates (post-dominance producers) stay whole-candidate.
+    if (node.role !== 'adversarial-verifier') return false;
+    const byId = new Map(nodes.map(candidate => [candidate.id, candidate]));
+    const producerIds = Array.from(new Set(group.flatMap(member => member.certifies || [])));
+    if (!producerIds.length) return false;
+    // node.writeSet is a Set (classifier.parseWriteSetCell) — spread to an array so
+    // flatMap actually flattens the paths instead of nesting the Set.
+    const surfacePaths = Array.from(new Set(producerIds.flatMap(id => {
+      const producer = byId.get(id);
+      return producer && producer.writeSet ? Array.from(producer.writeSet) : [];
+    }))).filter(Boolean);
+    if (!surfacePaths.length) return false;
+    const attempts = journalAttempts();
+    if (!attempts) return false;
+    const seal = receipts[0] && receipts[0].candidate_digest;
+    if (!seal || receipts.some(receipt => receipt.candidate_digest !== seal)) return false;
+    const attempt = attempts.find(entry => entry && entry.candidate_digest === seal
+      && entry.logical_gate && Array.isArray(entry.logical_gate.members)
+      && entry.logical_gate.members.includes(node.id)
+      && entry.candidate_declared && typeof entry.candidate_declared === 'object');
+    if (!attempt) return false;
+    const sealMap = attempt.candidate_declared;
+    let current;
+    try {
+      const runner = require('./kaola-workflow-validation-runner');
+      current = runner.computeLandableBlobEntries(opts.root || process.cwd(), { paths: surfacePaths });
+    } catch (_) { current = null; }
+    if (!current) return false;
+    for (const surfacePath of surfacePaths) {
+      if ((sealMap[surfacePath] || null) !== (current[surfacePath] || null)) return false;
+    }
+    return true;
+  }
   function checkSchema2One(node) {
     if (!GATE_VERDICT_ROLES.has(node.role)) {
       return { ok: true, nodeId: node.id, role: node.role, verdict: null, found: false };
@@ -2129,7 +2198,8 @@ function verifyVerdictBlock(content, opts) {
       receipts.push(receipt);
     }
     const currentCandidate = currentSchema2Candidate();
-    if (!currentCandidate || receipts.some(receipt => receipt.candidate_digest !== currentCandidate)) {
+    const wholeStale = !currentCandidate || receipts.some(receipt => receipt.candidate_digest !== currentCandidate);
+    if (wholeStale && !(currentCandidate && interiorSurfaceFresh(node, group, receipts))) {
       return { ok: false, nodeId: node.id, role: node.role, found: true,
         reason: 'schema-2 certifier receipt is stale for the current candidate' };
     }

@@ -551,6 +551,73 @@ function computeLandableTreeDigest(repoRoot, options) {
   }
 }
 
+// Current landable blob entries for an EXPLICIT set of repo-relative paths.
+// Builds the same landable tree as computeLandableTreeDigest (HEAD + all working
+// tree changes) and returns { path: '<mode> <sha>' } — the SAME per-path form the
+// review journal's candidate_declared map stores (computeReviewCandidateDigest),
+// so an interior review gate's certified surface can be compared byte-exactly
+// between its seal-time attempt and the current tree WITHOUT re-hashing the whole
+// candidate. Only requested paths present in the tree appear in the result; an
+// absent path is simply omitted (an absent seal-vs-current pair compares equal
+// via `=== undefined`). Returns null on any git failure (caller falls back to the
+// whole-candidate binding — fail-closed). No validation-invisible / self-host
+// filtering: the caller passes concrete declared code paths, and candidate_declared
+// records those paths verbatim, so the two maps are directly comparable.
+function computeLandableBlobEntries(repoRoot, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const want = new Set((Array.isArray(opts.paths) ? opts.paths : [])
+    .map(p => String(p || '').replace(/^\.\//, '')).filter(Boolean));
+  if (!want.size) return {};
+  let root;
+  try { root = fs.realpathSync(repoRoot); } catch (_) { return null; }
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validation-blobs-'));
+  const indexPath = path.join(temp, 'index');
+  const env = Object.assign({}, process.env, { GIT_INDEX_FILE: indexPath });
+  try {
+    const hasHead = runGit(root, ['rev-parse', '--verify', 'HEAD'], env, 'utf8');
+    const seed = runGit(root, hasHead.status === 0 ? ['read-tree', 'HEAD'] : ['read-tree', '--empty'], env, 'utf8');
+    if (seed.status !== 0) return null;
+    if (runGit(root, ['add', '-A'], env, 'utf8').status !== 0) return null;
+    const tree = runGit(root, ['write-tree'], env, 'utf8');
+    if (tree.status !== 0) return null;
+    const treeId = String(tree.stdout || '').trim();
+    if (!treeId) return null;
+    const listingResult = runGit(root, ['ls-tree', '-r', '-z', treeId], env, undefined);
+    if (listingResult.status !== 0 || !Buffer.isBuffer(listingResult.stdout)) return null;
+    const out = Object.create(null);
+    const bytes = listingResult.stdout;
+    let start = 0;
+    for (let index = 0; index <= bytes.length; index++) {
+      if (index !== bytes.length && bytes[index] !== 0) continue;
+      if (index > start) {
+        const record = bytes.subarray(start, index).toString('utf8');
+        const tab = record.indexOf('\t');
+        if (tab >= 0) {
+          const relative = record.slice(tab + 1);
+          if (want.has(relative)) {
+            // `<mode> <type> <sha>` before the tab — keep '<mode> <sha>' (mode carries the exec/symlink/
+            // gitlink bit; type is a pure function of the mode), matching computeReviewCandidateDigest.
+            const meta = record.slice(0, tab).trim().split(/\s+/);
+            const mode = meta[0] || '';
+            const blob = meta[2] || '';
+            if (/^[0-7]{6}$/.test(mode) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(blob)) {
+              out[relative] = mode + ' ' + blob;
+            } else {
+              return null; // unparsable entry — fail closed rather than mis-compare
+            }
+          }
+        }
+      }
+      start = index + 1;
+    }
+    return out;
+  } catch (_) {
+    return null;
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
 function normalizeOutputText(value, absolutePaths) {
   let text = Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '');
   text = text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
@@ -1055,6 +1122,7 @@ module.exports = {
   computeCommandId,
   isValidationInvisible,
   computeLandableTreeDigest,
+  computeLandableBlobEntries,
   normalizeFailureSignature,
   reduceRuns,
   buildValidationVector,
