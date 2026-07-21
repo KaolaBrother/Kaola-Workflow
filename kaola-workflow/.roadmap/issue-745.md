@@ -1,5 +1,5 @@
 issue: #745
 title: bug(plan-validator): interior code-reviewer/security-reviewer walls still false-block on disjoint downstream writes — the surface-freshness rescue covers only adversarial-verifier, and their reopen remedy still dead-ends
-status: ready — filed 2026-07-21 (post-v6.24.0 audit; residual of the interior-gate freshness fix)
+status: PARTIALLY SHIPPED — the false-block half landed (merge window ending 7d0df364); the reopen-remedy half is deliberately unimplemented
 workflow_project: —
-next_step: BATCH 1 (urgent release residuals, with #748) — widen interiorSurfaceFresh beyond adversarial-verifier + reopen auto-park/fold-backfill remedy
+next_step: SHIPPED: interiorSurfaceFresh widened to code-reviewer/security-reviewer, with the producer slice RECOMPUTED from the frozen graph (not trusted from the journal) and a final certifier counting as a live whole-candidate wall only when its ledger row is actually complete. REMAINING: the reopen remedy. Auto-parking a "provably pristine" sink was REJECTED as unsafe, not deferred — the sink runs main-session-direct and its first irreversible step writes no in-band marker, so a pristine sink cannot be distinguished from one that already committed/pushed/merged. A safe remedy needs an explicit sink-progress marker. Cross-epoch freshness (seal attempt absent after journal rotation) also still falls back to whole-candidate.
