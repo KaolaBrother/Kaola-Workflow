@@ -975,6 +975,159 @@ function assert(condition, message) {
 }
 
 // ---------------------------------------------------------------------------
+// T-PRESEED (#719): freeze PRE-SEEDS the Required Agent Compliance set.
+//
+// A FRESH epoch-1 schema-2 plan carries `plan_schema_version: 2` but NOT
+// `epoch_schema_version` (that field only appears on replan CHILD plans), so
+// the freeze/resume compliance walls — both gated on parseEpochContract().active
+// — skip it and the plan froze with NO `## Required Agent Compliance` section at
+// all. The runtime epoch-authority check is NOT gated that way: it calls
+// validateRequiredAgentCompliance unconditionally for an epoch-planned state and
+// refuses the same plan mid-run. The producer must therefore complete the
+// artifact at its AUTHORING boundary — freeze appends exactly one pending row per
+// node, in `## Nodes` order, including the finalize/sink node — rather than the
+// shared authority check learning to tolerate its absence (that would blind it to
+// genuine mid-run corruption). The section is outside computePlanHash, so the
+// pre-seed is hash-neutral and --governance-ack / --resume-check are unaffected.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+
+  // shape 'fresh'  — epoch-1 schema-2, NO epoch_schema_version, NO compliance section.
+  // shape 'seeded' — same plan that ALREADY carries a hand-authored compliance section.
+  // shape 'legacy' — a frozen v1 plan (no plan_schema_version) that must stay untouched.
+  const mkPreseedRepo = (shape) => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'preseed719-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const meta = shape === 'legacy'
+      ? ['labels: area:scripts', 'sink: CHANGELOG.md']
+      : [
+        'plan_schema_version: 2',
+        'contract_version: 2',
+        'labels: area:scripts',
+        'sink: CHANGELOG.md',
+        'code_certifier: review',
+        'security_certifier: none',
+        'inherited_frontier_digest: none',
+        'inherited_frontier_classes: none',
+        'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+        'validation_timeout_minutes: 5',
+      ];
+    // A legacy v1 plan predates the schema-2 gate-metadata columns entirely.
+    const nodeTable = shape === 'legacy'
+      ? [
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| seed     | code-explorer | —      | —        | 1 | sequence |',
+        '| impl     | tdd-guide     | seed   | src/a.js | 1 | sequence |',
+        '| review   | code-reviewer | impl   | —        | 1 | sequence |',
+        '| finalize | finalize      | review | —        | 1 | sequence |',
+      ]
+      : [
+        '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| seed     | code-explorer | —      | —        | 1 | sequence | — | — | — | — |',
+        '| impl     | tdd-guide     | seed   | src/a.js | 1 | sequence | — | — | — | — |',
+        '| review   | code-reviewer | impl   | —        | 1 | sequence | review-change | code-tree | sequence | — |',
+        '| finalize | finalize      | review | —        | 1 | sequence | — | — | — | — |',
+      ];
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', ...meta, '',
+      '## Nodes', '',
+      ...nodeTable, '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | pending |', '| impl | pending |', '| review | pending |', '| finalize | pending |', '',
+      ...(shape === 'seeded' ? [
+        '## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |',
+        '| --- | --- | --- | --- |',
+        '| code-explorer (seed) | subagent-invoked | evidence-binding: seed n1 | |',
+        '| tdd-guide (impl) | pending | | |',
+        '| code-reviewer (review) | pending | | |',
+        '| finalize (finalize) | pending | | |', '',
+      ] : []),
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, planPath, plan };
+  };
+  const rmrf = (dir) => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} };
+  const complianceBlock = (raw) => {
+    const content = String(raw == null ? '' : raw);
+    const start = content.indexOf('## Required Agent Compliance');
+    if (start < 0) return null;
+    const rest = content.slice(start + 1);
+    const nextIdx = rest.indexOf('\n## ');
+    return nextIdx >= 0 ? content.slice(start, start + 1 + nextIdx) : content.slice(start);
+  };
+
+  // T-PRESEED-a: a fresh epoch-1 schema-2 plan freezes AND comes out compliance-complete.
+  {
+    const { repoRoot, plan } = mkPreseedRepo('fresh');
+    assert(planValidator.parseEpochContract(plan).active === false,
+      'T-PRESEED-a: the fixture is a FRESH epoch-1 plan (no epoch_schema_version) — the wedge precondition');
+    const frozen = planValidator.freezePlan(plan, { root: repoRoot });
+    assert(frozen.frozen === true && frozen.result === 'in-grammar',
+      'T-PRESEED-a: fresh schema-2 plan freezes, got ' + JSON.stringify(frozen.errors || frozen.result));
+    const nodes = planValidator.parseNodes(frozen.content);
+    const comp = planValidator.validateRequiredAgentCompliance(frozen.content, nodes);
+    assert(comp.ok === true,
+      'T-PRESEED-a: freeze pre-seeds a validator-complete compliance set, got ' + JSON.stringify(comp));
+    assert(comp.ok && comp.rows.length === nodes.length && comp.rows.every(row => row.status === 'pending'),
+      'T-PRESEED-a: pre-seed is exactly one PENDING row per node, got ' + JSON.stringify(comp.rows || []));
+    assert(comp.ok && JSON.stringify(comp.rows.map(row => row.requirement))
+      === JSON.stringify(nodes.map(node => node.role + ' (' + node.id + ')')),
+    'T-PRESEED-a: rows are emitted in ## Nodes order and INCLUDE the finalize/sink node, got '
+      + JSON.stringify((comp.rows || []).map(row => row.requirement)));
+    assert(planValidator.computePlanHash(frozen.content) === frozen.planHash,
+      'T-PRESEED-a: pre-seed is plan_hash-NEUTRAL (compliance table excluded from computePlanHash)');
+    assert(planValidator.revalidateForResume(frozen.content, { root: repoRoot }).ok === true,
+      'T-PRESEED-a: the pre-seeded frozen plan still --resume-check passes');
+    rmrf(repoRoot);
+  }
+
+  // T-PRESEED-b: the pre-seed is INJECT-IF-ABSENT — a plan that already carries the
+  // section (a replan CHILD, or a mid-run plan with advanced rows) is byte-untouched.
+  {
+    const { repoRoot, plan } = mkPreseedRepo('seeded');
+    const before = complianceBlock(plan);
+    const frozen = planValidator.freezePlan(plan, { root: repoRoot });
+    assert(frozen.frozen === true, 'T-PRESEED-b: the already-seeded plan freezes');
+    assert(complianceBlock(frozen.content) === before,
+      'T-PRESEED-b: an EXISTING compliance section is left byte-identical (advanced rows never clobbered)');
+    rmrf(repoRoot);
+  }
+
+  // T-PRESEED-c: a legacy v1 plan gains NO section — v1 resume-check back-compat is byte-exact.
+  {
+    const { repoRoot, plan } = mkPreseedRepo('legacy');
+    const stamped = planValidator.freezePlan(plan, { root: repoRoot });
+    assert(stamped.frozen === false && stamped.reason === 'plan_schema_version_missing',
+      'T-PRESEED-c: a bare v1 DRAFT still refuses at freeze (unchanged), got ' + JSON.stringify(stamped.reason));
+    // A v1 plan only re-freezes as verified-legacy-frozen: hash-stamp it the way a
+    // pre-schema-2 frozen plan already on disk is re-validated.
+    const preFrozen = plan.replace('# Workflow Plan — test-project\n',
+      '# Workflow Plan — test-project\n\n<!-- plan_hash: ' + planValidator.computePlanHash(plan) + ' -->\n');
+    const reFrozen = planValidator.freezePlan(preFrozen, { root: repoRoot });
+    assert(reFrozen.frozen === true, 'T-PRESEED-c: the verified-legacy frozen v1 plan re-freezes, got '
+      + JSON.stringify(reFrozen.errors || reFrozen.reason));
+    assert(complianceBlock(reFrozen.content) === null,
+      'T-PRESEED-c: a legacy v1 plan is NEVER pre-seeded (stays byte-identical for resume back-compat)');
+    assert(reFrozen.content === preFrozen,
+      'T-PRESEED-c: the re-frozen v1 plan is byte-identical to its input');
+    rmrf(repoRoot);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
