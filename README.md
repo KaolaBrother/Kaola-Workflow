@@ -523,10 +523,17 @@ Update an existing Codex install (durable, stale-proof flow):
 ```bash
 cd ~/kaola-workflow
 git pull
-# Refresh the cached plugin bundle Codex actually loads. Prefer the marketplace
-# upgrade; fall back to remove+add when upgrade is unavailable or the cache is stale:
-codex plugin marketplace upgrade <marketplace>
-#   or: codex plugin remove kaola-workflow@<marketplace> && codex plugin add kaola-workflow@<marketplace>
+# Refresh the cached plugin bundle Codex actually loads. The Install steps above
+# register the marketplace from a local path, so remove+re-add is the reliable
+# refresh — it re-reads the working tree directly, no clone/network involved:
+codex plugin remove kaola-workflow@<marketplace>
+codex plugin marketplace remove <marketplace>
+codex plugin marketplace add ~/kaola-workflow
+codex plugin add kaola-workflow@<marketplace>
+# Only if you registered the marketplace from a git URL/ref instead of a local path:
+# `codex plugin marketplace upgrade <marketplace>` re-fetches that ref over the
+# network — it requires a fresh clone every time and fails outright for a local-path
+# marketplace, so it is not the default here.
 # Re-run the agent-profile installer globally (validates each profile schema, prunes
 # retired Kaola files like docs-lookup.toml, writes the managed manifest
 # ~/.codex/agents/kaola-workflow/.kaola-managed-profiles.json, and refreshes the
@@ -1560,9 +1567,15 @@ git pull --ff-only
 ./install.sh --yes --forge=github --profile=higher
 
 # Codex — refresh the marketplace, replace the selected cached plugin, then copy
-# its validated role profiles/hooks into the global runtime authority.
-codex plugin marketplace upgrade <marketplace>
+# its validated role profiles/hooks into the global runtime authority. Remove+re-add
+# both the plugin and the marketplace itself; for a local-path marketplace (the
+# default from the Install steps) this re-reads the working tree directly, no
+# clone/network involved. (`codex plugin marketplace upgrade` only applies if you
+# registered the marketplace from a git URL/ref instead — it fails outright for a
+# local-path marketplace and otherwise requires a fresh network clone every time.)
 codex plugin remove kaola-workflow@<marketplace>
+codex plugin marketplace remove <marketplace>
+codex plugin marketplace add ~/kaola-workflow
 codex plugin add kaola-workflow@<marketplace>
 node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
 
