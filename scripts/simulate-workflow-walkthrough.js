@@ -16996,6 +16996,7 @@ function buildRegistry() {
   add('testSinkTransactionCleanEndToEnd',                 testSinkTransactionCleanEndToEnd);
   add('testTwoLanesInOneCheckout579',                     testTwoLanesInOneCheckout579);
   add('testSummaryDispatchSegments602',                   testSummaryDispatchSegments602);
+  add('testReadOnlyLaneEmptyWriteSet752',                 testReadOnlyLaneEmptyWriteSet752);
   add('testCodexDispatchModeThreading603',                testCodexDispatchModeThreading603);
   add('testRunProgressMirror605',                         testRunProgressMirror605);
   add('testGateEvidenceNonceRotation654',                 testGateEvidenceNonceRotation654);
@@ -19119,6 +19120,137 @@ function testSummaryDispatchSegments602() {
   }
 
   console.log('testSummaryDispatchSegments602: PASSED');
+}
+
+// #752: PIN the read-only lane classification for nodes whose declared_write_set is the literal word
+// `none` / `n/a`. classifier.parseWriteSetCell has NO special case for those two words — it only folds
+// blank / `-` / em-dash — so it parses `none` into the one-token set {"none"}. The runtime predicate
+// nodeWriteSetNonempty short-circuits on EMPTY_WRITE_SET_MARKERS (blank, `-`, `—`, `none`, `n/a`) BEFORE
+// consulting the classifier, and isReadOnlyNode is its exact negation. A `none`-declaring node is therefore
+// READ-ONLY; the pre-unification isReadOnlyNode (parseWriteSetCell(raw).size === 0) called it a WRITER.
+//
+// This test pins the FOLDED side at the SCHEDULER, which is where the divergence was observable:
+// runOpenReady partitions the frontier with `frontier.filter(n => !isReadOnlyNode(n))`, so the split
+// decides whether a `none`-declaring node joins a write lane group and gets a real git worktree leg
+// provisioned for writes it does not make. The folded behavior is strictly the safer one — the old
+// behavior formed a lane group whose write_union allowlist contained the fictional paths "none" and
+// "n/a" (trivially disjoint from every real path, so --parallel-safe passed anyway). Write-set
+// truthfulness is unaffected either way: it is enforced downstream by barrierCheck, which builds its
+// allowlist straight from parseWriteSetCell, on a close path that has no read/write branch at all.
+//
+// Block A is the mixed frontier (the pin). Block B is the CONTROL — a real write set must be unchanged.
+// `kind` is the primary discriminator, not opened.length: kind flips deterministically regardless of
+// which write sub-branch a regression takes, whereas opened.length varies with tryFormLaneGroup and the
+// parent-clean fence.
+function testReadOnlyLaneEmptyWriteSet752() {
+  const freezeCommit = (grepo, planPath) => {
+    const fz = runLegacyFreeze(planValidatorScript, planPath, grepo);
+    assert(fz.status === 0, '#752: freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
+  };
+  // The roles MUST be write-roles: parseWriteSetCell('none').size === 1, so the freeze-time
+  // "read-only role declares a write set" check refuses if a/b are authored as read roles.
+  const plan = (slug, rows, ledger) => [
+    '# Workflow Plan — issue #' + slug, '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
+    '|---|---|---|---|---|---|---|',
+    ...rows, '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledger, ''].join('\n');
+
+  // ---- Block A (THE PIN): mixed frontier a:`none`, b:`n/a`, c:`lib/c.js`. `none`/`n/a` are EMPTY write
+  //      sets, so the ready frontier is classified READ and only a+b co-open — no lane group, no legs. ----
+  {
+    const grepo = adaptiveTmp('readonly-752a');
+    initGitRepoWithBareRemote(grepo);
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-752a'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-752a');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, plan('752a', [
+      '| a | implementer | — | none | — | 1 | sequence |',
+      '| b | implementer | — | n/a | — | 1 | sequence |',
+      '| c | implementer | — | lib/c.js | — | 1 | sequence |',
+      '| rv | code-reviewer | a,b,c | — | — | 1 | sequence |',
+      '| done | finalize | rv | — | — | 1 | sequence |'
+    ], [
+      '| a | pending |', '| b | pending |', '| c | pending |',
+      '| rv | pending |', '| done | pending |'
+    ]));
+    freezeCommit(grepo, planPath);
+    try {
+      const r = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-752a', '--json'], grepo);
+      assert(r.status === 0, '#752 (A): open-ready should exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+      const parsed = JSON.parse(r.stdout);
+      // PRIMARY discriminator.
+      assert(parsed.kind === 'read',
+        '#752 (A): a frontier whose only non-`none`/`n/a` member is a writer must open as kind "read" — '
+        + '`none`/`n/a` are EMPTY write sets, so a+b are read-only and the read fan-out wins the split. got kind='
+        + JSON.stringify(parsed.kind) + ' opened=' + JSON.stringify((parsed.opened || []).map(n => n.id)));
+      const openedIds = (parsed.opened || []).map(n => n.id).sort();
+      assert(JSON.stringify(openedIds) === JSON.stringify(['a', 'b']),
+        '#752 (A): only the two empty-write-set nodes may co-open on the read lane (the real writer c must NOT '
+        + 'join them), got ' + JSON.stringify(openedIds));
+      const rsPath = path.join(proj, '.cache', 'running-set.json');
+      assert(fs.existsSync(rsPath), '#752 (A): open-ready must persist .cache/running-set.json');
+      const rs = JSON.parse(fs.readFileSync(rsPath, 'utf8'));
+      for (const row of rs.nodes || []) {
+        assert(row.kind === 'read',
+          '#752 (A): every persisted running-set row must be kind "read", got ' + JSON.stringify(row));
+      }
+      assert(!Object.prototype.hasOwnProperty.call(rs, 'lane_group'),
+        '#752 (A): a read batch must NOT carry a lane_group key — a lane group here would provision write legs '
+        + 'and an allowlist over the non-existent paths "none"/"n/a", got ' + JSON.stringify(rs.lane_group));
+      assert(rs.max_concurrent === 8,
+        '#752 (A): the read batch must be capped by the READ ceiling (8), not the write ceiling, got '
+        + rs.max_concurrent);
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // ---- Block B (CONTROL): the SAME fixture minus a+b. A real write set is UNCHANGED — still kind "write",
+  //      still serial (one opened node), still no lane group. This block must be invariant under any
+  //      isReadOnlyNode variant; if it ever flips together with Block A the control discriminates nothing. ----
+  {
+    const grepo = adaptiveTmp('readonly-752b');
+    initGitRepoWithBareRemote(grepo);
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-752b'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-752b');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, plan('752b', [
+      '| c | implementer | — | lib/c.js | — | 1 | sequence |',
+      '| rv | code-reviewer | c | — | — | 1 | sequence |',
+      '| done | finalize | rv | — | — | 1 | sequence |'
+    ], [
+      '| c | pending |', '| rv | pending |', '| done | pending |'
+    ]));
+    freezeCommit(grepo, planPath);
+    try {
+      const r = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-752b', '--json'], grepo);
+      assert(r.status === 0, '#752 (B): open-ready should exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+      const parsed = JSON.parse(r.stdout);
+      assert(parsed.kind === 'write',
+        '#752 (B) CONTROL: a real declared write set must still open as kind "write", got ' + JSON.stringify(parsed.kind));
+      const openedIds = (parsed.opened || []).map(n => n.id).sort();
+      assert(JSON.stringify(openedIds) === JSON.stringify(['c']),
+        '#752 (B) CONTROL: the lone writer opens serially, got ' + JSON.stringify(openedIds));
+      const rs = JSON.parse(fs.readFileSync(path.join(proj, '.cache', 'running-set.json'), 'utf8'));
+      assert(!Object.prototype.hasOwnProperty.call(rs, 'lane_group'),
+        '#752 (B) CONTROL: a single serial writer forms no lane group, got ' + JSON.stringify(rs.lane_group));
+      assert((rs.nodes || []).every(row => row.kind === 'write'),
+        '#752 (B) CONTROL: the persisted row must be kind "write", got ' + JSON.stringify(rs.nodes));
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testReadOnlyLaneEmptyWriteSet752: PASSED');
 }
 
 // #603: the Codex dispatch mode detected at startup must thread into the runtime dispatch cards.
