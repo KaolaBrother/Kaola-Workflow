@@ -1438,12 +1438,18 @@ function historyReceipt(relPath, bytes, extra) {
   }, extra || {});
 }
 
-function describeCommittedRotation(paths, transaction) {
+// `historyBytes` lets a caller supply the exact committed bytes it already holds
+// (the rotated `.cache/committed-transactions/{id}.json` copy) instead of the live
+// `.cache/replan-transaction.json`. Every proof below is unchanged and still runs
+// over whichever bytes were selected.
+function describeCommittedRotation(paths, transaction, historyBytes) {
   if (!transaction) return { ok: true, predecessor: null, predecessor_bytes: null,
     rotated_source: null, rotated_source_bytes: null };
-  let transactionBytes;
-  try { transactionBytes = readAuthorityBytes(paths.transactionPath); }
-  catch (error) { return { ok: false, reason: 'replan_transaction_history_unreadable', detail: error.message }; }
+  let transactionBytes = historyBytes || null;
+  if (!transactionBytes) {
+    try { transactionBytes = readAuthorityBytes(paths.transactionPath); }
+    catch (error) { return { ok: false, reason: 'replan_transaction_history_unreadable', detail: error.message }; }
+  }
   let parsed;
   try { parsed = JSON.parse(transactionBytes.toString('utf8')); }
   catch (_) { return { ok: false, reason: 'replan_transaction_history_invalid' }; }
@@ -1506,6 +1512,63 @@ function persistCommittedRotation(paths, rotation, opts) {
       ? 'replan_history_receipt_collision' : 'replan_history_write_failed', detail: error.message };
   }
   return { ok: true };
+}
+
+// The live `.cache/replan-transaction.json` is the only place a committed
+// predecessor is normally read from, so a sanctioned scratch reset that removes it
+// would silently author an epoch >= 3 successor with `predecessor: null` — a
+// transaction the schema-2 lineage validator correctly refuses on the next read.
+// The durable `.cache/committed-transactions/` receipts survive that reset (they
+// are not cleanup-eligible), so the predecessor is recoverable from them.
+//
+// Identity is filtered FIRST so ambiguity is decided on the merits of the lineage
+// match, never on a shape defect elsewhere in the directory. Every surviving proof
+// is delegated to the existing authority helpers.
+function recoverCommittedRotation(paths, parentPlanHash, parentEpoch, lineage) {
+  let names;
+  try { names = fs.readdirSync(paths.transactionHistoryDir).sort(); }
+  catch (_) { names = []; }
+  const matched = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const stem = name.slice(0, -'.json'.length);
+    if (!HEX64_RE.test(stem)) continue;
+    let bytes;
+    let candidate;
+    try {
+      bytes = readAuthorityBytes(path.join(paths.transactionHistoryDir, name));
+      candidate = JSON.parse(bytes.toString('utf8'));
+    } catch (_) { continue; }
+    if (!candidate || typeof candidate !== 'object' || candidate.schema_version !== 2) continue;
+    if (candidate.transaction_id !== stem) continue;
+    if (!candidate.parent || !candidate.child || !candidate.source) continue;
+    if (candidate.child.plan_hash !== parentPlanHash) continue;
+    if (Number(candidate.parent.plan_epoch) + 1 !== Number(parentEpoch)) continue;
+    if (candidate.epoch_lineage_id !== lineage.epoch_lineage_id) continue;
+    if (candidate.parent.claim_identity_digest !== lineage.claim_identity_digest) continue;
+    if (candidate.parent.claim_root_base_digest !== lineage.claim_root_base_digest) continue;
+    matched.push({ transaction: candidate, bytes });
+  }
+  if (matched.length !== 1) {
+    return { ok: false, reason: 'replan_committed_predecessor_unresolved',
+      detail: matched.length ? 'ambiguous_committed_predecessor' : 'no_committed_predecessor',
+      matched: matched.length };
+  }
+  const [only] = matched;
+  const receipt = historyReceipt(
+    '.cache/committed-transactions/' + only.transaction.transaction_id + '.json',
+    only.bytes,
+    { transaction_id: only.transaction.transaction_id, schema_version: only.transaction.schema_version });
+  const authority = readCommittedTransactionAuthority(paths.projectDir,
+    only.transaction.transaction_id, receipt);
+  if (!authority.ok) {
+    return { ok: false, reason: authority.reason, detail: authority.detail || null, matched: matched.length };
+  }
+  const rotation = describeCommittedRotation(paths, authority.transaction, authority.bytes);
+  if (!rotation.ok) {
+    return { ok: false, reason: rotation.reason, detail: rotation.detail || null, matched: matched.length };
+  }
+  return { ok: true, rotation, matched: matched.length };
 }
 
 function prepareReplan(opts) {
@@ -1599,6 +1662,18 @@ function prepareReplanUnlocked(paths, opts) {
       automatic_review_replans: Number(state.automatic_review_replans || 0),
       authorized_epoch_ceiling: Number(state.authorized_epoch_ceiling || schema.REVIEW_REPLAN_LIMIT),
     });
+  }
+  // Placed AFTER the consent/budget block so a consent refusal keeps its zero
+  // side effects, and BEFORE the rotation is persisted so the recovered receipts
+  // are written through the same idempotent exclusive-create path.
+  if (!committedRotation.predecessor && Number(state.plan_epoch || 1) > 1) {
+    const recovered = recoverCommittedRotation(paths, parentPlanHash,
+      Number(state.plan_epoch || 1), lineage);
+    if (!recovered.ok) return schema.refuse(recovered.reason, {
+      detail: recovered.detail || null,
+      matched: recovered.matched === undefined ? null : recovered.matched,
+    });
+    committedRotation = recovered.rotation;
   }
   const persistedRotation = persistCommittedRotation(paths, committedRotation, opts);
   if (!persistedRotation.ok) return schema.refuse(persistedRotation.reason, {

@@ -1683,6 +1683,110 @@ for (const target of ['after_predecessor_history', 'after_source_history']) {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// #732: a sanctioned scratch reset removes the live `.cache/replan-transaction.json`
+// (plus the planner packet/attestation) but never the durable
+// `.cache/committed-transactions/` receipts. Before the recovery path existed, the
+// re-prepare read the predecessor ONLY from the live transaction file, so it
+// returned `prepared` while authoring a `predecessor: null` (and
+// `source.rotated_from: null`) epoch >= 3 successor under the SAME transaction id —
+// a false success that silently overwrote the durable record and wedged the next
+// read on `replan_transaction_predecessor_invalid`.
+{
+  const scratchReset = () => {
+    const fx = initFixture();
+    driveReplanToCommit(fx);
+    const firstTx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    installCurrentReviewSource(fx, 'child-review:2');
+    const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: 'child-review:2', transitionReason: 'review_repair_requires_replan' });
+    equal(prepared.result, 'prepared', 'scratch-reset fixture prepares the epoch-2 successor');
+    for (const name of [schema.REPLAN_TRANSACTION_NAME, schema.REPLAN_PLANNER_ATTESTATION_NAME,
+      schema.REPLAN_PLANNER_PACKET_NAME]) {
+      const file = path.join(fx.cacheDir, name);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+    return { fx, firstTx, prepare: () => replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: 'child-review:2', transitionReason: 'review_repair_requires_replan' }) };
+  };
+
+  // (a) EXACTLY ONE identity-matching committed receipt recovers the predecessor.
+  {
+    const { fx, firstTx, prepare } = scratchReset();
+    try {
+      const again = prepare();
+      equal(again.result, 'prepared', 're-prepare after a scratch reset prepares: ' + JSON.stringify(again));
+      const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+      ok(tx.predecessor, 're-prepare recovers a committed predecessor from the durable receipts');
+      equal(tx.predecessor.transaction_id, firstTx.transaction_id,
+        're-prepare cites the exact committed predecessor transaction');
+      ok(tx.source.rotated_from, 're-prepare recovers the archived source receipt');
+      equal(tx.source.rotated_from.transaction_id, firstTx.transaction_id,
+        're-prepare cites the predecessor as the rotated source origin');
+      ok(schema.validateReplanTransaction(tx).ok,
+        'the recovered successor is a valid schema-2 transaction: '
+        + JSON.stringify(schema.validateReplanTransaction(tx).reason));
+      equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
+        'replan_planner_dispatch_required', 'the recovered successor resumes instead of wedging');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // (b) ZERO identity-matching receipts fail closed with no transaction written.
+  {
+    const { fx, firstTx, prepare } = scratchReset();
+    try {
+      fs.unlinkSync(path.join(fx.cacheDir, 'committed-transactions', firstTx.transaction_id + '.json'));
+      const again = prepare();
+      equal(again.reason, 'replan_committed_predecessor_unresolved',
+        'an unrecoverable predecessor refuses instead of authoring a null-predecessor successor');
+      equal(again.detail, 'no_committed_predecessor', 'the zero-match refusal is typed by detail');
+      equal(again.matched, 0, 'the zero-match refusal reports its candidate cardinality');
+      ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+        'the zero-match refusal writes no transaction');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // (c) MULTIPLE identity-matching receipts fail closed rather than guessing.
+  {
+    const { fx, firstTx, prepare } = scratchReset();
+    try {
+      const historyDir = path.join(fx.cacheDir, 'committed-transactions');
+      const twin = JSON.parse(fs.readFileSync(path.join(historyDir, firstTx.transaction_id + '.json'), 'utf8'));
+      // A twin is only probative if it is FULLY schema-valid, so every id-bound
+      // field is recomputed from the new identity preimage.
+      twin.source.source_attempt_ids = ['child-review:twin'];
+      twin.transaction_id = schema.sha256Canonical({
+        schema_version: twin.schema_version,
+        epoch_lineage_id: twin.epoch_lineage_id,
+        parent_plan_epoch: twin.parent.plan_epoch,
+        parent_plan_hash: twin.parent.plan_hash,
+        source_reason: twin.source.source_reason,
+        source_attempt_ids: twin.source.source_attempt_ids.slice().sort(),
+        prepare_candidate_digest: twin.cas.prepare.candidate_digest,
+        prepare_inherited_frontier_digest: twin.cas.prepare.inherited_frontier_digest,
+      });
+      twin.planner.dispatch_nonce = schema.sha256Canonical({
+        transaction_id: twin.transaction_id, role: 'workflow-planner',
+        planner_attempt: twin.planner_attempt,
+      }).slice(0, 12);
+      twin.snapshot.authority_projection.transaction_id = twin.transaction_id;
+      twin.snapshot.authority_digest = schema.sha256Canonical(twin.snapshot.authority_projection);
+      const twinCheck = schema.validateReplanTransaction(twin);
+      ok(twinCheck.ok, 'the ambiguity fixture is itself a fully valid committed transaction: '
+        + JSON.stringify(twinCheck.reason));
+      ok(twin.transaction_id !== firstTx.transaction_id, 'the ambiguity fixture has a distinct identity');
+      fs.writeFileSync(path.join(historyDir, twin.transaction_id + '.json'),
+        schema.canonicalJson(twin) + '\n');
+      const again = prepare();
+      equal(again.reason, 'replan_committed_predecessor_unresolved',
+        'two identity-matching committed receipts refuse instead of picking one');
+      equal(again.detail, 'ambiguous_committed_predecessor', 'the many-match refusal is typed by detail');
+      equal(again.matched, 2, 'the many-match refusal reports its candidate cardinality');
+      ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+        'the many-match refusal writes no transaction');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
 // CAS mismatch before freeze advances no epoch/counter and preserves the parent.
 {
   const fx = initFixture();
