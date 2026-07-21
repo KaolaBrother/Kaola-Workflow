@@ -2132,13 +2132,34 @@ function verifyVerdictBlock(content, opts) {
   // there is no ahead. A certifier whose row is anything other than `complete` (including a missing row)
   // is nameable but never verified, so scoping interior reviewers to their own surfaces behind it would
   // leave the whole candidate unguarded. Tighten-only — this can only remove relief, never grant it.
+  //
+  // Liveness is also not just STATUS — it is status AND the arm the sweep routes that status to.
+  // Under an ACTIVE epoch contract the whole-plan sweep sends a code/security-reviewer FANOUT to the
+  // schema-2 logical GROUP reducer, which reads evidence and reduces verdicts ONLY: it never compares
+  // the sealed candidate against the current tree the way the single-node arm (checkSchema2One) does.
+  // A group certifier is therefore nameable, complete, and swept — yet holds no whole-candidate wall,
+  // so scoping interior gates behind it would retire the only staleness check in the plan. Decline it
+  // here rather than teaching the group arm to compare: this is tighten-only and cannot loosen any
+  // existing verdict. The predicate MIRRORS the sweep's routing predicate exactly (epoch contract
+  // active + code/security-reviewer role + fanout shape, including a one-member fanout, which the
+  // sweep also groups) so the two can never drift apart.
+  let epochActiveMemo;
+  const epochContractActive = () => {
+    if (epochActiveMemo === undefined) epochActiveMemo = parseEpochContract(content).active;
+    return epochActiveMemo;
+  };
+  const schema2GroupReduced = node => epochContractActive()
+    && SCHEMA2_LOGICAL_REVIEW_ROLES.includes(node.role)
+    && !!(node.shape && node.shape.kind === 'fanout');
   let finalCertifierLiveMemo;
   const finalCertifierLive = () => {
     if (finalCertifierLiveMemo !== undefined) return finalCertifierLiveMemo;
     const ledger = verdictLedger();
     finalCertifierLiveMemo = [...finalCertifierIds()].some(id => {
       const status = String(ledger.get(id) == null ? '' : ledger.get(id)).trim().toLowerCase();
-      return status === 'complete';
+      if (status !== 'complete') return false;
+      const certifier = nodes.find(candidate => candidate.id === id);
+      return !!certifier && !schema2GroupReduced(certifier);
     });
     return finalCertifierLiveMemo;
   };
@@ -2184,6 +2205,68 @@ function verifyVerdictBlock(content, opts) {
       slice.push(id);
     }
     return slice;
+  }
+  // The INDEPENDENT authority for a review gate's seal-time bytes: the gate's OWN barrier baseline.
+  // `--record-base` snapshots the FULL landable worktree at node open (read-tree HEAD + add -A +
+  // write-tree) and anchors it as a commit under refs/kaola-workflow/barrier/<project>/<node> — a git
+  // object, written by a different mechanism at a different moment, that whoever edits the review
+  // journal does not own. A review gate declares no write set and opens on the very tree it then
+  // certifies, so `ls-tree -r` of that baseline yields the SAME `<mode> <sha>` per path that
+  // candidate_declared recorded. Returns the baseline commit only when the anchored REF and the
+  // .cache base file both resolve AND agree — the same cross-check --barrier-check runs before it
+  // trusts a baseline — and null otherwise, so the caller falls back to whole-candidate.
+  function gateBarrierBaseCommit(memberId) {
+    if (!opts.planPath) return null;
+    const safe = sanitizeNodeId(memberId);
+    const projTag = path.basename(path.dirname(path.resolve(opts.planPath)))
+      .replace(/[^A-Za-z0-9_-]/g, '_') || 'plan';
+    const ref = 'refs/kaola-workflow/barrier/' + projTag + '/' + safe;
+    let refSha = '';
+    try {
+      refSha = String(execFileSync('git', ['-C', opts.root || process.cwd(),
+        'rev-parse', '--verify', '--quiet', ref + '^{commit}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) || '').trim();
+    } catch (_) { return null; }
+    if (!/^[0-9a-f]{40,64}$/i.test(refSha)) return null;
+    const filed = String(readCache('barrier-base-' + safe) || '').trim();
+    return filed && filed === refSha ? refSha : null;
+  }
+  // Corroborate the journal's seal-time blob map over the gate's reviewed surface against EVERY gate
+  // member's anchored baseline. Mirrors computeLandableBlobEntries' semantics exactly — `ls-tree -r`
+  // then an EXACT repo-relative path match, so a directory-shaped declared token contributes nothing
+  // on either side and the two maps stay directly comparable. Any member without a resolvable
+  // baseline, any unparsable entry, or any disagreement returns false (whole-candidate binding).
+  function sealSurfaceCorroborated(group, surfacePaths, sealMap) {
+    if (!group.length || !sealMap || typeof sealMap !== 'object') return false;
+    const want = new Set(surfacePaths);
+    for (const member of group) {
+      const base = gateBarrierBaseCommit(member.id);
+      if (!base) return false;
+      let listing;
+      try {
+        listing = String(execFileSync('git', ['-C', opts.root || process.cwd(), 'ls-tree', '-r', '-z', base],
+          { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }));
+      } catch (_) { return false; }
+      const baseMap = Object.create(null);
+      for (const record of listing.split('\0')) {
+        if (!record) continue;
+        const tab = record.indexOf('\t');
+        if (tab < 0) return false;
+        const relative = record.slice(tab + 1);
+        if (!want.has(relative)) continue;
+        // '<mode> <type> <sha>' before the tab; keep '<mode> <sha>' — the exact form
+        // computeReviewCandidateDigest journalled and computeLandableBlobEntries returns.
+        const meta = record.slice(0, tab).trim().split(/\s+/);
+        const mode = meta[0] || '';
+        const blob = meta[2] || '';
+        if (!/^[0-7]{6}$/.test(mode) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(blob)) return false;
+        baseMap[relative] = mode + ' ' + blob;
+      }
+      for (const surfacePath of surfacePaths) {
+        if ((baseMap[surfacePath] || null) !== (sealMap[surfacePath] || null)) return false;
+      }
+    }
+    return true;
   }
   // An INTERIOR change-gate whose OWN reviewed surface is byte-unchanged since it sealed is
   // still fresh, even when a disjoint downstream write moved the whole candidate. Scope
@@ -2244,6 +2327,12 @@ function verifyVerdictBlock(content, opts) {
     }))).filter(Boolean);
     if (!surfacePaths.length) return false;
     const sealMap = attempt.candidate_declared;
+    // The seal map decides whether the reviewed surface CHANGED, and it lives in the very journal
+    // whose freshness verdict it produces — so reading it verbatim lets one edited entry re-freshen a
+    // genuinely stale gate. It cannot be RECOMPUTED (the bytes are historical; the tree has moved), so
+    // it is CORROBORATED against an independent recorded authority instead. Both arms consume the map,
+    // so both are corroborated here. Fails closed to the whole-candidate binding on any doubt.
+    if (!sealSurfaceCorroborated(group, surfacePaths, sealMap)) return false;
     let current;
     try {
       const runner = require('./kaola-workflow-validation-runner');
@@ -5257,7 +5346,10 @@ function main() {
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
     const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
     const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
-    const verdictCheckOut = verifyVerdictBlock(content, { nodeId, readCache, globCache });
+    // root + planPath let the interior-freshness corroboration resolve the gate's anchored barrier
+    // baseline; without them it fails closed to the whole-candidate binding, which would make this
+    // per-node view disagree with the whole-plan --verdict-check below.
+    const verdictCheckOut = verifyVerdictBlock(content, { nodeId, readCache, globCache, root, planPath });
     // (4) selector-check — only when this node is a selector_source (else cheap isSelector:false).
     let selectorCheckOut;
     {
@@ -5362,7 +5454,7 @@ function main() {
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
     const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
     const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
-    const r = verifyVerdictBlock(content, { nodeId: nodeId || undefined, readCache, globCache, root });
+    const r = verifyVerdictBlock(content, { nodeId: nodeId || undefined, readCache, globCache, root, planPath });
     process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'verdict ok' : 'typed refusal: verdict-check failed')) + '\n');
     if (!r.ok) process.exitCode = 1;
     return;
