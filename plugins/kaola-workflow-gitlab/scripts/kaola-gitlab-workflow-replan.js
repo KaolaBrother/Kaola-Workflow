@@ -588,8 +588,22 @@ function readSource(paths, planHash, sourceAttemptId, options) {
   if (options && options.verifyCandidate) {
     const effective = schema.effectiveCandidate(attempt);
     let current = null;
-    try { current = computeReviewCandidateDigest(paths.repoRoot, paths.project); }
-    catch (_) { current = null; }
+    try {
+      // Compare like for like. A contract-2 attempt seals its candidate identity with the
+      // deterministic validation runner's LANDABLE tree digest — the same band the reviewer's
+      // context bound, and the same value the rebind overlay re-bases onto. A contract-1 attempt
+      // sealed the legacy raw ls-tree digest, so that lane keeps the raw comparison. The
+      // discriminator is per-ATTEMPT, never the journal's schema_version: reading the attempt's own
+      // contract is the narrower, fail-closed form of a property the journal validator already
+      // enforces uniformly (a schema-2 journal rejects any attempt that is not contract-2), so it
+      // stays correct without depending on that validator having run first.
+      // Fail-closed: any failure here lands on `current = null` and refuses. Never fall back to the
+      // other algorithm, and never `||`-chain the two — that would be a silent pass.
+      current = attempt.contract_version === 2
+        ? require('./kaola-workflow-validation-runner').computeLandableTreeDigest(paths.repoRoot,
+          { test_consumed_paths: validator.parseValidationTestConsumes(planContent) })
+        : computeReviewCandidateDigest(paths.repoRoot, paths.project);
+    } catch (_) { current = null; }
     if (!current || current !== effective.digest) {
       return { ok: false, reason: 'replan_source_candidate_changed' };
     }
@@ -656,8 +670,21 @@ function readSource(paths, planHash, sourceAttemptId, options) {
     let body;
     try { stat = fs.lstatSync(evidencePath); body = fs.readFileSync(evidencePath, 'utf8'); }
     catch (_) { return { ok: false, reason: 'replan_source_evidence_missing' }; }
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || body !== receipt.body
-        || schema.sha256Hex(Buffer.from(body, 'utf8')) !== receipt.receipt_sha256) {
+    // The journal was structurally validated above, and it fixes the receipt shape: a schema-1
+    // journal guarantees every receipt carries `body` plus `receipt_sha256 === sha256(body)`; a
+    // schema-2 journal guarantees every receipt carries a hex64 `raw_evidence_sha256` over the same
+    // evidence bytes and embeds no body. Bind EVERY digest the receipt actually declares — never
+    // fewer, so a receipt carrying both shapes must satisfy both — and refuse a receipt that
+    // declares none. This is conjunctive on purpose: do NOT rewrite it as "pick a shape, check that
+    // one", which would let an extra hand-written body/receipt_sha256 pair route past the
+    // authoritative raw_evidence_sha256.
+    const bodyDigest = schema.sha256Hex(Buffer.from(body, 'utf8'));
+    const declaresEmbeddedBody = receipt.body !== undefined || receipt.receipt_sha256 !== undefined;
+    const declaresRawEvidence = receipt.raw_evidence_sha256 !== undefined;
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+        || (!declaresEmbeddedBody && !declaresRawEvidence)
+        || (declaresEmbeddedBody && (body !== receipt.body || bodyDigest !== receipt.receipt_sha256))
+        || (declaresRawEvidence && bodyDigest !== receipt.raw_evidence_sha256)) {
       return { ok: false, reason: 'replan_source_evidence_mismatch' };
     }
   }
