@@ -2307,7 +2307,10 @@ function archiveProjectDirSafely(root, project, statusValue, suffix, opts) {
 // the operator had to hand-commit it before any sink could proceed. Mirrors the sink's
 // archive_commit step (kaola-workflow-sink-merge.js): stage the ACTUAL result.dest (never a
 // reconstructed plain path — a collision suffix escapes one, the #700 lesson), skip the commit
-// when nothing staged (diff-quiet guard), then verify the archive landed at HEAD. Local git only:
+// when nothing staged (diff-quiet guard), then verify the archive landed at HEAD. #749 R2: the
+// archive is a MOVE, so when the repo tracks the live `kaola-workflow/<project>` source that path
+// joins both pathspecs (conditional on a tracked-probe — an empty pathspec is fatal to `git add`)
+// and `committed:true` additionally requires the source GONE at HEAD. Local git only:
 // KAOLA_WORKFLOW_OFFLINE must NOT skip it. A failed commit must NEVER strand the release (the live
 // folder is already gone) or throw past the emit — the outcome is returned as
 // { committed: true, branch } or { committed: false, branch, detail } for the caller to record
@@ -2400,17 +2403,37 @@ function commitDiscardArchive(result, project, baseBranch, opts) {
         detail: 'current branch "' + currentBranch + '" is not the surviving base branch "' + base +
           '"; the discard archive stays uncommitted as recoverable residue' };
     }
+    // #749 R2: the archive MOVE is two halves — an ADD at the destination and a DELETE of the live
+    // `kaola-workflow/<project>` source. Staging only the destination left the source deletions
+    // unstaged whenever the consumer repo TRACKS the active folder, so `committed:true` named a
+    // half-recorded move and the discarded run stayed readable at HEAD. Derive the source from the
+    // ACTUAL dest (never a reconstructed plain path — the #700 lesson): dest is
+    // <…>/kaola-workflow/archive/<name>, so its grandparent joined with `project` is the live
+    // folder. The tracked-probe is MANDATORY, not an optimization: `git add -A -- <no-match>` is
+    // fatal (exit 128), so an unconditional source pathspec would flip the common
+    // untracked-active-folder case into a false committed:false.
+    let srcRel = null;
     try {
-      execFileSync('git', ['-C', top, 'add', '-A', '--', rel], { encoding: 'utf8' });
+      const srcAbs = path.join(path.dirname(path.dirname(result.dest)), project);
+      const candidate = path.relative(top, srcAbs).split(path.sep).join('/');
+      if (candidate && !candidate.startsWith('..') && candidate !== rel) {
+        const tracked = execFileSync('git', ['-C', top, 'ls-files', '--', candidate],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        if (tracked) srcRel = candidate;
+      }
+    } catch (_) { /* unprobeable → treat as untracked; the truth check below stays destination-only */ }
+    const pathspecs = srcRel ? [rel, srcRel] : [rel];
+    try {
+      execFileSync('git', ['-C', top, 'add', '-A', '--'].concat(pathspecs), { encoding: 'utf8' });
     } catch (e) {
-      return { committed: false, branch: currentBranch, detail: 'git add failed for ' + rel + ': ' + (e && e.message ? e.message : String(e)) };
+      return { committed: false, branch: currentBranch, detail: 'git add failed for ' + pathspecs.join(', ') + ': ' + (e && e.message ? e.message : String(e)) };
     }
     // diff-quiet guard: skip the commit when nothing was staged.
     let hasStaged = false;
-    try { execFileSync('git', ['-C', top, 'diff', '--cached', '--quiet', '--', rel], { stdio: 'ignore' }); }
+    try { execFileSync('git', ['-C', top, 'diff', '--cached', '--quiet', '--'].concat(pathspecs), { stdio: 'ignore' }); }
     catch (e) { if (e && e.status === 1) hasStaged = true; /* other status = diff error → do not commit */ }
     if (hasStaged) {
-      execFileSync('git', ['-C', top, 'commit', '-m', 'chore: discard archive ' + project, '--', rel], { encoding: 'utf8' });
+      execFileSync('git', ['-C', top, 'commit', '-m', 'chore: discard archive ' + project, '--'].concat(pathspecs), { encoding: 'utf8' });
     }
     // #715 N5-B: TOCTOU — re-resolve the checkout AFTER the commit and require it to still be
     // the guarded base, then require the HEAD commit to be reachable from base. A concurrent
@@ -2436,8 +2459,23 @@ function commitDiscardArchive(result, project, baseBranch, opts) {
     }
     const atHead = execFileSync('git', ['-C', top, 'cat-file', '-t', 'HEAD:' + rel],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (atHead === 'tree') return { committed: true, branch: currentBranch };
-    return { committed: false, branch: currentBranch, detail: 'archive ' + rel + ' is not present at HEAD after the commit attempt' };
+    if (atHead !== 'tree') {
+      return { committed: false, branch: currentBranch, detail: 'archive ' + rel + ' is not present at HEAD after the commit attempt' };
+    }
+    // #749 R2: the destination landing is only HALF the move. When the source was tracked, require
+    // it GONE at HEAD too — otherwise `committed:true` would claim a move the commit only half
+    // recorded, leaving the discarded run readable at HEAD and its deletions as unstaged residue
+    // the next sink preflight refuses as foreign dirt.
+    if (srcRel) {
+      const srcAtHead = execFileSync('git', ['-C', top, 'ls-tree', '-r', '--name-only', 'HEAD', '--', srcRel],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (srcAtHead) {
+        return { committed: false, branch: currentBranch, detail: 'the discard archive commit recorded ' + rel +
+          ' but the live source ' + srcRel + ' is still present at HEAD — the move is only half committed; ' +
+          'the unstaged source deletions stay as recoverable residue' };
+      }
+    }
+    return { committed: true, branch: currentBranch };
   } catch (e) {
     return { committed: false, branch: currentBranch, detail: 'discard archive commit failed: ' + (e && e.message ? e.message : String(e)) };
   }

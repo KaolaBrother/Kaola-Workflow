@@ -3797,6 +3797,89 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// --- #749 R2: the discard-archive commit must record the SOURCE removal too ------
+// The archive move is rename (or copy+delete) on the filesystem — git sees an ADD at the archive
+// destination and a DELETE at the live `kaola-workflow/<project>` source. Both of the helper's
+// pathspecs named only the destination, so when the consumer repo TRACKS the active folder the
+// deletions stayed unstaged while the helper still reported committed:true, and the source was
+// still readable at HEAD. `committed:true` must imply the COMPLETE move landed at HEAD: additions
+// present, source gone. Unrelated staged/unstaged dirt must stay untouched (pathspec-scoped), and
+// the far more common untracked-source case must still report committed:true (an unconditional
+// source pathspec would be a fatal `git add -A -- <no-match>`).
+{
+  const { commitDiscardArchive } = require('./kaola-workflow-claim.js');
+  const { execFileSync } = require('child_process');
+  assert(typeof commitDiscardArchive === 'function',
+    '#749 R2: commitDiscardArchive must be exported from claim.js for the source-removal pin');
+  if (typeof commitDiscardArchive !== 'function') { failed++; console.error('FAIL: #749 R2 source-removal pin body skipped (commitDiscardArchive not exported)'); }
+  else {
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-749-src-')));
+  try {
+    const gitEnv = Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t'
+    });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: tmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture\n');
+
+    // The consumer repo TRACKS the active folder (the live-run precondition).
+    const src = path.join(tmpDir, 'kaola-workflow', 'proj-x');
+    fs.mkdirSync(path.join(src, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(src, 'workflow-state.md'), 'state\n');
+    fs.writeFileSync(path.join(src, 'workflow-plan.md'), 'plan\n');
+    fs.writeFileSync(path.join(src, '.cache', 'n1.md'), 'evidence\n');
+    execFileSync('git', ['add', '-A'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+
+    // Unrelated dirt that must survive the pathspec-scoped commit byte-untouched.
+    fs.writeFileSync(path.join(tmpDir, 'staged-dirt.txt'), 'staged\n');
+    execFileSync('git', ['add', 'staged-dirt.txt'], { cwd: tmpDir, env: gitEnv, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'fixture modified\n');
+
+    // The archive move itself (archiveProjectDir's in-place branch): pure filesystem rename.
+    const dest = path.join(tmpDir, 'kaola-workflow', 'archive', 'proj-x.discarded-x');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(src, dest);
+
+    const moved = commitDiscardArchive({ archived: true, dest: dest }, 'proj-x', 'main');
+    assert(moved && moved.committed === true,
+      '#749 R2: the helper commits the complete archive move when the source folder is tracked, got ' + JSON.stringify(moved));
+    assert(execFileSync('git', ['cat-file', '-t', 'HEAD:kaola-workflow/archive/proj-x.discarded-x'],
+      { cwd: tmpDir, encoding: 'utf8' }).trim() === 'tree',
+      '#749 R2: the archive destination is a tree at HEAD after the commit');
+    const srcAtHead = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'kaola-workflow/proj-x'],
+      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert(srcAtHead === '',
+      '#749 R2: committed:true must imply the tracked SOURCE folder is gone at HEAD, still present: ' + JSON.stringify(srcAtHead));
+    const scoped = execFileSync('git', ['status', '--porcelain', '--', 'kaola-workflow'],
+      { cwd: tmpDir, encoding: 'utf8' }).trim();
+    assert(scoped === '',
+      '#749 R2: no kaola-workflow-scoped residue survives the discard-archive commit, got ' + JSON.stringify(scoped));
+    // Unrelated dirt untouched: staged-dirt.txt still STAGED (never committed), README still unstaged.
+    assert(execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: tmpDir, encoding: 'utf8' }).trim() === 'staged-dirt.txt',
+      '#749 R2: the pathspec-scoped commit leaves unrelated STAGED dirt staged and uncommitted');
+    assert(execFileSync('git', ['diff', '--name-only'], { cwd: tmpDir, encoding: 'utf8' }).trim() === 'README.md',
+      '#749 R2: the pathspec-scoped commit leaves unrelated UNSTAGED dirt unstaged');
+    const headFiles = execFileSync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' });
+    assert(!headFiles.includes('staged-dirt.txt'),
+      '#749 R2: unrelated staged dirt is NOT swept into the discard-archive commit, got ' + JSON.stringify(headFiles));
+
+    // The common case: the source folder was never tracked → still committed:true (an
+    // unconditional source pathspec would be a fatal `git add -A -- <no-match>`).
+    const destU = path.join(tmpDir, 'kaola-workflow', 'archive', 'proj-untracked.discarded-x');
+    fs.mkdirSync(destU, { recursive: true });
+    fs.writeFileSync(path.join(destU, 'workflow-state.md'), 'state\n');
+    const untracked = commitDiscardArchive({ archived: true, dest: destU }, 'proj-untracked', 'main');
+    assert(untracked && untracked.committed === true,
+      '#749 R2: an untracked source folder still commits the archive (no fatal empty-pathspec), got ' + JSON.stringify(untracked));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
