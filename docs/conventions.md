@@ -591,6 +591,17 @@ The contractor MUST:
    - `- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.
    - `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not
      worth tracking.
+
+   The `<sample>` is delimited by the FIRST `): ` that is followed by a valid `filed:`/`noise:`
+   tail (issue #726). Consequently a sample may itself contain parentheses — e.g.
+   `- manual:api-probe (retryAfter(from:)): filed: #N` — and a `noise:` justification, which is
+   unconstrained free text, may itself contain `): filed: #N` without being mis-carved into the
+   sample. A bullet that looks like a mapping row (a parenthesised sample immediately followed by
+   a `filed:`/`noise:` tail marker) but does not match the grammar is still skipped, and now names
+   itself on stderr as an advisory `ignoring malformed ## Run gaps mapping line` warning so a typo
+   does not resurface later as a puzzling `gaps_unswept` / `observed_gap_unseeded` refusal. The
+   warning never changes the parse result, the exit code, or the `--json` line on stdout, and
+   free-text bullets (`- none`, prose notes) remain silently ignored by design.
 3. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --check` as the gate. It checks
    BOTH directions (issue #653 / D-653-01): a swept-but-unmapped tuple refuses `gaps_unswept`
    (forward, unchanged — `{ result: 'refuse', reason: 'gaps_unswept', unmapped: [{reasonClass,
@@ -599,7 +610,10 @@ The contractor MUST:
    (`unseeded: [{reasonClass, sample}]`, reverse — new). A vacuous pass now requires BOTH sides
    empty — no swept classes AND no strict-grammar `## Run gaps` entries; free-text lines that
    don't match the grammar (e.g. `- none`) are ignored by design, preserving back-compat with
-   existing summaries. Either refusal exits 1 and blocks finalization until resolved.
+   existing summaries. Either refusal exits 1 and blocks finalization until resolved. Because a
+   paren-bearing sample now parses (issue #726), a hand-typed row whose sample contains `)` is
+   subject to reverse containment like any other — previously such a row never parsed, so it fell
+   through to the both-sides-empty vacuous pass and escaped the check entirely.
 4. Cite the gate exit code as evidence in the contractor summary. Never record a
    `gaps_addressed: true` prose attestation without a passing `--check` invocation.
 
