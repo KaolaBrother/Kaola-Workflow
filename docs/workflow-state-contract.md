@@ -865,6 +865,54 @@ adaptive per-node evidence lives in `.cache/{node-id}.md`, not in a phase file. 
 `#459` contract validators still forbid a contractor dispatch from returning to any
 migrated surface.
 
+### Recovering a project ALREADY wedged by a stranded settled row
+
+**Scope — read this first.** The recipe below applies to exactly one state: a project whose ledger
+is **already** wedged, mutated by a runtime that predates the `would_strand_completed_dependent`
+refusal. It is **not** the answer to seeing that refusal. The refusal fires before any ledger row
+moves, so the node ledger on disk is still consistent and there is nothing to repair by hand — take
+the sanctioned exit the refusal's `operator_hint` names (fold/replan, or repair the tail-most
+settled writer mid-run) and never hand-edit a row to get past it. How much had already been written
+differs by op, and the hint says which: in `reopen-node` the refusal precedes **every** side effect,
+so a refused call is a pure no-op; in `repair-node` only the repair's **own** mutations are
+withheld — a shared preamble of the same call (an interrupted-rebind convergence and the barrier
+shell) may already have written the review journal, a baseline or a git ref, which is expected and
+self-converges on retry.
+
+`reopen-node` / `repair-node` refuse `would_strand_completed_dependent` rather than leave a
+settled row (`complete` / `in_progress` / `n/a`) above a dependency chain the reopen resets.
+The guard is role-agnostic because the invariant is: the epoch-authority check rejects ANY
+settled node whose dependency is neither `complete` nor `n/a`, whatever its role. It refuses only
+what the mutation would **newly** strand, decided by ATTRIBUTION: a row refuses only if it would
+remain settled above a dependency **this mutation moved** — the reopened node, the rows it resets,
+and every read-only row it folds — so a violation already present elsewhere in the plan is not that
+reopen's to answer for. A settled **read-only** descendant — an empty declared write set, so nothing
+to undo — is folded back to `pending` with the post-dominating gates instead of refusing, which is
+what keeps its upstream writer repairable in place; a folded row joins the moved set, so whatever the
+fold itself strands is attributed to the same call. "Empty declared write set" means blank, `-`,
+`—`, `none`, or `n/a`: one predicate, shared with the writer/producer classification it is the exact
+negation of. The `finalize` sink is excluded from that fold: its irreversible work leaves no in-band
+marker, so a settled sink still refuses.
+
+Runtimes installed at v6.24.0 predate that refusal, so a project reopened there — or one whose
+`baseline_failed` crash residue produced the same shape — can already be wedged: the ledger
+holds a settled row whose dependency is `pending`/`in_progress`, the epoch-authority check
+rejects it as `state_ledger_progress_invalid`, and every scripted command then reports
+`legal_mutation: "none"` with no sanctioned exit.
+
+For that already-wedged project only, recover in two steps, from the project root:
+
+1. Edit the ONE offending `## Node Ledger` row in `kaola-workflow/{project}/workflow-plan.md` —
+   the stranded node, most often the `finalize` sink — back to `pending`. Change nothing else:
+   no other row, no `## Required Agent Compliance` row, no `## Meta` field, and never the plan
+   hash comment.
+2. Re-derive the task mirror so `workflow-tasks.json` matches the corrected ledger:
+   `node scripts/kaola-workflow-task-mirror.js --project {project} --json`.
+
+The project is then an ordinary mid-run state and the normal commands resume. If the sink had
+already committed, pushed, or merged, do NOT resume in place — that work is irreversible and
+outside the ledger; treat the run as finished and open a follow-up instead.
+
 ## Barrier Ref Lifecycle (issue #686)
 
 Each writer/reviewer node anchors its barrier baseline under a git ref so `git gc` cannot prune the

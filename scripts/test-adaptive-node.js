@@ -25,6 +25,7 @@ const {
   runReconcileRunningSet,
   readRunningSet,
   isReadOnlyNode,
+  runIsFinished,
   runReopenNode,
   runRecordEvidence,
   runCloseAndOpenNext,
@@ -63,6 +64,10 @@ const {
   structuralNonGateWriterDescendants,
   replayConeSafety,
   validatedReplayExempt,
+  // #748: journal-global replay relief + the schema-2 identity twin.
+  activeReplayRelief,
+  reviewJournalV2MatchesPlan,
+  reviewLogicalGate,
   reviewJournalBlocker,
   reduceLogicalReviewAttempt,
   uniqueMaximalReviewProducer,
@@ -113,6 +118,7 @@ const path = require('path');
 const { execFileSync: execFixtureFileSync } = require('child_process');
 const planValidator = require('./kaola-workflow-plan-validator');
 const { ROLE_TOKEN_REGISTRY } = planValidator;
+const { REVIEW_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
 const { computeNextAction } = require('./kaola-workflow-next-action');
 
 let passed = 0;
@@ -1586,6 +1592,940 @@ for (const selected of ['arm-a', 'arm-b']) {
         '#701-F: an unroutable-file (empty-ownership) journal degrades to a generic replan, got ' + JSON.stringify(rImpl));
     } finally { f.cleanup(); }
   }
+}
+
+// #748-MIXED: a MIXED direct-repair-then-replay history at ONE gate. #739's in-plan descendant replay
+// performs a journal-GLOBAL, plan-GLOBAL mutation (reopen the owner, reset its completed writer cone to
+// pending), but the exemption that lets the identity validator tolerate it was ATTEMPT-LOCAL. A SETTLED
+// direct-repair attempt at the same gate therefore recomputed its producer proof against a ledger the
+// replay had just moved and wedged the journal permanently (repair-node, reopen-node, record-evidence,
+// the fused advance AND the replan escape all refuse). Relief must be journal-global, proof-bounded and
+// STATUS-ONLY: only records that pass the full validatedReplayExempt recompute contribute; a healed cone
+// merely SUSPENDS the relief for that one read (any later un-healing re-arms it), so SUPERSESSION — a
+// strictly higher ordinal at the same logical gate — is the bound that retires a record for good; and the
+// relief never waives another attempt's graph-maximal writer-binding proof.
+{
+  const makeMixedFixture = () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-748-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-748');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const NODES = [
+      '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+      '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+      '| review | code-reviewer | tail | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ];
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const runningPath = path.join(cacheDir, 'running-set.json');
+    const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+      open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12), ref: 'refs/kaola-workflow/barrier/issue-748/' + id });
+    const identities = { impl: identityFor('i'), tail: identityFor('t') };
+    const writePlan = rows => {
+      const body = makePlan(rows, NODES);
+      fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body);
+    };
+    const allComplete = ['| impl | complete | |', '| tail | complete | |', '| review | in_progress | |', '| done | pending | |'];
+    writePlan(allComplete);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-impl'), identities.impl.baseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-tail'), identities.tail.baseline + '\n');
+    const seedReview = (nonce, findingFile) => {
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), nonce + '-rest\n');
+      fs.writeFileSync(path.join(cacheDir, 'review.md'),
+        'evidence-binding: review ' + nonce + '\nverdict: fail\nfindings_blocking: 1\n'
+        + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=' + findingFile + '\n');
+      fs.writeFileSync(runningPath, JSON.stringify({ state: 'open', nodes: [{ id: 'review', role: 'code-reviewer', kind: 'read' }] }));
+    };
+    const common = { planPath, project: 'issue-748',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '9'.repeat(64),
+      captureWriterBarrierIdentity: id => identities[id] || null };
+    const readJournal = () => JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const planNow = () => fs.readFileSync(planPath, 'utf8');
+    return { tmp, common, planPath, journalPath, cacheDir, seedReview, writePlan, allComplete,
+      identities, readJournal, planNow, cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
+  };
+
+  // Drive the mixed history: attempt-1 finding owned by `tail` ⇒ ordinary DIRECT repair; tail re-completes,
+  // the gate re-fails with a finding owned by `impl` ⇒ the #739 descendant replay resets `tail` to pending.
+  const driveMixed = f => {
+    f.seedReview('rrrrrrrrrrrr', 'scripts/tail.js');
+    const closed1 = runCloseNode({ ...f.common, nodeId: 'review' });
+    const a1 = f.readJournal().attempts[0];
+    const repair1 = runRepairNode({ ...f.common, nodeId: 'tail', attemptId: a1.attempt_id });
+    // tail re-runs and re-completes; the gate re-opens and re-fails, this time owned by impl.
+    f.writePlan(f.allComplete);
+    fs.writeFileSync(path.join(f.cacheDir, 'barrier-base-tail'), f.identities.tail.baseline + '\n');
+    f.seedReview('ssssssssssss', 'scripts/impl.js');
+    const closed2 = runCloseNode({ ...f.common, nodeId: 'review' });
+    const a2 = f.readJournal().attempts.find(a => a.attempt_id.endsWith(':2'));
+    const repair2 = runRepairNode({ ...f.common, nodeId: 'impl', attemptId: a2.attempt_id });
+    return { closed1, a1, repair1, closed2, a2, repair2 };
+  };
+
+  // THE REGRESSION PIN. RED before the fix: {"ok":false,"reason":"review_journal_repair_identity_mismatch"}.
+  {
+    const f = makeMixedFixture();
+    try {
+      const d = driveMixed(f);
+      assert(d.repair1.result === 'ok' && d.repair1.consumed_by === 'tail' && !d.repair1.replay,
+        '#748 setup: attempt-1 is an ordinary DIRECT repair on tail (no replay), got ' + JSON.stringify(d.repair1));
+      assert(d.repair2.result === 'ok' && d.repair2.replay && d.repair2.replay.owner === 'impl'
+        && JSON.stringify(d.repair2.replay.descendants_reset) === JSON.stringify(['tail']),
+        '#748 setup: attempt-2 performs the in-plan descendant replay of impl, got ' + JSON.stringify(d.repair2));
+      const statuses = readLedgerStatuses(f.planNow());
+      assert(statuses.impl === 'in_progress' && statuses.tail === 'pending',
+        '#748 setup: the replay reopened impl and reset the tail cone, got ' + JSON.stringify(statuses));
+
+      const reread = readReviewJournal(f.common, f.planNow());
+      assert(reread.ok === true,
+        '#748: a journal holding a SETTLED direct repair (tail) plus an ACTIVE descendant replay (impl) '
+        + 're-validates on the next read, got ' + JSON.stringify({ ok: reread.ok, reason: reread.reason }));
+
+      const resume = runRepairNode({ ...f.common, nodeId: 'impl', attemptId: d.a2.attempt_id });
+      assert(resume.result === 'ok' && resume.idempotent === true,
+        '#748: the reopened replay owner can resume after a mixed history, got ' + JSON.stringify(resume));
+
+      // Assert the EXACT outcome, not "anything but the wedge reason": the replay already reopened impl to
+      // in_progress, so reopen-node must reach its own (2) admissibility rung and refuse node_not_complete.
+      // A tolerant "!== review_journal_repair_identity_mismatch" would also pass on an unrelated regression.
+      const reopened = runReopenNode({ ...f.common, nodeId: 'impl' });
+      assert(reopened.result === 'refuse' && reopened.reason === 'node_not_complete',
+        '#748: reopen-node is not wedged by the mixed history — it reaches its own admissibility ladder and '
+        + 'refuses node_not_complete (the replay left impl in_progress), got ' + JSON.stringify(reopened));
+    } finally { f.cleanup(); }
+  }
+
+  // Relief is PROOF-BOUNDED, not a silent pass: strip the replay record and the SAME reset ledger — now an
+  // unproven cone reset, i.e. corruption — must still fail closed.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      const journal = f.readJournal();
+      for (const attempt of journal.attempts) delete attempt.replay;
+      fs.writeFileSync(f.journalPath, JSON.stringify(journal));
+      const stripped = readReviewJournal(f.common, f.planNow());
+      assert(stripped.ok === false && stripped.reason === 'review_journal_repair_identity_mismatch',
+        '#748: an UNPROVEN cone reset (replay record removed) still fails closed, got '
+        + JSON.stringify({ ok: stripped.ok, reason: stripped.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // A forged replay record buys nothing: relief only flows from records that pass every
+  // validatedReplayExempt clause, and an unsound one still fails the read.
+  for (const [label, mutate] of [
+    ['descendants emptied', a => { a.replay.descendants = []; }],
+    ['owner forged to a non-owner', a => { a.replay.owner = 'tail'; }],
+    ['descendant outside the structural cone', a => { a.replay.descendants = ['done']; }],
+    ['malformed (no descendants array)', a => { delete a.replay.descendants; }],
+  ]) {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      const journal = f.readJournal();
+      mutate(journal.attempts.find(a => a.replay));
+      fs.writeFileSync(f.journalPath, JSON.stringify(journal));
+      const forged = readReviewJournal(f.common, f.planNow());
+      assert(forged.ok === false,
+        '#748: a replay record with ' + label + ' grants NO relief and still refuses, got '
+        + JSON.stringify({ ok: forged.ok, reason: forged.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // Genuine corruption is untouched: deleting a producer binding key still refuses.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      const journal = f.readJournal();
+      delete journal.attempts[0].producer_bindings.impl;
+      fs.writeFileSync(f.journalPath, JSON.stringify(journal));
+      const corrupt = readReviewJournal(f.common, f.planNow());
+      assert(corrupt.ok === false && corrupt.reason === 'review_journal_repair_identity_mismatch',
+        '#748: a deleted producer binding is still genuine corruption and refuses, got '
+        + JSON.stringify({ ok: corrupt.ok, reason: corrupt.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // Relief is a WHITELIST with two distinct strengths, and neither one covers the owner at `pending`.
+  // The owner enters preservedProducers, which relaxes ONLY `in_progress` (and does not bypass the
+  // graph-maximal check); the reset descendants enter the journal-global statusRelief set (admission
+  // only — never replayExempt, which would also waive the graph-maximal proof). So a cone healed back to
+  // complete and
+  // then hand-edited to strand its OWNER at pending must still refuse — relief never launders a producer
+  // the replay did not actually reopen.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      // Heal the cone: owner + every descendant back to complete.
+      f.writePlan(['| impl | complete | |', '| tail | complete | |', '| review | pending | |', '| done | pending | |']);
+      const healed = readReviewJournal(f.common, f.planNow());
+      assert(healed.ok === true, '#748: a fully healed cone re-validates, got '
+        + JSON.stringify({ ok: healed.ok, reason: healed.reason }));
+      // Hand-edit the replay OWNER to pending. `preserved` cannot relieve pending and the owner is not in
+      // its own exempt cone, so this is still genuine corruption.
+      f.writePlan(['| impl | pending | |', '| tail | complete | |', '| review | pending | |', '| done | pending | |']);
+      const corrupt = readReviewJournal(f.common, f.planNow());
+      assert(corrupt.ok === false,
+        '#748: relief never covers the replay OWNER at pending — a hand-edited ledger still refuses, got '
+        + JSON.stringify({ ok: corrupt.ok, reason: corrupt.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // #748-SUPERSESSION (the laundering pin). "Healed ⇒ no relief" only SUSPENDS relief; without a
+  // supersession bound any later un-healing RE-ARMS it, so one legitimate replay would make every node in
+  // its descendant cone permanently `pending`-launderable at that gate, forever. Drive a THIRD attempt
+  // after the replay (which the gate can only mint once the cone re-completed), then hand-edit a CONE
+  // MEMBER back to pending: the settled replay record is now provably history and must grant nothing.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      // Heal the cone and let the gate mint attempt 3 — proof the replay is finished.
+      f.writePlan(f.allComplete);
+      fs.writeFileSync(path.join(f.cacheDir, 'barrier-base-impl'), f.identities.impl.baseline + '\n');
+      fs.writeFileSync(path.join(f.cacheDir, 'barrier-base-tail'), f.identities.tail.baseline + '\n');
+      f.seedReview('tttttttttttt', 'scripts/tail.js');
+      runCloseNode({ ...f.common, nodeId: 'review' });
+      const ordinals = f.readJournal().attempts.map(a => a.ordinal).sort();
+      assert(JSON.stringify(ordinals) === JSON.stringify([1, 2, 3]),
+        '#748-SUPERSESSION setup: a THIRD attempt exists at the gate after the replay, got '
+        + JSON.stringify(ordinals));
+      // Hand-edit the replay's CONE MEMBER back to pending. Pre-fix this re-armed the settled replay's
+      // relief and laundered the corruption into ok:true.
+      f.writePlan(['| impl | complete | |', '| tail | pending | |',
+        '| review | pending | |', '| done | pending | |']);
+      const laundered = readReviewJournal(f.common, f.planNow());
+      assert(laundered.ok === false && laundered.reason === 'review_journal_repair_identity_mismatch',
+        '#748-SUPERSESSION: a SUPERSEDED replay record (a strictly higher ordinal exists at the same '
+        + 'logical gate) grants no relief — hand-editing a cone member back to pending still refuses, got '
+        + JSON.stringify({ ok: laundered.ok, reason: laundered.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // Post-replay RUN-TO-GREEN: the mixed history is not merely un-wedged, it is COMPLETABLE. The reopened
+  // owner records its evidence and closes, tail re-runs, and the gate re-closes with a passing verdict.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      const nonce = readNonce(f.planPath, 'impl', f.common.readFile);
+      const stdinContent = 'evidence-binding: impl ' + nonce + '\nRED: reproduced\nGREEN: passes\n';
+      const recorded = runRecordEvidence({ ...f.common, nodeId: 'impl', stdinContent });
+      assert(recorded.result === 'ok',
+        '#748: the reopened replay owner can RECORD the evidence it was reopened to produce, got '
+        + JSON.stringify(recorded));
+      // Re-complete the whole cone and settle the gate; the journal must stay readable throughout.
+      f.writePlan(['| impl | complete | |', '| tail | complete | |', '| review | pending | |', '| done | pending | |']);
+      const settled = readReviewJournal(f.common, f.planNow());
+      assert(settled.ok === true && reviewJournalBlocker(settled.journal) === null,
+        '#748: after the cone re-completes the journal reads clean and blocks nothing, got '
+        + JSON.stringify({ ok: settled.ok, reason: settled.reason,
+          blocker: settled.ok ? reviewJournalBlocker(settled.journal) : null }));
+    } finally { f.cleanup(); }
+  }
+
+  // #748-ANCESTRY (the bypass pin). The journal-global relief carries TWO distinct powers, and only one
+  // of them may travel across attempts. STATUS relief (a cone member sits at `pending` because the replay
+  // reset it) is journal-global — that is the whole point. The graph-MAXIMAL binding proof ("every producer
+  // in the slice is the selected writer or one of its ancestors") is NOT: it is what pins each attempt to
+  // the unique maximal writer it actually repaired. Merging both into one parameter let a live replay
+  // ANYWHERE in the journal retire the writer-binding proof of EVERY other attempt. Tamper the settled
+  // direct-repair attempt to claim it repaired `impl` instead of `tail`: `tail` is then in the slice but is
+  // NOT an ancestor of `impl`, so the graph-maximal proof must fail — the replay's status relief must not
+  // launder it.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      const journal = f.readJournal();
+      const settled = journal.attempts.find(a => a.ordinal === 1);
+      settled.repair.selected_writer = 'impl';
+      settled.consumed_by = 'impl';
+      fs.writeFileSync(f.journalPath, JSON.stringify(journal));
+      const tampered = readReviewJournal(f.common, f.planNow());
+      assert(tampered.ok === false && tampered.reason === 'review_journal_repair_identity_mismatch',
+        '#748-ANCESTRY: a live replay grants STATUS relief only — it must NOT waive another attempt\'s '
+        + 'graph-maximal writer-binding proof, got ' + JSON.stringify({ ok: tampered.ok, reason: tampered.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // ANCESTRY CONTROL (must not over-refuse): the SAME journal, untampered, still reads clean — the status
+  // relief the mixed history genuinely needs is unaffected by splitting the two powers apart.
+  {
+    const f = makeMixedFixture();
+    try {
+      driveMixed(f);
+      const untampered = readReviewJournal(f.common, f.planNow());
+      assert(untampered.ok === true,
+        '#748-ANCESTRY control: the untampered mixed history still reads clean after the split, got '
+        + JSON.stringify({ ok: untampered.ok, reason: untampered.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // CONTROL: same-owner repeated replays never wedged and must stay byte-identical in behaviour.
+  {
+    const f = makeMixedFixture();
+    try {
+      f.seedReview('rrrrrrrrrrrr', 'scripts/impl.js');
+      runCloseNode({ ...f.common, nodeId: 'review' });
+      const a1 = f.readJournal().attempts[0];
+      runRepairNode({ ...f.common, nodeId: 'impl', attemptId: a1.attempt_id });
+      f.writePlan(f.allComplete);
+      fs.writeFileSync(path.join(f.cacheDir, 'barrier-base-tail'), f.identities.tail.baseline + '\n');
+      f.seedReview('ssssssssssss', 'scripts/impl.js');
+      runCloseNode({ ...f.common, nodeId: 'review' });
+      const a2 = f.readJournal().attempts.find(a => a.attempt_id.endsWith(':2'));
+      runRepairNode({ ...f.common, nodeId: 'impl', attemptId: a2.attempt_id });
+      const reread = readReviewJournal(f.common, f.planNow());
+      assert(reread.ok === true, '#748 control: same-owner repeated replays still re-validate, got '
+        + JSON.stringify({ ok: reread.ok, reason: reread.reason }));
+    } finally { f.cleanup(); }
+  }
+
+  // #748-BUDGET: a replay gets NO free lane. consumedReviewRepairs counts every settled+consumed fail
+  // attempt at the gate regardless of whether it was a direct repair or a replay, so a gate that has
+  // already burned REVIEW_REPAIR_LIMIT attempts refuses the next replay-eligible repair outright.
+  {
+    const f = makeMixedFixture();
+    try {
+      const round = (ordinal, findingFile, owner) => {
+        f.writePlan(f.allComplete);
+        fs.writeFileSync(path.join(f.cacheDir, 'barrier-base-impl'), f.identities.impl.baseline + '\n');
+        fs.writeFileSync(path.join(f.cacheDir, 'barrier-base-tail'), f.identities.tail.baseline + '\n');
+        f.seedReview(String(ordinal).repeat(12).slice(0, 12), findingFile);
+        runCloseNode({ ...f.common, nodeId: 'review' });
+        const attempt = f.readJournal().attempts.find(a => a.ordinal === ordinal);
+        return { attempt, repaired: runRepairNode({ ...f.common, nodeId: owner, attemptId: attempt.attempt_id }) };
+      };
+      // Burn the budget with a MIX of direct repairs (tail) and descendant replays (impl).
+      for (let i = 1; i <= REVIEW_REPAIR_LIMIT; i++) {
+        const r = round(i, i % 2 === 1 ? 'scripts/tail.js' : 'scripts/impl.js', i % 2 === 1 ? 'tail' : 'impl');
+        assert(r.repaired.result === 'ok',
+          '#748-BUDGET: round ' + i + ' consumes one repair, got ' + JSON.stringify(r.repaired));
+      }
+      const over = round(REVIEW_REPAIR_LIMIT + 1, 'scripts/impl.js', 'impl');
+      assert(over.repaired.result === 'repair_limit_reached'
+        && over.repaired.consumed === REVIEW_REPAIR_LIMIT && over.repaired.limit === REVIEW_REPAIR_LIMIT,
+        '#748-BUDGET: a replay-eligible repair at the limit refuses repair_limit_reached (no free lane '
+        + 'for replays), got ' + JSON.stringify(over.repaired));
+    } finally { f.cleanup(); }
+  }
+}
+
+// #748-DECLINE: the three in-plan-replay decline reasons, pinned through the REAL runRepairNode surface
+// (only `nonpostdominating_gate_in_cone` was pinned there before; the other three were pure-helper or
+// wholly untested). Each must route to the existing claim-preserving replan path with ZERO mutation.
+{
+  const makeDeclineFixture = (nodeRows, ledgerRows, findingLines, ids) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-748-decline-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-748');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(ledgerRows, nodeRows);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body);
+    const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+      open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-748/' + id });
+    const identities = {};
+    for (const id of ids) identities[id] = identityFor(id[0]);
+    for (const id of ids) fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + id), identities[id].baseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'rrrrrrrrrrrr-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review rrrrrrrrrrrr\nverdict: fail\nfindings_blocking: ' + findingLines.length + '\n'
+      + findingLines.map(l => l + '\n').join(''));
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+      JSON.stringify({ state: 'open', nodes: [{ id: 'review', role: 'code-reviewer', kind: 'read' }] }));
+    const common = { planPath, project: 'issue-748',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '9'.repeat(64),
+      captureWriterBarrierIdentity: id => identities[id] || null };
+    const closed = runCloseNode({ ...common, nodeId: 'review' });
+    const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    return { tmp, common, closed, attempt: journal.attempts[0], planPath,
+      runRepair: nodeId => runRepairNode({ ...common, nodeId, attemptId: journal.attempts[0].attempt_id }),
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
+  };
+  const CHAIN = [
+    '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+    '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+    '| review | code-reviewer | tail | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+  const CHAIN_LEDGER = ['| impl | complete | |', '| tail | complete | |',
+    '| review | in_progress | |', '| done | pending | |'];
+
+  // finding_outside_cone: one anchored finding owned by impl PLUS one anchor-less finding. Ownership
+  // still resolves uniquely to impl, but a finding the replay cone cannot account for must veto it.
+  {
+    const f = makeDeclineFixture(CHAIN, CHAIN_LEDGER, [
+      'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js',
+      'finding: id=F-2 scope=in_scope action=fix status=open severity=high',
+    ], ['impl', 'tail']);
+    try {
+      const r = f.runRepair('impl');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'dependent_producer_replay_required'
+        && r.replay_declined === 'finding_outside_cone',
+        '#748-DECLINE: an anchor-less finding beside an owned one declines the replay with '
+        + 'finding_outside_cone, got ' + JSON.stringify(r));
+      const statuses = readLedgerStatuses(fs.readFileSync(f.planPath, 'utf8'));
+      assert(statuses.impl === 'complete' && statuses.tail === 'complete',
+        '#748-DECLINE: the finding_outside_cone decline is ZERO-mutation, got ' + JSON.stringify(statuses));
+    } finally { f.cleanup(); }
+  }
+
+  // owner_not_gate_producer: the finding routes to an OFF-CHAIN writer that is not a graph producer of
+  // the gate. It owns the finding and has a completed writer descendant, but reopening it would record a
+  // replay whose owner is outside the gate's producer slice — decline, never mutate.
+  {
+    const f = makeDeclineFixture([
+      ...CHAIN,
+      '| side | tdd-guide | — | scripts/side.js | 1 | sequence |',
+      '| sideTail | tdd-guide | side | scripts/sideTail.js | 1 | sequence |',
+    ], [...CHAIN_LEDGER, '| side | complete | |', '| sideTail | complete | |'],
+    ['finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/side.js'],
+    ['impl', 'tail', 'side', 'sideTail']);
+    try {
+      const r = f.runRepair('side');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'dependent_producer_replay_required'
+        && r.replay_declined === 'owner_not_gate_producer',
+        '#748-DECLINE: an owner outside the gate producer slice declines the replay with '
+        + 'owner_not_gate_producer, got ' + JSON.stringify(r));
+      const statuses = readLedgerStatuses(fs.readFileSync(f.planPath, 'utf8'));
+      assert(statuses.side === 'complete' && statuses.sideTail === 'complete',
+        '#748-DECLINE: the owner_not_gate_producer decline is ZERO-mutation, got ' + JSON.stringify(statuses));
+    } finally { f.cleanup(); }
+  }
+
+  // replay_cone_synthesis_boundary: a synthesizer inside the owner's cone is not a mechanical re-run.
+  // Previously pinned only at the pure-helper level; pin it through runRepairNode's replay_declined.
+  {
+    const f = makeDeclineFixture([
+      '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+      '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+      '| syn | synthesizer | tail | — | 1 | sequence |',
+      '| review | code-reviewer | syn | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ], ['| impl | complete | |', '| tail | complete | |', '| syn | complete | |',
+      '| review | in_progress | |', '| done | pending | |'],
+    ['finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/impl.js'],
+    ['impl', 'tail']);
+    try {
+      const r = f.runRepair('impl');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'dependent_producer_replay_required'
+        && r.replay_declined === 'replay_cone_synthesis_boundary',
+        '#748-DECLINE: a synthesizer in the owner cone declines the replay with '
+        + 'replay_cone_synthesis_boundary, got ' + JSON.stringify(r));
+      const statuses = readLedgerStatuses(fs.readFileSync(f.planPath, 'utf8'));
+      assert(statuses.impl === 'complete' && statuses.tail === 'complete' && statuses.syn === 'complete',
+        '#748-DECLINE: the synthesis-boundary decline is ZERO-mutation, got ' + JSON.stringify(statuses));
+    } finally { f.cleanup(); }
+  }
+}
+
+// #748-ESCAPE: the replan escape hatch driven THROUGH the actual wedge shape. The three DECLINE cases
+// above use FRESH single-attempt journals and non-schema-2 states, so persistRepairReplanSource returns
+// early and the escape is satisfied only by construction — yet the escape is precisely what the wedge
+// killed: runRepairNodeCore refused before it could ever return repair_requires_replan, and even past
+// that, persistRepairReplanSource performs its OWN SECOND readReviewJournal and re-refused
+// replan_source_authority_invalid on the same mixed journal. Both reads must now succeed.
+// Shape: two independent chains sharing one journal and one sink. Chain A carries the LIVE mixed history
+// (settled direct repair on tailA + active replay of implA, cone un-healed). Chain B is intact and its
+// gate is the one being repaired, with a synthesizer in the owner's cone so the replay declines. So the
+// escape runs while chain A's relief is genuinely load-bearing — not after it has healed away.
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-748-escape-'));
+  try {
+    const project = 'issue-748';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const NODES = [
+      '| implA | tdd-guide | — | scripts/a.js | 1 | sequence |',
+      '| tailA | implementer | implA | scripts/tailA.js | 1 | sequence |',
+      '| gateA | code-reviewer | tailA | — | 1 | sequence |',
+      '| implB | tdd-guide | — | scripts/b.js | 1 | sequence |',
+      '| tailB | implementer | implB | scripts/tailB.js | 1 | sequence |',
+      '| synB | synthesizer | tailB | — | 1 | sequence |',
+      '| gateB | code-reviewer | synB | — | 1 | sequence |',
+      '| done | finalize | gateA, gateB | CHANGELOG.md | 1 | sequence |',
+    ];
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const writePlan = rows => {
+      const body = makePlan(rows, NODES);
+      fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body);
+    };
+    const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+      open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-748/' + id });
+    const identities = {};
+    for (const id of ['implA', 'tailA', 'implB', 'tailB']) identities[id] = identityFor(id[4].toLowerCase());
+    const writeBases = () => {
+      for (const id of Object.keys(identities)) {
+        fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + id), identities[id].baseline + '\n');
+      }
+    };
+    const common = { planPath, statePath, project,
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '9'.repeat(64),
+      captureWriterBarrierIdentity: id => identities[id] || null };
+    const readJournal = () => JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const planNow = () => fs.readFileSync(planPath, 'utf8');
+    const seedGate = (gateId, nonce, findingFile) => {
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + gateId), nonce + '-rest\n');
+      fs.writeFileSync(path.join(cacheDir, gateId + '.md'),
+        'evidence-binding: ' + gateId + ' ' + nonce + '\nverdict: fail\nfindings_blocking: 1\n'
+        + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=' + findingFile + '\n');
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+        JSON.stringify({ state: 'open', nodes: [{ id: gateId, role: 'code-reviewer', kind: 'read' }] }));
+    };
+    const ledger = over => ['implA', 'tailA', 'gateA', 'implB', 'tailB', 'synB', 'gateB', 'done']
+      .map(id => '| ' + id + ' | ' + (over[id] || 'complete') + ' | |');
+
+    // --- chain A: build the LIVE mixed history (direct repair on tailA, then the replay of implA).
+    writeBases();
+    writePlan(ledger({ gateA: 'in_progress', gateB: 'pending', done: 'pending' }));
+    seedGate('gateA', 'aaaaaaaaaaaa', 'scripts/tailA.js');
+    runCloseNode({ ...common, nodeId: 'gateA' });
+    const a1 = readJournal().attempts[0];
+    const directRepair = runRepairNode({ ...common, nodeId: 'tailA', attemptId: a1.attempt_id });
+    assert(directRepair.result === 'ok' && !directRepair.replay,
+      '#748-ESCAPE setup: attempt-1 on chain A is an ordinary DIRECT repair, got ' + JSON.stringify(directRepair));
+    writeBases();
+    writePlan(ledger({ gateA: 'in_progress', gateB: 'pending', done: 'pending' }));
+    seedGate('gateA', 'bbbbbbbbbbbb', 'scripts/a.js');
+    runCloseNode({ ...common, nodeId: 'gateA' });
+    const a2 = readJournal().attempts.find(a => a.ordinal === 2);
+    const replay = runRepairNode({ ...common, nodeId: 'implA', attemptId: a2.attempt_id });
+    assert(replay.result === 'ok' && replay.replay && replay.replay.owner === 'implA',
+      '#748-ESCAPE setup: attempt-2 on chain A performs the in-plan descendant replay, got ' + JSON.stringify(replay));
+
+    // --- the mixed history is LIVE: implA reopened, tailA reset, nothing superseded, nothing healed.
+    const midStatuses = readLedgerStatuses(planNow());
+    assert(midStatuses.implA === 'in_progress' && midStatuses.tailA === 'pending',
+      '#748-ESCAPE setup: chain A sits mid-replay (relief load-bearing), got ' + JSON.stringify(midStatuses));
+
+    // --- chain B: intact, its gate in_progress, finding owned by the NON-MAXIMAL implB whose cone holds a
+    // synthesizer, so the in-plan replay declines and the call must escape to replan.
+    writeBases();
+    writePlan(ledger({ implA: 'in_progress', tailA: 'pending', gateA: 'pending',
+      gateB: 'in_progress', done: 'pending' }));
+    // A schema-2 state bound to THIS plan — without it persistRepairReplanSource returns early and the
+    // second journal read (the seam the wedge killed) is never exercised.
+    fs.writeFileSync(statePath, ['# Kaola-Workflow State', '', '## Project',
+      'name: ' + project, 'status: active',
+      'epoch_schema_version: 2',
+      'active_plan_hash: ' + planValidator.readStoredHash(planNow()),
+      'epoch_lineage_id: ' + 'a'.repeat(64),
+      'claim_identity_digest: ' + 'b'.repeat(64),
+      'claim_root_base_digest: ' + 'c'.repeat(64), ''].join('\n'));
+    seedGate('gateB', 'cccccccccccc', 'scripts/b.js');
+    runCloseNode({ ...common, nodeId: 'gateB' });
+    const b1 = readJournal().attempts.find(a => (a.logical_gate.members || []).includes('gateB'));
+    assert(b1, '#748-ESCAPE setup: chain B recorded its own attempt in the SAME journal');
+
+    // Sanity: the shared journal really is the wedge shape — strip chain A's replay record and the very
+    // same read fails closed, proving the escape below runs through live relief rather than around it.
+    const unproven = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    for (const attempt of unproven.attempts) delete attempt.replay;
+    const guard = readReviewJournal({ ...common,
+      readFile: p => (p === journalPath ? JSON.stringify(unproven) : fs.readFileSync(p, 'utf8')) }, planNow());
+    assert(guard.ok === false && guard.reason === 'review_journal_repair_identity_mismatch',
+      '#748-ESCAPE sanity: the shared journal is genuinely the wedge shape (unproven reset still refuses), got '
+      + JSON.stringify({ ok: guard.ok, reason: guard.reason }));
+
+    const escaped = runRepairNode({ ...common, nodeId: 'implB', attemptId: b1.attempt_id });
+    assert(escaped.result === 'repair_requires_replan'
+      && escaped.reason === 'dependent_producer_replay_required'
+      && escaped.replay_declined === 'replay_cone_synthesis_boundary',
+      '#748-ESCAPE: repair-node escapes to replan THROUGH the live mixed journal (first read), got '
+      + JSON.stringify(escaped));
+    assert(escaped.source_persisted === true && typeof escaped.source_path === 'string',
+      '#748-ESCAPE: persistRepairReplanSource completes its SECOND journal read over the same mixed '
+      + 'journal and publishes the replan source — the seam that re-refused replan_source_authority_invalid '
+      + 'before the fix, got ' + JSON.stringify(escaped));
+    const envelope = JSON.parse(fs.readFileSync(escaped.source_path, 'utf8'));
+    assert(envelope.kind === 'repair_outcome' && envelope.result === 'repair_requires_replan'
+      && envelope.attempt_id === b1.attempt_id && envelope.reason === 'dependent_producer_replay_required',
+      '#748-ESCAPE: the published source names the real declined repair, got ' + JSON.stringify(envelope));
+    const afterStatuses = readLedgerStatuses(planNow());
+    assert(afterStatuses.implB === 'complete' && afterStatuses.tailB === 'complete'
+      && afterStatuses.synB === 'complete',
+      '#748-ESCAPE: the escape is ZERO-mutation on chain B, got ' + JSON.stringify(afterStatuses));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// #748-UNIT: DIRECT unit coverage of activeReplayRelief — the one function every relief defect has been in.
+// Every prior defect was the same shape: relief sourced from an over-broad population. The end-to-end
+// fixtures above exercise it only through readReviewJournal, which cannot isolate WHICH bound admitted a
+// record, so a widened population reads as "still passes". These call the function itself and pin each
+// bound independently. Every case below is RED against a mutant that removes exactly its own bound.
+{
+  const NODES748U = [
+    '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+    '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+    '| review | code-reviewer | tail | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+  const content748U = makePlan(['| impl | in_progress | |', '| tail | pending | |',
+    '| review | pending | |', '| done | pending | |'], NODES748U);
+  const nodes748U = planValidator.parseNodes(content748U);
+  const statuses748U = readLedgerStatuses(content748U);
+  // A replay record that passes every validatedReplayExempt clause: impl is a real writer, tail is in
+  // structuralNonGateWriterDescendants(impl), and impl is the UNIQUE owner of the attempt's open finding.
+  const replayRecord748U = over => Object.assign({
+    attempt_id: 'review:1', ordinal: 1,
+    logical_gate: { key: 'review-key', kind: 'single', id: 'review' },
+    route_candidates: [{ finding_id: 'F-1', status: 'open', ownership_candidates: ['impl'] }],
+    repair: { selected_writer: 'impl', settled: true },
+    consumed_by: 'impl',
+    replay: { owner: 'impl', descendants: ['tail'] },
+  }, over || {});
+
+  // (a) LIVE + UNSUPERSEDED ⇒ relief for its own cone, and ONLY its own cone.
+  {
+    const relief = activeReplayRelief({ attempts: [replayRecord748U()] }, nodes748U, statuses748U);
+    assert([...relief.exempt].join(',') === 'tail' && [...relief.preserved].join(',') === 'impl',
+      '#748-UNIT(a): a live unsuperseded replay relieves exactly its reset cone (exempt) and its owner '
+      + '(preserved), got ' + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+    // The two sets are never interchanged: the owner must NOT land in `exempt` (that set is the one the
+    // status-admission site consumes for rows the replay moved to pending), and a reset descendant must NOT
+    // land in `preserved` (that set only relaxes in_progress).
+    assert(!relief.exempt.has('impl') && !relief.preserved.has('tail'),
+      '#748-UNIT(a): owner and cone never cross between preserved/exempt, got '
+      + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+  }
+
+  // (b) SUPERSEDED ⇒ nothing. A strictly higher ordinal at the same logical gate proves the replay ran to
+  // completion, so the record is finished history and must not stay relief-bearing forever.
+  {
+    const relief = activeReplayRelief({ attempts: [
+      replayRecord748U(),
+      replayRecord748U({ attempt_id: 'review:2', ordinal: 2, replay: undefined, repair: { selected_writer: 'tail', settled: true }, consumed_by: 'tail' }),
+    ] }, nodes748U, statuses748U);
+    assert(relief.exempt.size === 0 && relief.preserved.size === 0,
+      '#748-UNIT(b): a SUPERSEDED replay grants nothing, got '
+      + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+  }
+
+  // (c) LEGACY / UNVALIDATED ⇒ nothing. THE INVARIANT: relief can only ever come from a record this read has
+  // independently re-proven. reviewJournalAttempts() unions journal.attempts with the imported
+  // __legacy_attempts projection, but the identity loop recomputes ONLY journal.attempts — imported records
+  // are checked for ordinal contiguity alone. Sourcing relief from the union let a committed legacy import
+  // grant relief that no read ever proved.
+  {
+    const imported = { attempts: [] };
+    Object.defineProperty(imported, '__legacy_attempts',
+      { value: [replayRecord748U()], enumerable: false });
+    const relief = activeReplayRelief(imported, nodes748U, statuses748U);
+    assert(relief.exempt.size === 0 && relief.preserved.size === 0,
+      '#748-UNIT(c): a record living ONLY in the unvalidated __legacy_attempts population grants NO relief, '
+      + 'got ' + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+    // Tighten-only, not blanket-ignore: a legacy record still COUNTS toward the supersession maximum, so an
+    // imported higher ordinal can retire a current record (it may never revive one).
+    const mixed = { attempts: [replayRecord748U()] };
+    Object.defineProperty(mixed, '__legacy_attempts',
+      { value: [replayRecord748U({ attempt_id: 'review:2', ordinal: 2, replay: undefined })], enumerable: false });
+    const reliefMixed = activeReplayRelief(mixed, nodes748U, statuses748U);
+    assert(reliefMixed.exempt.size === 0 && reliefMixed.preserved.size === 0,
+      '#748-UNIT(c): a HIGHER legacy ordinal at the same gate still supersedes a current record, got '
+      + JSON.stringify({ exempt: [...reliefMixed.exempt], preserved: [...reliefMixed.preserved] }));
+  }
+
+  // (d) FORGED ⇒ nothing. Each mutation breaks exactly one validatedReplayExempt clause; none may leak.
+  for (const [label, replay, over] of [
+    ['owner is not the unique finding owner', { owner: 'tail', descendants: ['tail'] }, {}],
+    // `review` is a GATE role, so it is excluded from structuralNonGateWriterDescendants(impl) — pointing a
+    // record's cone at it is precisely the out-of-cone forgery the recompute exists to refuse.
+    ['descendant outside the structural cone', { owner: 'impl', descendants: ['review'] }, {}],
+    ['owner is not a real node', { owner: 'ghost', descendants: ['tail'] }, {}],
+    ['owner declares no writes (a gate)', { owner: 'review', descendants: ['tail'] }, {}],
+    ['descendants not an array', { owner: 'impl', descendants: 'tail' }, {}],
+    ['bound writer disagrees with the owner', { owner: 'impl', descendants: ['tail'] },
+      { repair: { selected_writer: 'tail', settled: true }, consumed_by: 'tail' }],
+    ['no resolvable finding ownership', { owner: 'impl', descendants: ['tail'] }, { route_candidates: [] }],
+  ]) {
+    const relief = activeReplayRelief({ attempts: [replayRecord748U({ replay, ...over })] },
+      nodes748U, statuses748U);
+    assert(relief.exempt.size === 0 && relief.preserved.size === 0,
+      '#748-UNIT(d): a forged replay record (' + label + ') grants NO relief, got '
+      + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+  }
+  // An unkeyed / unordinaled record cannot be proven live either — same fail-closed skip.
+  for (const [label, over] of [
+    ['no logical gate key', { logical_gate: { kind: 'single', id: 'review' } }],
+    ['non-integer ordinal', { ordinal: '1' }],
+  ]) {
+    const relief = activeReplayRelief({ attempts: [replayRecord748U(over)] }, nodes748U, statuses748U);
+    assert(relief.exempt.size === 0 && relief.preserved.size === 0,
+      '#748-UNIT(d): an unprovable-live record (' + label + ') grants NO relief, got '
+      + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+  }
+  // HEALED is the cheap suspension: owner + whole cone complete ⇒ nothing to relieve on THIS read.
+  {
+    const healed = { impl: 'complete', tail: 'complete', review: 'pending', done: 'pending' };
+    const relief = activeReplayRelief({ attempts: [replayRecord748U()] }, nodes748U, healed);
+    assert(relief.exempt.size === 0 && relief.preserved.size === 0,
+      '#748-UNIT: a fully healed cone suspends relief for that read, got '
+      + JSON.stringify({ exempt: [...relief.exempt], preserved: [...relief.preserved] }));
+  }
+
+  // (e) STATUS-ONLY. The relief the function returns must be consumable at the status-ADMISSION site
+  // without ever waiving the graph-MAXIMAL binding proof. Proven on the real consumer: impl is a
+  // NON-maximal producer of the review gate (tail is downstream of it and also a producer), so binding the
+  // proof to impl must still FAIL even though relief admits tail's `pending` row into the slice — the same
+  // set passed as replayExempt (the attempt-LOCAL power, which does waive maximality) flips it to ok.
+  {
+    const relief = activeReplayRelief({ attempts: [replayRecord748U()] }, nodes748U, statuses748U);
+    const asStatusRelief = uniqueMaximalReviewProducer(nodes748U, ['review'], 'impl', statuses748U,
+      ['impl', ...relief.preserved], [], relief.exempt);
+    assert(asStatusRelief.history_valid === true && asStatusRelief.producer_slice.join(',') === 'impl,tail'
+      && asStatusRelief.ok === false,
+      '#748-UNIT(e): journal-global relief ADMITS the moved rows but never waives the graph-maximal proof, '
+      + 'got ' + JSON.stringify(asStatusRelief));
+    const asReplayExempt = uniqueMaximalReviewProducer(nodes748U, ['review'], 'impl', statuses748U,
+      ['impl', ...relief.preserved], relief.exempt, []);
+    assert(asReplayExempt.ok === true,
+      '#748-UNIT(e): the SAME set passed as the attempt-local replayExempt does waive maximality — which is '
+      + 'exactly why the journal-global set must never be routed there, got ' + JSON.stringify(asReplayExempt));
+  }
+}
+
+// FIX(read-only predicate unification): isReadOnlyNode and the writer predicate nodeWriteSetNonempty encoded
+// the same concept ~5,000 lines apart with two different token lists, and disagreed on the literal cells
+// `none` / `n/a`: the writer predicate called them empty, isReadOnlyNode (via parseWriteSetCell) called them
+// a one-path write set. A node declaring `none` was therefore NOT recognized as read-only and over-refused
+// instead of folding. They are now ONE predicate — read-only is the exact negation of "declares writes".
+{
+  for (const cell of ['', ' ', '-', '—', 'none', 'None', 'NONE', 'n/a', 'N/A']) {
+    assert(isReadOnlyNode({ id: 'x', declared_write_set: cell }) === true
+      && isReadOnlyNode({ id: 'x', writeSetRaw: cell }) === true,
+      'read-only unification: declared_write_set "' + cell + '" is an EMPTY write set ⇒ read-only');
+  }
+  for (const cell of ['scripts/a.js', 'CHANGELOG.md', 'docs/a.md, docs/b.md']) {
+    assert(isReadOnlyNode({ id: 'x', declared_write_set: cell }) === false,
+      'read-only unification: a real write set "' + cell + '" is NOT read-only');
+  }
+  // The pin: a COMPLETE read-only descendant whose cell is `none` / `n/a` must FOLD with the gates, not
+  // trigger would_strand_completed_dependent.
+  for (const cell of ['none', 'n/a']) {
+    const roNodes = [
+      '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+      '| probe | code-explorer | impl | ' + cell + ' | 1 | sequence |',
+      '| review | code-reviewer | probe | — | 1 | sequence |',
+      '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ];
+    let roPlan = makePlan(['| impl | complete | |', '| probe | complete | |',
+      '| review | complete | |', '| finalize | pending | |'], roNodes);
+    const res = runReopenNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+      shell: () => ({ exitCode: 0, result: 'ok' }),
+      readFile: f => { if (f.endsWith('workflow-plan.md')) return roPlan; throw new Error('ENOENT ' + f); },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) roPlan = c; },
+      cacheExists: () => false, unlink: () => {}, readdir: () => [],
+    });
+    assert(res.result === 'ok' && (res.readOnlyReset || []).includes('probe'),
+      'read-only unification: a complete descendant whose write set cell is "' + cell + '" FOLDS instead of '
+      + 'refusing, got ' + JSON.stringify({ result: res.result, reason: res.reason, readOnlyReset: res.readOnlyReset }));
+  }
+}
+
+// FIX(finished ⇒ complete): runIsFinished decides whether the strand hint may tell the operator the work
+// SHIPPED. It used to accept the strand-SATISFIED set, which includes `n/a` — but an `n/a` sink means the
+// sink was marked not-applicable and nothing shipped at all, so that advice was false AND foreclosed the
+// in-plan mid-run continuation. Only a genuinely `complete` sink may claim the run finished.
+{
+  for (const [status, finished] of [['complete', true], ['n/a', false], ['n.a', false], ['na', false],
+    ['pending', false], ['in_progress', false], [undefined, false]]) {
+    assert(runIsFinished('sink', { sink: status }) === finished,
+      'runIsFinished: sink status ' + JSON.stringify(status) + ' ⇒ finished=' + finished);
+    for (const op of ['reopen', 'repair']) {
+      const hint = getOperatorHint('would_strand_completed_dependent',
+        { nodeId: 'w', stranded: ['d'], op, runFinished: runIsFinished('sink', { sink: status }) });
+      assert(/treat the work as shipped/.test(hint) === finished,
+        'runIsFinished: the ' + op + ' hint claims the work shipped ONLY for a complete sink (status '
+        + JSON.stringify(status) + '), got: ' + hint);
+      assert(/NOT complete — this run is NOT finished/.test(hint) === !finished,
+        'runIsFinished: the ' + op + ' hint takes the not-finished branch for status '
+        + JSON.stringify(status) + ', got: ' + hint);
+    }
+  }
+  assert(runIsFinished(null, { sink: 'complete' }) === false,
+    'runIsFinished: an unresolvable sink is conservatively NOT finished');
+  // The pre-write clause is op-specific. reopen-node reaches its strand guard before ANY side effect;
+  // repair-node reaches it only after a shared preamble (interrupted-rebind convergence + the barrier
+  // shell) may already have written the journal, a baseline or a git ref. The repair arm must not claim
+  // the unqualified "fired BEFORE any mutation".
+  const reopenHint = getOperatorHint('would_strand_completed_dependent',
+    { nodeId: 'w', stranded: ['d'], op: 'reopen', runFinished: false });
+  const repairHint = getOperatorHint('would_strand_completed_dependent',
+    { nodeId: 'w', stranded: ['d'], op: 'repair', runFinished: false });
+  assert(/This refusal fired BEFORE any mutation, so the ledger on disk is still consistent and there is nothing wedged/.test(reopenHint),
+    'strand hint: the reopen arm keeps the unqualified pre-write claim, got: ' + reopenHint);
+  assert(!/BEFORE any mutation/.test(repairHint)
+    && /BEFORE the repair applied any of its own mutations/.test(repairHint)
+    && /may already have written/.test(repairHint),
+    'strand hint: the repair arm states accurately that only the repair\'s OWN mutations were withheld, '
+    + 'got: ' + repairHint);
+  assert(/do NOT hand-edit a ledger row here/.test(reopenHint) && /do NOT hand-edit a ledger row here/.test(repairHint),
+    'strand hint: both arms keep the do-not-hand-edit advice');
+}
+
+// FIX(twin fold parity): repair-node's adversarial-verifier fan-out receipt purge iterated gatesReset — the
+// STRUCTURAL gate set — while reopen-node's iterates rowsReset, the FULL fold set (structural gates PLUS the
+// read-only rows folded with them). A verifier declares no writes, so a NON-post-dominating fan-out gate
+// enters the fold through the read-only path, and repair-node was leaving its stale skeptic receipts on disk
+// where a later --verdict-check could still consume them. The twins must fold identically.
+{
+  const tmpAV = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fold-twin-'));
+  try {
+    const projectDir = path.join(tmpAV, 'kaola-workflow', 'fold-twin');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    // `av` does NOT post-dominate `tail` (the `gate` leg bypasses it) and is not a cardinality-1 group, so
+    // it never reaches gatesReset — it is folded purely because it is a settled READ-ONLY stranded row.
+    const body = makePlan([
+      '| impl | complete | |', '| tail | complete | |', '| av | complete | |',
+      '| gate | in_progress | |', '| done | pending | |',
+    ], [
+      '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+      '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+      '| av | adversarial-verifier | tail | — | 3 | fanout(verify) |',
+      '| gate | code-reviewer | tail | — | 1 | sequence |',
+      '| done | finalize | av, gate | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + planValidator.computePlanHash(body) + ' -->\n' + body);
+    const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+      open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/fold-twin/' + id });
+    const identities = { impl: identityFor('i'), tail: identityFor('t') };
+    for (const id of ['impl', 'tail']) {
+      fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + id), identities[id].baseline + '\n');
+    }
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-gate'), 'gggggggggggg-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'gate.md'),
+      'evidence-binding: gate gggggggggggg\nverdict: fail\nfindings_blocking: 1\n'
+      + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/tail.js\n');
+    fs.writeFileSync(path.join(cacheDir, 'adversarial-verifier-0.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'adversarial-verifier-1.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(cacheDir, 'unrelated.md'), 'x\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+      JSON.stringify({ state: 'open', nodes: [{ id: 'gate', role: 'code-reviewer', kind: 'read' }] }));
+    const common = { planPath, project: 'fold-twin',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => { try { fs.unlinkSync(p); } catch (_) { /* absent */ } },
+      readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '9'.repeat(64),
+      captureWriterBarrierIdentity: id => identities[id] || null };
+    const closed = runCloseNode({ ...common, nodeId: 'gate' });
+    const journal = JSON.parse(fs.readFileSync(path.join(cacheDir, 'review-attempts.json'), 'utf8'));
+    assert(closed.result === 'review_failed' && journal.attempts[0],
+      'fold twin: the gate close produces a repairable failed attempt, got ' + JSON.stringify(closed));
+    const repaired = runRepairNode({ ...common, nodeId: 'tail', attemptId: journal.attempts[0].attempt_id });
+    assert(repaired.result === 'ok' && !(repaired.gatesReset || []).includes('av')
+      && (repaired.readOnlyReset || []).includes('av'),
+      'fold twin: `av` is folded through the READ-ONLY path, not the structural gate set, got '
+      + JSON.stringify({ result: repaired.result, gatesReset: repaired.gatesReset, readOnlyReset: repaired.readOnlyReset }));
+    assert((repaired.evidenceRemoved || []).includes('adversarial-verifier-0.md')
+      && (repaired.evidenceRemoved || []).includes('adversarial-verifier-1.md'),
+      'fold twin: repair-node purges the fan-out receipts of a READ-ONLY-folded verifier exactly as '
+      + 'reopen-node does, got ' + JSON.stringify(repaired.evidenceRemoved));
+    assert(!(repaired.evidenceRemoved || []).includes('unrelated.md'),
+      'fold twin: unrelated .cache receipts are untouched, got ' + JSON.stringify(repaired.evidenceRemoved));
+  } finally { fs.rmSync(tmpAV, { recursive: true, force: true }); }
+}
+
+// #748-V2: the schema-2 identity twin. For a DERIVED gate (certified_producers empty) the expected
+// producer bindings are recomputed the same way, so the same mixed history wedged reviewJournalV2MatchesPlan
+// with review_journal_repair_identity_mismatch. Driven by direct call over a hand-built schema-2 journal.
+{
+  const NODE_ROWS = [
+    '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+    '| tail | implementer | impl | scripts/tail.js | 1 | sequence |',
+    '| review | code-reviewer | tail | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+  // The POST-REPLAY ledger: the replay reopened impl and reset its tail cone.
+  const plan = makePlan(['| impl | in_progress | |', '| tail | pending | |',
+    '| review | pending | |', '| done | pending | |'], NODE_ROWS);
+  const nodes = planValidator.parseNodes(plan);
+  const gate = reviewLogicalGate(nodes, nodes.find(n => n.id === 'review'));
+  const gateCore = { key: gate.key, kind: gate.kind, members: gate.members,
+    claim_digest: gate.claim_digest, surface_digests: gate.surface_digests,
+    aggregation: gate.aggregation, certified_producers: gate.certified_producers };
+  assert(gateCore.certified_producers.length === 0,
+    '#748-V2 setup: the gate has DERIVED (empty certified_producers) membership, got '
+    + JSON.stringify(gateCore.certified_producers));
+  const bindingFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+    open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12),
+    ref: 'refs/kaola-workflow/barrier/issue-748/' + id });
+  const findingFor = (uid, filePath) => ({ uid, scope: 'in_scope', action: 'fix', status: 'open',
+    severity: 'high', primary_anchor: { path: filePath } });
+  const attemptFor = (ordinal, writer, findingPath, replay) => {
+    const findings = [findingFor('F-' + ordinal, findingPath)];
+    return {
+      attempt_id: 'review:' + ordinal, ordinal, logical_gate: gateCore, gate_mode: 'change_gate',
+      outcome: 'fail', lifecycle_settled: true, consumed_by: writer,
+      repair: { selected_writer: writer, settled: true },
+      producer_bindings: { impl: bindingFor('i'), tail: bindingFor('t') },
+      receipts: [{ node_id: 'review', findings }],
+      route_candidates: schema2RouteCandidates(findings, nodes, 'review'),
+      ...(replay ? { replay } : {}),
+    };
+  };
+  const journal = { schema_version: 2, attempts: [
+    attemptFor(1, 'tail', 'scripts/tail.js', null),                             // settled DIRECT repair
+    attemptFor(2, 'impl', 'scripts/impl.js', { owner: 'impl', descendants: ['tail'] }), // ACTIVE replay
+  ] };
+  const mixed = reviewJournalV2MatchesPlan(journal, plan);
+  assert(mixed.ok === true,
+    '#748-V2: the schema-2 derived-gate twin re-validates a mixed direct-repair + replay history, got '
+    + JSON.stringify(mixed));
+  // Proof-bounded there too: strip the replay record and the same ledger is unproven corruption.
+  const stripped = JSON.parse(JSON.stringify(journal));
+  delete stripped.attempts[1].replay;
+  const strippedResult = reviewJournalV2MatchesPlan(stripped, plan);
+  assert(strippedResult.ok === false && strippedResult.reason === 'review_journal_repair_identity_mismatch',
+    '#748-V2: an unproven cone reset still fails the schema-2 twin closed, got ' + JSON.stringify(strippedResult));
+  // And a forged owner grants nothing.
+  const forged = JSON.parse(JSON.stringify(journal));
+  forged.attempts[1].replay.owner = 'tail';
+  assert(reviewJournalV2MatchesPlan(forged, plan).ok === false,
+    '#748-V2: a forged replay owner grants no relief in the schema-2 twin');
+  // #748-SUPERSESSION twin: a THIRD attempt at the same logical gate proves the replay ran to completion
+  // (the gate could not have minted a higher ordinal otherwise). Hand-edit the cone member back to pending
+  // and the settled replay must grant nothing — otherwise one legitimate replay makes its whole descendant
+  // cone permanently pending-launderable at that gate.
+  const superseded = JSON.parse(JSON.stringify(journal));
+  superseded.attempts.push(attemptFor(3, 'tail', 'scripts/tail.js', null));
+  const relaunderPlan = makePlan(['| impl | complete | |', '| tail | pending | |',
+    '| review | pending | |', '| done | pending | |'], NODE_ROWS);
+  const supersededResult = reviewJournalV2MatchesPlan(superseded, relaunderPlan);
+  assert(supersededResult.ok === false
+    && supersededResult.reason === 'review_journal_repair_identity_mismatch',
+    '#748-V2-SUPERSESSION: a replay record with a strictly higher ordinal at the same logical gate is '
+    + 'settled history and grants no relief — re-stranding a cone member still refuses, got '
+    + JSON.stringify(supersededResult));
+  // Control: WITHOUT the third attempt the very same ledger is a genuinely live mid-replay state and
+  // still validates — the bound is supersession, not "any pending cone member".
+  const liveRelief = reviewJournalV2MatchesPlan(JSON.parse(JSON.stringify(journal)), relaunderPlan);
+  assert(liveRelief.ok === true,
+    '#748-V2-SUPERSESSION control: an UNsuperseded replay still relieves its own reset cone, got '
+    + JSON.stringify(liveRelief));
 }
 
 // #739-DIAMOND: the write-diamond liveness guard (surfaced by adversarial verification of #739). A finding
@@ -5135,7 +6075,8 @@ function makeState(opts) {
 // ---------------------------------------------------------------------------
 // T23d (#334): runReopenNode resets a downstream COMPLETE main-session-gate and removes its
 // baseline — a plan-repair to implementation MUST re-run the visual check. Plan
-// a→impl→review(code-reviewer)→vgate(main-session-gate)→finalize, all complete.
+// a→impl→review(code-reviewer)→vgate(main-session-gate)→finalize, everything the reopen
+// touches complete; the sink stays pending (a complete sink is a separate typed refusal).
 // ---------------------------------------------------------------------------
 {
   const planNodes = [
@@ -5146,7 +6087,7 @@ function makeState(opts) {
     '| finalize | finalize | vgate | — | 1 | sequence |',
   ];
   let planContent = makePlan([
-    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| vgate | complete | |', '| finalize | complete | |',
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| vgate | complete | |', '| finalize | pending | |',
   ], planNodes);
   const removed = [];
   const shelled = [];
@@ -5172,17 +6113,30 @@ function makeState(opts) {
 // baseline. Plan a→impl→review(code-reviewer)→finalize, all complete.
 // ---------------------------------------------------------------------------
 {
+  // The sink is `pending` — the mid-run repair this narrow reset was designed for. (It formerly read
+  // `complete` while asserting that transitive readiness "withholds" it, which is false for a completed
+  // sink: a complete row is not withheld, it is stranded above the gate this reopen just reset; that case
+  // is now owned by the #748-SINK pin below.) A pending row is not a reset candidate to begin with, so it
+  // proves nothing on its own — the narrow-reset property is exercised by the PARALLEL branch instead:
+  // `sib` and its own gate `sib-review` are complete, are NOT descendants of `impl`, and must survive the
+  // reopen untouched while `impl` + its post-dominating gate `review` are the ONLY rows that move.
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| sib | implementer | a | scripts/sib.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
-    '| finalize | finalize | review | — | 1 | sequence |',
+    '| sib-review | code-reviewer | sib | — | 1 | sequence |',
+    // parseNodes splits depends_on on COMMAS only (then strips whitespace), so a space-separated cell
+    // parses to ONE nonexistent dependency ("reviewsib-review") and silently un-sinks the plan.
+    '| finalize | finalize | review, sib-review | — | 1 | sequence |',
   ];
   let planContent = makePlan([
     '| a | complete | |',
     '| impl | complete | |',
+    '| sib | complete | |',
     '| review | complete | |',
-    '| finalize | complete | |',
+    '| sib-review | complete | |',
+    '| finalize | pending | |',
   ], planNodes);
   const removed = [];
   const shelled = [];
@@ -5203,13 +6157,365 @@ function makeState(opts) {
   assert(result.result === 'ok', '#308 reopen: result ok, got ' + JSON.stringify(result));
   assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent), '#308 reopen: impl reopened to in_progress');
   assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent), '#308 reopen: post-dominating gate review reset to pending');
-  assert(/\|\s*finalize\s*\|\s*complete\s*\|/.test(planContent), '#308 reopen: sink finalize left complete (narrow reset; transitive readiness withholds it)');
+  assert(/\|\s*finalize\s*\|\s*pending\s*\|/.test(planContent), '#308 reopen: sink finalize left pending');
   assert(/\|\s*a\s*\|\s*complete\s*\|/.test(planContent), '#308 reopen: upstream a left complete');
-  assert(result.gatesReset && result.gatesReset.includes('review'), '#308 reopen: gatesReset names review, got ' + JSON.stringify(result.gatesReset));
-  assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review'),
-    '#308 reopen: stale baselines for impl + gate removed, got ' + JSON.stringify(removed));
+  // THE NARROW-RESET PROPERTY, actually exercised: the parallel branch is COMPLETE (so it WOULD be a reset
+  // candidate if the reset cascaded) and is not a descendant of impl, so both its writer and its own
+  // post-dominating gate must survive untouched — and neither may appear in gatesReset.
+  assert(/\|\s*sib\s*\|\s*complete\s*\|/.test(planContent)
+    && /\|\s*sib-review\s*\|\s*complete\s*\|/.test(planContent),
+    '#308 reopen: the COMPLETE parallel branch (sib + sib-review) is left untouched — the reset is narrow, '
+    + 'not a cascade, got ' + planContent);
+  assert(result.gatesReset && result.gatesReset.includes('review')
+    && !result.gatesReset.includes('sib-review') && result.gatesReset.length === 1,
+    '#308 reopen: gatesReset names ONLY review — a gate that does not post-dominate impl is not folded, '
+    + 'got ' + JSON.stringify(result.gatesReset));
+  assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review')
+    && !removed.includes('barrier-base-sib') && !removed.includes('barrier-base-sib-review'),
+    '#308 reopen: stale baselines for impl + its gate removed, the parallel branch\'s baselines kept, got '
+    + JSON.stringify(removed));
   assert(shelled.includes('kaola-workflow-commit-node.js'), '#308 reopen: fresh baseline (commit-node --start) recorded for impl');
   assert(shelled.includes('kaola-workflow-plan-validator.js'), '#368 reopen: validator --drop-base shelled to delete the anchored baseline ref(s) (no dangling ref)');
+}
+
+// #748-SINK: reopen/repair behind a COMPLETED sink is refused at MUTATION time. runReopenNode folds only
+// gate roles, and its orphan guard inspects only in_progress rows — so a `complete` non-gate descendant was
+// neither folded nor seen, and the reopen ADMITTED a mutation that leaves a complete row above the
+// dependency chain it just reset. That is exactly the ledger shape the epoch-authority check rejects,
+// which every scripted command consults before mutating: the result is a project where nothing is legal
+// and nothing warned. Refuse before any side effect instead.
+// SYMMETRY (must not over-refuse): pending sink -> still ADMISSIBLE (the designed mid-run repair);
+// in_progress sink -> the pre-existing would_orphan_in_progress; complete sink -> the new refusal;
+// reopening the completed sink ITSELF -> ADMISSIBLE (a node is not its own descendant).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const reopenWithSink = (sinkStatus, targetId) => {
+    let planContent = makePlan([
+      '| a | complete | |', '| impl | complete | |', '| review | complete | |',
+      '| finalize | ' + sinkStatus + ' | |',
+    ], planNodes);
+    const removed = [];
+    const shelled = [];
+    const result = runReopenNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      project: 'test-project',
+      nodeId: targetId || 'impl',
+      shell: (scriptPath) => {
+        shelled.push(path.basename(scriptPath));
+        if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+        return { exitCode: 1 };
+      },
+      readFile: (fpath) => { if (fpath.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + fpath); },
+      writeFile: (fpath, content) => { if (fpath.endsWith('workflow-plan.md')) planContent = content; },
+      cacheExists: (fpath) => /barrier-base-/.test(fpath),
+      unlink: (fpath) => removed.push(path.basename(fpath)),
+    });
+    return { result, planContent, removed, shelled };
+  };
+
+  const sunk = reopenWithSink('complete');
+  assert(sunk.result.result === 'refuse' && sunk.result.reason === 'would_strand_completed_dependent',
+    '#748-SINK: reopen behind a COMPLETE finalize sink refuses would_strand_completed_dependent, got '
+    + JSON.stringify(sunk.result));
+  assert(JSON.stringify(sunk.result.stranded) === JSON.stringify(['finalize']),
+    '#748-SINK: the refusal names the offending row, got ' + JSON.stringify(sunk.result.stranded));
+  assert(/\|\s*impl\s*\|\s*complete\s*\|/.test(sunk.planContent)
+    && /\|\s*review\s*\|\s*complete\s*\|/.test(sunk.planContent)
+    && /\|\s*finalize\s*\|\s*complete\s*\|/.test(sunk.planContent)
+    && sunk.removed.length === 0 && sunk.shelled.length === 0,
+    '#748-SINK: the refusal fires BEFORE any side effect — zero ledger mutation, zero baseline unlink, '
+    + 'zero shell, got ' + JSON.stringify({ removed: sunk.removed, shelled: sunk.shelled }));
+  // The hint must name an exit that is actually REACHABLE. `replan prepare` is admissible from this state
+  // ONLY when the project already carries both `.cache/review-attempts.json` and a valid
+  // `.cache/replan-source.json` repair_outcome handoff — verified by running prepareReplan against an
+  // all-complete post-finalize fixture: absent the journal it refuses `replan_source_journal_missing`,
+  // with the journal but no handoff `replan_source_outcome_missing`, and only with both does it prepare.
+  // So the hint must carry those preconditions, not an unconditional "replan IS admissible".
+  assert(typeof sunk.result.operator_hint === 'string'
+    && /review-attempts\.json/.test(sunk.result.operator_hint)
+    && /replan-source\.json/.test(sunk.result.operator_hint)
+    && !/hand-edit/i.test(sunk.result.operator_hint.replace(/Do NOT hand-edit/i, '')),
+    '#748-SINK: the refusal states the PRECONDITIONS under which the replan exit is reachable (and never '
+    + 'suggests hand-editing a ledger row), got ' + JSON.stringify(sunk.result.operator_hint));
+
+  const live = reopenWithSink('in_progress');
+  assert(live.result.result === 'refuse' && live.result.reason === 'would_orphan_in_progress',
+    '#748-SINK SYMMETRY: an in_progress sink keeps its pre-existing refusal (precedence unchanged), got '
+    + JSON.stringify(live.result));
+
+  const midRun = reopenWithSink('pending');
+  assert(midRun.result.result === 'ok',
+    '#748-SINK SYMMETRY: a PENDING sink is the designed mid-run repair and stays ADMISSIBLE, got '
+    + JSON.stringify(midRun.result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(midRun.planContent)
+    && /\|\s*review\s*\|\s*pending\s*\|/.test(midRun.planContent),
+    '#748-SINK SYMMETRY: the pending-sink reopen still performs its full narrow reset');
+
+  // An `n/a` sink is NOT admissible, and that is a deliberate widening over the role-specific guard this
+  // replaced (which only looked at `complete`). The invariant being mirrored puts n/a in the SETTLED set,
+  // not the satisfied set: `['in_progress','complete','n/a'].includes(status) && deps.some(d =>
+  // !['complete','n/a'].includes(d))`. Verified by running verifyCurrentEpochAuthority directly against
+  // both ledgers — sink=n/a + gate=pending and sink=complete + gate=pending BOTH refuse
+  // state_ledger_progress_invalid, while sink=pending and sink=n/a + gate=complete are both ok. So
+  // admitting the n/a case would leave exactly the same unrecoverable wedge this guard exists to prevent.
+  const naSink = reopenWithSink('n/a');
+  assert(naSink.result.result === 'refuse' && naSink.result.reason === 'would_strand_completed_dependent'
+    && JSON.stringify(naSink.result.stranded) === JSON.stringify(['finalize']),
+    '#748-SINK SYMMETRY: an n/a sink over a folded gate wedges the authority exactly like a complete one, '
+    + 'so it refuses too, got ' + JSON.stringify(naSink.result));
+
+  const selfReopen = reopenWithSink('complete', 'finalize');
+  assert(selfReopen.result.result === 'ok',
+    '#748-SINK SYMMETRY: reopening the COMPLETED SINK ITSELF stays ADMISSIBLE — a node is not its own '
+    + 'descendant, and its own dependencies are all still complete, got ' + JSON.stringify(selfReopen.result));
+  assert(/\|\s*finalize\s*\|\s*in_progress\s*\|/.test(selfReopen.planContent)
+    && /\|\s*review\s*\|\s*complete\s*\|/.test(selfReopen.planContent),
+    '#748-SINK SYMMETRY: the self-reopen reopens the sink and leaves its upstream gate complete');
+
+  // repair-node shares the ladder and gets the same guard. It reaches the guard only with an in_progress
+  // downstream gate (its own (2b) safe-point check), so drive the AV variant: review in_progress, sink
+  // already complete — a corrupt-but-reachable shape that must refuse rather than deepen the wedge.
+  {
+    let planContent = makePlan([
+      '| a | complete | |', '| impl | complete | |', '| review | in_progress | |',
+      '| finalize | complete | |',
+    ], planNodes);
+    const removed = [];
+    const repaired = runRepairNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      project: 'test-project',
+      nodeId: 'impl',
+      shell: () => ({ exitCode: 0, result: 'ok' }),
+      readFile: (fpath) => { if (fpath.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + fpath); },
+      writeFile: (fpath, content) => { if (fpath.endsWith('workflow-plan.md')) planContent = content; },
+      cacheExists: (fpath) => /barrier-base-/.test(fpath),
+      unlink: (fpath) => removed.push(path.basename(fpath)),
+      readdir: () => [],
+    });
+    assert(repaired.result === 'refuse' && repaired.reason === 'would_strand_completed_dependent',
+      '#748-SINK: repair-node mirrors the stranded-dependent refusal, got ' + JSON.stringify(repaired));
+    assert(/\|\s*impl\s*\|\s*complete\s*\|/.test(planContent) && removed.length === 0,
+      '#748-SINK: the repair-node refusal is ZERO-mutation, got ' + JSON.stringify(removed));
+  }
+}
+
+// #748-STRAND: the invariant the guard protects is ROLE-AGNOSTIC. verifyCurrentEpochAuthority refuses
+// `state_ledger_progress_invalid` for ANY node at complete/in_progress/n/a whose dependency is neither
+// complete nor n/a — it never looks at roles. A guard that filtered `role === 'finalize'` therefore left
+// the SAME wedge admissible for every interior node, reachable from an ORDINARY MID-RUN state (sink still
+// pending) with zero warning at mutation time. Plan a -> impl -> review(gate) -> docs -> finalize, with
+// docs COMPLETE and the sink still pending: reopening impl folds `review` to pending and would strand the
+// complete `docs` row above it.
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| docs | implementer | review | docs/api.md | 1 | sequence |',
+    '| finalize | finalize | docs | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |',
+    '| docs | complete | |', '| finalize | pending | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project', nodeId: 'impl',
+    shell: (sp) => { shelled.push(path.basename(sp)); return { exitCode: 0, result: 'ok' }; },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+    readdir: () => [],
+  });
+  assert(result.result === 'refuse' && result.reason === 'would_strand_completed_dependent',
+    '#748-STRAND: a MID-RUN reopen that would strand a COMPLETE NON-finalize descendant refuses, got '
+    + JSON.stringify(result));
+  assert(JSON.stringify(result.stranded) === JSON.stringify(['docs']),
+    '#748-STRAND: the refusal NAMES the offending node(s), got ' + JSON.stringify(result.stranded));
+  assert(/docs/.test(String(result.detail)) && !/finalize sink/.test(String(result.detail)),
+    '#748-STRAND: the detail names the real offender and never miscalls an interior node "the finalize '
+    + 'sink", got ' + JSON.stringify(result.detail));
+  assert(/\|\s*impl\s*\|\s*complete\s*\|/.test(planContent) && /\|\s*review\s*\|\s*complete\s*\|/.test(planContent)
+    && removed.length === 0 && shelled.length === 0,
+    '#748-STRAND: the refusal is PRE-WRITE — zero ledger mutation, zero unlink, zero shell, got '
+    + JSON.stringify({ removed, shelled }));
+  // The hint fires from TWO structurally different states, so its terminal advice must be true in BOTH.
+  // HERE the sink is still PENDING: nothing has shipped, and telling the operator "the run is finished,
+  // treat the work as shipped" would be false AND would foreclose the in-plan mid-run recovery.
+  assert(typeof result.operator_hint === 'string'
+    && !/run is finished/.test(result.operator_hint)
+    && !/treat the work as shipped/.test(result.operator_hint)
+    && /NOT finished/.test(result.operator_hint),
+    '#748-STRAND: from the MID-RUN trigger (sink still pending) the hint must NOT claim the run is '
+    + 'finished / the work is shipped, got ' + JSON.stringify(result.operator_hint));
+}
+
+// #748-R5-DISJOINT: the stranded-dependent guard must refuse only what THIS mutation NEWLY strands.
+// Computing the stranded set from the POST-mutation ledger alone and refusing on any hit conflates a
+// violation this reset creates with one that was already sitting in the plan — so a PRE-EXISTING
+// violation in a DISJOINT leg (a settled row above a pending dependency the reopen never touches)
+// blocked an unrelated, entirely safe reopen. "Newly" is decided by ATTRIBUTION: a row refuses only when
+// it would remain settled above a dependency THIS mutation moved, which also confines the scan to the
+// touched cone. (Attribution, not a raw before/after set difference: subtracting the pre-mutation stranded
+// set would retire the repair-node arm of the guard entirely, since repair-node's safe point runs with a
+// downstream gate at in_progress and every settled descendant above it already reads as stranded-before.
+// That case is pinned above, at #748-SINK.)
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| u1 | implementer | a | scripts/u1.js | 1 | sequence |',
+    '| u2 | implementer | u1 | scripts/u2.js | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | pending | |',
+    '| u1 | pending | |', '| u2 | n/a | |',
+  ], planNodes);
+  const removed = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project', nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+    readdir: () => [],
+  });
+  assert(result.result === 'ok',
+    '#748-R5-DISJOINT: a PRE-EXISTING violation in a disjoint leg (u2 n/a above pending u1) must not block '
+    + 'an unrelated reopen — the reopen folds nothing of that leg, got ' + JSON.stringify(result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent)
+    && /\|\s*u1\s*\|\s*pending\s*\|/.test(planContent) && /\|\s*u2\s*\|\s*n\/a\s*\|/.test(planContent),
+    '#748-R5-DISJOINT: the disjoint leg is left EXACTLY as it was — the guard neither refuses nor repairs '
+    + 'a violation it did not create, got ' + planContent);
+}
+
+// #748-R5-READONLY: a COMPLETE descendant with an EMPTY declared write set produced no repo bytes, so
+// there is nothing about it to undo — folding it back to pending is safe and cheap, exactly like the
+// post-dominating gate fold (gates are read-only for the same reason). Refusing on it instead made the
+// upstream writer PERMANENTLY unrepairable in-plan: no clean ledger state exists from which reopen-node
+// or repair-node would admit it. Fold such rows into the reset set rather than refusing.
+// SCOPE: the `finalize` role is EXCLUDED even though its declared write set is often empty. The sink runs
+// main-session-direct and its first irreversible step (the feature commit) writes neither node evidence
+// nor a sink-receipt journal, so no in-band marker can distinguish a pristine sink from one that already
+// committed/pushed/merged — folding it could double-apply irreversible work. A settled sink therefore
+// still refuses, and the replan exit named in the hint is the sanctioned recovery for that state.
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| notes | code-explorer | review | — | 1 | sequence |',
+    '| finalize | finalize | notes | — | 1 | sequence |',
+  ];
+  const ledgerRows = (reviewStatus) => ([
+    '| a | complete | |', '| impl | complete | |', '| review | ' + reviewStatus + ' | |',
+    '| notes | complete | |', '| finalize | pending | |',
+  ]);
+
+  let planContent = makePlan(ledgerRows('complete'), planNodes);
+  const removed = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project', nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-|\.md$/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+    readdir: () => [],
+  });
+  assert(result.result === 'ok',
+    '#748-R5-READONLY: a complete READ-ONLY descendant must not make impl permanently unrepairable — the '
+    + 'reopen folds it instead of refusing, got ' + JSON.stringify(result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent)
+    && /\|\s*review\s*\|\s*pending\s*\|/.test(planContent)
+    && /\|\s*notes\s*\|\s*pending\s*\|/.test(planContent)
+    && /\|\s*finalize\s*\|\s*pending\s*\|/.test(planContent),
+    '#748-R5-READONLY: the read-only descendant is reset to pending alongside the post-dominating gate, '
+    + 'leaving a ledger with NO settled row above a pending dependency, got ' + planContent);
+  assert(Array.isArray(result.readOnlyReset) && result.readOnlyReset.includes('notes')
+    && !result.gatesReset.includes('notes'),
+    '#748-R5-READONLY: the folded read-only row is reported separately from gatesReset, got '
+    + JSON.stringify({ gatesReset: result.gatesReset, readOnlyReset: result.readOnlyReset }));
+  // The fold must mirror the gate fold EXACTLY: stale baseline + stale evidence for the reset row go,
+  // the reopened node's own evidence stays (it is re-seeded by the reopen itself).
+  assert(removed.includes('barrier-base-notes') && removed.includes('notes.md'),
+    '#748-R5-READONLY: the folded read-only row loses its stale baseline + evidence exactly like a folded '
+    + 'gate, got ' + JSON.stringify(removed));
+
+  // repair-node shares the ladder and must stay repairable for the same reason. Its (2b) safe-point check
+  // requires an in_progress downstream gate, which ALSO makes `notes` stranded BEFORE the mutation — so
+  // the difference rule alone would admit the repair and leave the wedge in place. The fold is what makes
+  // the post-repair ledger actually valid.
+  {
+    let repairPlan = makePlan(ledgerRows('in_progress'), planNodes);
+    const repairRemoved = [];
+    const repaired = runRepairNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      project: 'test-project', nodeId: 'impl',
+      shell: () => ({ exitCode: 0, result: 'ok' }),
+      readFile: (f) => { if (f.endsWith('workflow-plan.md')) return repairPlan; throw new Error('ENOENT ' + f); },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) repairPlan = c; },
+      cacheExists: (f) => /barrier-base-|\.md$/.test(f),
+      unlink: (f) => repairRemoved.push(path.basename(f)),
+      readdir: () => [],
+    });
+    assert(repaired.result === 'ok',
+      '#748-R5-READONLY: repair-node stays admissible over a complete read-only descendant, got '
+      + JSON.stringify(repaired));
+    assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(repairPlan)
+      && /\|\s*review\s*\|\s*pending\s*\|/.test(repairPlan)
+      && /\|\s*notes\s*\|\s*pending\s*\|/.test(repairPlan),
+      '#748-R5-READONLY: repair-node folds the read-only descendant too, so the repaired ledger carries no '
+      + 'settled row above a pending dependency, got ' + repairPlan);
+    assert(repairRemoved.includes('barrier-base-notes') && repairRemoved.includes('notes.md'),
+      '#748-R5-READONLY: repair-node clears the folded read-only row\'s stale baseline + evidence, got '
+      + JSON.stringify(repairRemoved));
+  }
+}
+
+// #748-R5-SPELLING: the ledger-status sets this guard compares against must accept the SAME defensive
+// spellings the rest of this file accepts (TERMINAL_LEDGER: 'n/a', 'n.a', 'na'). A sink row spelled `na`
+// is settled exactly like `n/a`; reading it as unsatisfied instead yields a spurious refusal naming the
+// SINK as stranded above its own complete gate.
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  for (const spelling of ['na', 'n.a']) {
+    let planContent = makePlan([
+      '| a | complete | |', '| impl | complete | |', '| review | complete | |',
+      '| finalize | ' + spelling + ' | |',
+    ], planNodes);
+    const result = runReopenNode({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      project: 'test-project', nodeId: 'impl',
+      shell: () => ({ exitCode: 0, result: 'ok' }),
+      readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+      writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: (f) => /barrier-base-/.test(f),
+      unlink: () => {},
+      readdir: () => [],
+    });
+    assert(result.result === 'refuse' && result.reason === 'would_strand_completed_dependent'
+      && JSON.stringify(result.stranded) === JSON.stringify(['finalize']),
+      '#748-R5-SPELLING: a sink spelled "' + spelling + '" is settled exactly like n/a, got '
+      + JSON.stringify(result));
+  }
 }
 
 // #349: reopen-node purges stale GATE verdict evidence (.cache/<gate-id>.md) for each reset gate,
@@ -5223,7 +6529,7 @@ function makeState(opts) {
     '| finalize | finalize | review | — | 1 | sequence |',
   ];
   let planContent = makePlan([
-    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | pending | |',
   ], planNodes);
   const removed = [];
   // barrier-base baselines present AND the gate evidence review.md + node evidence impl.md present.
@@ -5256,7 +6562,7 @@ function makeState(opts) {
     '| finalize | finalize | av | — | 1 | sequence |',
   ];
   let planContent = makePlan([
-    '| a | complete | |', '| impl | complete | |', '| av | complete | |', '| finalize | complete | |',
+    '| a | complete | |', '| impl | complete | |', '| av | complete | |', '| finalize | pending | |',
   ], planNodes);
   const removed = [];
   const present = new Set(['barrier-base-impl', 'barrier-base-av', 'av.md']);
@@ -5292,7 +6598,7 @@ function makeState(opts) {
   ];
   let planContent = makePlan([
     '| impl | complete | |', '| review | complete | |', '| av-a | complete | |',
-    '| av-b | complete | |', '| foreign-av | complete | |', '| finalize | complete | |',
+    '| av-b | complete | |', '| foreign-av | complete | |', '| finalize | pending | |',
   ], planNodes);
   const present = new Set(['av-a.md', 'av-b.md', 'foreign-av.md']);
   const removed = [];
@@ -14407,7 +15713,7 @@ function rtHarness(initialFiles, opts) {
       '| finalize | finalize | review | — | 1 | sequence |',
     ];
     let planContent = makePlan([
-      '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
+      '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | pending | |',
     ], planNodes);
     const removed = [];
     let baselineSawInProgressAtInvoke = null;

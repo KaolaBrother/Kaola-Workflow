@@ -276,7 +276,31 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   routing → fused advance), `write-halt` (consent/security/test_thrash escalation), and
   `reopen-node` (#308 first-class plan-repair: reset an already-`complete` node and its
   post-dominating gate(s) → `pending` — including a gate still `in_progress` (the #343 mid-gate
-  repair); any other `in_progress` row is a typed `would_orphan_in_progress` refusal — remove
+  repair); any other `in_progress` row is a typed `would_orphan_in_progress` refusal, and any
+  descendant that would remain SETTLED (`complete` / `in_progress` / `n/a`) above a dependency
+  this reset moves to `pending` is a typed `would_strand_completed_dependent` refusal, because
+  that is precisely the ledger shape the epoch authority rejects as `state_ledger_progress_invalid`.
+  The second guard is role-agnostic on purpose — it mirrors the authority's own role-agnostic
+  invariant, so an interior writer wedges the project exactly as a `finalize` sink does. In
+  `reopen-node` both guards fire before any side effect, so a refused reopen is a pure no-op; in
+  `repair-node` the strand guard sits LATER in the transaction — the repair's own ledger mutation is
+  still unapplied when it refuses, but a shared preamble of the same call (an interrupted-rebind
+  convergence and the barrier shell) may already have written the review journal, a baseline or a git
+  ref, and the operator hint says so rather than promising an untouched project. It refuses only what
+  the mutation would NEWLY strand, and it decides that by ATTRIBUTION, not by differencing two
+  stranded sets: the reset simulation tracks the exact rows THIS mutation moved (the reopened node,
+  the rows it resets, and every read-only row it folds), and a settled row refuses only when it would
+  remain settled above a dependency in that moved set. Attribution confines the scan to the touched
+  cone by construction, so a pre-existing violation in a disjoint leg never blocks an unrelated
+  reopen — and, unlike a before/after set difference, a row that was already stranded for an
+  unrelated reason still refuses the moment this mutation becomes a cause of its being stranded.
+  A settled READ-ONLY descendant (empty declared write set, nothing to undo) is folded to `pending`
+  with the gates instead of refusing, which is what keeps its upstream writer repairable in place;
+  a folded row joins the moved set, so whatever the fold itself strands is attributed to this call
+  too. "Empty declared write set" is one predicate for the whole aggregator — blank, `-`, `—`,
+  `none` and `n/a` are all no-write markers, and read-only-ness is the exact negation of the
+  writer/producer predicate, so the two classifications cannot drift. The `finalize` sink is
+  excluded from that fold because its irreversible work leaves no in-band marker — remove
   the stale `.cache/barrier-base-<id>` baselines, reopen the node to `in_progress`, and
   re-record a fresh baseline at the current merged state)
   transactions. It is a pure composition layer: it shells `next-action.js` and `commit-node.js`

@@ -15607,6 +15607,118 @@ function testGateEvidenceNonceRotation654() {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
+// #748: a MIXED direct-repair-then-replay history at ONE gate, driven end-to-end through the real
+// plan-run surface. The in-plan descendant replay reopens its owner and resets the owner's completed
+// writer cone; a SETTLED direct repair already recorded at that gate must survive that journal-global
+// mutation, and the run must complete to green. Before the fix the very next command after the replay
+// refused review_journal_repair_identity_mismatch — permanently, with no continuation and no replan escape.
+function testMixedRepairReplayJournal748() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'kw-748-walk-')));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-748-walk';
+    const projectDir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    fs.writeFileSync(path.join(tmp, 'lib', 'tail.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — mixed repair/replay journal', '', '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| impl | tdd-guide | — | lib/impl.js | 1 | sequence |',
+      '| tail | tdd-guide | impl | lib/tail.js | 1 | sequence |',
+      '| reviewer | code-reviewer | tail | — | 1 | sequence |',
+      '| finalize | finalize | reviewer | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| impl | pending |', '| tail | pending |', '| reviewer | pending |', '| finalize | pending |', ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+    const freeze = runLegacyFreeze(planValidatorScript, planPath, tmp);
+    assert(freeze.status === 0, '#748 walkthrough plan freezes: ' + freeze.stderr + freeze.stdout);
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+    spawnSync('git', ['commit', '-m', 'freeze mixed replay fixture'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
+
+    const record = (nodeId, body) => spawnSync(process.execPath,
+      [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', nodeId, '--stdin', '--json'], {
+        cwd: tmp, encoding: 'utf8', input: body,
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+      });
+    const writerBody = (nodeId, nonce, tag) => 'evidence-binding: ' + nodeId + ' ' + nonce
+      + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+    const failBody = (nonce, file) => 'evidence-binding: reviewer ' + nonce
+      + '\nverdict: fail\nfindings_blocking: 1\n'
+      + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=' + file + '\n';
+
+    // impl -> tail -> reviewer, all the way to the first blocking verdict.
+    const openImpl = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    assert(record('impl', writerBody('impl', openImpl.nonce, 'impl')).status === 0, '#748 impl evidence records');
+    const closeImpl = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'impl', '--json'], tmp));
+    assert(closeImpl.opened && closeImpl.opened.id === 'tail', '#748 tail opens after impl');
+    fs.writeFileSync(path.join(tmp, 'lib', 'tail.js'), 'module.exports = 1;\n');
+    assert(record('tail', writerBody('tail', closeImpl.opened.nonce, 'tail')).status === 0, '#748 tail evidence records');
+    const closeTail = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'tail', '--json'], tmp));
+    assert(closeTail.opened && closeTail.opened.id === 'reviewer', '#748 reviewer opens after tail');
+
+    // ATTEMPT 1: the finding is anchored to the TAIL writer's file ⇒ an ordinary DIRECT repair.
+    assert(record('reviewer', failBody(closeTail.opened.nonce, 'lib/tail.js')).status === 0, '#748 attempt-1 blocking evidence records');
+    const failed1 = json(runNode(adaptiveNodeScript, ['close-node', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
+    assert(failed1.result === 'review_failed' && failed1.attempt_id, '#748 attempt-1 settles as review_failed: ' + JSON.stringify(failed1));
+    const repair1 = json(runNode(adaptiveNodeScript, ['repair-node', '--project', project,
+      '--attempt-id', failed1.attempt_id, '--node-id', 'tail', '--json'], tmp));
+    assert(repair1.result === 'ok' && !repair1.replay,
+      '#748 attempt-1 is an ordinary DIRECT repair on tail (no replay): ' + JSON.stringify(repair1));
+
+    // tail re-runs; the gate re-opens and re-fails, this time anchored to the UPSTREAM impl writer.
+    fs.writeFileSync(path.join(tmp, 'lib', 'tail.js'), 'module.exports = 2;\n');
+    assert(record('tail', writerBody('tail', closeImpl.opened.nonce, 'tail-repair')).status === 0, '#748 repaired tail evidence records');
+    const closeTail2 = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'tail', '--json'], tmp));
+    assert(closeTail2.opened && closeTail2.opened.id === 'reviewer', '#748 reviewer reopens after the repaired tail');
+    assert(record('reviewer', failBody(closeTail2.opened.nonce, 'lib/impl.js')).status === 0, '#748 attempt-2 blocking evidence records');
+    const failed2 = json(runNode(adaptiveNodeScript, ['close-node', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
+    assert(failed2.result === 'review_failed' && failed2.attempt_id !== failed1.attempt_id,
+      '#748 attempt-2 settles as a distinct review_failed: ' + JSON.stringify(failed2));
+
+    // ATTEMPT 2: the in-plan descendant REPLAY fires on impl and resets the tail cone.
+    const repair2 = json(runNode(adaptiveNodeScript, ['repair-node', '--project', project,
+      '--attempt-id', failed2.attempt_id, '--node-id', 'impl', '--json'], tmp));
+    assert(repair2.result === 'ok' && repair2.replay && repair2.replay.owner === 'impl'
+      && JSON.stringify(repair2.replay.descendants_reset) === JSON.stringify(['tail']),
+      '#748 attempt-2 performs the in-plan descendant replay of impl: ' + JSON.stringify(repair2));
+
+    // THE PIN: the very next command must NOT refuse review_journal_repair_identity_mismatch.
+    const orient = json(runNode(adaptiveNodeScript, ['orient', '--project', project, '--json'], tmp));
+    assert(orient.result !== 'refuse',
+      '#748 the mixed direct-repair + replay journal re-validates on the very next read: ' + JSON.stringify(orient));
+
+    // RUN TO GREEN: the reopened owner produces evidence, the cone re-runs, the gate passes.
+    fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
+    const implRec = record('impl', writerBody('impl', openImpl.nonce, 'impl-repair'));
+    assert(implRec.status === 0,
+      '#748 the reopened replay owner records the evidence it was reopened to produce: ' + implRec.stdout + implRec.stderr);
+    // The replay REUSES the owner's original baseline, so the descendant's now-discarded output sits
+    // outside the owner's declared write set. That is the sanctioned revert-overflow path, not a wedge.
+    const overflow = json(runNode(adaptiveNodeScript, ['revert-overflow', '--project', project, '--node-id', 'impl', '--json'], tmp));
+    assert(overflow.result === 'ok',
+      '#748 the replayed cone output reverts through the sanctioned overflow path: ' + JSON.stringify(overflow));
+    const closeImpl2 = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'impl', '--json'], tmp));
+    assert(closeImpl2.opened && closeImpl2.opened.id === 'tail', '#748 the reset cone re-opens at tail: ' + JSON.stringify(closeImpl2));
+    fs.writeFileSync(path.join(tmp, 'lib', 'tail.js'), 'module.exports = 3;\n');
+    assert(record('tail', writerBody('tail', closeImpl2.opened.nonce, 'tail-replay')).status === 0, '#748 replayed tail evidence records');
+    const closeTail3 = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'tail', '--json'], tmp));
+    assert(closeTail3.opened && closeTail3.opened.id === 'reviewer', '#748 reviewer reopens after the replayed tail');
+    assert(record('reviewer', 'evidence-binding: reviewer ' + closeTail3.opened.nonce
+      + '\nverdict: pass\nfindings_blocking: 0\n').status === 0, '#748 passing reviewer evidence records');
+    const reviewerClose = json(runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'reviewer', '--json'], tmp));
+    assert(reviewerClose.result === 'ok' && reviewerClose.closed === 'reviewer',
+      '#748 the gate settles PASS after a mixed repair/replay history: ' + JSON.stringify(reviewerClose));
+    console.log('testMixedRepairReplayJournal748: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
 // #699: one malformed split-brain fixture drives every runtime surface. The
 // transaction fence has precedence over plan validation and performs zero
 // mutation, including scheduler-lock and summary-envelope side effects.
@@ -16813,6 +16925,7 @@ function buildRegistry() {
   add('testCodexDispatchModeThreading603',                testCodexDispatchModeThreading603);
   add('testRunProgressMirror605',                         testRunProgressMirror605);
   add('testGateEvidenceNonceRotation654',                 testGateEvidenceNonceRotation654);
+  add('testMixedRepairReplayJournal748',                  testMixedRepairReplayJournal748);
   add('testReplanRuntimeFence699',                        testReplanRuntimeFence699);
   add('testPlanlessAndPlannedInitialAuthority699',        testPlanlessAndPlannedInitialAuthority699);
   add('testArchiveCallersFailClosed699',                  testArchiveCallersFailClosed699);

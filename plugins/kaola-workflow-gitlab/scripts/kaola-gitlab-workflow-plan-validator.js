@@ -2112,29 +2112,97 @@ function verifyVerdictBlock(content, opts) {
     } catch (_) { journalAttemptsMemo = null; }
     return journalAttemptsMemo;
   };
-  // An INTERIOR change-gate whose OWN certified surface is byte-unchanged since it
-  // sealed is still fresh, even when a disjoint downstream write moved the whole
-  // candidate. Scope freshness to the gate's certified-producer write sets and
-  // compare the seal-time per-path blobs (the attempt's candidate_declared) against
-  // the current tree. Tighten-only: any shape we cannot prove safe (the final
-  // certifier, a non-adversarial gate, no resolvable certifies, no seal attempt,
-  // git failure) returns false and keeps the whole-candidate binding.
+  let verdictLedgerMemo;
+  const verdictLedger = () => {
+    if (!verdictLedgerMemo) verdictLedgerMemo = parseLedger(content);
+    return verdictLedgerMemo;
+  };
+  // finalCertifierIds() answers RESOLVABILITY (does Meta name a gate that exists in the frozen
+  // graph), which is NOT the property the interior widening depends on. What holds the
+  // whole-candidate wall is LIVENESS: a certifier the verdict sweep will actually check. Membership in
+  // that sweep is an ALLOW-list of exactly one status — `if (ledger.get(node.id) !== 'complete') continue;`
+  // — so liveness must mirror it as an allow-list too. `pending` / `in_progress` are NOT "not yet, the
+  // wall is still ahead": this predicate only matters at the finalize sweep, and at the finalize sweep
+  // there is no ahead. A certifier whose row is anything other than `complete` (including a missing row)
+  // is nameable but never verified, so scoping interior reviewers to their own surfaces behind it would
+  // leave the whole candidate unguarded. Tighten-only — this can only remove relief, never grant it.
+  let finalCertifierLiveMemo;
+  const finalCertifierLive = () => {
+    if (finalCertifierLiveMemo !== undefined) return finalCertifierLiveMemo;
+    const ledger = verdictLedger();
+    finalCertifierLiveMemo = [...finalCertifierIds()].some(id => {
+      const status = String(ledger.get(id) == null ? '' : ledger.get(id)).trim().toLowerCase();
+      return status === 'complete';
+    });
+    return finalCertifierLiveMemo;
+  };
+  // PLAN-DERIVED mirror of the runtime's uniqueMaximalReviewProducer producer_slice for a
+  // reviewer gate: the common ancestors of every gate member that declare a nonempty write
+  // set, minus `n/a` rows. This is what beginReviewAttempt froze into producer_bindings, so
+  // recomputing it here lets the caller CROSS-CHECK the journal instead of trusting it (the
+  // same "never trust the record" posture reviewJournalIdentityMatchesPlan applies at
+  // runtime). Returns null — fail closed — when any such producer is not `complete`: the
+  // runtime's preserved/replay relief for a nonterminal producer lives in the very journal
+  // we are cross-checking, so the validator must not reconstruct it from that journal.
+  function recomputedReviewProducers(groupIds) {
+    const byId = new Map(nodes.map(candidate => [candidate.id, candidate]));
+    const ancestorsOf = id => {
+      const out = new Set();
+      const queue = [...(((byId.get(id) || {}).dependsOn) || [])];
+      while (queue.length) {
+        const cur = queue.shift();
+        if (out.has(cur)) continue;
+        out.add(cur);
+        queue.push(...(((byId.get(cur) || {}).dependsOn) || []));
+      }
+      return out;
+    };
+    const memberSets = groupIds.map(ancestorsOf);
+    if (!memberSets.length) return null;
+    let common = new Set(memberSets[0]);
+    for (const set of memberSets.slice(1)) common = new Set([...common].filter(id => set.has(id)));
+    const ledger = verdictLedger();
+    const slice = [];
+    for (const id of [...common].sort()) {
+      const producer = byId.get(id);
+      if (!producer) return null;
+      // nodeWriteSetNonempty (adaptive-node) — the SAME writer vocabulary the runtime proof uses: the
+      // authored no-write markers, PLUS classifier.parseWriteSetCell yielding no paths. Both clauses,
+      // in that order, so this slice can never disagree with the runtime's writer/read-only predicate.
+      const raw = String(producer.writeSetRaw == null ? '' : producer.writeSetRaw).trim().toLowerCase();
+      if (['', '-', '—', 'none', 'n/a'].includes(raw)) continue;
+      if (classifier.parseWriteSetCell(producer.writeSetRaw).size === 0) continue;
+      const status = String(ledger.get(id) || '').toLowerCase();
+      if (status === 'n/a' || status === 'na') continue;
+      if (status !== 'complete') return null;
+      slice.push(id);
+    }
+    return slice;
+  }
+  // An INTERIOR change-gate whose OWN reviewed surface is byte-unchanged since it sealed is
+  // still fresh, even when a disjoint downstream write moved the whole candidate. Scope
+  // freshness to the gate's reviewed-producer write sets and compare the seal-time per-path
+  // blobs (the attempt's candidate_declared) against the current tree.
+  //
+  // The reviewed-producer set is PLAN-DERIVED in both arms: an adversarial-verifier carries an
+  // explicit `certifies` list; a code-reviewer / security-reviewer gate carries none (freeze-time
+  // G4 forbids `certifies` on reviewer roles), so its slice is recomputed here from the frozen
+  // graph + ledger and the journal's recorded producer_bindings must match it exactly.
+  //
+  // Tighten-only: every shape we cannot prove safe returns false and keeps the whole-candidate
+  // binding — a member of the plan's final certifier; a plan with no final certifier that is both
+  // resolvable AND live (nothing is left holding the whole-candidate wall, so scoping any gate to
+  // its own surface would silently retire that wall); any other role; a missing journal, mixed
+  // receipt candidates or no seal attempt; a gate membership or producer slice that does not match
+  // the recomputed one; an empty surface; or a git failure.
   function interiorSurfaceFresh(node, group, receipts) {
     const finalIds = finalCertifierIds();
+    if (!finalIds.size || !finalCertifierLive()) return false;
     if (group.some(member => finalIds.has(member.id))) return false;
-    // Only the explicit-producer shape: an adversarial-verifier change-gate carries
-    // `certifies`. Reviewer gates (post-dominance producers) stay whole-candidate.
-    if (node.role !== 'adversarial-verifier') return false;
-    const byId = new Map(nodes.map(candidate => [candidate.id, candidate]));
-    const producerIds = Array.from(new Set(group.flatMap(member => member.certifies || [])));
-    if (!producerIds.length) return false;
-    // node.writeSet is a Set (classifier.parseWriteSetCell) — spread to an array so
-    // flatMap actually flattens the paths instead of nesting the Set.
-    const surfacePaths = Array.from(new Set(producerIds.flatMap(id => {
-      const producer = byId.get(id);
-      return producer && producer.writeSet ? Array.from(producer.writeSet) : [];
-    }))).filter(Boolean);
-    if (!surfacePaths.length) return false;
+    if (node.role !== 'adversarial-verifier' && node.role !== 'code-reviewer'
+      && node.role !== 'security-reviewer') return false;
+    // Resolve the seal attempt FIRST — reviewer producers are cross-checked against it. Missing
+    // journal, mixed candidate digests, or no matching attempt all fail closed to whole-candidate.
     const attempts = journalAttempts();
     if (!attempts) return false;
     const seal = receipts[0] && receipts[0].candidate_digest;
@@ -2144,6 +2212,31 @@ function verifyVerdictBlock(content, opts) {
       && entry.logical_gate.members.includes(node.id)
       && entry.candidate_declared && typeof entry.candidate_declared === 'object');
     if (!attempt) return false;
+    const byId = new Map(nodes.map(candidate => [candidate.id, candidate]));
+    // AV: plan-authoritative `certifies`. Reviewer: the plan-recomputed maximal writer slice,
+    // required to match the journal's recorded producer_bindings exactly.
+    let producerIds;
+    if (node.role === 'adversarial-verifier') {
+      producerIds = Array.from(new Set(group.flatMap(member => member.certifies || [])));
+    } else {
+      const groupIds = group.map(member => member.id).slice().sort();
+      const attemptMembers = attempt.logical_gate.members.slice().sort();
+      if (JSON.stringify(groupIds) !== JSON.stringify(attemptMembers)) return false;
+      const recomputed = recomputedReviewProducers(groupIds);
+      if (!recomputed) return false;
+      const recorded = Object.keys(attempt.producer_bindings
+        && typeof attempt.producer_bindings === 'object' ? attempt.producer_bindings : {}).sort();
+      if (JSON.stringify(recomputed) !== JSON.stringify(recorded)) return false;
+      producerIds = recomputed;
+    }
+    if (!producerIds.length) return false;
+    // node.writeSet is a Set (classifier.parseWriteSetCell) — spread to an array so
+    // flatMap actually flattens the paths instead of nesting the Set.
+    const surfacePaths = Array.from(new Set(producerIds.flatMap(id => {
+      const producer = byId.get(id);
+      return producer && producer.writeSet ? Array.from(producer.writeSet) : [];
+    }))).filter(Boolean);
+    if (!surfacePaths.length) return false;
     const sealMap = attempt.candidate_declared;
     let current;
     try {

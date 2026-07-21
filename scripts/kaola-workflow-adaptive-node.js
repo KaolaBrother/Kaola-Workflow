@@ -322,6 +322,55 @@ const OPERATOR_HINT_REGISTRY = {
     'Only a complete node can be reopened for repair; ' + (ctx.nodeId || '<id>') + ' is not complete. Run to allDone first, then reopen.',
   would_orphan_in_progress: () =>
     'Reopening this node would orphan an in_progress sibling. Close the in_progress node(s) first, then reopen.',
+  // The replan preconditions below are empirical, not inferred: prepareReplan was run against an
+  // all-complete post-finalize fixture and refuses `replan_source_journal_missing` with no
+  // `.cache/review-attempts.json`, `replan_source_outcome_missing` with the journal but no
+  // `.cache/replan-source.json` repair_outcome handoff, and only prepares when BOTH are present. An
+  // all-complete ledger is not itself a blocker.
+  //
+  // The hint fires from TWO structurally different states, so it is state-aware on exactly two axes.
+  //
+  // AXIS 1 — did the run actually finish? A run is finished ONLY when the terminal sink reached
+  // `complete` (runIsFinished). Then "open a follow-up" is the honest advice. With a sink at
+  // pending / in_progress — or at `n/a`, which means the sink was marked NOT APPLICABLE and therefore
+  // shipped nothing at all — claiming the work shipped would be false AND would foreclose the in-plan
+  // mid-run continuation (repair the tail-most settled writer instead).
+  //
+  // AXIS 2 — how much of THIS call had already written when the guard fired? Not the same for the two
+  // ops, so the clause must not be shared:
+  //   * reopen-node reaches the guard before ANY side effect, so the strong claim holds verbatim: nothing
+  //     was written, nothing is wedged, and hand-editing a ledger row is never the right move.
+  //   * repair-node reaches the guard LATE — an interrupted-rebind convergence (reconcilePendingRebind,
+  //     which writes the review journal, a baseline file and even a git ref) and the STEP-15 barrier shell
+  //     both run ahead of it. The repair's OWN ledger mutation is still unapplied, but a shared preamble
+  //     may already have written, so the honest claim is narrower.
+  // In BOTH cases the "do not hand-edit" advice is scoped to THIS refusal only. It does not speak to an
+  // ALREADY-WEDGED project — one mutated by a runtime that predates this guard — whose documented
+  // two-step manual recovery (docs/workflow-state-contract.md) is the correct procedure for that state.
+  would_strand_completed_dependent: (ctx) =>
+    'Row(s) ' + (((ctx.stranded || []).join(', ')) || '<id>') + ' are already settled, so '
+    + (ctx.op === 'repair' ? 'repairing ' : 'reopening ') + (ctx.nodeId || '<id>')
+    + ' would strand them above a dependency this reset moves to pending — a ledger shape every downstream '
+    + 'authority rejects. '
+    + (ctx.op === 'repair'
+      ? 'This refusal fired BEFORE the repair applied any of its own mutations, so no ledger row moved and '
+        + 'the node ledger on disk is still consistent; note that a shared preamble of this same call (an '
+        + 'interrupted-rebind convergence and the barrier shell) may already have written the review '
+        + 'journal, a baseline or a git ref, which is expected and self-converging on retry. '
+      : 'This refusal fired BEFORE any mutation, so the ledger on disk is still consistent and there is '
+        + 'nothing wedged: ')
+    + 'do NOT hand-edit a ledger row here, take a sanctioned exit instead. A '
+    + 'replacement plan (/kaola-workflow-adapt) is the sanctioned exit ONLY when this project already '
+    + 'carries BOTH .cache/review-attempts.json and a valid .cache/replan-source.json repair_outcome '
+    + 'handoff — without them replan prepare itself refuses (replan_source_journal_missing / '
+    + 'replan_source_outcome_missing). '
+    + (ctx.runFinished
+      ? 'The terminal sink already ran to complete, so this run is finished: if neither precondition holds, '
+        + 'treat the work as shipped and open a follow-up issue instead.'
+      : 'The terminal sink is NOT complete — this run is NOT finished and nothing has shipped, so do not '
+        + 'treat it as such. In plan, repair the TAIL-most settled writer instead: the named row(s) sit '
+        + 'downstream of ' + (ctx.nodeId || '<id>') + ', and repair-node admits the graph-maximal producer '
+        + 'of the flagged findings.'),
   no_active_reviewer: () =>
     'No active reviewer node to attach the repair to. Open the reviewer gate before repair-node.',
   ledger_splice_failed: (ctx) =>
@@ -3081,18 +3130,39 @@ function reviewJournalBlocker(journal) {
   };
 }
 
+// THE single "does this node declare any writes?" predicate for the whole aggregator. Read-only-ness is
+// its exact negation (isReadOnlyNode below), so producer/writer classification and read-only classification
+// can never disagree — they are one predicate, not two. A cell is EMPTY when it is one of the authored
+// no-write markers (blank, `-`, em-dash `—`, `none`, `n/a`, case-insensitive) OR when the classifier's
+// structural parse of the cell yields no paths (the SAME classifier.parseWriteSetCell that the batch
+// classifier and the plan_hash consume, so this can never drift from them either).
+const EMPTY_WRITE_SET_MARKERS = ['', '-', '—', 'none', 'n/a'];
 function nodeWriteSetNonempty(node) {
   const raw = node && (node.declared_write_set != null ? node.declared_write_set : node.writeSetRaw);
-  return raw != null && !['', '-', '—', 'none', 'n/a'].includes(String(raw).trim().toLowerCase());
+  if (raw == null) return false;
+  if (EMPTY_WRITE_SET_MARKERS.includes(String(raw).trim().toLowerCase())) return false;
+  try {
+    const { parseWriteSetCell } = require('./kaola-workflow-classifier');
+    return parseWriteSetCell(raw).size > 0;
+  } catch (_) {
+    return String(raw).trim().length > 0;
+  }
 }
 
-// replayExempt (#739, OPTIONAL last arg — a Set/array of node ids): the descendant cone of an in-plan
-// descendant replay. An exempt producer is kept in the slice at ANY status (so bindingKeys still matches),
-// never counted history-invalid, and excluded from the graph-maximal `every` check — because the replay
-// legitimately reopened+reset exactly those descendants under the owner, which the identity validators
-// bound to structuralNonGateWriterDescendants(owner) before ever passing them here. With no replayExempt
-// (every pre-#739 caller) `replay` is empty and every branch degenerates to the exact prior behavior.
-function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerStatuses, preservedProducers, replayExempt) {
+// replayExempt (#739, OPTIONAL arg — a Set/array of node ids): THIS attempt's own in-plan descendant-replay
+// cone. An exempt producer is kept in the slice at ANY status (so bindingKeys still matches), never counted
+// history-invalid, AND excluded from the graph-maximal `every` check — because the replay legitimately
+// reopened+reset exactly those descendants under THIS attempt's owner, which the identity validators bound
+// to structuralNonGateWriterDescendants(owner) before ever passing them here.
+//
+// statusRelief (#748, OPTIONAL last arg — a Set/array of node ids): the JOURNAL-GLOBAL relief set. A replay's
+// ledger mutation moves rows for every attempt in the journal, so the STATUS admission must be journal-global
+// too. The graph-MAXIMAL binding proof must NOT be: it is what pins each attempt to the unique maximal writer
+// it actually repaired, and waiving it for one attempt because a DIFFERENT attempt is mid-replay would retire
+// that proof journal-wide. So statusRelief is consumed at the status-admission site ONLY; the graph-maximal
+// clause reads `replay` alone. With neither arg (every pre-#739 caller) both sets are empty and every branch
+// degenerates to the exact prior behavior.
+function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerStatuses, preservedProducers, replayExempt, statusRelief) {
   const byId = new Map((Array.isArray(nodes) ? nodes : []).map(n => [n.id, n]));
   const ancestors = id => {
     const out = new Set();
@@ -3111,6 +3181,7 @@ function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerS
   const staticProducers = [...common].filter(id => nodeWriteSetNonempty(byId.get(id))).sort();
   const preserved = new Set(Array.isArray(preservedProducers) ? preservedProducers : []);
   const replay = new Set(replayExempt instanceof Set ? replayExempt : (Array.isArray(replayExempt) ? replayExempt : []));
+  const statusOnly = new Set(statusRelief instanceof Set ? statusRelief : (Array.isArray(statusRelief) ? statusRelief : []));
   const producer_slice = [];
   const invalid_producers = [];
   for (const id of staticProducers) {
@@ -3119,7 +3190,8 @@ function uniqueMaximalReviewProducer(nodes, gateMembers, selectedWriter, ledgerS
       continue;
     }
     const status = ledgerStatuses[id];
-    if (status === 'complete' || (status === 'in_progress' && preserved.has(id)) || replay.has(id)) producer_slice.push(id);
+    if (status === 'complete' || (status === 'in_progress' && preserved.has(id))
+      || replay.has(id) || statusOnly.has(id)) producer_slice.push(id);
     else if (status !== 'n/a') invalid_producers.push(id);
   }
   const history_valid = invalid_producers.length === 0;
@@ -3707,6 +3779,77 @@ function reviewJournalRoutesMatchPlan(journal, nodes) {
   return true;
 }
 
+// #748 — a validated in-plan replay (#739) resets its owner to in_progress and its descendant cone to
+// pending. That mutation is journal-GLOBAL and plan-GLOBAL, so the relief it grants must be too: the
+// identity validators recompute EVERY attempt's producer proof against the same live ledger, so a settled
+// direct-repair attempt at the same gate would otherwise recompute both of its bound producers as
+// nonterminal and wedge the journal permanently. Bounded, never trusted: only records that pass the full
+// validatedReplayExempt recompute contribute (an unsound one contributes NOTHING, so every existing typed
+// reason keeps its precedence). Only journal.attempts may contribute: that is the population this read
+// re-proves per attempt. __legacy_attempts are excluded from contributing at all — the identity loop
+// scans them for ordinal contiguity only, so a legacy record is never re-proven and must never relieve.
+//   - the replay OWNER goes into preservedProducers, which only relaxes `in_progress` into slice
+//     membership and does NOT bypass the graph-maximal check — exactly enough, since a replay always
+//     reopens its owner to in_progress.
+//   - the reset DESCENDANTS go into the returned `exempt` set, which every caller passes as `statusRelief`
+//     — the STATUS-admission-only relief — and NEVER as replayExempt. They sit at `pending`, which
+//     `preserved` cannot relieve, so they do need admitting; but replayExempt additionally waives the
+//     graph-MAXIMAL binding check, and waiving that for one attempt because a DIFFERENT attempt is
+//     mid-replay would retire the writer-binding proof journal-wide.
+// Relief can only move a producer_slice TOWARD the statically-complete producer set that bindingKeys was
+// frozen from, never past it, so it can never manufacture a new bindingKeys !== producer_slice refusal.
+//
+// LIFETIME. Two independent bounds decide whether a replay record still grants relief, and the guarantee
+// each one buys is stated in terms of what the code actually checks:
+//   (a) SUPERSESSION (the durable bound). A record is skipped once a STRICTLY HIGHER ordinal exists at the
+//       same logical_gate.key. The gate can only mint a later ordinal after its cone re-completed and it
+//       re-dispatched, so a superseded replay is provably finished history; a genuinely live mid-replay
+//       record is never superseded. This is what makes the relief non-permanent: without it, one settled
+//       replay would leave every node in its descendant cone `pending`-launderable at that gate forever,
+//       because bound (b) alone is only a suspension that any later un-healing re-arms.
+//   (b) HEALED (a cheap suspension, not a lifetime). While the owner plus its whole reset cone read
+//       `complete`, there is nothing to relieve, so the record contributes nothing for that read. It says
+//       nothing about later reads — (a) is the bound that retires the record for good.
+//
+// POPULATION (the structural bound — the one that makes the three bounds above sufficient rather than a
+// growing list of special cases). THE INVARIANT: relief can only ever come from a record THIS READ has
+// independently re-proven. Concretely, only `journal.attempts` — the population the identity loop
+// recomputes per-attempt on this same read — may CONTRIBUTE relief. The `__legacy_attempts` projection is
+// a read-only import of parent history that no identity loop re-derives here (it is validated only for
+// ordinal contiguity), so an imported record can never be a relief source; if legacy history is ever
+// required to carry relief, it must first be subjected to the SAME per-attempt recompute, not admitted by
+// widening this population. Legacy records still count toward the supersession MAXIMUM below, because
+// that direction is tighten-only: a higher imported ordinal may retire a current record, never revive one.
+function activeReplayRelief(journal, nodes, ledgerStatuses) {
+  const exempt = new Set();
+  const preserved = new Set();
+  // Supersession scans the FULL population (legacy ∪ current) — tighten-only, see POPULATION above.
+  const maxOrdinalByGate = new Map();
+  for (const attempt of reviewJournalAttempts(journal)) {
+    const key = attempt && attempt.logical_gate && attempt.logical_gate.key;
+    if (!key || !Number.isInteger(attempt.ordinal)) continue;
+    if (!maxOrdinalByGate.has(key) || attempt.ordinal > maxOrdinalByGate.get(key)) {
+      maxOrdinalByGate.set(key, attempt.ordinal);
+    }
+  }
+  // Relief is SOURCED only from the identity-validated population.
+  const attempts = (journal && Array.isArray(journal.attempts)) ? journal.attempts : [];
+  for (const attempt of attempts) {
+    const key = attempt && attempt.logical_gate && attempt.logical_gate.key;
+    // (a) supersession — an unkeyed / unordinaled record cannot be proven live either, so it is skipped
+    // for the same fail-closed reason.
+    if (!key || !Number.isInteger(attempt.ordinal)
+      || attempt.ordinal < maxOrdinalByGate.get(key)) continue;
+    const check = validatedReplayExempt(attempt, nodes);
+    if (!check.ok || !check.replayExempt) continue;
+    const members = [check.owner, ...check.replayExempt];
+    if (members.every(id => (ledgerStatuses || {})[id] === 'complete')) continue;  // (b) healed
+    for (const descendant of check.replayExempt) exempt.add(descendant);
+    preserved.add(check.owner);
+  }
+  return { exempt, preserved };
+}
+
 function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
   const crypto = require('crypto');
   const byId = new Map((nodes || []).map(node => [node.id, node]));
@@ -3714,6 +3857,8 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
   const importedAttempts = journal && Array.isArray(journal.__legacy_attempts) ? journal.__legacy_attempts : [];
   const importedIds = new Set(importedAttempts.map(attempt => attempt && attempt.attempt_id).filter(Boolean));
   const importedTransactions = new Set(importedAttempts.map(attempt => attempt && attempt.transaction_key).filter(Boolean));
+  // #748: journal-global replay relief, computed BEFORE the per-attempt loop (see activeReplayRelief).
+  const relief = activeReplayRelief(journal, nodes, ledgerStatuses);
   for (const attempt of importedAttempts) {
     if (!attempt || !attempt.logical_gate || !Number.isInteger(attempt.ordinal)) continue;
     const ordinalScope = reviewAttemptOrdinalScope(attempt.logical_gate);
@@ -3760,9 +3905,14 @@ function reviewJournalIdentityMatchesPlan(journal, nodes, ledgerStatuses) {
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
     // A settled historical attempt owns its immutable attempt-time producer proof. If a later gate
     // legitimately reopens that producer, retain the older executed slice from its bindings. The
-    // actively repaired attempt remains narrower: only its proven selected writer may be nonterminal.
+    // actively repaired attempt remains narrower: its proven selected writer, PLUS any owner/cone member
+    // of an ACTIVE validated replay recorded anywhere in this journal (#748 — the replay's ledger
+    // mutation is journal-global, so the STATUS relief it grants must be too), may be nonterminal. The
+    // journal-global set is passed as statusRelief, NOT merged into replayExempt: it may admit a row the
+    // replay moved, and must never waive THIS attempt's graph-maximal writer-binding proof.
     const proof = uniqueMaximalReviewProducer(nodes, expectedGate.members, writer || '', ledgerStatuses,
-      writer ? [writer] : bindingKeys, replayCheck.replayExempt);
+      (writer ? [writer] : bindingKeys).concat([...relief.preserved]),
+      replayCheck.replayExempt || [], relief.exempt);
     if (hasProducerBindings) {
       if (!proof.history_valid || JSON.stringify(bindingKeys) !== JSON.stringify(proof.producer_slice)) {
         return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
@@ -4040,6 +4190,8 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
   const planView = validator.buildPlanView(planContent);
   const ledger = readLedgerStatuses(planContent);
   const canonicalRows = rows => rows.map(row => reviewSchema.canonicalJson(row)).sort();
+  // #748: same journal-global replay relief as the schema-1 twin (see activeReplayRelief).
+  const relief = activeReplayRelief(journal, nodes, ledger);
   for (const attempt of (journal.attempts || [])) {
     let expectedGate = null;
     for (const receipt of attempt.receipts || []) {
@@ -4074,9 +4226,11 @@ function reviewJournalV2MatchesPlan(journal, planContent) {
     if (!replayCheck.ok) return { ok: false, reason: replayCheck.reason };
     const expectedBindings = expectedGate.certified_producers.length
       ? expectedGate.certified_producers.slice().sort()
+      // #748: the journal-global set is statusRelief (admission only), never merged into replayExempt.
       : uniqueMaximalReviewProducer(nodes, expectedGate.members,
         (attempt.repair && attempt.repair.selected_writer) || attempt.consumed_by || '',
-        ledger, bindingKeys, replayCheck.replayExempt).producer_slice.sort();
+        ledger, bindingKeys.concat([...relief.preserved]),
+        replayCheck.replayExempt || [], relief.exempt).producer_slice.sort();
     if (reviewSchema.canonicalJson(bindingKeys) !== reviewSchema.canonicalJson(expectedBindings)) {
       return { ok: false, reason: 'review_journal_repair_identity_mismatch' };
     }
@@ -6706,11 +6860,126 @@ function runClearHalt(opts) {
 //       does not post-dominate N) refuses typed `would_orphan_in_progress` BEFORE any
 //       real side effect. Downstream NON-gate nodes (incl. the sink) are left as-is:
 //       next-action's #308 transitive readiness withholds them while an upstream gate is
-//       non-terminal (no broad cascade needed).
+//       non-terminal (no broad cascade needed) — but only while they are still `pending`.
+//       A downstream row that is already SETTLED cannot be withheld, only stranded, so it
+//       refuses typed `would_strand_completed_dependent` (see planLedgerReset).
 //   (4) Reopen N pending→in_progress, remove its stale baseline, persist the plan, then
 //       re-record a FRESH baseline at the current merged state (commit-node --start) so
 //       the next barrier attributes ONLY the repair.
 // ---------------------------------------------------------------------------
+// #748 — the ledger invariant EVERY downstream authority enforces, stated once and mirrored exactly:
+//
+//   a row at complete / in_progress / n/a may not depend on a row that is neither complete nor n/a
+//
+// (verifyCurrentEpochAuthority in kaola-workflow-replan.js refuses `state_ledger_progress_invalid` on it).
+// The invariant is ROLE-AGNOSTIC, so the guard that protects it must be too. reopen-node and repair-node
+// both reset a node plus its post-dominating gates, and neither the gate fold (gate roles only) nor the
+// orphan guard (in_progress rows only) can see a `complete` NON-gate descendant — so the mutation used to
+// be ADMITTED and left exactly the shape the authority rejects, producing a project in which every
+// scripted command reports `legal_mutation: "none"` and nothing warned at mutation time. A finalize-role
+// special case both UNDER-covers (any interior node wedges identically, reachable from an ordinary mid-run
+// state) and MIS-describes (a second finalize-role node is not "the sink"). So: simulate the post-mutation
+// ledger and name whatever would actually be stranded.
+//
+// Tighten-only. A `pending` row is not in the settled set, so the designed mid-run repair still passes;
+// an `in_progress` row is caught earlier by would_orphan_in_progress, whose precedence is untouched; and
+// reopening a node never strands the node itself (it is not its own descendant, and it was complete, so
+// its own dependencies already satisfy the invariant). An `n/a` row DOES refuse — n/a is in the invariant's
+// settled set, so an n/a row above a folded gate wedges the authority exactly like a complete one (checked
+// directly against verifyCurrentEpochAuthority: sink=n/a + gate=pending refuses state_ledger_progress_invalid
+// just as sink=complete + gate=pending does). A dependency with no ledger row is skipped rather than treated
+// as unsatisfied — a partial ledger is a different failure, owned by the ledger-authority check. The status
+// sets accept the same defensive n/a spellings as TERMINAL_LEDGER elsewhere in this file, so a row spelled
+// `na` reads as settled/satisfied rather than as an unsatisfied dependency.
+//
+// TWO refinements keep the guard from over-refusing, both learned from shapes the first corpus lacked:
+//
+//   (i) REFUSE ONLY WHAT THIS MUTATION NEWLY STRANDS. Scanning the whole post-mutation ledger and refusing
+//       on any hit conflates a violation this reset CREATES with one that was already sitting in the plan:
+//       a settled row above a pending dependency in a DISJOINT leg this reopen never touches blocked an
+//       otherwise-safe, entirely unrelated reopen. "Newly" is therefore decided by ATTRIBUTION: a row
+//       refuses only when it would remain settled above a dependency THIS mutation moved (`moved` = the
+//       reopened node, the reset rows, the read-only folds below). A row stranded solely by a dependency
+//       the mutation never touched is pre-existing and not this call's to answer for — which also confines
+//       the scan to the touched cone by construction.
+//       Attribution, NOT a plain before/after set difference. Subtracting the raw pre-mutation stranded set
+//       would silently retire the whole repair-node arm of this guard: repair-node's (2b) safe point runs
+//       with a downstream gate at `in_progress`, and `in_progress` is not in the SATISFIED set, so every
+//       settled descendant above that gate already counts as "stranded before" — the exact
+//       complete-sink-behind-a-live-gate wedge this guard exists to refuse would have read as pre-existing
+//       and been admitted. Attribution keeps it refused while still clearing the disjoint-leg case.
+//
+//  (ii) FOLD, DON'T REFUSE, ON A READ-ONLY DESCENDANT. A `complete` descendant whose declared write set is
+//       EMPTY produced no repo bytes, so there is nothing about it to undo — folding it back to pending is
+//       safe and cheap, which is precisely why the post-dominating GATE fold is safe (gates are read-only
+//       for the same reason). Refusing on it instead left the upstream writer permanently unrepairable
+//       in-plan: no clean ledger state existed from which reopen-node or repair-node would admit it. The
+//       fold iterates to a fixpoint, because folding one row can strand the next.
+//       SCOPE — the `finalize` role is EXCLUDED even though its declared write set is usually empty. The
+//       sink runs main-session-direct and its first irreversible step (the feature commit) writes neither
+//       node evidence nor a sink-receipt journal, so nothing in-band distinguishes a pristine sink from one
+//       that already committed / pushed / merged; folding it could double-apply irreversible work. A
+//       settled sink therefore still refuses, and the replan exit named in the operator hint stays the
+//       sanctioned recovery for that state. The fold is also confined to the reopened node's descendant
+//       cone: a stranded row OUTSIDE the cone is pre-existing (i), never something this call repairs.
+const STRAND_SETTLED_STATUSES = new Set(['complete', 'in_progress', 'n/a', 'n.a', 'na']);
+const STRAND_SATISFIED_STATUSES = new Set(['complete', 'n/a', 'n.a', 'na']);
+
+// Rows left settled above a dependency THIS mutation moved (see (i)); `moved` is the attribution set.
+function strandedByMovedDeps(nodes, statuses, moved) {
+  return nodes
+    .filter(node => STRAND_SETTLED_STATUSES.has(statuses[node.id])
+      && (node.dependsOn || []).some(dep => moved.has(dep)
+        && Object.prototype.hasOwnProperty.call(statuses, dep)
+        && !STRAND_SATISFIED_STATUSES.has(statuses[dep])))
+    .map(node => node.id);
+}
+
+// planLedgerReset — simulate the mutation and return { readOnlyReset, stranded }:
+//   readOnlyReset  read-only descendants to fold to pending ALONGSIDE the post-dominating gates (ii)
+//   stranded       rows this mutation NEWLY strands and cannot fold — the refusal set (i)
+function planLedgerReset(nodes, ledgerStatuses, reopenedId, resetToPending, descendants) {
+  const simulated = Object.assign({}, ledgerStatuses);
+  // The attribution set: every row whose status this mutation writes. The reopened node counts — it moves
+  // complete → in_progress, which is NOT satisfied, so a settled row directly above it is newly stranded
+  // too. A row the reset targets that is already `pending` counts as well: it is inside the cone this call
+  // is redoing, so leaving a settled row above it is this call's business, not pre-existing history.
+  const moved = new Set([reopenedId]);
+  for (const id of (resetToPending || [])) {
+    if (!Object.prototype.hasOwnProperty.call(simulated, id)) continue;
+    moved.add(id);
+    if (simulated[id] === 'complete' || simulated[id] === 'in_progress') simulated[id] = 'pending';
+  }
+  simulated[reopenedId] = 'in_progress';
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const inCone = id => id !== reopenedId && (descendants ? descendants.has(id) : true);
+  const readOnlyReset = [];
+  for (;;) {
+    const strandedNow = strandedByMovedDeps(nodes, simulated, moved);
+    const foldable = strandedNow.filter(id => simulated[id] === 'complete' && inCone(id)
+      && byId.get(id) && byId.get(id).role !== 'finalize' && isReadOnlyNode(byId.get(id)));
+    if (!foldable.length) {
+      return { readOnlyReset: readOnlyReset.slice().sort(), stranded: strandedNow.slice().sort() };
+    }
+    // Each pass flips at least one complete→pending, so the fixpoint terminates. A folded row joins the
+    // attribution set: folding it is this mutation's doing, so whatever it strands is newly stranded.
+    for (const id of foldable) { simulated[id] = 'pending'; moved.add(id); readOnlyReset.push(id); }
+  }
+}
+
+// The stranded-dependent refusal fires from two structurally different states, and its advice differs
+// between them; this is the discriminator. A run is FINISHED only when its terminal sink actually RAN to
+// `complete`. Deliberately NOT the strand-satisfied set: `n/a` also satisfies the strand invariant (a
+// not-applicable row can sit above a reset dependency), but a not-applicable sink means the sink was
+// SKIPPED — nothing shipped — so telling the operator to "treat the work as shipped and open a follow-up"
+// would be false AND would foreclose the in-plan mid-run continuation. With a pending / in_progress / n/a
+// sink, and with no resolvable sink at all (the answer is then simply unknown), the conservative read is
+// "not finished" — never tell an operator that work shipped when it may not have.
+function runIsFinished(sinkId, ledgerStatuses) {
+  if (!sinkId) return false;
+  return (ledgerStatuses || {})[sinkId] === 'complete';
+}
+
 function runReopenNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir } = opts;
   // #334: a downstream non-delegable main-session-gate is reset like the reviewer gates so a
@@ -6824,20 +7093,46 @@ function runReopenNode(opts) {
     };
   }
 
+  // (3b-ii) Fail-closed STRANDED-DEPENDENT guard — the role-agnostic ledger invariant (see
+  // planLedgerReset). A `complete` non-gate descendant is neither folded by (3c) nor seen by (3b),
+  // so the reopen used to ADMIT a mutation that leaves it above a dependency chain this same call reset.
+  // Refuse HERE instead, before any side effect — but only for what THIS mutation newly strands, and only
+  // when the row cannot simply be folded with the gates (a read-only descendant can; see planLedgerReset).
+  const resetPlan = planLedgerReset(nodes, ledgerStatuses, nodeId, gatesReset, desc);
+  const stranded = resetPlan.stranded;
+  if (stranded.length) {
+    return {
+      result: 'refuse',
+      reason: 'would_strand_completed_dependent',
+      nodeId,
+      stranded,
+      detail: 'reopening ' + nodeId + ' would leave settled row(s) [' + stranded.join(', ')
+        + '] above a dependency this reset moves to pending — a ledger shape every downstream authority '
+        + 'rejects as state_ledger_progress_invalid',
+      operator_hint: getOperatorHint('would_strand_completed_dependent',
+        { nodeId, stranded, op: 'reopen', runFinished: runIsFinished(sink, ledgerStatuses) }),
+    };
+  }
+  // Read-only descendants fold to pending ALONGSIDE the gates. rowsReset is the full reset set from here
+  // on — ledger fold, stale baselines, stale evidence — so a folded read-only row is treated EXACTLY like
+  // a folded gate. gatesReset stays the structural gate set for reporting.
+  const readOnlyReset = resetPlan.readOnlyReset;
+  const rowsReset = gatesReset.concat(readOnlyReset);
+
   // (3c) Fold the post-dominating gates to pending. #343: an in_progress gate — the mid-gate
   // repair case (the gate just emitted a blocking finding owned by N) — folds back to
   // pending exactly like a complete one, so the repair does NOT have to advance the DAG
-  // to allDone on a known-broken tree. gatesFolded = the rows actually flipped.
+  // to allDone on a known-broken tree. gatesFolded = the rows actually flipped (gates + read-only rows).
   const gatesFolded = [];
-  for (const gid of gatesReset) {
+  for (const gid of rowsReset) {
     const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete', 'in_progress'] });
     if (s.changed) { planContent = s.content; gatesFolded.push(gid); }
   }
 
-  // (4) Remove stale per-node baselines for N + the reset gates.
+  // (4) Remove stale per-node baselines for N + the reset rows.
   const cacheBaseFile = nid => path.join(path.dirname(planPath), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
   const baselinesRemoved = [];
-  for (const id of [nodeId, ...gatesReset]) {
+  for (const id of [nodeId, ...rowsReset]) {
     const bf = cacheBaseFile(id);
     const present = cacheExists ? cacheExists(bf) : true;
     if (present && typeof unlink === 'function') {
@@ -6873,7 +7168,7 @@ function runReopenNode(opts) {
       removedNames.add(name);
     }
   };
-  for (const gid of gatesReset) {
+  for (const gid of rowsReset) {
     removeEvidenceName(gid + '.md');
     const g = gateById.get(gid);
     if (g && g.role === 'adversarial-verifier' && g.shape && g.shape.kind === 'fanout') {
@@ -6911,7 +7206,7 @@ function runReopenNode(opts) {
 
   const baseline = shell(commitNodePath, [planPath, '--node-id', nodeId, '--start', '--json']);
   if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
-    return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, gatesReset, gatesFolded };
+    return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, gatesReset, readOnlyReset, gatesFolded };
   }
 
   // Baseline recorded while N was still PENDING on disk — now flip pending→in_progress and persist.
@@ -6937,7 +7232,7 @@ function runReopenNode(opts) {
   reopenTransitions.push(buildTransition(nodeId, 'in_progress', 'reopen-node'));
 
   return {
-    result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, evidenceRemoved, baselineRecorded: true,
+    result: 'ok', reopened: nodeId, gatesReset, readOnlyReset, gatesFolded, baselinesRemoved, evidenceRemoved, baselineRecorded: true,
     // #433: report nonce rotation and evidence metadata. #516: this is the bare on-disk mirror (reopen
     // returns no dispatch sub-object; the orchestrator re-dispatches the reopened node via a fresh
     // open-next/open-ready whose dispatch.evidence_file IS project-qualified). Kept bare for vestige parity.
@@ -7686,12 +7981,18 @@ function runRepairNodeCore(opts) {
   };
   const desc = descendantsOf(nodeId);
   const sinkId = nodes.find(n => n.shape === 'sink' || (n.id && desc.has(n.id) && !nodes.some(m => descendantsOf(n.id).size > 0 && m.dependsOn && m.dependsOn.includes(n.id))));
-  // Compute the real unique sink (same as reopen-node).
-  let uniqueSink = null;
-  for (const n of nodes) {
-    const d = descendantsOf(n.id);
-    if (d.size === 0) { uniqueSink = n.id; break; }
-  }
+  // The UNIQUE sink, derived exactly as reopen-node derives it: the sole node with no outgoing edge, or
+  // null when the graph has zero or several terminals. It is deliberately NOT "the first terminal found" —
+  // picking one arbitrarily out of several would (a) make the post-dominance test below assert dominance of
+  // a path that other terminals bypass, and (b) let runIsFinished report a whole run finished off one
+  // arbitrary terminal's status. Both consumers want the SAME conservative answer when the sink is
+  // ambiguous: post-dominance falls back to "treat the gate as gating" (fold it) and runIsFinished falls
+  // back to "not finished". The frozen grammar guarantees a unique sink, so this is a defensive path.
+  const nodeIdSet = new Set(nodes.map(n => n.id));
+  const outbound = new Set();
+  for (const n of nodes) for (const d of (n.dependsOn || [])) if (nodeIdSet.has(d)) outbound.add(d);
+  const terminalNodes = nodes.filter(n => !outbound.has(n.id));
+  const uniqueSink = terminalNodes.length === 1 ? terminalNodes[0].id : null;
   // Compute nodes through which ALL paths from nodeId to the sink pass (post-dominators).
   const pathsFromNodeToSink = desc;
   const gatesReset = [];
@@ -7737,8 +8038,10 @@ function runRepairNodeCore(opts) {
         (fwd.get(cur) || []).forEach(c => q2.push(c));
         if (cur !== nodeId) descWithoutGate.add(cur);
       }
-      // If the sink is not reachable when excluding `did`, it post-dominates.
-      if (uniqueSink && !descWithoutGate.has(uniqueSink)) {
+      // If the sink is not reachable when excluding `did`, it post-dominates. With NO resolvable unique
+      // sink the answer is unknown and the conservative read is "it gates" — the same fallback reopen-node
+      // takes (`if (!sink) return true`), so the twins fold identically.
+      if (!uniqueSink || !descWithoutGate.has(uniqueSink)) {
         addGateReset(did);
       } else if (dn.role === 'adversarial-verifier' && dn.shape && dn.shape.kind === 'fanout' && String(dn.cardinality) === '1') {
         // #664: an explicit skeptic group is an AND-joined collective gate. No individual
@@ -7797,6 +8100,32 @@ function runRepairNodeCore(opts) {
     }
   }
 
+  // (3b-ii) Stranded-dependent guard — mirrors reopen-node, same role-agnostic invariant (see
+  // planLedgerReset). A `complete` non-gate descendant is neither foldable (not a gate role) nor
+  // visible to the orphan guard (not in_progress), so the repair would strand it above a reset dependency
+  // chain. Ordered AFTER the replay write-diamond rung so that rung keeps its typed
+  // `dependent_producer_replay_required` precedence for the shape it owns; a replay's own descendant cone
+  // is included in the simulated reset here, so this rung catches the NON-gate strandings that one does not.
+  const resetPlan = planLedgerReset(nodes, ledgerStatuses, nodeId,
+    gatesReset.concat(replayMode ? replayMode.descendants : []), desc);
+  const stranded = resetPlan.stranded;
+  if (stranded.length) {
+    return {
+      result: 'refuse',
+      reason: 'would_strand_completed_dependent',
+      nodeId,
+      stranded,
+      detail: 'repairing ' + nodeId + ' would leave settled row(s) [' + stranded.join(', ')
+        + '] above a dependency this reset moves to pending — a ledger shape every downstream authority '
+        + 'rejects as state_ledger_progress_invalid',
+      operator_hint: getOperatorHint('would_strand_completed_dependent',
+        { nodeId, stranded, op: 'repair', runFinished: runIsFinished(uniqueSink, ledgerStatuses) }),
+    };
+  }
+  // Read-only descendants fold to pending alongside the gates (see planLedgerReset) — mirrors reopen-node.
+  const readOnlyReset = resetPlan.readOnlyReset;
+  const rowsReset = gatesReset.concat(readOnlyReset);
+
   // ---- STEPS 14-15 (deferred): P0 has now held — repairs are strictly serialized, so every foreign path
   // is attributable. Perform the proven rebind (P5 asserted inside, before any durable byte moves), then
   // replay the original barrier, whose input is now EXACT rather than poisoned by a sibling's writes.
@@ -7825,9 +8154,9 @@ function runRepairNodeCore(opts) {
     reviewFailpoint(opts, 'repair_selected_written');
   }
 
-  // (4) Fold gates back to pending.
+  // (4) Fold gates (and the read-only rows folded with them) back to pending.
   const gatesFolded = [];
-  for (const gid of gatesReset) {
+  for (const gid of rowsReset) {
     const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete', 'in_progress'] });
     if (s.changed) { planContent = s.content; gatesFolded.push(gid); }
   }
@@ -7857,7 +8186,7 @@ function runRepairNodeCore(opts) {
   // The writer's own barrier-base-{nodeId} is KEPT (the anti-laundering invariant).
   const cacheBaseFile = nid => path.join(path.dirname(planPath), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
   const deletedDownstreamBaselines = [];
-  for (const gid of gatesReset) {
+  for (const gid of rowsReset) {
     const bf = cacheBaseFile(gid);
     const present = cacheExists ? cacheExists(bf) : true;
     if (present && typeof unlink === 'function') deletedDownstreamBaselines.push('barrier-base-' + String(gid).replace(/[^A-Za-z0-9_-]/g, '_'));
@@ -7872,6 +8201,10 @@ function runRepairNodeCore(opts) {
   // including its per-receipt-NAME dedupe (#665 R2): the validator keys fan-out groups by (label,
   // origin) — resolveAdversarialFanoutGroup — so two independent groups sharing a label at DIFFERENT
   // origins are two distinct receipt sets. A group-LABEL-only dedupe would purge only the first.
+  // It iterates rowsReset — the FULL fold set (structural gates + the read-only rows folded with them),
+  // exactly like reopen-node's purge — not gatesReset. A read-only row can itself be an adversarial-verifier
+  // fan-out member (a verifier declares no writes), so scanning only the structural gate set skipped the
+  // group purge for folds that came in through the read-only path and left a stale skeptic vote on disk.
   const cacheDir = path.dirname(cacheBaseFile(nodeId));
   const gateById = new Map(nodes.map(n => [n.id, n]));
   const evidenceRemoved = [];
@@ -7884,7 +8217,7 @@ function runRepairNodeCore(opts) {
       removedNames.add(name);
     }
   };
-  for (const gid of gatesReset) {
+  for (const gid of rowsReset) {
     const gn = gateById.get(gid);
     if (!gn || gn.role !== 'adversarial-verifier' || !gn.shape || gn.shape.kind !== 'fanout') continue;
     const { resolveAdversarialFanoutGroup } = require('./kaola-workflow-plan-validator');
@@ -7905,6 +8238,9 @@ function runRepairNodeCore(opts) {
     }
   }
   for (const gid of completedJournalGates) removeEvidenceName(gid + '.md');
+  // A read-only row folded back to pending re-runs from scratch, so its stale evidence goes with its stale
+  // baseline — exactly what reopen-node's (#349) gate purge does, and what #739 does for a reset cone.
+  for (const rid of readOnlyReset) removeEvidenceName(rid + '.md');
 
   // (5) Transition writer: complete→pending→in_progress.
   const replayDescendantsReset = [];
@@ -7979,6 +8315,7 @@ function runRepairNodeCore(opts) {
     result: 'ok',
     repaired: nodeId,
     gatesReset,
+    readOnlyReset,
     gatesFolded,
     deletedDownstreamBaselines,
     // #664: fan-out group receipts purged (empty when no reset gate was a fan-out group).
@@ -8326,21 +8663,15 @@ function runRepairNode(opts) {
 // crashed 'opening' forward (kept rows) / back (un-flipped rows).
 // ===========================================================================
 
-// A node is read-only iff its declared write set is empty. Delegates to the SAME
-// classifier.parseWriteSetCell the batch classifier (classifyBatchKind) and the
-// plan_hash use, so read-only/write classification can never drift between paths
-// (em-dash `—`, `-`, and empty all parse to the empty set → read-only). Write
-// nodes co-open in isolated legs by default when planner-proven-disjoint (#542),
-// and serial-degrade (or consent-gate) when their sets overlap or are uncertain.
+// A node is read-only iff its declared write set is empty — the EXACT negation of the writer predicate
+// nodeWriteSetNonempty, which is the single definition of "empty write set" in this file (it folds the
+// authored no-write markers `-` / `—` / `none` / `n/a` / blank together with classifier.parseWriteSetCell's
+// structural parse, the same one classifyBatchKind and the plan_hash consume). There is deliberately no
+// second token list here: read-only classification and writer/producer classification cannot drift because
+// they are one predicate. Write nodes co-open in isolated legs by default when planner-proven-disjoint
+// (#542), and serial-degrade (or consent-gate) when their sets overlap or are uncertain.
 function isReadOnlyNode(node) {
-  const raw = node && (node.declared_write_set != null ? node.declared_write_set : node.writeSetRaw);
-  try {
-    const { parseWriteSetCell } = require('./kaola-workflow-classifier');
-    return parseWriteSetCell(raw).size === 0;
-  } catch (_) {
-    const s = String(raw == null ? '' : raw).trim();
-    return !s || s === '—' || s === '-';
-  }
+  return !nodeWriteSetNonempty(node);
 }
 
 // ---------------------------------------------------------------------------
@@ -11848,6 +12179,8 @@ module.exports = {
   runReconcileRunningSet,
   readRunningSet,
   isReadOnlyNode,
+  nodeWriteSetNonempty,
+  runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
@@ -11901,6 +12234,10 @@ module.exports = {
   reviewJournalBlocker,
   readReviewJournal,
   reviewJournalAttempts,
+  // #748: journal-global replay relief + the schema-2 identity twin, exported for direct testing.
+  activeReplayRelief,
+  reviewJournalV2MatchesPlan,
+  reviewLogicalGate,
   reduceLogicalReviewAttempt,
   readProjectReplanFence,
   replanOrientation,
