@@ -193,23 +193,13 @@ and must run from the main root, above.)
 
 <!-- PIN: codex-dispatch -->
 Model, reasoning effort, and identity: always delegate to the base `dispatch.agent_type` profile (= the
-node's role). Every named profile omits both runtime-strength keys and therefore inherits the current
-parent session. The descriptor's `dispatch.codex_profile_mode` is `inherit`; its
+node's role). Every named profile omits both runtime-strength keys and therefore inherits
+the current parent session — the profile-freshness preflight above is what enforces that omission, so
+no runtime child probe is needed. The descriptor's `dispatch.codex_profile_mode` is `inherit`; its
 `dispatch.codex_profile_tier` remains declarative role metadata, and its
 `dispatch.codex_model` + `dispatch.codex_reasoning_effort` fields come only from a fresh parent-session
 proof. An unresolved tier refuses as `codex_tier_unresolved`; inheritance never creates a tier/profile
 compatibility conflict.
-
-Before the first real node for the current parent session and installed profile-set fingerprint,
-require one fresh parent-equals-child inheritance proof. Spawn the probe by role identity only, bind it
-to the intended installed profile path and role, then inspect both parent and child session JSONL latest
-`turn_context` model and effort. Config text, spawn arguments, and parent-side descriptors are not proof.
-If the profile-set binding changes, either value is absent/stale, the child identity/path is wrong, or
-the child pair differs from the freshly re-read parent pair, refuse with
-`codex_profile_runtime_mismatch`. A parent-side encrypted
-output/decryption failure does not erase valid JSONL profile evidence. For real node work it is a
-separate transport failure handled only by the durable-result contract below: verified child-written
-cache evidence may continue as `returned_partial`; missing or invalid cache evidence cannot.
 
 Codex collaboration transport is a hard pre-dispatch gate. In v2 task-name mode, invoke every
 collaboration operation through the direct `agents` namespace reported by preflight. Never use the
@@ -218,7 +208,7 @@ server-reserved `collaboration` namespace and never dispatch through `functions.
 Do not retry an encrypted-output decode or reserved-schema failure and do not fall back to a default
 role: the same transport/schema mismatch is deterministic.
 
-For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
+For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the transport gate
 passes, call the direct `agents.spawn_agent` tool with `task_name: dispatch.codex_task_name`, `agent_type:
 dispatch.agent_type`, and `fork_turns: "none"` on EVERY role dispatch — the dispatch card
 is self-contained by contract, so no role spawn ever forks the parent's history. Omit both `model`

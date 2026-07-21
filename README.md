@@ -629,11 +629,11 @@ The audit must keep these facts separate:
   enough for Kaola fan-out and root-to-subagent dispatch.
 - The installed plugin cache, generated role profiles, and global hooks must be
   fresh relative to the plugin source Codex is actually loading.
-- Runtime profile integrity still requires child-session proof: bind the child
-  JSONL to the requested role/profile and verify its `turn_context.model` and
-  `turn_context.effort` exactly equal the freshly read parent pair. A
-  reasoning-floor role additionally requires the parent proof to meet the
-  classified `gpt-5.6-sol`/`xhigh` floor.
+- Runtime profile integrity comes from omission plus preflight: every generated
+  role profile omits both runtime-strength keys, and the profile-freshness
+  preflight migrates or refuses any profile that pins them, so a named child
+  cannot fail to inherit the parent pair. A reasoning-floor role additionally
+  requires the parent proof to meet the classified `gpt-5.6-sol`/`xhigh` floor.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -812,9 +812,7 @@ The adaptive planner still writes portable `reasoning`/`standard` tier tokens.
 Codex dispatch cards expose `codex_profile_mode: "inherit"`, retain the role's
 default tier as metadata, and source the effective model/effort pair from a fresh
 parent-session JSONL proof. `codex_tier_unresolved` remains the refusal for invalid
-or absent tier metadata; missing/stale proof, changed profile binding, or a child
-pair that differs from the parent/card pair refuses as
-`codex_profile_runtime_mismatch`.
+or absent tier metadata.
 
 Every Codex DAG node role writes its full nonce-bound deliverable directly to the seeded
 `dispatch.evidence_file` under `kaola-workflow/{project}/.cache/` before returning. Its final message
@@ -835,9 +833,8 @@ and the prompt/evidence carry the node mapping. When the operator explicitly ena
 Codex v2 multi-agent support, the descriptor reports `v2-task-name` and plan-run
 passes `task_name: dispatch.codex_task_name`, a sanitized value derived from the
 workflow node id and role. Both modes use `fork_turns: "none"` and omit transient
-model/effort overrides. Before real role work, plan-run proves the applicable
-profile mode from the spawned child's JSONL `turn_context.model` and
-`turn_context.effort`; a parent-side descriptor or spawn argument is not proof.
+model/effort overrides, so the named standalone profile inherits the parent
+session's pair by construction.
 
 ## Usage
 
