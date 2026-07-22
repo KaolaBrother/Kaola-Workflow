@@ -585,14 +585,15 @@ function canonicalRouteCandidates(rows) {
 // The anchor PATHS a finding declares, in both lanes: a schema-2 finding's primary plus secondary
 // anchors (an `evidence_observation` anchor legally carries none — report that, never invent one),
 // or a schema-1 finding's flat `file=` token. Sorted and de-duplicated; never widened with a path
-// the finding did not state.
-function findingAnchorPathList(finding, route) {
+// the finding did not state. Read from the FINDING only, never from its route row: the journal
+// validator already pins `route.file` to the finding's own `file` key (present on exactly the same
+// findings, with the same value), so a route-side fallback could only ever restate this one.
+function findingAnchorPathList(finding) {
   const anchors = [finding && finding.primary_anchor,
     ...(Array.isArray(finding && finding.secondary_anchors) ? finding.secondary_anchors : [])];
   const paths = anchors.filter(anchor => anchor && typeof anchor.path === 'string' && anchor.path)
     .map(anchor => anchor.path);
   if (!paths.length && finding && typeof finding.file === 'string' && finding.file) paths.push(finding.file);
-  if (!paths.length && route && typeof route.file === 'string' && route.file) paths.push(route.file);
   return Array.from(new Set(paths)).sort();
 }
 
@@ -630,7 +631,7 @@ function buildPlannerFrontier(source) {
         failure_class: finding.failure_class == null ? null : String(finding.failure_class),
         primary_anchor: finding.primary_anchor && typeof finding.primary_anchor === 'object'
           && !Array.isArray(finding.primary_anchor) ? finding.primary_anchor : null,
-        anchor_paths: findingAnchorPathList(finding, route),
+        anchor_paths: findingAnchorPathList(finding),
         fix_role: pick('fix_role'),
         source_node: finding.source_node == null
           ? (route && route.source_node !== null ? route.source_node : null) : String(finding.source_node),

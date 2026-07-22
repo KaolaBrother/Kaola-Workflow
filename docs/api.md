@@ -1590,7 +1590,18 @@ The planner packet contains the repository/project identity, typed source eviden
 root, current candidate/inherited frontier, budget, acceptance requirements, exact child path,
 profile identity, dispatch nonce, and the transaction's immutable `snapshot_authority_projection`
 plus its digest. It must not prescribe nodes, roles, dependencies, write sets, cardinality, shape,
-model, or build order. Child validation requires schema/contract version 2, a fully pending Ledger,
+model, or build order.
+
+`frontier` is the packet's readable projection of the failure record the child epoch exists to
+repair: exactly one row per source finding, in source order, carrying `uid` (the immutable finding
+id — the schema-2 canonical uid, or the schema-1 `id=` token), `status`, `scope`, `action`,
+`severity`, `failure_class`, the immutable `primary_anchor` object, `anchor_paths` (primary plus
+secondary anchor paths, or the schema-1 `file=` token; empty for an `evidence_observation` anchor,
+which legally carries no path), `fix_role`, `source_node`, and the route/ownership the source
+attempt already resolved — `owning_node` plus the full `ownership_candidates` set, carried from the
+attempt's `route_candidates`. Ownership the source did not resolve arrives as `null` / `[]`; it is
+never inferred here. The projection is plumbing only — it derives no coverage verdict over the
+child plan. Child validation requires schema/contract version 2, a fully pending Ledger,
 parent/lineage/root/frontier/source/planner bindings, and the inherited G4 code/security certifier
 declarations. Despite its historical name, the child's `parent_snapshot_manifest_digest` equals the
 projection digest—not the later full manifest-file digest. A zero-new-writer child therefore cannot
@@ -2606,7 +2617,7 @@ The following functions are exported from sink, claim, re-plan, and forge module
 - `verifySnapshotManifest(epochDir)` / `verifyAllEpochSnapshots(projectDir, expected?)` — Recursively verify immutable epoch files, manifest self-digests, sequence, lineage, active-state binding, and consent ceiling. Snapshot integrity is **content-addressed**: each file is verified by size + SHA-256 digest against the manifest row, and the manifest itself by its self-digest and recomputed authority projection. The manifest still records each file's creation `mode` as forensic metadata, but verification never compares permission bits — snapshot files are read-only evidence copies that are never executed and never restored, and mode is not preserved by the transports these snapshots travel through (git stores only `100644`/`100755`). A sealed epoch therefore keeps verifying across an archive commit, clone, or fresh worktree checkout.
 - `readStatus(opts)` — Read the current re-plan fence and transaction status without mutation.
 - `validateChildPlan(childBytes, transaction)` / `validateChildHandoffAuthority(paths, transaction)` — Enforce schema-2 child bindings, all-pending Ledger, exact child path, and durable pre-freeze CAS authority.
-- `buildPlannerPacket(paths, transaction)` — Produce the topology-free evidence packet consumed by `workflow-planner` re-plan mode, including the precomputed `transaction.snapshot.authority_projection` and `authority_digest`; callers must pass a full transaction built by `buildTransaction`, not a partial legacy fixture.
+- `buildPlannerPacket(paths, transaction)` — Produce the topology-free evidence packet consumed by `workflow-planner` re-plan mode, including the precomputed `transaction.snapshot.authority_projection` and `authority_digest` plus the `frontier` projection of `transaction.source.{findings,route_candidates}`; callers must pass a full transaction built by `buildTransaction`, not a partial legacy fixture. Pure over the transaction (no fs), so a crash-prefix retry rebuilds byte-identical packet bytes.
 
 **`scripts/kaola-workflow-roadmap.js`:**
 - `regenerateRoadmap(root)` — Silently regenerates `ROADMAP.md` from `.roadmap/issue-*.md` sources. Returns `'generated'` if content changed, `'up-to-date'` if no change. Used by claim scripts during finalization to clean up roadmap entries. Does not print to stdout.

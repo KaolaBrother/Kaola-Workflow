@@ -4081,6 +4081,45 @@ function preparedPacket(fx, sourceAttemptId) {
 }
 
 {
+  // A RESOLVED finding is still projected, with its real status. The frontier guard's predicate is
+  // deliberately non-empty FINDINGS rather than non-empty OPEN frontier — an attempt that failed
+  // only on progress legally carries an all-resolved record — so the projection must neither drop
+  // a resolved row nor report every row as open.
+  const fx = initFixture();
+  try {
+    const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const attempt = journal.attempts[0];
+    const receipt = attempt.receipts[0];
+    const body = receipt.body.replace('id=R2 scope=in_scope action=fix status=open',
+      'id=R2 scope=in_scope action=fix status=resolved');
+    ok(body !== receipt.body, '#729 AC2: the resolved-status fixture actually rewrote R2');
+    const evaluated = schema.evaluateEffectiveVerdict(body);
+    receipt.body = body;
+    receipt.receipt_sha256 = sha256(Buffer.from(body));
+    receipt.effective_pass = evaluated.pass;
+    receipt.verdict = evaluated.verdict;
+    receipt.findings_blocking = evaluated.findings_blocking;
+    attempt.findings = schema.parseNodeFindings(body).map(finding => ({ source_node: 'review', ...finding }));
+    attempt.route_candidates = attempt.findings.map(finding => ({
+      source_node: 'review', finding_id: finding.id, id: finding.id, scope: finding.scope,
+      action: finding.action, status: finding.status, severity: finding.severity, file: finding.file,
+      ownership_candidates: ['impl'], owning_node: 'impl', fix_role: finding.fix_role, raw: finding.raw,
+    }));
+    fs.writeFileSync(path.join(fx.cacheDir, 'review.md'), body);
+    fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
+    writeSchema2RepairSource(fx, journal, attempt);
+    const packet = preparedPacket(fx, SOURCE_ATTEMPT_ID);
+    deepEqual(packet.frontier.map(row => row.uid), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
+      '#729 AC2: a resolved finding is still projected — the packet is the whole record, not the open set');
+    equal(packetFrontierRow(packet, 'R2').status, 'resolved',
+      '#729 AC2: the resolved row reports its REAL status');
+    equal(packetFrontierRow(packet, 'R1').status, 'open',
+      '#729 AC2: its still-open siblings are unaffected');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
   // Absent ownership is reported as ABSENT, never guessed. A route row the reviewer left
   // unresolved (`ownership_candidates: []`) must arrive as an empty candidate set with a
   // null owner — the planner needs to see that the source could not route it.
