@@ -62,8 +62,8 @@ function computeNextAction(content, opts) {
   // The ready-set derivation therefore reads spine + expansion records through ONE graph — readiness,
   // longest-path priority, allDone, the stall refusal and the reasoning-tier floor all range over the
   // composed interior with no parallel code path. A plan with no `## Expansion Records` section
-  // produces zero units and an empty pointDeps map, so `nodes` is the byte-identical legacy array and
-  // every typed refusal family below is reached on exactly the same inputs as before.
+  // produces zero units, so `nodes` IS the legacy array (by reference) and every typed refusal family
+  // below is reached on exactly the same inputs as before.
   const expansion = expansionUnitNodes(content, spineNodes);
   const nodes = expansion.units.length
     ? spineNodes

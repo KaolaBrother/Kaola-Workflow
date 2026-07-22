@@ -2286,13 +2286,19 @@ function spliceStateMarker(content, key, value) {
 }
 
 // ---------------------------------------------------------------------------
-// parseNodesFromContent — read-only require of plan-validator's parseNodes.
+// parseNodesFromContent — read-only require of the plan-validator's EXECUTION-TIME node view.
 // Returns [] on any error (fail-closed).
+//
+// #759: this is the executor's single node reader, so routing it through planNodesWithExpansions is
+// what makes every downstream lifecycle consumer — close-node's role/evidence resolution, the
+// dispatch descriptor, the compliance rows, the consumed-proof channel — see a composed expansion
+// unit WITHOUT any of them being modified. The freeze walls keep reading the narrower `parseNodes`
+// (spine only), so no interior shape proof is re-applied at execution time.
 // ---------------------------------------------------------------------------
 function parseNodesFromContent(content) {
   try {
-    const { parseNodes } = require('./kaola-workflow-plan-validator');
-    return parseNodes(content);
+    const { planNodesWithExpansions } = require('./kaola-workflow-plan-validator');
+    return planNodesWithExpansions(content);
   } catch (_) {
     return [];
   }

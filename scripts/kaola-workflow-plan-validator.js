@@ -1083,6 +1083,25 @@ function expansionUnitNodes(content, spineNodes) {
   return { parsed, units, pointDeps };
 }
 
+// planNodesWithExpansions — the EXECUTION-TIME node view: the frozen spine plus every recorded
+// expansion unit, with each expansion point's `depends_on` widened to cover its own units.
+//
+// This is deliberately a SEPARATE reader from `parseNodes`, not a widening of it. `parseNodes` is what
+// the FREEZE walls (interior shape proofs, disjointness, post-dominance, caps) and `computePlanHash`
+// range over, and those must keep seeing the spine and only the spine — widening them would re-apply
+// at resume exactly the interior proofs the spine form exists to defer. Everything that runs at
+// EXECUTION time (the ready-set derivation, the executor's node reader) uses this view instead.
+//
+// A plan with no expansion records returns the identical `parseNodes` array by reference.
+function planNodesWithExpansions(content) {
+  const spine = parseNodes(content);
+  const { units, pointDeps } = expansionUnitNodes(content, spine);
+  if (!units.length) return spine;
+  return spine
+    .map(n => (pointDeps.has(n.id) ? { ...n, dependsOn: n.dependsOn.concat(pointDeps.get(n.id)) } : n))
+    .concat(units);
+}
+
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
 // write-set parsing to classifier.parseWriteSetCell, so the validator, the plan_hash, and
@@ -2966,7 +2985,12 @@ function classifyOverflowSubtype(outOfAllow) {
 function barrierCheck(content, actualPaths, opts) {
   opts = opts || {};
   const errors = [];
-  const nodes = parseNodes(content);
+  // #759: the barrier is an EXECUTION-time check, not a freeze wall, so it ranges over the execution
+  // node view — spine + every recorded expansion unit. Without this a composed unit is `node_not_found`
+  // at its own close (per-node mode) and its declared surfaces are missing from the whole-plan union
+  // (so its own writes read as out-of-allowlist overflow at finalize). A plan with no expansion records
+  // gets the identical `parseNodes` array, so every legacy barrier verdict is byte-unchanged.
+  const nodes = planNodesWithExpansions(content);
   if (!nodes.length) return { result: 'refuse', reason: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), errors: ['plan has no parseable ## Nodes table'] };
   const ownNode = opts.nodeId ? nodes.find(n => n.id === opts.nodeId) : null;
   if (opts.nodeId && !ownNode) {
@@ -6049,6 +6073,7 @@ module.exports = {
   expansionRecordOpened,
   expansionRecordSettled,
   expansionUnitNodes,
+  planNodesWithExpansions,
   parseValidationCommand,
   parseValidationPolicy,
   parseValidationTestConsumes,
