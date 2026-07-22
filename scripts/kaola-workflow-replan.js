@@ -705,7 +705,39 @@ function readSource(paths, planHash, sourceAttemptId, options) {
     repair_outcome_digest: handoff.outcome_digest,
   };
   source.source_evidence_digest = schema.sha256Canonical(source);
+  if (!reviewSourceCarriesFrontier(source)) {
+    return { ok: false, reason: 'replan_source_findings_missing', detail: 'source_frontier_empty' };
+  }
   return { ok: true, source, attempt, journal };
+}
+
+// #729 — REPLAN-SIDE FRONTIER INVARIANT. A review-authored transition consumes an epoch
+// and authorizes a whole child plan; `findings` is the ONLY record of what failed that
+// crosses that boundary (the packet's `source.findings`, and the source_evidence_digest
+// the child plan is frozen against). A settled FAILED attempt carrying an EMPTY canonical
+// frontier therefore authorizes a child epoch with nothing to repair — observed live as a
+// read-only adversary -> docs writer -> review plan whose own text recorded that "no
+// security frontier or unresolved finding was supplied", after which the same defect was
+// rediscovered and burned another epoch.
+//
+// The producer seam already refuses to SETTLE a failed schema-2 gate with an empty open
+// frontier; this is the independent CONSUMER wall, so a corrupted, hand-written, rotated,
+// or pre-guard journal fails closed here instead of being laundered into an epoch.
+//
+// SCOPE — `review_outcome` ONLY. The `diagnosis_to_build` authority legitimately carries
+// `findings: []`: nothing failed, and its evidence is the four sealed diagnosis artifacts
+// verified by verifyCaseBProof. Widening this to every authority kind would hard-block
+// Case B outright.
+//
+// PREDICATE — non-empty `findings`, deliberately NOT "non-empty OPEN frontier". An attempt
+// that fails only on progress (resolution proof missing, validation drift) legitimately
+// carries findings whose status is all `resolved`: the record of what failed is intact and
+// the child has something to route. Demanding an open UID there would false-refuse a legal
+// transition; demanding a non-empty ARRAY refuses exactly the case with no record at all.
+function reviewSourceCarriesFrontier(source) {
+  if (!source) return false;
+  if (source.authority_kind === 'diagnosis_to_build') return true;
+  return Array.isArray(source.findings) && source.findings.length > 0;
 }
 
 function validCaseBEvidence(request) {
@@ -1962,6 +1994,12 @@ function repairCandidateReauthorPrefix(paths, transaction, opts) {
 function reauthorCandidate(paths, transaction, opts) {
   if (activationComplete(transaction, 'child_plan_promoted')) {
     return schema.refuse('replan_activation_integrity_failure', { step: 'candidate_changed_after_promotion' });
+  }
+  // #729 frontier: the re-author rebuilds the successor transaction from the STORED
+  // `transaction.source` and never re-reads the journal, so the readSource wall does not
+  // cover it. An empty stored frontier must not be laundered into a fresh transaction.
+  if (!reviewSourceCarriesFrontier(transaction.source)) {
+    return schema.refuse('replan_source_findings_missing', { detail: 'stored_frontier_empty' });
   }
   const lineage = {
     ok: true,
@@ -3278,6 +3316,13 @@ function resumeReplanUnlocked(paths, opts) {
     const observed = observeCas(paths, transaction, 'prepare', opts);
     if (!observed.ok) return schema.refuse(observed.reason);
     if (!sameCasTuple(casTuple(transaction.cas.prepare), casTuple(observed))) return candidateChanged(paths, transaction, observed, opts);
+    // #729 frontier: the packet is what the child planner actually reads, and it copies
+    // `transaction.source.findings` verbatim. The transaction's stored copy is not
+    // recomputed by validateReplanTransaction, so an empty array reaches here even when
+    // the journal on disk re-reads clean. Refuse before it can author a child epoch.
+    if (!reviewSourceCarriesFrontier(transaction.source)) {
+      return schema.refuse('replan_source_findings_missing', { detail: 'packet_frontier_empty' });
+    }
     const packet = buildPlannerPacket(paths, transaction);
     durableWriteJson(paths.packetPath, packet, opts, 'after_packet_written');
     const seeded = seedPlannerOutput(paths, opts);

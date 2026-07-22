@@ -3847,19 +3847,38 @@ function installEmptyFrontierSource(fx) {
   // Frontier 1 — the schema-2 review lane reaches the same wall. Its canonical finding
   // set is normalized/UID-bearing rather than parsed from flat rows, so the guard must
   // not be accidentally bound to the schema-1 shape.
+  //
+  // The gate is an ADVERSARIAL-VERIFIER refutation, which is the only schema-2 shape that
+  // can carry a failing aggregate with zero canonical findings and still be a
+  // production-valid journal: validateReviewJournal's coherence pair
+  // (`changes_requested` => at least one open finding) is explicitly gated on
+  // `role !== 'adversarial-verifier'`. It is also the exact live shape —
+  // {"outcome":"fail","findings":[],"route_candidates":[]} behind a refuted verifier.
   const fx = initFixture();
   try {
     const v2 = installReviewJournalV2Source(fx);
     const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
     const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
     const attempt = journal.attempts[0];
+    const receipt = attempt.receipts[0];
+    receipt.domain_outcome = 'refuted';
+    receipt.findings = [];
+    receipt.blocking_findings = 0;
+    receipt.gate_effect = schema.deriveGateEffect('adversarial-verifier', 'change_gate', 'refuted', 0);
+    equal(receipt.gate_effect, 'fail', 'a refuted change-gate verifier receipt is a gate FAILURE');
+    const reduced = schema.reduceReviewReceipts({
+      aggregation: attempt.logical_gate.aggregation, role: 'adversarial-verifier',
+      gate_mode: attempt.gate_mode, expected_members: attempt.logical_gate.members,
+      expected_surfaces: [receipt.surface], receipts: [receipt],
+    });
+    attempt.reducer = { role: 'adversarial-verifier', complete: reduced.complete,
+      domain_outcome: reduced.domain_outcome, gate_effect: reduced.gate_effect,
+      blocking_findings: reduced.blocking_findings };
     attempt.findings = [];
     attempt.current_findings = [];
     attempt.current_open_uids = [];
     attempt.route_candidates = [];
     attempt.progress.current_open_uids = [];
-    attempt.receipts[0].findings = [];
-    attempt.receipts[0].blocking_findings = 0;
     fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
     writeSchema2RepairSource(fx, journal, attempt, { producerSlice: ['impl'] });
     const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
