@@ -59,6 +59,9 @@ function runNode(script, args, cwd, extraEnv, opts) {
     cwd,
     encoding: 'utf8',
     timeout,
+    // opts.input feeds STDIN (the --stdin transit used by record-evidence / expand-open).
+    // Absent ⇒ undefined ⇒ spawnSync behaves exactly as before.
+    ...(opts && opts.input != null ? { input: opts.input } : {}),
     env: { ...baseEnv, ...(extraEnv || {}), KAOLA_WORKFLOW_OFFLINE: '1' }
   });
   if (result.error) throw result.error;
@@ -16962,6 +16965,349 @@ function testSpinePlanFormFreeze758() {
   console.log('testSpinePlanFormFreeze758: PASSED');
 }
 
+
+// ---------------------------------------------------------------------------
+// #759 — THE EXPANSION TRANSACTION, end to end.
+//
+// Acceptance, in order:
+//   (a) a spine with ONE expansion point -> expand-open a 3-unit co_open frontier -> close each unit
+//       -> expand-open a SECOND record on the SAME point -> close -> discharge -> the spine advances
+//       to its review wall and then to the sink;
+//   (b) a crash injected BETWEEN the record append and the frontier open resumes cleanly via
+//       reconcile-running-set (roll-forward), and the roll-forward is idempotent;
+//   (c) the `## Expansion Records` channel is APPEND-ONLY across the whole run — after every
+//       mutation the previous content is a byte PREFIX of the new content — and the `## Node Ledger`
+//       only ever GAINS rows (no row is removed, no row id is reordered);
+//   (d) the carry-forward from the spine-grammar verifier: a pure-spine schema-2 plan is held to the
+//       SAME `validation_policy_required` fail-closed rule as the byte-equivalent DAG plan.
+// ---------------------------------------------------------------------------
+const SPINE_PLAN_759 = [
+  '# Workflow Plan — issue #759', '',
+  '## Meta', '',
+  'project: issue-759',
+  'labels: enhancement',
+  'plan_schema_version: 2',
+  'plan_form: spine',
+  'validation_command: node scripts/simulate-workflow-walkthrough.js',
+  'validation_timeout_minutes: 20',
+  'code_certifier: wall',
+  'security_certifier: none',
+  'inherited_frontier_digest: none',
+  'inherited_frontier_classes: none', '',
+  'expansion(m1):',
+  '  milestone_goal: land the reader seam in the core script',
+  '  expected_surfaces: scripts/',
+  '  join_constraints: none',
+  '  review_class: code-reviewer', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+  '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+  '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+  '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Node Ledger', '',
+  '| id | status |',
+  '|---|---|',
+  '| probe | complete |',
+  '| m1 | pending |',
+  '| wall | pending |',
+  '| done | pending |', '',
+].join('\n');
+
+function testExpansionTransaction759() {
+  const validator = require('./kaola-workflow-plan-validator');
+
+  // ---- (d) THE CARRY-FORWARD, pinned first (pure grammar, no fixture repo needed). ----
+  // A pure-spine schema-2 plan whose only code producers live inside not-yet-composed expansions
+  // used to freeze `auto-run` with NO validation_command, where the byte-equivalent DAG plan refuses.
+  {
+    const strip = SPINE_PLAN_759
+      .replace('validation_command: node scripts/simulate-workflow-walkthrough.js\n', '')
+      .replace('validation_timeout_minutes: 20\n', '');
+    const r = validator.validatePlan(strip, { root: repoRoot });
+    assert(r.result === 'refuse' && r.reason === 'validation_policy_required',
+      '#759 (d): a schema-2 SPINE plan with no validation policy must refuse validation_policy_required '
+      + '(the expansion point is a code producer we cannot inspect at freeze), got '
+      + JSON.stringify({ result: r.result, reason: r.reason, decision: r.decision }));
+    // The CONTROL that makes the pin discriminate: the byte-equivalent DAG plan already refused, and
+    // still does. If this ever passes while the spine one fails, the rule has been split in two.
+    const dag = strip.replace('plan_form: spine\n', '').replace('| m1 | expansion-point | probe |', '| m1 | tdd-guide | probe |');
+    const rd = validator.validatePlan(dag, { root: repoRoot });
+    assert(rd.result === 'refuse' && rd.reason === 'validation_policy_required',
+      '#759 (d) CONTROL: the byte-equivalent DAG plan must refuse identically, got ' + JSON.stringify({ result: rd.result, reason: rd.reason }));
+    // Over-refusal control: WITH a policy the same spine plan freezes green (the rule is not a blanket ban).
+    const ok = validator.validatePlan(SPINE_PLAN_759, { root: repoRoot });
+    assert(ok.result === 'in-grammar',
+      '#759 (d) CONTROL: a spine plan that DOES declare a validation policy must stay in-grammar, got ' + JSON.stringify(ok));
+    // ...and expected_surfaces is deliberately NOT the escape hatch: removing the advisory hint does
+    // not change the verdict either way (it is not a validation-policy input).
+    const noSurfaces = strip.replace('  expected_surfaces: scripts/\n', '  expected_surfaces: —\n');
+    const rs = validator.validatePlan(noSurfaces, { root: repoRoot });
+    assert(rs.result === 'refuse' && rs.reason === 'validation_policy_required',
+      '#759 (d): the advisory expected_surfaces hint must not be able to move the validation-policy verdict');
+  }
+
+  const grepo = adaptiveTmp('expansion-759');
+  initGitRepoWithBareRemote(grepo);
+  spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-759'], { encoding: 'utf8' });
+  const proj = path.join(grepo, 'kaola-workflow', 'issue-759');
+  fs.mkdirSync(proj, { recursive: true });
+  const planPath = path.join(proj, 'workflow-plan.md');
+  const readPlan = () => fs.readFileSync(planPath, 'utf8');
+  const recordsSection = () => {
+    const i = readPlan().indexOf('## Expansion Records');
+    return i < 0 ? '' : readPlan().slice(i);
+  };
+  const ledgerIds = () => (readPlan().match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])
+    .map(l => l.split('|')[1].trim());
+
+  // APPEND-ONLY WATCHER: every observation must have the previous one as a byte PREFIX (the records
+  // channel) and must preserve the ledger's row-id sequence as a prefix (rows are only ever added).
+  let lastRecords = '';
+  let lastLedgerIds = [];
+  const assertAppendOnly = (label) => {
+    const now = recordsSection();
+    assert(now.indexOf(lastRecords) === 0,
+      '#759 append-only (' + label + '): the ## Expansion Records channel was REWRITTEN, not appended to.\n'
+      + '  previous:\n' + lastRecords + '\n  now:\n' + now);
+    lastRecords = now;
+    const ids = ledgerIds();
+    assert(JSON.stringify(ids.slice(0, lastLedgerIds.length)) === JSON.stringify(lastLedgerIds),
+      '#759 append-only (' + label + '): the ## Node Ledger row sequence changed — rows must only ever be APPENDED.\n'
+      + '  previous: ' + JSON.stringify(lastLedgerIds) + '\n  now: ' + JSON.stringify(ids));
+    lastLedgerIds = ids;
+  };
+
+  const expandOpen = (nodeId, composition) => runNode(adaptiveNodeScript,
+    ['expand-open', '--project', 'issue-759', '--node-id', nodeId, '--json', '--stdin'],
+    grepo, null, { input: JSON.stringify(composition) });
+  const closeUnit = (id, label) => {
+    // The open seeded .cache/<id>.md with the binding header + role stubs; fill the stub in place
+    // (the same thing a role agent does) rather than rewriting the file.
+    fs.appendFileSync(path.join(proj, '.cache', id + '.md'), '\nfindings: none\n');
+    const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-759', '--node-id', id, '--json'], grepo);
+    assert(c.status === 0, '#759 ' + label + ': close-node ' + id + ' should exit 0, got ' + c.status + '\n' + c.stdout + c.stderr);
+    return JSON.parse(c.stdout);
+  };
+  const nextAction = () => JSON.parse(runNode(nextActionScript, [planPath, '--json'], grepo).stdout);
+
+  try {
+    fs.writeFileSync(planPath, SPINE_PLAN_759);
+    const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], grepo);
+    assert(fz.status === 0, '#759 (a): the spine plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+    const spineHash = JSON.parse(fz.stdout).planHash;
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
+    assertAppendOnly('after freeze');
+
+    // Before any expansion the point is ready but is NOT an openable frontier member.
+    {
+      const na = nextAction();
+      assert((na.readyPending || []).length === 0,
+        '#759 (a): an un-expanded expansion point must not be dispatchable, got ' + JSON.stringify(na.readyPending));
+      assert((na.expansionPending || []).length === 1 && na.expansionPending[0].readyToExpand === true,
+        '#759 (a): the ready expansion point must surface on expansionPending, got ' + JSON.stringify(na.expansionPending));
+      const orOpen = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-759', '--json'], grepo);
+      assert(orOpen.status === 0 && (JSON.parse(orOpen.stdout).opened || []).length === 0,
+        '#759 (a): the UNCHANGED open-ready must open nothing over an un-expanded point, got ' + orOpen.stdout);
+    }
+
+    // ---- expand-open: a 3-unit co_open frontier. ----
+    const first = {
+      derivation: {
+        grain: 'each unit owns a distinct surface, well over its setup cost',
+        path: 'this frontier is the critical path to the review wall',
+        join: 'mechanical — the units touch disjoint surfaces',
+        probe: 'no unit outcome reshapes the others',
+        serializer: 'none present — co-open',
+      },
+      units: [
+        { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        { name: 'u2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        { name: 'u3', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+      ],
+    };
+    const e1 = expandOpen('m1', first);
+    assert(e1.status === 0, '#759 (a): expand-open should exit 0, got ' + e1.status + '\n' + e1.stdout + e1.stderr);
+    const p1 = JSON.parse(e1.stdout);
+    assert(p1.result === 'ok' && p1.expansion_id === 'm1#1' && p1.ordinal === 1,
+      '#759 (a): the first record on a point is #1, got ' + JSON.stringify({ id: p1.expansion_id, ordinal: p1.ordinal }));
+    assert(JSON.stringify((p1.opened || []).map(n => n.id).sort()) === JSON.stringify(['m1-r1-u1', 'm1-r1-u2', 'm1-r1-u3']),
+      '#759 (a): all three co_open units must open through the running-set scheduler, got '
+      + JSON.stringify((p1.opened || []).map(n => n.id)));
+    // REVIEW-JOURNAL BINDING: (spine plan_hash, expansion record id). The hash component is the SPINE
+    // hash, which is what makes a later re-expansion incapable of orphaning a completed journal.
+    assert(p1.review_binding && p1.review_binding.plan_hash === spineHash && p1.review_binding.expansion_id === 'm1#1',
+      '#759 (a): the review binding must be (spine plan_hash, expansion id), got ' + JSON.stringify(p1.review_binding));
+    assert(validator.computePlanHash(readPlan()) === spineHash,
+      '#759 (a): appending an expansion record must NOT perturb the frozen spine identity');
+    const rcOk = runNode(planValidatorScript, [planPath, '--resume-check', '--json'], grepo);
+    assert(rcOk.status === 0 && JSON.parse(rcOk.stdout).ok === true,
+      '#759 (a): a plan carrying expansion records + unit ledger rows must resume-check green: ' + rcOk.stdout + rcOk.stderr);
+    assertAppendOnly('after expand-open #1');
+
+    // A SECOND record cannot be appended while the first is unsettled (the fail-closed gate).
+    {
+      const blocked = expandOpen('m1', first);
+      assert(blocked.status !== 0 && JSON.parse(blocked.stdout).reason === 'expansion_not_settled',
+        '#759 (a): a re-expansion over a live frontier must refuse expansion_not_settled, got ' + blocked.stdout);
+    }
+
+    // ---- close each unit through the UNCHANGED close-node. ----
+    for (const id of ['m1-r1-u1', 'm1-r1-u2', 'm1-r1-u3']) closeUnit(id, '(a)');
+    assertAppendOnly('after closing record #1');
+    {
+      const na = nextAction();
+      assert((na.expansionPending || []).length === 1 && na.expansionPending[0].readyToExpand === true
+        && na.expansionPending[0].readyToDischarge === true,
+        '#759 (a): a settled point is both re-expandable and dischargeable, got ' + JSON.stringify(na.expansionPending));
+      assert(!(na.readyPending || []).some(n => n.id === 'wall'),
+        '#759 (a): the review wall must stay withheld until the milestone itself discharges');
+    }
+
+    // ---- RE-EXPANSION: a second record on the SAME point, same transaction, no new machinery. ----
+    const second = {
+      derivation: {
+        grain: 'one follow-up unit; merging it into the first frontier would have been premature',
+        path: 'still the critical path',
+        join: 'mechanical',
+        probe: 'the first frontier answered the shape question',
+        serializer: 'none present — co-open',
+      },
+      units: [{ name: 'v1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' }],
+    };
+    const e2 = expandOpen('m1', second);
+    assert(e2.status === 0, '#759 (a): the re-expansion should exit 0, got ' + e2.status + '\n' + e2.stdout + e2.stderr);
+    const p2 = JSON.parse(e2.stdout);
+    assert(p2.expansion_id === 'm1#2' && p2.ordinal === 2,
+      '#759 (a): record ids are monotonically numbered PER EXPANSION POINT, got ' + JSON.stringify(p2.expansion_id));
+    assert(p2.review_binding.plan_hash === spineHash,
+      '#759 (a): the spine hash is INVARIANT across a re-expansion — this is why a re-expansion can never '
+      + 'orphan a completed review journal; only the expansion-id component moves');
+    assertAppendOnly('after expand-open #2');
+    closeUnit('m1-r2-v1', '(a)');
+    assertAppendOnly('after closing record #2');
+
+    // ---- discharge the milestone; the spine advances to the wall, then to the sink. ----
+    const dc = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-759', '--node-id', 'm1', '--json'], grepo);
+    assert(dc.status === 0, '#759 (a): expand-close should exit 0, got ' + dc.status + '\n' + dc.stdout + dc.stderr);
+    const dcp = JSON.parse(dc.stdout);
+    assert(JSON.stringify(dcp.discharged) === JSON.stringify(['m1#1', 'm1#2']),
+      '#759 (a): the discharge must name every record on the point, got ' + JSON.stringify(dcp.discharged));
+    assertAppendOnly('after discharge');
+    {
+      const na = nextAction();
+      assert(JSON.stringify((na.readyPending || []).map(n => n.id)) === JSON.stringify(['wall']),
+        '#759 (a): the spine advances to its review wall once the milestone discharges, got '
+        + JSON.stringify((na.readyPending || []).map(n => n.id)));
+    }
+    // Walk the spine tail to the sink (the wall + sink are ordinary spine nodes; their own lifecycle
+    // is covered elsewhere — what is under test here is that expansion left the spine walkable).
+    {
+      let content = readPlan();
+      content = content.replace('| wall | pending |', '| wall | complete |');
+      fs.writeFileSync(planPath, content);
+      const na = nextAction();
+      assert(na.nextNode && na.nextNode.id === 'done' && na.nextNode.role === 'finalize',
+        '#759 (a): the unique finalize sink is next once the wall passes, got ' + JSON.stringify(na.nextNode));
+      fs.writeFileSync(planPath, readPlan().replace('| done | pending |', '| done | complete |'));
+      const naDone = nextAction();
+      assert(naDone.result === 'ok' && naDone.allDone === true,
+        '#759 (a): the run reaches allDone with every expansion unit counted, got ' + JSON.stringify({ result: naDone.result, allDone: naDone.allDone }));
+    }
+    // FINAL append-only proof over the whole run: every record + proof + discharge block survives,
+    // in append order, byte-for-byte.
+    {
+      const section = recordsSection();
+      const order = ['record(m1#1):', 'open(m1#1):', 'record(m1#2):', 'open(m1#2):', 'discharge(m1):'];
+      let cursor = -1;
+      for (const marker of order) {
+        const at = section.indexOf(marker);
+        assert(at > cursor, '#759 (c): "' + marker + '" is missing or out of append order in:\n' + section);
+        cursor = at;
+      }
+      assert((section.match(/record\(/g) || []).length === 2,
+        '#759 (c): exactly two records were composed across this run; none may have been rewritten away');
+    }
+  } finally {
+    fs.rmSync(grepo, { recursive: true, force: true });
+    try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // ---- (b) CRASH between the record append and the frontier open -> reconcile rolls it FORWARD. ----
+  {
+    const crepo = adaptiveTmp('expansion-759-crash');
+    initGitRepoWithBareRemote(crepo);
+    spawnSync('git', ['-C', crepo, 'checkout', '-b', 'workflow/issue-759c'], { encoding: 'utf8' });
+    const cproj = path.join(crepo, 'kaola-workflow', 'issue-759');
+    fs.mkdirSync(cproj, { recursive: true });
+    const cplan = path.join(cproj, 'workflow-plan.md');
+    fs.writeFileSync(cplan, SPINE_PLAN_759);
+    const fz = runNode(planValidatorScript, [cplan, '--freeze', '--json'], crepo);
+    assert(fz.status === 0, '#759 (b): freeze should exit 0, got ' + fz.stdout + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: crepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: crepo, encoding: 'utf8' });
+    try {
+      // Simulate the SIGKILL window: Phase 1 (the record block + the unit ledger rows) landed;
+      // Phase 2 (the open) and Phase 3 (the `open()` proof block) never ran. The record deliberately
+      // OMITS every optional field, so the roll-forward predicate is exercised at its fail-closed
+      // extreme — a record with nothing but its required body must still be rolled forward.
+      let c = fs.readFileSync(cplan, 'utf8');
+      c = c.replace('| m1 | pending |', '| m1 | pending |\n| m1-r1-w1 | pending |\n| m1-r1-w2 | pending |');
+      c += ['', '## Expansion Records', '',
+        'record(m1#1):',
+        '  point: m1',
+        '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+        '  unit: w1 | code-explorer | standard | — | co_open | —',
+        '  unit: w2 | code-explorer | standard | — | co_open | —', ''].join('\n');
+      fs.writeFileSync(cplan, c);
+      const before = fs.readFileSync(cplan, 'utf8');
+
+      const rec1 = runNode(adaptiveNodeScript, ['reconcile-running-set', '--project', 'issue-759', '--json'], crepo);
+      assert(rec1.status === 0, '#759 (b): reconcile should exit 0, got ' + rec1.status + '\n' + rec1.stdout + rec1.stderr);
+      const rp1 = JSON.parse(rec1.stdout);
+      assert(JSON.stringify(rp1.expansionsRolledForward) === JSON.stringify(['m1#1']),
+        '#759 (b): the unopened record must be rolled FORWARD, got ' + JSON.stringify(rp1));
+      const na = JSON.parse(runNode(nextActionScript, [cplan, '--json'], crepo).stdout);
+      assert(JSON.stringify((na.active || []).map(n => n.id).sort()) === JSON.stringify(['m1-r1-w1', 'm1-r1-w2']),
+        '#759 (b): both units of the resumed record must now be live, got ' + JSON.stringify((na.active || []).map(n => n.id)));
+      assert(/open\(m1#1\)/.test(fs.readFileSync(cplan, 'utf8')),
+        '#759 (b): roll-forward must append the open() proof block so the next resume is a no-op');
+      // APPEND-ONLY through the repair: the pre-crash records channel is still a byte PREFIX of the
+      // post-repair one (only the proof block was added). Ledger STATUS cells legitimately move —
+      // that is what opening the frontier means — but no ledger ROW may vanish or be reordered.
+      const recSec = t => t.slice(t.indexOf('## Expansion Records'));
+      const after = fs.readFileSync(cplan, 'utf8');
+      assert(recSec(after).indexOf(recSec(before).replace(/\s+$/, '')) === 0,
+        '#759 (b): roll-forward must APPEND to the records channel, never rewrite it.\n  before:\n'
+        + recSec(before) + '\n  after:\n' + recSec(after));
+      const rowIds = t => (t.match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])
+        .map(l => l.split('|')[1].trim());
+      assert(JSON.stringify(rowIds(before)) === JSON.stringify(rowIds(after)),
+        '#759 (b): roll-forward must not add, drop or reorder a ledger ROW (only status cells move), got '
+        + JSON.stringify(rowIds(before)) + ' -> ' + JSON.stringify(rowIds(after)));
+
+      // IDEMPOTENCE: a second reconcile re-opens nothing and appends no second proof block.
+      const rec2 = runNode(adaptiveNodeScript, ['reconcile-running-set', '--project', 'issue-759', '--json'], crepo);
+      assert(rec2.status === 0, '#759 (b): the second reconcile should exit 0, got ' + rec2.stdout + rec2.stderr);
+      const rp2 = JSON.parse(rec2.stdout);
+      assert(!rp2.expansionsRolledForward,
+        '#759 (b): an already-proven record must NOT be rolled forward again, got ' + JSON.stringify(rp2));
+      assert((fs.readFileSync(cplan, 'utf8').match(/open\(m1#1\)/g) || []).length === 1,
+        '#759 (b): the roll-forward must be idempotent — exactly one open() proof block');
+      const na2 = JSON.parse(runNode(nextActionScript, [cplan, '--json'], crepo).stdout);
+      assert(JSON.stringify((na2.active || []).map(n => n.id).sort()) === JSON.stringify(['m1-r1-w1', 'm1-r1-w2']),
+        '#759 (b): the live set is unchanged by the idempotent second reconcile, got ' + JSON.stringify((na2.active || []).map(n => n.id)));
+    } finally {
+      fs.rmSync(crepo, { recursive: true, force: true });
+      try { fs.rmSync(crepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testExpansionTransaction759: PASSED');
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -17243,6 +17589,7 @@ function buildRegistry() {
   add('testReviewOutcomeTransport699',                    testReviewOutcomeTransport699);
   add('testReviewerContractV2Conformance',                testReviewerContractV2Conformance);
   add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
+  add('testExpansionTransaction759',                      testExpansionTransaction759);
   return reg;
 }
 
