@@ -574,12 +574,12 @@ function installReviewJournalV2Source(fx, config = {}) {
       precondition_digest: sha256(Buffer.from('pre')), input_digest: sha256(Buffer.from('in')),
       expected_digest: sha256(Buffer.from('expected')), observed_digest: sha256(Buffer.from('observed')),
     },
-    primary_anchor: {
+    primary_anchor: config.primaryAnchor || {
       kind: 'evidence_observation',
       producer_evidence_digest: sha256(Buffer.from('producer-evidence:' + producerId)),
       observation_key: 'product/regression',
     },
-    secondary_anchors: [],
+    secondary_anchors: config.secondaryAnchors || [],
     severity: 'high', scope: 'product', action: 'fix', status: 'open', fix_role: 'tdd-guide',
   }], { scope_lineage_id: scopeLineageId });
   ok(normalized.ok, 'schema-2 replan source fixture normalizes its finding set: ' + JSON.stringify(normalized));
@@ -3983,8 +3983,9 @@ function installEmptyFrontierSource(fx) {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+
 // ---------------------------------------------------------------------------
-// #729 AC2 — THE PLANNER PACKET CARRIES THE FRONTIER IT EXPECTS COVERED.
+// #729 AC2 — THE PLANNER PACKET CARRIES THE FAILURE RECORD IT EXPECTS REPAIRED.
 //
 // The empty-frontier walls above prove a transition never opens with NO record of
 // what failed. They say nothing about whether the child planner can READ that record.
@@ -3995,15 +3996,28 @@ function installEmptyFrontierSource(fx) {
 // ownership_candidates / owning_node, a REQUIRED attempt field in both journal
 // validators) was dropped on the floor between the journal and the packet.
 //
-// This pins the PLUMBING only: every source finding appears in `packet.frontier` with
-// its immutable uid, its anchor, its status, and whatever route/ownership row the
-// source actually carried. It deliberately does NOT assert any coverage obligation on
-// the child plan — that is a later criterion and it needs a plan-grammar addition in
-// the validator. Enforcing coverage against a planner that was never shown the
-// findings would wedge the loop until the budget escalated.
+// The projection lives at `packet.source.finding_index`, INSIDE the packet's source
+// evidence. Its placement is load-bearing, not cosmetic: the planner profile tells the
+// re-plan planner to treat the packet's claim/root/epoch/candidate/frontier/budget
+// fields as immutable integrity constraints, and to read its source evidence as a
+// semantic task input. A top-level key named `frontier` would therefore have handed the
+// planner the one record it must ACT on under the label of a field it must not touch.
+//
+// This pins the PLUMBING only: every source finding appears with its immutable uid, its
+// anchor, its status, and whatever route/ownership rows the source actually carried. It
+// deliberately does NOT assert any coverage obligation on the child plan — that is a
+// later criterion and it needs a plan-grammar addition in the validator. Enforcing
+// coverage against a planner that was never shown the findings would wedge the loop
+// until the budget escalated.
 // ---------------------------------------------------------------------------
-function packetFrontierRow(packet, uid) {
-  return (Array.isArray(packet.frontier) ? packet.frontier : []).find(row => row && row.uid === uid) || null;
+function findingIndexRow(packet, uid) {
+  const rows = packet && packet.source && Array.isArray(packet.source.finding_index)
+    ? packet.source.finding_index : [];
+  return rows.find(row => row && row.uid === uid) || null;
+}
+
+function findingIndexUids(packet) {
+  return (packet.source.finding_index || []).map(row => row.uid);
 }
 
 function preparedPacket(fx, sourceAttemptId) {
@@ -4016,33 +4030,78 @@ function preparedPacket(fx, sourceAttemptId) {
   return JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8'));
 }
 
+// A path-bearing anchor. `required_absence` is the cheapest anchor kind that carries a
+// real path (no blob/object identity to fabricate), which is all the projection reads.
+function absenceAnchor(anchorPath, seed) {
+  return {
+    kind: 'required_absence', path: anchorPath,
+    acceptance_clause_digest: sha256(Buffer.from('acceptance:' + seed)),
+    candidate_tree_digest: sha256(Buffer.from('candidate-tree:' + seed)),
+  };
+}
+
+// A minimal transaction shell for the seams reachable only by calling the EXPORTED
+// buildPlannerPacket directly (a hand-built source the journal validators would refuse
+// to produce, but which every forge contract validator is free to pass in).
+function packetFromSource(fx, source) {
+  return replan.buildPlannerPacket({ project: fx.project }, {
+    transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
+    epoch_lineage_id: fx.lineage.epoch_lineage_id,
+    parent: { claim_identity: { repository_id: 'repo', worktree_path: fx.root },
+      claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+      plan_epoch: 1, plan_hash: '3'.repeat(64) },
+    snapshot: { authority_projection: {}, authority_digest: 'b'.repeat(64) },
+    source: Object.assign({ source_attempt_ids: ['a1'], source_reason: 'review_repair_requires_replan',
+      source_evidence_digest: '5'.repeat(64), producer_slice: ['impl'], rebind: [],
+      inherited_frontier_classes: ['code'], validation_obligations: [] }, source),
+    cas: { prepare: { candidate_digest: '6'.repeat(64), inherited_frontier_digest: '7'.repeat(64) } },
+    budget: { count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
+      case_b_proof: null, consent_ledger_digest: '9'.repeat(64) },
+    planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-729' },
+  });
+}
+
 {
   // Lane 1 — schema-1. Six flat findings (R1-R6), each anchored by a `file=` token and
   // routed to the `impl` writer by the reviewer.
   const fx = initFixture();
   try {
     const packet = preparedPacket(fx, SOURCE_ATTEMPT_ID);
-    ok(Array.isArray(packet.frontier),
-      '#729 AC2: the packet carries an explicit frontier projection: ' + JSON.stringify(Object.keys(packet)));
-    deepEqual(packet.frontier.map(row => row.uid), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
+    ok(!Object.prototype.hasOwnProperty.call(packet, 'frontier'),
+      '#729 AC2: the record the planner must ACT on is NOT published under the `frontier` label '
+      + 'the planner profile pins as an immutable integrity constraint: ' + JSON.stringify(Object.keys(packet)));
+    ok(Array.isArray(packet.source.finding_index),
+      '#729 AC2: the packet indexes its source findings: ' + JSON.stringify(Object.keys(packet.source)));
+    deepEqual(findingIndexUids(packet), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
       '#729 AC2: every source finding reaches the planner under its immutable id — none is dropped');
-    const row = packetFrontierRow(packet, 'R1');
-    ok(row, '#729 AC2: R1 has a frontier row');
+    const row = findingIndexRow(packet, 'R1');
+    ok(row, '#729 AC2: R1 has an index row');
     equal(row.status, 'open', '#729 AC2: the row carries the finding status');
-    deepEqual(row.anchor_paths, ['product.js'], '#729 AC2: the row carries the finding anchor path');
-    equal(row.fix_role, 'tdd-guide', '#729 AC2: the row carries the reviewer-suggested fix role');
-    equal(row.source_node, 'review', '#729 AC2: the row names the node whose evidence produced it');
-    equal(row.owning_node, 'impl', '#729 AC2: the row carries the ownership the SOURCE already resolved');
-    deepEqual(row.ownership_candidates, ['impl'], '#729 AC2: the row carries the full ownership candidate set');
     equal(row.scope, 'in_scope', '#729 AC2: the row carries the finding scope');
     equal(row.action, 'fix', '#729 AC2: the row carries the finding action');
+    equal(row.severity, 'high', '#729 AC2: the row carries the finding severity');
+    equal(row.fix_role, 'tdd-guide', '#729 AC2: the row carries the reviewer-suggested fix role');
+    equal(row.failure_class, null,
+      '#729 AC2: a schema-1 finding declares no failure class and none is invented');
+    equal(row.primary_anchor, null,
+      '#729 AC2: a schema-1 finding declares no immutable anchor object and none is invented');
+    deepEqual(row.anchor_paths, ['product.js'], '#729 AC2: the row carries the finding anchor path');
+    deepEqual(row.source_nodes, ['review'], '#729 AC2: the row names the node whose evidence produced it');
+    equal(row.owning_node, 'impl', '#729 AC2: the row carries the ownership the SOURCE already resolved');
+    deepEqual(row.ownership_candidates, ['impl'], '#729 AC2: the row carries the full ownership candidate set');
+    // Every projected row must be the SAME shape — a planner that reads one row must not
+    // have to probe for keys on the next one.
+    for (const other of packet.source.finding_index) {
+      deepEqual(Object.keys(other).sort(), Object.keys(row).sort(),
+        '#729 AC2: every index row carries the identical key set: ' + other.uid);
+    }
     // Plumbing, not derivation: nothing here decides whether the child plan covers the row.
     for (const forbidden of ['covered', 'coverage', 'uncovered', 'required_writers']) {
       ok(!Object.prototype.hasOwnProperty.call(row, forbidden),
-        '#729 AC2: the frontier row derives no coverage verdict: ' + forbidden);
+        '#729 AC2: the index row derives no coverage verdict: ' + forbidden);
     }
-    // The packet must stay free of orchestrator-authored child-DAG keys — the same
-    // recursive walk the four contract validators run over buildPlannerPacket.
+    // The packet must stay free of orchestrator-authored child-DAG keys — the control
+    // boundary the planner profile refuses with planner_control_boundary_violation.
     const keys = new Set();
     (function collect(value) {
       if (!value || typeof value !== 'object') return;
@@ -4051,7 +4110,7 @@ function preparedPacket(fx, sourceAttemptId) {
     })(packet);
     for (const forbidden of ['nodes', 'node_ids', 'roles', 'depends_on', 'declared_write_set',
       'write_set', 'cardinality', 'shape', 'model', 'build_order']) {
-      ok(!keys.has(forbidden), '#729 AC2: the frontier introduces no child-DAG key: ' + forbidden);
+      ok(!keys.has(forbidden), '#729 AC2: the index introduces no child-DAG key: ' + forbidden);
     }
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
@@ -4066,17 +4125,47 @@ function preparedPacket(fx, sourceAttemptId) {
     const v2 = installReviewJournalV2Source(fx);
     const finding = v2.attempt.findings[0];
     const packet = preparedPacket(fx, v2.attempt.attempt_id);
-    deepEqual(packet.frontier.map(row => row.uid), [finding.uid],
-      '#729 AC2: the schema-2 lane projects the canonical uid frontier');
-    const row = packet.frontier[0];
+    deepEqual(findingIndexUids(packet), [finding.uid],
+      '#729 AC2: the schema-2 lane indexes the canonical uid');
+    const row = packet.source.finding_index[0];
     equal(row.status, 'open', '#729 AC2: the schema-2 row carries the status');
     equal(row.failure_class, 'correctness', '#729 AC2: the schema-2 row carries the failure class');
+    equal(row.severity, 'high', '#729 AC2: the schema-2 row carries the severity');
+    equal(row.scope, 'product', '#729 AC2: the schema-2 row carries the scope');
+    equal(row.action, 'fix', '#729 AC2: the schema-2 row carries the action');
+    equal(row.fix_role, 'tdd-guide', '#729 AC2: the schema-2 row carries the fix role');
     deepEqual(row.primary_anchor, finding.primary_anchor,
       '#729 AC2: the schema-2 row carries the IMMUTABLE primary anchor verbatim');
     deepEqual(row.anchor_paths, [],
       '#729 AC2: an evidence_observation anchor carries no path and none is invented');
+    deepEqual(row.source_nodes, ['review'], '#729 AC2: the schema-2 row names its reporting member');
     equal(row.owning_node, 'impl', '#729 AC2: the schema-2 row carries the resolved owner');
     deepEqual(row.ownership_candidates, ['impl'], '#729 AC2: the schema-2 row carries the owner set');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // SECONDARY ANCHORS ARE PART OF THE RECORD. A schema-2 finding may anchor the same defect at
+  // several places in the candidate; `anchor_paths` is the primary PLUS the secondaries, so a
+  // planner routing by path sees every surface the reviewer named, not just the first one.
+  // The primary here sorts LAST and one secondary repeats its path under a different anchor
+  // identity, so this one assertion also pins the sort and the de-duplication.
+  const fx = initFixture();
+  try {
+    const v2 = installReviewJournalV2Source(fx, {
+      primaryAnchor: absenceAnchor('src/z-primary.js', 'primary'),
+      secondaryAnchors: [absenceAnchor('src/a-secondary.js', 'secondary-a'),
+        absenceAnchor('src/z-primary.js', 'secondary-z')],
+    });
+    const finding = v2.attempt.findings[0];
+    equal(finding.secondary_anchors.length, 2,
+      '#729 AC2: the fixture really carries two secondary anchors: ' + JSON.stringify(finding.secondary_anchors));
+    const packet = preparedPacket(fx, v2.attempt.attempt_id);
+    const row = packet.source.finding_index[0];
+    deepEqual(row.anchor_paths, ['src/a-secondary.js', 'src/z-primary.js'],
+      '#729 AC2: anchor_paths is the primary PLUS every secondary anchor path, sorted and de-duplicated');
+    deepEqual(row.primary_anchor, finding.primary_anchor,
+      '#729 AC2: the primary anchor object is still carried verbatim alongside the path list');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
@@ -4110,11 +4199,11 @@ function preparedPacket(fx, sourceAttemptId) {
     fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
     writeSchema2RepairSource(fx, journal, attempt);
     const packet = preparedPacket(fx, SOURCE_ATTEMPT_ID);
-    deepEqual(packet.frontier.map(row => row.uid), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
+    deepEqual(findingIndexUids(packet), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
       '#729 AC2: a resolved finding is still projected — the packet is the whole record, not the open set');
-    equal(packetFrontierRow(packet, 'R2').status, 'resolved',
+    equal(findingIndexRow(packet, 'R2').status, 'resolved',
       '#729 AC2: the resolved row reports its REAL status');
-    equal(packetFrontierRow(packet, 'R1').status, 'open',
+    equal(findingIndexRow(packet, 'R1').status, 'open',
       '#729 AC2: its still-open siblings are unaffected');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
@@ -4133,12 +4222,62 @@ function preparedPacket(fx, sourceAttemptId) {
     fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
     writeSchema2RepairSource(fx, journal, attempt);
     const packet = preparedPacket(fx, SOURCE_ATTEMPT_ID);
-    const row = packetFrontierRow(packet, 'R2');
+    const row = findingIndexRow(packet, 'R2');
     ok(row, '#729 AC2: an unrouted finding still reaches the planner');
     equal(row.owning_node, null, '#729 AC2: an unresolved owner is null, never guessed');
     deepEqual(row.ownership_candidates, [], '#729 AC2: an unresolved candidate set stays empty');
     deepEqual(row.anchor_paths, ['product.js'],
       '#729 AC2: the anchor survives even when ownership does not');
+    equal(findingIndexRow(packet, 'R1').owning_node, 'impl',
+      '#729 AC2: its routed siblings keep their owner');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // DUPLICATE ROUTE ROWS ARE MERGED, NOT RACED. A fan-out gate whose members each report the
+  // same defect legally produces ONE deduped finding (normalizeFindingSet is uid-keyed) and
+  // one route row PER REPORTING MEMBER — the contract-2 validator sizes route_candidates from
+  // receipts.flatMap(receipt.findings), not from the deduped set. A first-wins join would drop
+  // the second member's row silently, so both reporters and the union of what they resolved
+  // must survive into the index.
+  //
+  // Exercised at the packet seam with a hand-built source: a genuine two-member schema-2
+  // fan-out journal is a fixture, not a behavior, and buildPlannerPacket is exported precisely
+  // so this seam can be driven directly (the forge contract validators call it that way too).
+  const fx = initFixture();
+  try {
+    const finding = { uid: 'R1', status: 'open', scope: 'in_scope', action: 'fix', file: 'product.js' };
+    const agreed = packetFromSource(fx, { findings: [finding], route_candidates: [
+      { source_node: 'review-b', finding_id: 'R1', ownership_candidates: ['impl'], owning_node: 'impl' },
+      { source_node: 'review-a', finding_id: 'R1', ownership_candidates: ['docs', 'impl'], owning_node: 'impl' },
+    ] });
+    const merged = agreed.source.finding_index[0];
+    deepEqual(findingIndexUids(agreed), ['R1'],
+      '#729 AC2: two members reporting one uid still project exactly one row');
+    deepEqual(merged.source_nodes, ['review-a', 'review-b'],
+      '#729 AC2: BOTH reporting members survive the join — neither is dropped first-wins');
+    deepEqual(merged.ownership_candidates, ['docs', 'impl'],
+      '#729 AC2: the candidate sets are unioned, sorted and de-duplicated');
+    equal(merged.owning_node, 'impl',
+      '#729 AC2: an owner every route row agrees on is carried');
+
+    const split = packetFromSource(fx, { findings: [finding], route_candidates: [
+      { source_node: 'review-a', finding_id: 'R1', ownership_candidates: ['impl'], owning_node: 'impl' },
+      { source_node: 'review-b', finding_id: 'R1', ownership_candidates: ['docs'], owning_node: 'docs' },
+    ] });
+    equal(split.source.finding_index[0].owning_node, null,
+      '#729 AC2: route rows that DISAGREE about the owner have resolved none — null, not a coin flip');
+    deepEqual(split.source.finding_index[0].ownership_candidates, ['docs', 'impl'],
+      '#729 AC2: the disagreement stays VISIBLE as the unioned candidate set');
+
+    const partial = packetFromSource(fx, { findings: [finding], route_candidates: [
+      { source_node: 'review-a', finding_id: 'R1', ownership_candidates: ['impl'], owning_node: 'impl' },
+      { source_node: 'review-b', finding_id: 'R1', ownership_candidates: [], owning_node: null },
+    ] });
+    equal(partial.source.finding_index[0].owning_node, null,
+      '#729 AC2: a member that resolved NO owner is a dissent too — one resolved row is not unanimity');
+    deepEqual(partial.source.finding_index[0].source_nodes, ['review-a', 'review-b'],
+      '#729 AC2: the member that could not route is still named');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
@@ -4147,33 +4286,21 @@ function preparedPacket(fx, sourceAttemptId) {
   // outright (route cardinality must equal the canonical finding set), so this cannot be reached
   // through prepare — but buildPlannerPacket is EXPORTED and every forge contract validator calls
   // it directly with a hand-built transaction whose source omits `route_candidates`. The
-  // projection must therefore stay total: no throw, the whole frontier still projected, and route
+  // projection must therefore stay total: no throw, the whole record still projected, and route
   // fields absent-shaped rather than fabricated.
   const fx = initFixture();
   try {
     const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
     const attempt = journal.attempts[0];
-    const packet = replan.buildPlannerPacket({ project: fx.project }, {
-      transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
-      epoch_lineage_id: fx.lineage.epoch_lineage_id,
-      parent: { claim_identity: { repository_id: 'repo', worktree_path: fx.root },
-        claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
-        plan_epoch: 1, plan_hash: '3'.repeat(64) },
-      snapshot: { authority_projection: {}, authority_digest: 'b'.repeat(64) },
-      source: { source_attempt_ids: [attempt.attempt_id], source_reason: 'review_repair_requires_replan',
-        source_evidence_digest: '5'.repeat(64), producer_slice: ['impl'],
-        findings: attempt.findings, rebind: [], inherited_frontier_classes: ['code'],
-        validation_obligations: [] },
-      cas: { prepare: { candidate_digest: '6'.repeat(64), inherited_frontier_digest: '7'.repeat(64) } },
-      budget: { count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
-        case_b_proof: null, consent_ledger_digest: '9'.repeat(64) },
-      planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-729' },
-    });
-    deepEqual(packet.frontier.map(row => row.uid), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
-      '#729 AC2: a route-less source still projects its whole frontier');
-    const row = packetFrontierRow(packet, 'R1');
+    const packet = packetFromSource(fx, { source_attempt_ids: [attempt.attempt_id],
+      findings: attempt.findings });
+    deepEqual(findingIndexUids(packet), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
+      '#729 AC2: a route-less source still projects its whole record');
+    const row = findingIndexRow(packet, 'R1');
     equal(row.owning_node, null, '#729 AC2: no route row means no owner, not a guessed one');
     deepEqual(row.ownership_candidates, [], '#729 AC2: no route row means an empty candidate set');
+    deepEqual(row.source_nodes, ['review'],
+      '#729 AC2: the finding-borne reporter survives without any route row');
     equal(row.status, 'open', '#729 AC2: the finding itself still carries its own status');
     deepEqual(row.anchor_paths, ['product.js'],
       '#729 AC2: the finding-borne anchor survives without any route row');
@@ -4188,7 +4315,8 @@ function preparedPacket(fx, sourceAttemptId) {
   try {
     const packetPath = path.join(fx.cacheDir, 'replan-planner-packet.json');
     const packet = preparedPacket(fx, SOURCE_ATTEMPT_ID);
-    ok(packet.frontier.length === 6, '#729 AC2: the idempotence fixture carries the full frontier');
+    equal(packet.source.finding_index.length, 6,
+      '#729 AC2: the idempotence fixture carries the full record');
     const bytes = fs.readFileSync(packetPath, 'utf8');
     const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
     equal(schema.canonicalJson(replan.buildPlannerPacket({ project: fx.project }, tx)),
@@ -4197,6 +4325,125 @@ function preparedPacket(fx, sourceAttemptId) {
     equal(sha256(Buffer.from(bytes, 'utf8')), tx.planner.packet_digest,
       '#729 AC2: the transaction still binds the written packet digest');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // DURABLE COMPATIBILITY. source_evidence_digest is INVARIANT under the carried route/ownership
+  // rows, so this carriage-only addition leaves the digest of every already-stored transaction
+  // untouched. Cover them instead and a transaction prepared by an earlier build recomputes a
+  // different digest on its very next resume and fails closed with replan_source_changed — a
+  // mid-flight run wedged by a field that adds no authority at all, since the journal the rows
+  // are read from is already pinned byte-exact by journal_digest.
+  const bare = { authority_kind: 'review_outcome', attempt_id: 'a1', findings: [{ id: 'R1' }] };
+  equal(replan.sourceEvidenceDigest(Object.assign({}, bare, { route_candidates: [
+    { finding_id: 'R1', source_node: 'review', owning_node: 'impl', ownership_candidates: ['impl'] }] })),
+  replan.sourceEvidenceDigest(bare),
+  '#729 AC2: the source authority digest is unchanged by the route rows the source carries');
+  ok(replan.sourceEvidenceDigest(Object.assign({}, bare, { findings: [{ id: 'R2' }] }))
+    !== replan.sourceEvidenceDigest(bare),
+  '#729 AC2: the same digest still moves when the evidence it DOES cover changes');
+
+  const fx = initFixture();
+  try {
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' }).result,
+    'prepared', '#729 AC2: the durable-compat fixture prepares');
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+    ok(Array.isArray(tx.source.route_candidates) && tx.source.route_candidates.length === 6,
+      '#729 AC2: a freshly prepared transaction stores its route rows');
+    // Exactly the durable shape an earlier build wrote: same digest, no route rows.
+    delete tx.source.route_candidates;
+    fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
+    const resumed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(resumed.reason, 'replan_planner_dispatch_required',
+      '#729 AC2: a transaction stored by an earlier build resumes — no replan_source_changed: '
+      + JSON.stringify(resumed));
+    const packet = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8'));
+    deepEqual(findingIndexUids(packet), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
+      '#729 AC2: that transaction still gets a complete index, with route fields absent-shaped');
+    equal(findingIndexRow(packet, 'R1').owning_node, null,
+      '#729 AC2: an earlier-build transaction records no ownership, and none is invented for it');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // CANDIDATE-CHANGED RE-AUTHOR. reauthorCandidate rebuilds the successor transaction from the
+  // STORED transaction.source without re-reading the journal, so the route rows must survive
+  // that copy — otherwise a re-authored epoch silently hands its planner an ownership-free
+  // record while a first-attempt epoch gets the full one.
+  const fx = initFixture();
+  try {
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: SOURCE_ATTEMPT_ID, transitionReason: 'review_repair_requires_replan' }).result,
+    'prepared', '#729 AC2: the re-author fixture prepares');
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project,
+      casMutation: { seam: 'prepare', axis: 'candidate_digest', value: 'f'.repeat(64) } }).reason,
+    'replan_candidate_changed', '#729 AC2: the re-author fixture reaches candidate_changed');
+    const first = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'reauthored',
+      '#729 AC2: the fixture re-authors a successor transaction');
+    const next = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+    equal(first.outcome, 'candidate_changed', '#729 AC2: the predecessor is parked on the re-author route');
+    equal(next.attempts.length, 1,
+      '#729 AC2: the successor is a fresh transaction carrying the failed attempt receipt');
+    ok(next.outcome !== 'candidate_changed', '#729 AC2: the successor is live, not parked');
+    deepEqual(next.source.route_candidates, first.source.route_candidates,
+      '#729 AC2: the re-authored source carries the SAME route rows');
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
+      'replan_planner_dispatch_required', '#729 AC2: the successor reaches its own planner dispatch');
+    const packet = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8'));
+    deepEqual(findingIndexUids(packet), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
+      '#729 AC2: the re-authored packet indexes the whole record');
+    equal(findingIndexRow(packet, 'R1').owning_node, 'impl',
+      '#729 AC2: the re-authored packet still carries the ownership the source resolved');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // THE INDEX IS A PURE FUNCTION OF AN ATTEMPT-SHAPED BAG — `{ findings, route_candidates }`,
+  // which is exactly a review journal attempt as well as the transaction's source projection of
+  // one. It reads no fs, no transaction identity and no replan phase, so any consumer holding an
+  // attempt can build the same index without opening a replan transaction. These cases also pin
+  // the normalization the packet's ONE readable shape depends on: a planner must never have to
+  // decide whether an absent value arrived as null, undefined, or a missing key.
+  equal(typeof replan.buildFindingIndex, 'function',
+    '#729 AC2: the index builder is exported for use outside a replan transaction');
+  deepEqual(replan.buildFindingIndex({ findings: [{ id: 'R1' }] }), [{
+    uid: 'R1', status: null, scope: null, action: null, severity: null, failure_class: null,
+    primary_anchor: null, anchor_paths: [], fix_role: null, source_nodes: [],
+    owning_node: null, ownership_candidates: [],
+  }], '#729 AC2: a bare finding projects a complete, fully null-shaped row');
+  deepEqual(replan.buildFindingIndex({}), [],
+    '#729 AC2: a bag with no findings projects nothing rather than throwing');
+  deepEqual(replan.buildFindingIndex({ findings: 'six' }), [],
+    '#729 AC2: a malformed findings value projects nothing rather than throwing');
+  deepEqual(replan.buildFindingIndex({ findings: [null, 'R1', ['R1'], { id: 'R2' }] }).map(row => row.uid),
+    ['R2'], '#729 AC2: non-object findings are skipped, not projected as empty rows');
+  deepEqual(replan.buildFindingIndex({ findings: [{ id: 7, severity: 3 }] })
+    .map(row => [row.uid, row.severity]), [['7', '3']],
+  '#729 AC2: every projected scalar is normalized to a string');
+  equal(replan.buildFindingIndex({ findings: [{ id: 'R1', primary_anchor: ['not-an-object'] }] })[0].primary_anchor,
+    null, '#729 AC2: a non-object primary anchor is reported absent, not passed through');
+  deepEqual(replan.buildFindingIndex({ findings: [{ uid: 'R1' }],
+    route_candidates: [{ id: 'R1', source_node: 'review', ownership_candidates: ['impl'], owning_node: 'impl' }] })[0]
+    .ownership_candidates, ['impl'],
+  '#729 AC2: a route row keyed only by the legacy `id` still joins its finding');
+  deepEqual(replan.buildFindingIndex({ findings: [{ uid: 'R1' }],
+    route_candidates: [{ finding_id: 'R1', ownership_candidates: ['impl', null, 'impl'] }] })[0]
+    .ownership_candidates, ['impl'],
+  '#729 AC2: null and repeated candidates are dropped from the carried set');
+  deepEqual(replan.buildFindingIndex({ findings: [{ uid: 'R1' }],
+    route_candidates: [{ finding_id: 'R1', ownership_candidates: 'impl' }] })[0]
+    .ownership_candidates, [],
+  '#729 AC2: a malformed candidate set carries nothing rather than a stringified guess');
+  deepEqual(replan.buildFindingIndex({ findings: [{ uid: 'R1' }],
+    route_candidates: [null, 'R1', { finding_id: 'R2', owning_node: 'docs' }] })[0].owning_node, null,
+  '#729 AC2: malformed and non-matching route rows are never joined to a finding');
+  deepEqual(replan.buildFindingIndex({ findings: [{ uid: 'R1', source_node: 'review-c' }],
+    route_candidates: [{ finding_id: 'R1', source_node: 'review-a' }] })[0].source_nodes,
+  ['review-a', 'review-c'],
+  '#729 AC2: the finding-borne reporter and the route-borne reporters are unioned and sorted');
 }
 
 console.log(`test-replan: PASSED (${passed} assertions)`);

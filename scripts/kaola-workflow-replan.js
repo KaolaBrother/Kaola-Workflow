@@ -558,14 +558,11 @@ function computeReviewCandidateDigest(repoRoot, project) {
 // it is where the reviewer's write-set lookup landed (ownership_candidates / owning_node). This
 // is pure carriage: no ownership is derived here that the source did not record.
 //
-// Normalized to a FIXED key set with `null` (never `undefined`) defaults for two reasons. First,
-// `source` is canonical-JSON digested into `source_evidence_digest`, and canonicalJson REFUSES
-// undefined — a schema-1 route row whose finding omitted `scope=`/`file=` carries undefined
-// values and would throw mid-prepare. Second, the two review lanes produce different raw shapes
-// (schema-1 flat rows keyed by `id`; schema-2 rows keyed by the canonical `uid`), and the child
-// planner must be able to read ONE shape.
-const ROUTE_CANDIDATE_STRING_KEYS = Object.freeze(['status', 'scope', 'action', 'severity',
-  'fix_role', 'file', 'source_node', 'owning_node']);
+// Normalized to a FIXED key set with `null` (never `undefined`) defaults because the two review
+// lanes produce different raw shapes (schema-1 flat rows keyed by `id`; schema-2 rows keyed by the
+// canonical `uid`) and the child planner must be able to read ONE shape, and because `undefined`
+// is not representable in the JSON the packet is written as.
+const ROUTE_CANDIDATE_STRING_KEYS = Object.freeze(['source_node', 'owning_node']);
 
 function canonicalRouteCandidates(rows) {
   if (!Array.isArray(rows)) return [];
@@ -596,48 +593,80 @@ function findingAnchorPathList(finding) {
   return Array.from(new Set(paths)).sort();
 }
 
-// #729 — the frontier the child planner is expected to route, joined into ONE readable projection:
-// the immutable finding id, its anchor, its status, and the route/ownership the source carried.
-// Findings are the authority (the empty-frontier wall is on `findings`), so there is exactly one
-// row per source finding and route rows that match nothing are not smuggled in as extra work.
-// Order follows the source, which is already canonical (uid-sorted in the schema-2 lane).
+// #729 — the failure record the child epoch exists to repair, joined into ONE readable index:
+// per source finding its immutable id, its anchor, its status, and the route/ownership the source
+// already resolved. Findings are the authority (the empty-frontier wall is on `findings`), so there
+// is exactly one row per source finding and route rows that match nothing are not smuggled in as
+// extra work. Order follows the source, which is already canonical (uid-sorted in the schema-2 lane).
+//
+// PURE over an attempt-shaped bag — `{ findings, route_candidates }`, which is exactly a review
+// journal attempt as well as the transaction's `source` projection of one. It reads no fs, no
+// transaction identity, and no replan phase, so any consumer holding an attempt can build the same
+// index without opening a replan transaction.
+//
+// The two mutable axes are joined, never picked: a finding's own `status`/`scope`/`action`/
+// `severity`/`fix_role` are reported verbatim from the FINDING (a route row only ever restates
+// them, with the producer's defaults substituted for absent tokens — a default is not evidence),
+// while `source_nodes` / `ownership_candidates` union EVERY route row that names the finding and
+// `owning_node` reports only an owner every one of those rows agrees on. A fan-out gate whose
+// members legally report the same uid therefore keeps both reporters and both candidate sets;
+// nothing is dropped on a first-wins race.
 //
 // PLUMBING ONLY. Nothing here decides whether a child plan COVERS a row — that is a set comparison
 // against a child-plan declaration the plan grammar does not yet carry. Deriving a coverage verdict
 // from this projection would have to guess (an anchor records where a defect was OBSERVED, not
 // where its repair belongs), and enforcing a guessed obligation would loop the planner until the
 // transition budget escalated.
-function buildPlannerFrontier(source) {
-  const findings = Array.isArray(source && source.findings) ? source.findings : [];
-  const routes = canonicalRouteCandidates(source && source.route_candidates);
-  const routeById = new Map();
-  for (const row of routes) {
-    if (row.finding_id !== null && !routeById.has(row.finding_id)) routeById.set(row.finding_id, row);
+function buildFindingIndex(attempt) {
+  const findings = Array.isArray(attempt && attempt.findings) ? attempt.findings : [];
+  const routesById = new Map();
+  for (const row of canonicalRouteCandidates(attempt && attempt.route_candidates)) {
+    if (row.finding_id === null) continue;
+    if (!routesById.has(row.finding_id)) routesById.set(row.finding_id, []);
+    routesById.get(row.finding_id).push(row);
   }
+  const sortedUnique = values => Array.from(new Set(values.filter(value => value != null))).sort();
   return findings.filter(finding => finding && typeof finding === 'object' && !Array.isArray(finding))
     .map(finding => {
       const id = finding.uid == null ? finding.id : finding.uid;
       const uid = id == null ? null : String(id);
-      const route = uid === null ? null : (routeById.get(uid) || null);
-      const pick = key => (finding[key] == null
-        ? (route && route[key] != null ? route[key] : null) : String(finding[key]));
+      const routes = (uid === null ? null : routesById.get(uid)) || [];
+      const owners = sortedUnique(routes.map(route => route.owning_node));
+      const text = key => (finding[key] == null ? null : String(finding[key]));
       return {
         uid,
-        status: pick('status'),
-        scope: pick('scope'),
-        action: pick('action'),
-        severity: pick('severity'),
-        failure_class: finding.failure_class == null ? null : String(finding.failure_class),
+        status: text('status'),
+        scope: text('scope'),
+        action: text('action'),
+        severity: text('severity'),
+        failure_class: text('failure_class'),
         primary_anchor: finding.primary_anchor && typeof finding.primary_anchor === 'object'
           && !Array.isArray(finding.primary_anchor) ? finding.primary_anchor : null,
         anchor_paths: findingAnchorPathList(finding),
-        fix_role: pick('fix_role'),
-        source_node: finding.source_node == null
-          ? (route && route.source_node !== null ? route.source_node : null) : String(finding.source_node),
-        owning_node: route ? route.owning_node : null,
-        ownership_candidates: route ? route.ownership_candidates : [],
+        fix_role: text('fix_role'),
+        source_nodes: sortedUnique([finding.source_node == null ? null : String(finding.source_node),
+          ...routes.map(route => route.source_node)]),
+        // Unanimous or nothing: two route rows that disagree about the owner have not resolved
+        // one, and their union stays visible in ownership_candidates.
+        owning_node: owners.length === 1 && routes.every(route => route.owning_node !== null)
+          ? owners[0] : null,
+        ownership_candidates: sortedUnique(routes.flatMap(route => route.ownership_candidates)),
       };
     });
+}
+
+// #729 — the review source's authority digest, INVARIANT under the carried route/ownership rows.
+// This digest is only ever compared against a digest RECOMPUTED from the journal on disk, and
+// that journal is already pinned byte-exact by `journal_digest` (checked first, in
+// verifySourceAuthority) — so covering the route rows here would detect nothing new. It would,
+// however, change the digest of every source shape, wedging a transaction PREPARED by an earlier
+// build into a `replan_source_changed` refusal on its next resume, mid-flight, for a
+// carriage-only addition. Excluding them keeps the durable value byte-identical to what those
+// transactions stored.
+function sourceEvidenceDigest(source) {
+  const covered = Object.assign({}, source);
+  delete covered.route_candidates;
+  return schema.sha256Canonical(covered);
 }
 
 function readSource(paths, planHash, sourceAttemptId, options) {
@@ -781,7 +810,6 @@ function readSource(paths, planHash, sourceAttemptId, options) {
     source_reason: 'review_repair_requires_replan',
     producer_slice: producerSlice,
     findings: Array.isArray(attempt.findings) ? attempt.findings : [],
-    route_candidates: canonicalRouteCandidates(attempt.route_candidates),
     rebind: Array.isArray(attempt.rebind) ? attempt.rebind : [],
     case_b_evidence: null,
     scope_lineage_id: HEX64_RE.test(String(attempt.scope_lineage_id || '').toLowerCase())
@@ -792,7 +820,8 @@ function readSource(paths, planHash, sourceAttemptId, options) {
     handoff_digest: exactDigest(sourcePath),
     repair_outcome_digest: handoff.outcome_digest,
   };
-  source.source_evidence_digest = schema.sha256Canonical(source);
+  source.route_candidates = canonicalRouteCandidates(attempt.route_candidates);
+  source.source_evidence_digest = sourceEvidenceDigest(source);
   if (!reviewSourceCarriesFrontier(source)) {
     return { ok: false, reason: 'replan_source_findings_missing', detail: 'source_frontier_empty' };
   }
@@ -1901,12 +1930,17 @@ function buildPlannerPacket(paths, transaction) {
       source_evidence_digest: transaction.source.source_evidence_digest,
       producer_slice: transaction.source.producer_slice,
       findings: transaction.source.findings,
+      // The failure record the child epoch exists to repair, in one shape the planner can read:
+      // one row per source finding, carrying its immutable id, anchor, status, and the
+      // route/ownership the source already resolved. Absent ownership arrives as absent.
+      //
+      // Deliberately nested INSIDE `source`. The planner profile names the packet's claim / root /
+      // epoch / candidate / frontier / budget fields as immutable integrity constraints and its
+      // "source evidence" as a semantic task input — so an index of the source findings belongs
+      // where the planner is already told to READ, not beside the fields it is told not to touch.
+      finding_index: buildFindingIndex(transaction.source),
       rebind: transaction.source.rebind,
     },
-    // The frontier the child epoch exists to repair, in one shape the planner can read:
-    // one row per source finding, carrying its immutable id, anchor, status, and the
-    // route/ownership the source already resolved. Absent ownership arrives as absent.
-    frontier: buildPlannerFrontier(transaction.source),
     claim: {
       claim_identity_digest: transaction.parent.claim_identity_digest,
       claim_root_base_digest: transaction.parent.claim_root_base_digest,
@@ -3803,6 +3837,8 @@ module.exports = {
   validateChildPlan,
   validateChildHandoffAuthority,
   buildPlannerPacket,
+  buildFindingIndex,
+  sourceEvidenceDigest,
   buildSnapshotAuthorityProjection,
   verifyActivePlanningEvidence,
   verifyCurrentEpochAuthority,
