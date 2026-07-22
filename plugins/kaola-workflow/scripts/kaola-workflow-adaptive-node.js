@@ -8106,6 +8106,9 @@ function runRepairNodeCore(opts) {
       // Refuse to replan instead, which is the safe multi-writer outcome (a replacement plan can give
       // each finding its own writer). Tighten-only: the ownership-ABSENT case above is untouched (it
       // never reaches here), and a sole unambiguous owner of every open finding still repairs in place.
+      // This matches the NON-maximal (replay) branch's admission test above — `uniqueOwner === nodeId`
+      // plus no unowned finding is exactly `ownsWholeFrontier`, so both branches consume an attempt only
+      // for a writer that can fix the entire open set.
       if (own.anyOwned && !own.ownsWholeFrontier) {
         return { result: 'repair_requires_replan', reason: 'repair_scope_spans_writers',
           attempt_id: attemptId, producer_slice: proof.producer_slice,
