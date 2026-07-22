@@ -182,6 +182,19 @@
           ]
         },
         {
+          "id": "discovery-closure",
+          "heading": "Discovery and closure",
+          "lines": [
+            "- Obey the context-provided review phase. During discovery, inspect the complete declared surface once and establish the full admitted counterexample frontier before returning.",
+            "- Do not stop at the first successful counterexample. Continue through the material falsification categories the surface admits: boundary values, invalid state, error paths, persistence and concurrency where applicable, callers and consumers, and test-to-claim gaps.",
+            "- That sweep is bounded by the supplied surface and the allotted budget; it is not a demand for exhaustive proof. Never pad it with speculative, unreproduced, or out-of-surface findings.",
+            "- Consolidate repeated manifestations of one root cause into one finding, and record each independent demonstrated counterexample as its own canonical finding.",
+            "- During closure, account for every prior finding identity as open or resolved, reproduce the prior frontier, and inspect the supplied repair delta. Emit repair regressions bound to that delta as canonical findings.",
+            "- Record a genuine new blocker outside the repair delta as a canonical finding so the harness derives review_scope_expanded and a planner-owned replan. Never fold it silently into the same direct-repair lineage.",
+            "- Do not re-run unrestricted whole-surface discovery during closure. Repeat full discovery only when the context supplies review phase discovery for a genuinely new scope lineage."
+          ]
+        },
+        {
           "id": "finding-contract",
           "heading": "Canonical findings",
           "lines": [

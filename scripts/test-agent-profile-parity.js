@@ -373,6 +373,46 @@ if (reviewerGenerator) {
       `${role} Codex profiles must be forge-neutral and byte-identical`);
   }
 
+  // Falsification discovery and closure are different jobs: discovery establishes the whole admitted
+  // counterexample frontier over the declared surface in one pass; closure settles the prior frontier
+  // plus the supplied repair delta instead of re-running an unrestricted whole-surface search. Without
+  // that rule the role may stop at the first refutation and then rediscover a different latent blocker
+  // on every repair cycle, serializing real defects. The rule is versioned behavior, so it must live in
+  // the behavior source and reach every generated runtime surface.
+  {
+    const verifier = behaviorContracts.roles['adversarial-verifier'];
+    const section = (verifier.sections || []).find(entry => entry && entry.id === 'discovery-closure');
+    assert(!!section,
+      'adversarial-verifier behavior contract must declare a discovery-closure section');
+    const sectionLines = section && Array.isArray(section.lines) ? section.lines : [];
+    const sectionText = sectionLines.join(' ');
+    for (const token of [
+      'review phase',
+      'first successful counterexample',
+      'repair delta',
+      'review_scope_expanded',
+      'scope lineage',
+    ]) {
+      assert(sectionText.includes(token),
+        `adversarial-verifier discovery-closure policy must carry token ${JSON.stringify(token)}`);
+    }
+    const verifierSurfaces = [
+      'agents/adversarial-verifier.md',
+      ...TOML_TREES.map(tree => `${tree}/adversarial-verifier.toml`),
+    ];
+    for (const surface of verifierSurfaces) {
+      const content = read(surface) || '';
+      assert(section ? content.includes(`## ${section.heading}`) : false,
+        `${surface} must carry the generated discovery-closure heading`);
+      for (const line of sectionLines) {
+        assert(content.includes(line),
+          `${surface} must carry generated discovery-closure line ${JSON.stringify(line.slice(0, 56))}`);
+      }
+      assert(!reviewerGenerator.PROVENANCE_BAN.test(content),
+        `${surface} must contain no issue or decision provenance`);
+    }
+  }
+
   const manifest = reviewerGenerator.manifestForProfiles(rendered);
   assert(manifest.schema_version === 1 && manifest.profiles.length === rendered.length,
     'reviewer manifest must cover the complete deterministic render set');
