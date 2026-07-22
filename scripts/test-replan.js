@@ -4768,6 +4768,11 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     '#729: a token with an empty owner refuses');
   equal(check('none,F1=w', [open]).reason, 'replan_child_finding_owners_invalid',
     '#729: `none` mixed with real pairs refuses');
+  equal(check('', []).reason, 'replan_child_finding_owners_invalid',
+    '#729 FAIL DIRECTION: an EMPTY value is not the empty declaration — only the literal `none` '
+    + 'positively states that nothing needs an owner');
+  equal(check('F1=w,,F1=w', [open]).reason, 'replan_child_finding_owners_invalid',
+    '#729: an empty token between pairs does not silently collapse a duplicate declaration');
   equal(replan.childFindingCoverage(
     frozenPlan('p', { plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
       code_certifier: 'g', security_certifier: 'none' }, nodes, {}).text, tx([open])).reason,

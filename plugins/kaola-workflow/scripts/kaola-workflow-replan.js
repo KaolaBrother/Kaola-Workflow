@@ -2448,14 +2448,17 @@ const FINDING_OWNER_POLICIES = Object.freeze(['@relocated', '@anchorless']);
 //   3. the owner's declared write set covers one of the finding's anchor paths, UNLESS the
 //      planner explicitly asserted `@relocated` (the repair site legitimately differs from the
 //      observation anchor — an explicit assertion, never an inference);
-//   4. the owner reaches the applicable designated certifier and is not itself a member of it,
-//      so a repair can never be certified by itself and can never vanish merely because the
-//      child happens to contain an inherited-frontier certifier.
+//   4. the owner reaches every member of the applicable designated certifier and is not itself
+//      a member of it, so a repair can never be certified by itself and can never vanish merely
+//      because the child happens to contain an inherited-frontier certifier.
 //
-// ANCHORLESS / evidence-observation findings get the explicit TYPED policy the issue calls
-// for: a schema-2 `evidence_observation` anchor legally carries no path, so rule 3 is
-// inapplicable and is recorded as `anchorless_named_writer` in the report — but rules 1, 2
-// and 4 still bind in full, so a review-only child still cannot absorb one silently.
+// ANCHORLESS / evidence-observation findings get the explicit TYPED policy the issue calls for.
+// A schema-2 `evidence_observation` anchor legally carries no path, so rule 3 has nothing to
+// compute — and that is exactly why it may not simply be skipped: a silently-skipped rule is how
+// the live repro's child swallowed its finding. Such a finding must be declared with the
+// `@anchorless` suffix, which is REQUIRED where no anchor exists and REFUSED where one does (so
+// it can never double as a containment bypass). Rules 1, 2 and 4 bind unchanged, so a child with
+// no real writer still cannot absorb one.
 //
 // PURE: no fs, no transaction phase, no mutation. It reads the child bytes and the stored
 // source frontier, which is why the same verdict can be taken before the child is frozen and
@@ -2480,6 +2483,14 @@ function childFindingCoverage(childContent, transaction) {
   }
   const raw = declarations[0];
   const tokens = raw.split(',').map(token => token.trim()).filter(token => token !== '');
+  // An EMPTY value is not the empty declaration. `none` is a positive statement that the source
+  // carries nothing to repair; a blank value states nothing at all, and reading it as `none`
+  // would restore exactly the absence-is-fine hole this wall closes.
+  if (!tokens.length) {
+    return refuse('replan_child_finding_owners_invalid',
+      ['child ## Meta declares an empty finding_owners value; write the literal `none` to state '
+        + 'that no source finding needs an owner']);
+  }
   const errors = [];
   const owners = new Map();
   if (tokens.length === 1 && tokens[0] === 'none') {
