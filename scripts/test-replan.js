@@ -4007,9 +4007,10 @@ function packetFrontierRow(packet, uid) {
 }
 
 function preparedPacket(fx, sourceAttemptId) {
-  equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
-    sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result, 'prepared',
-  '#729 AC2: the packet fixture prepares');
+  const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+    sourceAttemptId, transitionReason: 'review_repair_requires_replan' });
+  equal(prepared.result, 'prepared',
+    '#729 AC2: the packet fixture prepares: ' + JSON.stringify(prepared));
   equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
     'replan_planner_dispatch_required', '#729 AC2: the packet fixture reaches planner dispatch');
   return JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8'));
@@ -4103,23 +4104,40 @@ function preparedPacket(fx, sourceAttemptId) {
 }
 
 {
-  // A route row the source never carried at all (a pre-route journal) must not throw and must
-  // not fabricate ownership: the finding still arrives, with route fields absent-shaped.
+  // A source that carries NO route rows at all. Both journal validators refuse such an attempt
+  // outright (route cardinality must equal the canonical finding set), so this cannot be reached
+  // through prepare — but buildPlannerPacket is EXPORTED and every forge contract validator calls
+  // it directly with a hand-built transaction whose source omits `route_candidates`. The
+  // projection must therefore stay total: no throw, the whole frontier still projected, and route
+  // fields absent-shaped rather than fabricated.
   const fx = initFixture();
   try {
-    const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
-    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
     const attempt = journal.attempts[0];
-    attempt.route_candidates = [];
-    fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
-    writeSchema2RepairSource(fx, journal, attempt);
-    const packet = preparedPacket(fx, SOURCE_ATTEMPT_ID);
+    const packet = replan.buildPlannerPacket({ project: fx.project }, {
+      transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
+      epoch_lineage_id: fx.lineage.epoch_lineage_id,
+      parent: { claim_identity: { repository_id: 'repo', worktree_path: fx.root },
+        claim_identity_digest: '1'.repeat(64), claim_root_base_digest: '2'.repeat(64),
+        plan_epoch: 1, plan_hash: '3'.repeat(64) },
+      snapshot: { authority_projection: {}, authority_digest: 'b'.repeat(64) },
+      source: { source_attempt_ids: [attempt.attempt_id], source_reason: 'review_repair_requires_replan',
+        source_evidence_digest: '5'.repeat(64), producer_slice: ['impl'],
+        findings: attempt.findings, rebind: [], inherited_frontier_classes: ['code'],
+        validation_obligations: [] },
+      cas: { prepare: { candidate_digest: '6'.repeat(64), inherited_frontier_digest: '7'.repeat(64) } },
+      budget: { count_before: 0, ceiling: 2, transition_cost: 1, case_b_exemption: false,
+        case_b_proof: null, consent_ledger_digest: '9'.repeat(64) },
+      planner: { profile_identity: 'workflow-planner-replan-v1', dispatch_nonce: 'dispatch-729' },
+    });
     deepEqual(packet.frontier.map(row => row.uid), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'],
       '#729 AC2: a route-less source still projects its whole frontier');
     const row = packetFrontierRow(packet, 'R1');
     equal(row.owning_node, null, '#729 AC2: no route row means no owner, not a guessed one');
     deepEqual(row.ownership_candidates, [], '#729 AC2: no route row means an empty candidate set');
     equal(row.status, 'open', '#729 AC2: the finding itself still carries its own status');
+    deepEqual(row.anchor_paths, ['product.js'],
+      '#729 AC2: the finding-borne anchor survives without any route row');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
