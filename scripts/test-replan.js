@@ -238,12 +238,23 @@ function initFixture(options = {}) {
   return fx;
 }
 
-function childFor(tx, project, sameGateChild, changedOriginChild) {
-  const implId = sameGateChild ? (changedOriginChild ? 'impl2' : 'impl') : 'child-impl';
-  const reviewId = sameGateChild ? 'review' : 'child-review';
-  const securityId = sameGateChild ? 'security' : 'child-security';
-  const finalizeId = sameGateChild ? 'finalize' : 'child-finalize';
-  return frozenPlan(project, {
+// #729 AC3-AC6: the carry-forward declaration every child epoch must publish — one
+// `<uid>=<node_id>` pair per source finding that still needs a repair owner, or the
+// literal `none` when the source carries no such finding. Built from the SAME source
+// projection the planner packet publishes, so a fixture can never declare an owner for a
+// uid the packet never showed.
+function findingOwnersLine(tx, ownerId) {
+  const rows = replan.buildFindingIndex(tx.source)
+    .filter(row => row.status !== 'resolved' && row.status !== 'deferred'
+      && (row.action == null || row.action === '' || row.action === 'fix'));
+  return rows.length ? rows.map(row => row.uid + '=' + ownerId).join(',') : 'none';
+}
+
+// The epoch-binding `## Meta` block every child of `tx` must carry. Extracted so a
+// coverage fixture can author a DIFFERENT node table under the SAME binding block and
+// still reach the carry-forward wall instead of tripping the binding wall first.
+function childMetaFor(tx, ids) {
+  return {
     plan_schema_version: 2,
     contract_version: 2,
     epoch_schema_version: 2,
@@ -261,8 +272,19 @@ function childFor(tx, project, sameGateChild, changedOriginChild) {
       recommended_shape_digest: tx.budget.case_b_proof.payload.recommended_shape_digest,
     } : {}),
     planner_binding: tx.planner.dispatch_nonce,
-    code_certifier: reviewId,
-    security_certifier: securityId,
+    code_certifier: ids.reviewId,
+    security_certifier: ids.securityId,
+  };
+}
+
+function childFor(tx, project, sameGateChild, changedOriginChild) {
+  const implId = sameGateChild ? (changedOriginChild ? 'impl2' : 'impl') : 'child-impl';
+  const reviewId = sameGateChild ? 'review' : 'child-review';
+  const securityId = sameGateChild ? 'security' : 'child-security';
+  const finalizeId = sameGateChild ? 'finalize' : 'child-finalize';
+  return frozenPlan(project, {
+    ...childMetaFor(tx, { reviewId, securityId }),
+    finding_owners: findingOwnersLine(tx, implId),
   }, [
     { id: implId, role: 'tdd-guide', write_set: 'product.js' },
     { id: reviewId, role: 'code-reviewer', depends_on: implId, model: 'reasoning',
@@ -4456,6 +4478,311 @@ function packetFromSource(fx, source) {
     equal(routed.owning_node, '7',
       '#729 AC2: a route-borne owner is normalized to a string');
   }
+}
+
+// ---------------------------------------------------------------------------
+// #729 case (b) — CHILD CARRY-FORWARD COVERAGE (AC3/AC4/AC5/AC6/AC7).
+//
+// The empty-frontier wall above proves a transition never opens with NO record of what
+// failed, and the packet index proves the planner is SHOWN that record. Neither proves the
+// child epoch can REPAIR it. The live defect was exactly that gap: a valid, non-empty
+// finding frontier reached a child whose only writer was a documentation node, the child
+// activated, the same defect was rediscovered by the child's own reviewer, and a second
+// epoch was burned.
+//
+// The sound check is a SET COMPARISON, not an inference: the child DECLARES, in its
+// hash-covered `## Meta`, which child node owns each inherited finding uid, and the
+// transaction verifies the declaration against the graph. Absence is never "fine" — a
+// missing declaration, a missing uid, or a missing owner row is the corruption signature
+// this wall exists to catch, so every one of them refuses.
+// ---------------------------------------------------------------------------
+function pendingTransactionFor(fx, sourceAttemptId) {
+  equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+    sourceAttemptId: sourceAttemptId || fx.sourceAttemptId,
+    transitionReason: 'review_repair_requires_replan' }).result, 'prepared',
+  '#729 coverage fixture prepares a transaction');
+  equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
+    'replan_planner_dispatch_required', '#729 coverage fixture reaches planner dispatch');
+  return JSON.parse(fs.readFileSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME), 'utf8'));
+}
+
+// Author an arbitrary child node table under the transaction's real binding block and
+// attest it, exactly as writePlannerResult does for the canonical child.
+function writeChildPlan(fx, tx, meta, nodes) {
+  const child = frozenPlan(fx.project, { ...childMetaFor(tx, {
+    reviewId: 'child-review', securityId: 'child-security' }), ...meta }, nodes, {});
+  fs.writeFileSync(path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME), child.text);
+  writePlannerAttestationForExistingChild(fx, tx);
+  return child;
+}
+
+// The live-repro node table: a read-only skeptic, a DOCUMENTATION writer, and the two
+// certifier walls. Every gate the epoch contract requires is present; nothing repairs
+// `product.js`.
+const REVIEW_ONLY_CHILD_NODES = [
+  { id: 'child-adversary', role: 'adversarial-verifier', model: 'reasoning',
+    gate_claim: 'the parent finding is analysed', gate_surface: 'parent evidence',
+    gate_aggregation: 'sequence' },
+  { id: 'child-docs', role: 'doc-updater', depends_on: 'child-adversary', write_set: 'README.md' },
+  { id: 'child-review', role: 'code-reviewer', depends_on: 'child-docs', model: 'reasoning',
+    gate_claim: 'current code candidate is approved', gate_surface: 'full code candidate',
+    gate_aggregation: 'sequence' },
+  { id: 'child-security', role: 'security-reviewer', depends_on: 'child-review', model: 'reasoning',
+    gate_claim: 'current security candidate is approved', gate_surface: 'full security candidate',
+    gate_aggregation: 'sequence' },
+  { id: 'child-finalize', role: 'finalize', depends_on: 'child-security', model: '—' },
+];
+
+// The canonical repair table: one writer whose declared write set is the finding's anchor,
+// upstream of both certifier walls.
+const COVERED_CHILD_NODES = [
+  { id: 'child-impl', role: 'tdd-guide', write_set: 'product.js' },
+  { id: 'child-review', role: 'code-reviewer', depends_on: 'child-impl', model: 'reasoning',
+    gate_claim: 'current code candidate is approved', gate_surface: 'full code candidate',
+    gate_aggregation: 'sequence' },
+  { id: 'child-security', role: 'security-reviewer', depends_on: 'child-review', model: 'reasoning',
+    gate_claim: 'current security candidate is approved', gate_surface: 'full security candidate',
+    gate_aggregation: 'sequence' },
+  { id: 'child-finalize', role: 'finalize', depends_on: 'child-security', model: '—' },
+];
+
+const SOURCE_UIDS = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'];
+const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
+
+{
+  // AC4 — a review-only child cannot activate for an unresolved path-based product finding,
+  // and AC3 — the refusal names the exact uncovered uid, its anchor path, and the node
+  // mapping that failed. The child here declares NO owners at all: absence must refuse.
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    const before = exactAuthorityBytes(fx);
+    writeChildPlan(fx, tx, {}, REVIEW_ONLY_CHILD_NODES);
+    const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(result.result, 'refuse',
+      '#729 AC4: a child that declares no finding owners refuses: ' + JSON.stringify(result));
+    equal(result.reason, 'replan_child_finding_owners_invalid',
+      '#729 AC4: an ABSENT carry-forward declaration is a typed refusal, never a silent pass: '
+      + JSON.stringify(result));
+    const after = exactAuthorityBytes(fx);
+    equal(after.cardinalities.epoch, 1, '#729 AC4: the parent epoch is not advanced');
+    equal(after.cardinalities.count, 0,
+      '#729 AC4: automatic_review_replans is not incremented by a coverage refusal');
+    equal(after.cardinalities.snapshots, 0, '#729 AC4: no parent snapshot is sealed');
+    equal(after.plan, before.plan, '#729 AC4: the parent plan remains authoritative byte for byte');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // AC3/AC4 — the SAME review-only child, now declaring the documentation writer as the
+  // owner of every finding. A declaration is not authority: the docs node cannot write
+  // `product.js`, so the refusal must name the uid, the anchor path, and the node.
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    writeChildPlan(fx, tx, { finding_owners: ownersFor(SOURCE_UIDS, 'child-docs') },
+      REVIEW_ONLY_CHILD_NODES);
+    const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(result.reason, 'replan_child_finding_uncovered',
+      '#729 AC4: a documentation-only owner does not cover a product anchor: ' + JSON.stringify(result));
+    const report = (result.errors || []).join(' ');
+    ok(/R1/.test(report), '#729 AC3: the refusal names the uncovered finding uid: ' + report);
+    ok(/product\.js/.test(report), '#729 AC3: the refusal names the uncovered anchor path: ' + report);
+    ok(/child-docs/.test(report), '#729 AC3: the refusal names the declared owner node: ' + report);
+    equal(authorityCardinalities(fx).epoch, 1, '#729 AC4: the parent epoch is not advanced');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // AC6 — covering N-1 of N refuses, and the report names the ONE uid that was dropped
+  // rather than collapsing to "some finding is uncovered".
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    writeChildPlan(fx, tx, { finding_owners: ownersFor(SOURCE_UIDS.slice(0, 5), 'child-impl') },
+      COVERED_CHILD_NODES);
+    const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(result.reason, 'replan_child_finding_uncovered',
+      '#729 AC6: covering 5 of 6 findings refuses: ' + JSON.stringify(result));
+    const report = (result.errors || []).join(' ');
+    ok(/R6/.test(report), '#729 AC6: the report names the dropped uid: ' + report);
+    ok(!/R1\b/.test(report), '#729 AC6: the report does not name the five covered uids: ' + report);
+    equal(authorityCardinalities(fx).epoch, 1, '#729 AC6: the parent epoch is not advanced');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // AC6 — a declaration naming a uid the source never carried is a source/child mismatch,
+  // not a harmless extra: it is how a hand-edited child manufactures apparent coverage.
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    writeChildPlan(fx, tx, {
+      finding_owners: ownersFor(SOURCE_UIDS.concat(['R7']), 'child-impl') }, COVERED_CHILD_NODES);
+    const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(result.reason, 'replan_child_finding_owners_invalid',
+      '#729 AC6: a uid the source never carried refuses: ' + JSON.stringify(result));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // A declared owner that is not a node of the child, and a declared owner that is the
+  // certifier itself. Neither may pass: the second is the exact "the finding disappears
+  // because the child contains a certifier" shape the issue names.
+  for (const [owner, label] of [['ghost-node', 'an owner outside the child graph'],
+    ['child-review', 'the certifier certifying its own repair']]) {
+    const fx = initFixture();
+    try {
+      const tx = pendingTransactionFor(fx);
+      writeChildPlan(fx, tx, { finding_owners: ownersFor(SOURCE_UIDS, owner) }, COVERED_CHILD_NODES);
+      const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+      equal(result.reason, 'replan_child_finding_uncovered',
+        '#729 AC4: ' + label + ' refuses: ' + JSON.stringify(result));
+      equal(authorityCardinalities(fx).epoch, 1, '#729 AC4: ' + label + ' advances no epoch');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
+{
+  // AC5 — a correctly mapped writer -> certifier child activates, and the second resume is
+  // idempotent. This is the same canonical child every other suite in this file drives, so
+  // its green path is the regression floor for the whole wall.
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    writeChildPlan(fx, tx, { finding_owners: ownersFor(SOURCE_UIDS, 'child-impl') },
+      COVERED_CHILD_NODES);
+    const committed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(committed.result, 'committed',
+      '#729 AC5: a mapped writer -> certifier child activates: ' + JSON.stringify(committed));
+    equal(authorityCardinalities(fx).epoch, 2, '#729 AC5: the child epoch is promoted');
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'already_committed',
+      '#729 AC5: the activated child resumes idempotently');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // AC5 — the anchorless lane. A schema-2 `evidence_observation` finding legally carries NO
+  // path, so anchor containment is not applicable; the TYPED policy is that such a finding
+  // still requires a named, write-capable, certified owner. A review-only child therefore
+  // still cannot absorb it, and a real writer still can.
+  const fx = initFixture({ sameGateChild: true });
+  try {
+    const v2 = installReviewJournalV2Source(fx);
+    const uid = v2.attempt.findings[0].uid;
+    ok(/^[0-9a-f]{64}$/.test(uid), '#729 AC5: the anchorless lane carries a canonical uid');
+    const tx = pendingTransactionFor(fx, v2.attempt.attempt_id);
+    writeChildPlan(fx, tx, { finding_owners: uid + '=child-docs' }, REVIEW_ONLY_CHILD_NODES);
+    const refused = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(refused.reason, 'replan_child_finding_uncovered',
+      '#729 AC5: an anchorless finding is not silently covered by a review-only child: '
+      + JSON.stringify(refused));
+    ok(/anchorless/.test((refused.errors || []).join(' ')),
+      '#729 AC5: the anchorless policy is named in the report: ' + JSON.stringify(refused.errors));
+    writeChildPlan(fx, tx, { finding_owners: uid + '=child-impl' }, COVERED_CHILD_NODES);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      '#729 AC5: an anchorless finding mapped to a real writer activates');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // AC7 — crash prefix + idempotent retry across the new seam. The coverage verdict is a
+  // pure function of (child bytes, source frontier): re-running the refusal must change
+  // nothing on disk, a crash at the last durable write BEFORE the seam must replay into the
+  // same typed refusal, and repairing the child in the SAME transaction must still activate.
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    writeChildPlan(fx, tx, { finding_owners: ownersFor(SOURCE_UIDS.slice(0, 1), 'child-impl') },
+      COVERED_CHILD_NODES);
+    const first = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(first.reason, 'replan_child_finding_uncovered', '#729 AC7: the seam refuses once');
+    const settled = exactAuthorityBytes(fx);
+    const second = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(second.reason, 'replan_child_finding_uncovered',
+      '#729 AC7: the retry lands on the SAME typed refusal');
+    deepEqual(authorityByteDiff(exactAuthorityBytes(fx), settled), { top: [], snapshots: [] },
+      '#729 AC7: the retry mutates no durable authority byte');
+    let crashed = null;
+    try {
+      replan.resumeReplan({ repoRoot: fx.root, project: fx.project,
+        failpoint(name) { if (name === 'after_tx_pre_freeze_cas') throw new Error('crash:' + name); } });
+    } catch (error) { crashed = error.message; }
+    ok(crashed === null || crashed === 'crash:after_tx_pre_freeze_cas',
+      '#729 AC7: the crash prefix fires at the last durable write before the seam: ' + crashed);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
+      'replan_child_finding_uncovered', '#729 AC7: the crash prefix replays into the same refusal');
+    // In-transaction repair: the planner re-authors and re-attests, and the child activates
+    // without a new transaction or a spent epoch.
+    writeChildPlan(fx, tx, { finding_owners: ownersFor(SOURCE_UIDS, 'child-impl') },
+      COVERED_CHILD_NODES);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
+      '#729 AC7: the repaired child activates inside the same transaction');
+    equal(authorityCardinalities(fx).epoch, 2, '#729 AC7: exactly one epoch is spent');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // The wall is a PURE function over (child content, transaction source) — no fs, no phase.
+  // These cases pin the grammar and the fail direction directly.
+  equal(typeof replan.childFindingCoverage, 'function',
+    '#729: the carry-forward wall is exported for direct coverage');
+  const nodes = [
+    { id: 'w', role: 'tdd-guide', write_set: 'src/a.js' },
+    { id: 'g', role: 'code-reviewer', depends_on: 'w', model: 'reasoning',
+      gate_claim: 'approved', gate_surface: 'candidate', gate_aggregation: 'sequence' },
+    { id: 'z', role: 'finalize', depends_on: 'g', model: '—' },
+  ];
+  const plan = owners => frozenPlan('p', {
+    plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
+    code_certifier: 'g', security_certifier: 'none', finding_owners: owners }, nodes, {}).text;
+  const tx = findings => ({ source: { findings } });
+  const check = (owners, findings) => replan.childFindingCoverage(plan(owners), tx(findings));
+  const open = { id: 'F1', status: 'open', action: 'fix', file: 'src/a.js' };
+
+  ok(check('F1=w', [open]).ok, '#729: a covered path-anchored finding passes');
+  equal(check('F1=z', [open]).reason, 'replan_child_finding_uncovered',
+    '#729: the terminal sink is not a repair owner');
+  equal(check('none', [open]).reason, 'replan_child_finding_uncovered',
+    '#729: `none` with a live frontier refuses rather than discharging it');
+  ok(check('none', []).ok, '#729: `none` with no frontier is the legal empty declaration');
+  ok(check('none', [{ id: 'F1', status: 'resolved' }]).ok,
+    '#729: an explicitly resolved finding needs no owner');
+  ok(check('none', [{ id: 'F1', status: 'deferred' }]).ok,
+    '#729: an explicitly deferred finding needs no owner');
+  ok(check('none', [{ id: 'F1', status: 'open', action: 'note' }]).ok,
+    '#729: an explicitly non-fix action needs no owner');
+  equal(check('none', [{ id: 'F1' }]).reason, 'replan_child_finding_uncovered',
+    '#729 FAIL DIRECTION: a finding with NO status and NO action still requires an owner — '
+    + 'absence never discharges the obligation');
+  equal(check('none', [{ id: 'F1', scope: 'product', status: 'open', action: 'fix' }]).reason,
+    'replan_child_finding_uncovered',
+    '#729 FAIL DIRECTION: the schema-2 free-form scope vocabulary never discharges an owner — '
+    + 'reading `scope !== in_scope` as out-of-scope would fail OPEN on the canonical lane');
+  equal(check('F1=w,F1=w', [open]).reason, 'replan_child_finding_owners_invalid',
+    '#729: a duplicated uid declaration refuses');
+  equal(check('F1', [open]).reason, 'replan_child_finding_owners_invalid',
+    '#729: a token with no `=` refuses');
+  equal(check('F1=', [open]).reason, 'replan_child_finding_owners_invalid',
+    '#729: a token with an empty owner refuses');
+  equal(check('none,F1=w', [open]).reason, 'replan_child_finding_owners_invalid',
+    '#729: `none` mixed with real pairs refuses');
+  equal(replan.childFindingCoverage(
+    frozenPlan('p', { plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
+      code_certifier: 'g', security_certifier: 'none' }, nodes, {}).text, tx([open])).reason,
+  'replan_child_finding_owners_invalid',
+  '#729 FAIL DIRECTION: an ABSENT finding_owners key refuses — absence is the corruption '
+    + 'signature, never an exemption');
+  // The relocation escape is an EXPLICIT planner assertion, never an inference: the repair
+  // site legitimately differs from the observation anchor, but the owner must still be a
+  // write-capable node that reaches the certifier.
+  equal(check('F1=w', [{ id: 'F1', status: 'open', action: 'fix', file: 'src/elsewhere.js' }]).reason,
+    'replan_child_finding_uncovered',
+    '#729: an anchor outside the declared write set refuses without an explicit relocation');
+  ok(check('F1=w@relocated', [{ id: 'F1', status: 'open', action: 'fix', file: 'src/elsewhere.js' }]).ok,
+    '#729: an explicitly relocated repair site is admitted');
+  equal(check('F1=g@relocated', [open]).reason, 'replan_child_finding_uncovered',
+    '#729: relocation waives only anchor containment, never write-capability or certification');
 }
 
 console.log(`test-replan: PASSED (${passed} assertions)`);
