@@ -34,10 +34,10 @@ function initGitRepo(tmp) {
   git(tmp, ['add', 'README.md']);
   git(tmp, ['commit', '-m', 'init']);
 }
-function node(script, args, cwd, input) {
+function node(script, args, cwd, input, envExtra) {
   return spawnSync(process.execPath, [script, ...args], {
     cwd, encoding: 'utf8', input,
-    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV, ...(envExtra || {}) },
   });
 }
 function lastJson(r) {
@@ -803,6 +803,196 @@ for (const certKind of ['group', 'single']) {
         + verdict.stdout + verdict.stderr);
     }
   } finally { fs.rmSync(tmp6, { recursive: true, force: true }); }
+}
+
+// ---- 7. #745 fail-closed fallback MATRIX for the newly-eligible reviewer roles ----
+// Widening `interiorSurfaceFresh` from adversarial-verifier to code-reviewer / security-reviewer
+// must NOT widen what counts as fresh. Every input the scoped path depends on is perturbed ONE AT A
+// TIME on an otherwise-honest fixture; each perturbation must degrade to the whole-candidate binding
+// (probe refuses stale), and the immediately following restore must bring the scoped freshness back —
+// so each refusal is provably caused by that perturbation and not by the scoped path being dead.
+// Exercised for BOTH newly-admitted roles; the adversarial-verifier arm consumes the same journal +
+// corroboration inputs (blocks 2 and 5 cover it end to end).
+for (const probeRole of ['code-reviewer', 'security-reviewer']) {
+  const tag = '745-F[' + probeRole + ']';
+  const tmp7 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-interior-fallbacks-')));
+  try {
+    initGitRepo(tmp7);
+    const project = 'issue-745-fallbacks';
+    const projectDir = path.join(tmp7, 'kaola-workflow', project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(path.join(tmp7, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp7, 'lib', 'impl.js'), 'module.exports = 0;\n');
+    fs.writeFileSync(path.join(tmp7, 'lib', 'other.js'), 'module.exports = 0;\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — interior reviewer fail-closed matrix', '',
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: enhancement',
+      'code_certifier: cert',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'validation_command: node --check lib/impl.js',
+      'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
+      '| probe | ' + probeRole + ' | writer | — | 1 | sequence | probe-review | impl-surface | sequence | — |',
+      '| docs | tdd-guide | probe | lib/other.js | 1 | sequence | — | — | — | — |',
+      '| cert | code-reviewer | docs | — | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize | cert | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '|---|---|',
+      '| writer | pending |', '| probe | pending |', '| docs | pending |',
+      '| cert | pending |', '| finalize | pending |', '',
+      '## Required Agent Compliance', '',
+      '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+      '| tdd-guide (writer) | pending | | |', '| ' + probeRole + ' (probe) | pending | | |',
+      '| tdd-guide (docs) | pending | | |', '| code-reviewer (cert) | pending | | |',
+      '| finalize (finalize) | pending | | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+
+    const freeze = node(planValidatorScript, [planPath, '--freeze', '--json'], tmp7);
+    assert(freeze.status === 0, tag + ' setup: plan freezes: ' + freeze.stdout + freeze.stderr);
+    if (freeze.status !== 0) { throw new Error('freeze failed — cannot proceed'); }
+    git(tmp7, ['add', '-A']);
+    git(tmp7, ['commit', '-m', 'freeze']);
+
+    const openWriter = lastJson(node(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp7));
+    assert(openWriter && openWriter.opened && openWriter.opened.id === 'writer', tag + ' setup: writer opens');
+    fs.writeFileSync(path.join(tmp7, 'lib', 'impl.js'), 'module.exports = 1;\n');
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], tmp7,
+      writerEvidence('writer', openWriter.nonce, 'base')).status === 0, tag + ' setup: writer evidence records');
+    const closeWriter = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp7));
+    assert(closeWriter && closeWriter.opened && closeWriter.opened.id === 'probe',
+      tag + ' setup: probe opens: ' + JSON.stringify(closeWriter));
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'probe', '--stdin', '--json'], tmp7,
+      gateEvidence('probe', closeWriter.opened.nonce, closeWriter.opened.dispatch, 'approved', ['findings_none: true'])).status === 0,
+      tag + ' setup: probe pass evidence records');
+    const closeProbe = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'probe', '--json'], tmp7));
+    assert(closeProbe && closeProbe.opened && closeProbe.opened.id === 'docs',
+      tag + ' setup: docs opens: ' + JSON.stringify(closeProbe));
+
+    // Disjoint downstream write: moves the WHOLE candidate, leaves the reviewed surface untouched.
+    fs.writeFileSync(path.join(tmp7, 'lib', 'other.js'), 'module.exports = 99;\n');
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'docs', '--stdin', '--json'], tmp7,
+      writerEvidence('docs', closeProbe.opened.nonce, 'disjoint')).status === 0, tag + ' setup: docs evidence records');
+    const closeDocs = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'docs', '--json'], tmp7));
+    assert(closeDocs && closeDocs.opened && closeDocs.opened.id === 'cert',
+      tag + ' setup: cert opens: ' + JSON.stringify(closeDocs));
+    assert(node(adaptiveNodeScript, ['record-evidence', '--project', project, '--node-id', 'cert', '--stdin', '--json'], tmp7,
+      gateEvidence('cert', closeDocs.opened.nonce, closeDocs.opened.dispatch, 'approved', ['findings_none: true'])).status === 0,
+      tag + ' setup: cert pass evidence records');
+    const closeCert = lastJson(node(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'cert', '--json'], tmp7));
+    assert(closeCert && closeCert.closed === 'cert', tag + ' setup: cert seals PASS: ' + JSON.stringify(closeCert));
+
+    const verdict = env => {
+      const r = node(planValidatorScript, [planPath, '--verdict-check', '--json'], tmp7, undefined, env);
+      return { r, out: lastJson(r) };
+    };
+    const refusedNode = (v, id) => v.r.status !== 0 && v.out && v.out.ok === false
+      && Array.isArray(v.out.failures)
+      && v.out.failures.some(f => f && f.nodeId === id && /stale/.test(String(f.reason || '')));
+    const isFresh = v => v.r.status === 0 && v.out && v.out.ok === true;
+
+    const cacheDir = path.join(projectDir, '.cache');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const basePath = path.join(cacheDir, 'barrier-base-probe');
+    const barrierRef = 'refs/kaola-workflow/barrier/' + project + '/probe';
+    const honestJournal = fs.readFileSync(journalPath, 'utf8');
+    const honestBase = fs.readFileSync(basePath, 'utf8');
+    const honestRefSha = String(git(tmp7, ['rev-parse', '--verify', barrierRef + '^{commit}']).stdout || '').trim();
+    assert(/^[0-9a-f]{40,64}$/.test(honestRefSha),
+      tag + ' setup: the probe gate has an anchored barrier baseline ref: ' + honestRefSha);
+
+    // CONTROL: the honest fixture gets the scoped freshness. Every perturbation below must take it away.
+    assert(isFresh(verdict()),
+      tag + ' CONTROL: the honest interior reviewer gate is fresh on its own surface: '
+      + verdict().r.stdout + verdict().r.stderr);
+
+    const withJournal = mutate => {
+      const parsed = JSON.parse(honestJournal);
+      const probeAttempt = parsed.attempts.find(a => a && a.logical_gate
+        && Array.isArray(a.logical_gate.members) && a.logical_gate.members.includes('probe'));
+      const next = mutate(parsed, probeAttempt);
+      fs.writeFileSync(journalPath, JSON.stringify(next === undefined ? parsed : next, null, 2) + '\n');
+    };
+    // Each entry: [label, apply, why]. Restore-and-recheck runs after every one.
+    const perturbations = [
+      ['missing journal', () => fs.rmSync(journalPath),
+        'with no review journal there is no seal attempt to scope freshness against'],
+      ['malformed journal', () => fs.writeFileSync(journalPath, '{ not json'),
+        'an unparsable journal yields no attempts'],
+      ['journal without an attempts array', () => fs.writeFileSync(journalPath, JSON.stringify({ attempts: 'nope' })),
+        'a journal whose attempts field is not an array yields no attempts'],
+      // KNOWN RESIDUAL, pinned as intended behavior: after a cross-epoch journal rotation the seal
+      // attempt is absent, so the child epoch falls back to whole-candidate and the false-block can
+      // reappear there. Tighten-only, and deliberately NOT rescued by this widening.
+      ['seal attempt absent (cross-epoch rotation shape)',
+        () => withJournal(parsed => ({ attempts: parsed.attempts.filter(a => !(a && a.logical_gate
+          && Array.isArray(a.logical_gate.members) && a.logical_gate.members.includes('probe'))) })),
+        'no attempt carries the gate\'s sealed candidate'],
+      ['attempt without candidate_declared',
+        () => withJournal((parsed, attempt) => { delete attempt.candidate_declared; }),
+        'without a seal-time blob map there is nothing to compare the current surface against'],
+      ['attempt candidate_digest does not match the sealed receipt',
+        () => withJournal((parsed, attempt) => { attempt.candidate_digest = 'a'.repeat(64); }),
+        'the attempt no longer describes the candidate the gate actually sealed'],
+      ['attempt gate membership does not contain the gate',
+        () => withJournal((parsed, attempt) => { attempt.logical_gate.members = ['someone-else']; }),
+        'the recorded logical gate is not this gate'],
+      ['anchored barrier ref deleted (git lookup fails)',
+        () => { const d = git(tmp7, ['update-ref', '-d', barrierRef]); assert(d.status === 0, tag + ': barrier ref deletes'); },
+        'the corroboration authority for the seal map cannot be resolved'],
+      ['filed barrier baseline disagrees with the anchored ref',
+        () => fs.writeFileSync(basePath, 'b'.repeat(40) + '\n'),
+        'the baseline cross-check the corroboration depends on fails'],
+      ['filed barrier baseline missing', () => fs.rmSync(basePath),
+        'no filed baseline means no corroboration'],
+    ];
+    for (const [label, apply, why] of perturbations) {
+      apply();
+      assert(refusedNode(verdict(), 'probe'),
+        tag + ' FAIL-CLOSED [' + label + ']: ' + why + ' — the interior reviewer gate must fall back to '
+        + 'the whole-candidate binding and refuse stale');
+      fs.writeFileSync(journalPath, honestJournal);
+      fs.writeFileSync(basePath, honestBase);
+      git(tmp7, ['update-ref', barrierRef, honestRefSha]);
+      assert(isFresh(verdict()),
+        tag + ' RESTORE [' + label + ']: restoring the perturbed input restores the scoped freshness — '
+        + 'the refusal above is caused by the perturbation, not by a dead scoped path');
+    }
+
+    // git itself unavailable: the whole-candidate digest cannot be computed either, so the gate refuses
+    // without ever reaching the scoped path. Coarser than the arms above (it does not isolate one call)
+    // but it pins the end-to-end property: no git => no pass.
+    // OUTSIDE the fixture repo: anything written under tmp7 joins the landable tree and would move
+    // the whole candidate by itself, staling the final certifier and confounding the arm.
+    const stubDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitless-')));
+    fs.writeFileSync(path.join(stubDir, 'git'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+    const gitless = verdict({ PATH: stubDir });
+    fs.rmSync(stubDir, { recursive: true, force: true });
+    assert(gitless.r.status !== 0 && (!gitless.out || gitless.out.ok !== true),
+      tag + ' FAIL-CLOSED [git unavailable]: with git failing, no gate can be proved fresh: '
+      + gitless.r.stdout + gitless.r.stderr);
+    assert(isFresh(verdict()),
+      tag + ' RESTORE [git unavailable]: with git back, the scoped freshness returns');
+
+    // FINAL-CERTIFIER MEMBERSHIP: the widening must never scope the plan's own final certifier to its
+    // own surface. An unreviewed new file moves the whole candidate but touches NO producer write set,
+    // so a certifier allowed to scope itself would finalize it clean.
+    fs.writeFileSync(path.join(tmp7, 'lib', 'rogue.js'), 'module.exports = "unreviewed";\n');
+    assert(refusedNode(verdict(), 'cert'),
+      tag + ' FAIL-CLOSED [final-certifier membership]: the designated final certifier keeps its '
+      + 'whole-candidate binding, so an unreviewed new file still refuses stale');
+    fs.rmSync(path.join(tmp7, 'lib', 'rogue.js'));
+    assert(isFresh(verdict()),
+      tag + ' RESTORE [final-certifier membership]: removing the unreviewed file restores the pass');
+  } finally { fs.rmSync(tmp7, { recursive: true, force: true }); }
 }
 
 if (failed) {
