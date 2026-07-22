@@ -120,11 +120,70 @@ semantic owner (both zero-mutation):
   (`blocking_descendants`) would have to be replayed to reopen it safely. The descendant-replay
   transaction is not performed in-plan; the envelope names `semantic_owner` + `blocking_descendants`
   so a replacement plan (`/kaola-workflow-adapt`) can re-derive from the owner (see #699).
+- **`repair_requires_replan` with `reason: repair_scope_spans_writers`** (#730) — the requested node is
+  graph-maximal and owns *some* blocking findings but **not all** of them. Owning at least one is not
+  authority to consume the attempt: the reopened writer is assigned the whole blocking set, so a partial
+  owner would either be handed findings it cannot fix or be handed a silently narrowed brief while
+  `consumed_by` burned the entire attempt. The envelope names the offending uids in three disjoint
+  lists — `foreign_owned_findings` (solely owned by another writer), `ambiguous_findings` (ownership
+  spans >1 candidate, so no single fixer), `unowned_findings` (routed to no writer at all) — plus the
+  `ownership_candidates` union.
+
+  **Recovery.** Zero-mutation, so you have every option:
+  1. If `foreign_owned_findings` is the only non-empty list *and* the whole blocking set happens to be
+     owned by one other writer, re-run `repair-node --node-id {that writer}` — the ownership envelope
+     names it in `ownership_candidates`.
+  2. Otherwise the blocking set genuinely spans writers and no single reopen can discharge it: run
+     `/kaola-workflow-adapt` to activate a replacement plan that gives **each** blocking finding a
+     writer. `unowned_findings` additionally means the plan has no writer declaring that path — the
+     replacement plan must add one (or the reviewer must re-anchor the finding).
+  3. A finding listed here that should *not* have been blocking is a reviewer-side fix: re-settle it as
+     `status: deferred` / `scope: out_of_scope` / a non-`fix` action. Non-blocking findings are excluded
+     from this partition entirely and never force a replan.
+
+**The population is the BLOCKING set, not every open row.** Both the ownership partition above and the
+repair brief below use `unresolvedInScopeFixes` — `scope: in_scope`, `action: fix`, status neither
+`resolved` nor `deferred`. A deferred, out-of-scope, pre-existing, or `follow_up`/`document`/`none`
+finding is open but does not block the gate, so it never triggers `repair_scope_spans_writers` and is
+never assigned to a fixer.
 
 When ownership is unresolvable — an anchor-less finding (e.g. an `evidence_observation` anchor carries
 no path) or a legacy attempt whose rows still hold `ownership_candidates: []` — the bridge stays inert:
 it never falsely accuses a maximal writer of a mismatch, and a non-maximal request simply degrades to
 the generic `repair_requires_replan`.
+
+### The repair brief handed to the reopened writer
+
+An admitted `repair-node` seeds the writer's `.cache/{node-id}.md` with a canonical, digest-bound brief
+and returns the same payload as `repair_brief` in its JSON envelope (identical on the transaction, the
+consumption-resume short-circuit, and the idempotent re-repair — it is a pure function of the attempt).
+It joins each still-open route row to its canonical finding record, so the fixer no longer has to
+re-derive the work from raw reviewer prose.
+
+| Evidence key | Meaning |
+| --- | --- |
+| `failed_review_attempt:` / `failed_review_gate:` | The legacy attempt/gate IDs, unchanged. |
+| `repair_brief_digest:` | SHA-256 over the canonical payload. |
+| `repair_brief_scope:` | `assigned_findings` \| `no_blocking_findings` \| `unstructured_reviewer_evidence`. |
+| `repair_brief_assigned_uids:` | The MUST-FIX uid list. Emitted only under `assigned_findings`. |
+| `repair_finding:` / `repair_finding_proof:` / `repair_finding_statement:` | One assigned finding: severity, scope, action, status, `failure_class`, anchor (kind/path/range or observation key), secondary anchors, owner candidates, fix role, reviewer evidence path; the proof line carries the four trigger digests (precondition/input/expected/observed), `trigger_digest`, `proof_digest`, `producer_evidence_digest`. |
+| `repair_brief_context_uids:` / `repair_context_finding:` | **Context only, not assigned, not required to be fixed** — open but non-blocking rows, shown for judgement. |
+| `repair_brief_reviewer_evidence:` | The reviewer `.cache/*.md` paths to re-read. |
+| `repair_validation_obligation:` | Validation commands carried from the attempt. |
+
+Two rules the brief never breaks:
+
+- **Only the assigned section is an instruction.** The "fix EVERY assigned uid" directive names the
+  `repair_finding:` lines alone; `repair_context_finding:` lines carry an explicit *not required*
+  label. A non-blocking finding is never assigned.
+- **Never a column-0 `finding:` line.** Every key is `repair_`-prefixed because the finding parser is
+  fence-blind — a bare `finding:` line would give the reopened *writer* an unresolved in-scope fix of
+  its own and it could never close.
+
+`repair_brief_scope` is typed rather than silently empty. `no_blocking_findings` means the review
+settled fail with findings present but none of them blocking; `unstructured_reviewer_evidence` means it
+settled fail with no structured finding at all. In both cases nothing is pre-assigned, no empty
+`repair_brief_assigned_uids:` line is emitted, and the reviewer evidence paths are named instead.
 
 ## 1. Reading the refusal envelope
 
@@ -361,4 +420,5 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 | `plan_hash_mismatch` | Frozen authority tampered → restore/prove the recorded parent bytes or stop; never re-stamp the tampered parent |
 | `repair_writer_ownership_mismatch` | Maximal writer owns no blocking finding → `repair-node --node-id {semantic_owner}` |
 | `dependent_producer_replay_required` | Non-maximal owner with completed downstream writers → replan from `semantic_owner` (`/kaola-workflow-adapt`, #699) |
+| `repair_scope_spans_writers` | Maximal writer owns SOME but not ALL blocking findings → if `ownership_candidates` names one other writer that owns them all, `repair-node --node-id {that writer}`; otherwise `/kaola-workflow-adapt` for a plan giving each blocking finding a writer (`unowned_findings` ⇒ the plan declares no writer for that path) |
 | `plan_hash_mismatch` | Plan tampered → re-run `--freeze-checked` → `--freeze` |
