@@ -259,10 +259,13 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   `kaola-workflow-commit-node.js` composes the plan-validator barrier subcommands into
   one auditable call by shelling the validator: at node START it runs `--record-base`
   (idempotent, capturing the full-worktree snapshot so the barrier has a clean baseline);
-  at node END it runs `--barrier-check` (blocking) plus `--gate-verify` and
-  `--verdict-check` (both informational only at the per-node level, because the
-  downstream reviewer is still pending); at
-  a whole-plan invocation (no `--node-id`) all three checks are blocking (a test-only mode — see the executor note below). The split between next-action
+  at node END it runs the fused `--node-end` (`--barrier-check` plus `--selector-check`,
+  both blocking); at
+  a whole-plan invocation (no `--node-id`) `--barrier-check`, `--gate-verify` and `--verdict-check` are all blocking (a test-only mode — see the executor note below).
+  The per-node end used to *also* compute `--gate-verify` and `--verdict-check`, but only
+  informationally — the downstream reviewer is still pending when the writer commits, so
+  excluding them from the verdict was the deadlock fix, and nothing ever read the payloads.
+  They are no longer computed there at all; the fused envelope pins both keys at `null`. The split between next-action
   and commit-node mirrors the executor's own dispatch/commit cycle: next-action resolves
   *what* to run next; commit-node proves *what was written* was in bounds.
   `kaola-workflow-adaptive-node.js` (#272) is the third aggregator and owns the complete
@@ -651,8 +654,8 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   `verdict: pass` / `findings_blocking: 0` vocabulary and legacy adversarial majority-refute
   behavior. Contract 2 instead verifies normalized bound receipts and applies the declared reducer;
   missing, failed, stale, or unparseable evidence is incomplete rather than a vote. Both paths fail
-  closed — informational per-node in `kaola-workflow-commit-node.js`
-  and a hard blocking merge gate in Finalization. `--barrier-check`
+  closed — verdict-check is a hard blocking merge gate in Finalization; it is not run at all
+  during a per-node close (where it was informational-only and unread). `--barrier-check`
   re-scans the files actually written and refuses a sensitive write with no `security-reviewer`
   node (audit H1), an out-of-allowlist production write (audit H3), or a foreign-project `kaola-workflow/archive/<X>/` write whose `<X>` is not the finalized project (#261 — scoping the blanket `kaola-workflow/` artifact exemption so a stray cross-issue archive folder cannot reach a protected branch undetected; companion defense-in-depth: `cmdFinalize` stages only the finalized project's own archive/rename/roadmap paths, and the Finalization Staging Guard typed-blocks a staged foreign `archive/<other>/`). It runs in two modes: the
   **whole-plan** Finalization merge gate diffs vs the merge-base of HEAD and `origin/main` (so a

@@ -5372,11 +5372,13 @@ function main() {
     return;
   }
   if (args.includes('--node-end')) {
-    // #366: FUSED per-node end-of-node check — barrier-check + gate-verify + verdict-check +
-    // selector-check in ONE process / ONE plan parse, emitting the SAME per-check payloads keyed in
-    // one envelope (back-compat: commit-node's per-node end-mode reads barrierCheck/gateVerify/
-    // verdictCheck/selectorCheck). Replaces four separate validator spawns with one. selector-check
-    // runs only when the node IS a selector source (cheap non-selector short-circuit otherwise).
+    // #366: FUSED per-node end-of-node check — barrier-check + selector-check in ONE process /
+    // ONE plan parse, emitting the per-check payloads keyed in one envelope (commit-node's
+    // per-node end-mode reads barrierCheck/selectorCheck). selector-check runs only when the node
+    // IS a selector source (cheap non-selector short-circuit otherwise).
+    // #744: the two INFORMATIONAL sub-checks this mode used to also compute — gate-verify and
+    // verdict-check — are gone; the envelope keeps their keys pinned at null. See the (2)+(3)
+    // note below for why nothing could ever read them.
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
@@ -5403,16 +5405,21 @@ function main() {
         barrierCheckOut = barrierCheck(content, actualPaths, { nodeId, root, project: projTag });
       }
     }
-    // (2) gate-verify (informational at the per-node level — commit-node tags it so).
-    const gateVerifyOut = verifyGateExecution(content, { root, planPath });
-    // (3) verdict-check (informational per-node).
+    // (2)+(3) gate-verify and verdict-check are NOT computed here (#744).
+    // At the per-node level both were INFORMATIONAL: commit-node tagged them
+    // `informational:true` and deliberately excluded them from overallOk (deadlock
+    // prevention — the post-dominating reviewer is still pending when the writer
+    // commits), which makes their gate_failed / verdict_failed refuse branches
+    // structurally unreachable in per-node mode. No consumer read the payloads
+    // either — adaptive-node's per-node commit-node reads are exitCode / result /
+    // barrierCheck.reason / barrierCheck.outOfAllow / selectorCheck only.
+    // The keys stay in the envelope as an explicit null so the shape is stable and
+    // commit-node's per-node arm resolves them to null without a special case.
+    // The BLOCKING whole-plan `--gate-verify` / `--verdict-check` subcommands are
+    // untouched; only this per-node fused view stops computing them.
+    const gateVerifyOut = null;
+    const verdictCheckOut = null;
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
-    const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
-    const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
-    // root + planPath let the interior-freshness corroboration resolve the gate's anchored barrier
-    // baseline; without them it fails closed to the whole-candidate binding, which would make this
-    // per-node view disagree with the whole-plan --verdict-check below.
-    const verdictCheckOut = verifyVerdictBlock(content, { nodeId, readCache, globCache, root, planPath });
     // (4) selector-check — only when this node is a selector_source (else cheap isSelector:false).
     let selectorCheckOut;
     {

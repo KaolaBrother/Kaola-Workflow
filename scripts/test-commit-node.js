@@ -232,7 +232,9 @@ function assert(condition, message) {
 // ---------------------------------------------------------------------------
 // Test 7 (#366): per-node end-mode makes ONE fused --node-end validator spawn instead of FOUR
 // (barrier + gate + verdict + selector) — ≥40% reduction. A logging stub counts validator
-// invocations. The fallback (stub without --node-end support) re-runs the legacy four spawns.
+// invocations. The fallback (stub without --node-end support) re-runs the legacy spawns.
+// #744: the fallback is now TWO legacy spawns (barrier + selector) — gate-verify and
+// verdict-check are no longer requested per-node on EITHER arm.
 // ---------------------------------------------------------------------------
 {
   const { execFileSync } = require('child_process');
@@ -262,7 +264,10 @@ function assert(condition, message) {
   assert(fusedCalls.length === 1, 'test7: per-node end shells the validator exactly ONCE (--node-end), got ' + fusedCalls.length + ': ' + JSON.stringify(fusedCalls));
   assert(fusedCalls[0].includes('--node-end'), 'test7: the single spawn is --node-end, got ' + fusedCalls[0]);
 
-  // (b) legacy stub (no --node-end support: returns {} ) → fallback to FOUR spawns.
+  assert(fusedCalls.filter(c => c.includes('--gate-verify') || c.includes('--verdict-check')).length === 0,
+    'test7 (#744): the per-node fused arm never requests gate-verify / verdict-check, got ' + JSON.stringify(fusedCalls));
+
+  // (b) legacy stub (no --node-end support: returns {} ) → fallback to the legacy per-node spawns.
   const legacyStub =
     "const a=process.argv.slice(2);\n" +
     "if(a.includes('--barrier-check'))process.stdout.write(JSON.stringify({result:'pass',errors:[]}));\n" +
@@ -270,9 +275,34 @@ function assert(condition, message) {
     "else if(a.includes('--gate-verify')||a.includes('--verdict-check'))process.stdout.write(JSON.stringify({ok:true}));\n" +
     "else process.stdout.write('{}');\n"; // --node-end → {} (no mode) → fallback
   const legacyCalls = runWithStub(legacyStub);
-  assert(legacyCalls.length === 5, 'test7: fallback path = 1 (--node-end probe) + 4 legacy spawns = 5, got ' + legacyCalls.length + ': ' + JSON.stringify(legacyCalls));
+  assert(legacyCalls.length === 3, 'test7 (#744): fallback path = 1 (--node-end probe) + 2 legacy spawns (barrier + selector) = 3, got ' + legacyCalls.length + ': ' + JSON.stringify(legacyCalls));
   assert(legacyCalls.filter(c => c.includes('--node-end')).length === 1, 'test7: fallback probes --node-end once');
   assert(legacyCalls.filter(c => c.includes('--barrier-check')).length === 1, 'test7: fallback runs the legacy barrier-check');
+  assert(legacyCalls.filter(c => c.includes('--selector-check')).length === 1, 'test7: fallback runs the legacy selector-check');
+  assert(legacyCalls.filter(c => c.includes('--gate-verify') || c.includes('--verdict-check')).length === 0,
+    'test7 (#744): the per-node FALLBACK arm never requests gate-verify / verdict-check either, got ' + JSON.stringify(legacyCalls));
+
+  // (c) whole-plan mode is UNTOUCHED — gate-verify and verdict-check are BLOCKING there and
+  //     must still be shelled (3 spawns: barrier + gate + verdict).
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-spawn-wp-'));
+    const stub = path.join(dir, 'vstub.js');
+    const log = path.join(dir, 'calls.log');
+    fs.writeFileSync(stub, "const fs=require('fs');\nfs.appendFileSync(" + JSON.stringify(log) + ", process.argv.slice(2).join(' ') + '\\n');\n"
+      + "const a=process.argv.slice(2);\n"
+      + "if(a.includes('--barrier-check'))process.stdout.write(JSON.stringify({result:'pass',errors:[]}));\n"
+      + "else process.stdout.write(JSON.stringify({ok:true}));\n");
+    try {
+      execFileSync(process.execPath, [commitNode, path.join(dir, 'plan.md'), '--json'], {
+        encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_COMMIT_NODE_VALIDATOR: stub }),
+      });
+    } catch (_) { /* exit code irrelevant to the spawn count */ }
+    const wpCalls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert(wpCalls.length === 3, 'test7 (#744): whole-plan still shells 3 (barrier + gate-verify + verdict-check), got ' + wpCalls.length + ': ' + JSON.stringify(wpCalls));
+    assert(wpCalls.filter(c => c.includes('--gate-verify')).length === 1, 'test7 (#744): whole-plan gate-verify is retained (blocking)');
+    assert(wpCalls.filter(c => c.includes('--verdict-check')).length === 1, 'test7 (#744): whole-plan verdict-check is retained (blocking)');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1154,127 @@ function assert(condition, message) {
     assert(reFrozen.content === preFrozen,
       'T-PRESEED-c: the re-frozen v1 plan is byte-identical to its input');
     rmrf(repoRoot);
+  }
+}
+
+// ===========================================================================
+// T-NODEEND-PRUNE (#744 register item): the fused per-node `--node-end` mode no
+// longer COMPUTES gate-verify / verdict-check.
+//
+// Those two sub-checks were informational-ONLY at the per-node level: commit-node
+// tagged them `informational:true` and deliberately excluded them from overallOk
+// (deadlock prevention — the downstream reviewer is still pending when the writer
+// commits), so their `gate_failed` / `verdict_failed` refuse branches are
+// structurally UNREACHABLE in per-node mode. No caller ever read them either:
+// adaptive-node's per-node commit-node reads are exitCode / result /
+// barrierCheck.reason / barrierCheck.outOfAllow / selectorCheck only.
+//
+// The VERDICT must stay byte-identical: barrier + selector alone decide.
+// The whole-plan mode is UNTOUCHED — there both checks are blocking.
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const COMMIT_NODE = path.join(__dirname, 'kaola-workflow-commit-node.js');
+
+  // A real git repo whose ledger has impl COMPLETE and its post-dominating
+  // reviewer still PENDING — the exact state where gate-verify AND verdict-check
+  // would report a failure while the per-node barrier passes.
+  const mkNodeEndRepo = () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeend744-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta',
+      'plan_schema_version: 2',
+      'labels: area:scripts',
+      'sink: CHANGELOG.md',
+      'code_certifier: review',
+      'security_certifier: none',
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'validation_command: node --check scripts/kaola-workflow-plan-validator.js',
+      'validation_timeout_minutes: 5', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —      | —        | 1 | sequence | — | — | — | — |',
+      '| impl     | tdd-guide     | seed   | src/a.js | 1 | sequence | — | — | — | — |',
+      '| review   | code-reviewer | impl   | —        | 1 | sequence | review-change | code-tree | sequence | — |',
+      '| finalize | finalize      | review | —        | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |', '| impl | complete |', '| review | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, planPath };
+  };
+  const runNode = (repoRoot, argv) => {
+    try {
+      const stdout = execFileSync('node', argv, { cwd: repoRoot, encoding: 'utf8' });
+      let parsed = {};
+      try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {};
+      try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  };
+
+  // (a) the validator's fused --node-end emits NO gate-verify / verdict-check payload.
+  {
+    const { repoRoot, planPath } = mkNodeEndRepo();
+    const rb = runNode(repoRoot, [VALIDATOR, planPath, '--record-base', '--node-id', 'impl', '--json']);
+    assert(rb.exitCode === 0, 'T-NODEEND-PRUNE-a: --record-base for impl succeeds, got ' + JSON.stringify(rb));
+    const ne = runNode(repoRoot, [VALIDATOR, planPath, '--node-end', '--node-id', 'impl', '--json']);
+    assert(ne.mode === 'node-end', 'T-NODEEND-PRUNE-a: --node-end emits mode node-end, got ' + JSON.stringify(ne));
+    assert(ne.barrierCheck && ne.barrierCheck.result === 'pass',
+      'T-NODEEND-PRUNE-a: the per-node barrier still runs and passes (verdict UNCHANGED), got ' + JSON.stringify(ne.barrierCheck));
+    assert(ne.selectorCheck && ne.selectorCheck.ok === true,
+      'T-NODEEND-PRUNE-a: the per-node selector-check still runs, got ' + JSON.stringify(ne.selectorCheck));
+    assert(ne.gateVerify === null,
+      'T-NODEEND-PRUNE-a: gate-verify is NOT computed in the per-node fused mode (informational + unread), got ' + JSON.stringify(ne.gateVerify));
+    assert(ne.verdictCheck === null,
+      'T-NODEEND-PRUNE-a: verdict-check is NOT computed in the per-node fused mode (informational + unread), got ' + JSON.stringify(ne.verdictCheck));
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+
+  // (b) VERDICT INVARIANCE: commit-node's per-node envelope is still result:'ok'
+  //     / exit 0 in exactly this state — the pruned checks never decided anything.
+  {
+    const { repoRoot, planPath } = mkNodeEndRepo();
+    runNode(repoRoot, [COMMIT_NODE, planPath, '--node-id', 'impl', '--start', '--json']);
+    const out = runNode(repoRoot, [COMMIT_NODE, planPath, '--node-id', 'impl', '--json']);
+    assert(out.result === 'ok' && out.overallOk === true && out.exitCode === 0,
+      'T-NODEEND-PRUNE-b: per-node verdict is UNCHANGED (barrier+selector decide), got ' + JSON.stringify(out));
+    assert(out.mode === 'per-node', 'T-NODEEND-PRUNE-b: mode is per-node');
+    assert(out.reason === undefined, 'T-NODEEND-PRUNE-b: no refuse reason on a passing per-node close, got ' + out.reason);
+    assert(out.gateVerify === null && out.verdictCheck === null,
+      'T-NODEEND-PRUNE-b: the aggregator emits null for the pruned informational sub-checks, got '
+      + JSON.stringify({ gateVerify: out.gateVerify, verdictCheck: out.verdictCheck }));
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+
+  // (c) the standalone whole-plan subcommands are UNTOUCHED — --gate-verify and
+  //     --verdict-check still compute and still block there.
+  {
+    const { repoRoot, planPath } = mkNodeEndRepo();
+    const gv = runNode(repoRoot, [VALIDATOR, planPath, '--gate-verify', '--json']);
+    assert(gv.ok === false,
+      'T-NODEEND-PRUNE-c: standalone --gate-verify STILL reports the uncovered complete writer, got ' + JSON.stringify(gv));
+    const vc = runNode(repoRoot, [VALIDATOR, planPath, '--verdict-check', '--json']);
+    assert(typeof vc.ok === 'boolean',
+      'T-NODEEND-PRUNE-c: standalone --verdict-check STILL emits an ok verdict, got ' + JSON.stringify(vc));
+    fs.rmSync(repoRoot, { recursive: true, force: true });
   }
 }
 
