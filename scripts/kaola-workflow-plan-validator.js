@@ -180,6 +180,28 @@ const TERMINAL_ROLE = 'finalize';
 // by its own post-dominance gate G3 (freeze) + G3 execution check (--gate-verify).
 const MAIN_SESSION_GATE = schema.MAIN_SESSION_GATE_ROLE;
 
+// #758 (progressive elaboration, child 1): the SPINE plan form. A spine plan is an ordered
+// milestone spine plus the unique finalize sink; each spine node is either a CONCRETE
+// single-role node (unchanged semantics — every legacy rule applies to it verbatim) or a
+// typed EXPANSION POINT whose frontier is composed at OPEN time.
+//
+// `plan_form` is the EXPLICIT shape discriminator (D-note: discriminate, never loosen a shared
+// check). Absent => `dag` => the legacy full-DAG grammar, byte-identical. This is deliberately
+// dual-accept: the legacy grammar is NOT retired here.
+//
+// SPINE_EXPANSION_ROLE is a BUILT-IN role token like TERMINAL_ROLE / MAIN_SESSION_GATE — it has
+// no agents/*.md profile, so the closed-library check exempts it, but ONLY inside a spine plan.
+// In a `dag` plan it stays an unknown role and refuses through the EXISTING unknown-role error.
+//
+// Why no shared check needed loosening: an expansion point is read-only (not in WRITE_ROLES ⇒ a
+// declared write set is already refused), shape `sequence` only, and not a gate role. It is
+// therefore invisible BY CONSTRUCTION to every interior shape proof — fan-out group disjointness,
+// the antichain write-overlap sweep, G1/G2/G3 post-dominance (it is not producesCode / not
+// nodeIsSensitive). The interiors those proofs would range over do not exist at freeze time, and
+// no legacy predicate had to be widened to admit the spine.
+const SPINE_EXPANSION_ROLE = 'expansion-point';
+const PLAN_FORM_LEGAL = Object.freeze(['dag', 'spine']);
+
 // The canonical roles that are ALWAYS installed (vendored). The validator unions
 // this baseline with any maintainer-added roles discovered under <root>/agents,
 // so the library is runtime-closed over the INSTALLED set (not the literal nine).
@@ -768,6 +790,80 @@ function optimizeHeaderCounts(content) {
   }
   return counts;
 }
+// #758: resolve the `plan_form` shape discriminator from the hash-covered `## Meta` body.
+// Returns { values, form } — `values` is every occurrence (so a DUPLICATE field, which would let a
+// decoy `plan_form: spine` line silently re-shape the grammar, can be refused rather than
+// last-wins-resolved). An ABSENT field resolves to `dag`: legacy plans are untouched.
+function parsePlanForm(content) {
+  const values = metaFieldValues(content, 'plan_form').map(v => String(v || '').trim().toLowerCase());
+  return { values, form: values.length === 1 ? values[0] : (values.length === 0 ? 'dag' : values[values.length - 1]) };
+}
+// #758: parse the `expansion(<id>):` contracts out of the hash-covered `## Meta` body. Same block
+// grammar (column-0 header + indented `key: value` fields) as the `optimize(<id>):` contracts, so
+// the planner learns ONE Meta-contract shape and the two readers cannot drift structurally.
+//
+// Field semantics:
+//   milestone_goal      — what this milestone must achieve (prose, required)
+//   expected_surfaces   — coarse directories/areas the milestone is EXPECTED to touch. ADVISORY
+//                         ONLY: deliberately NOT normalized through parseWriteSetCell and NEVER
+//                         fed to the barrier, the disjointness sweep, or any freeze wall. It is an
+//                         orientation hint for the open-time composer; a directory-shaped token
+//                         (`scripts/`) is LEGAL here precisely because it is not a write grant.
+//   join_constraints    — known join constraints (prose, required; the literal `none` is legal)
+//   review_class        — the review obligation class(es) this expansion must discharge BEFORE the
+//                         sink, as gate-role tokens. This is the spine-level reviewed-before-sink
+//                         wall input (SPINE-5); it is a CLOSED vocabulary over GATE_VERDICT_ROLES.
+function parseExpansionContracts(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const headerRe = /^expansion\(([^)]*)\)[ \t]*:[ \t]*$/;          // column 0, no leading whitespace
+  const fieldRe = /^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)[ \t]*$/;  // indented key: value
+  const contracts = new Map();
+  let curId = null;
+  let curFields = null;
+  const flush = () => {
+    if (curId === null) return;
+    const f = curFields || {};
+    const str = k => (Object.prototype.hasOwnProperty.call(f, k) ? String(f[k]).trim() : '');
+    contracts.set(curId, {
+      nodeId: curId,
+      milestone_goal: str('milestone_goal'),
+      expected_surfaces_raw: str('expected_surfaces'),
+      expected_surfaces: str('expected_surfaces').split(/[\s,]+/).filter(Boolean),
+      join_constraints: str('join_constraints'),
+      review_class_raw: str('review_class'),
+      review_class: str('review_class').toLowerCase().split(/[\s,]+/).filter(Boolean),
+    });
+    curId = null;
+    curFields = null;
+  };
+  for (const raw of String(meta || '').split('\n')) {
+    const h = raw.match(headerRe);
+    if (h) { flush(); curId = h[1].trim(); curFields = {}; continue; }
+    if (curId !== null) {
+      const fm = raw.match(fieldRe);
+      if (fm) { curFields[fm[1]] = fm[2]; continue; }
+      // a non-indented, non-empty line closes the current block; blank lines stay inside it.
+      if (raw.trim() !== '' && !/^[ \t]/.test(raw)) flush();
+    }
+  }
+  flush();
+  return contracts;
+}
+// #758: count `expansion(<id>):` headers per node id from the RAW `## Meta` body — the same
+// duplicate-header wall OPT-1 needs, and for the same reason: parseExpansionContracts' Map.set
+// LAST-WINS, so a second block for the same id (including a decoy fenced inside `## Meta`, which
+// classifier.sectionBody returns verbatim) would silently clobber the real contract — swapping a
+// review_class out from under the SPINE-5 wall with no refusal.
+function expansionHeaderCounts(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const headerRe = /^expansion\(([^)]*)\)[ \t]*:[ \t]*$/;
+  const counts = new Map();
+  for (const raw of String(meta || '').split('\n')) {
+    const h = raw.match(headerRe);
+    if (h) { const id = h[1].trim(); counts.set(id, (counts.get(id) || 0) + 1); }
+  }
+  return counts;
+}
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
 // write-set parsing to classifier.parseWriteSetCell, so the validator, the plan_hash, and
@@ -866,7 +962,10 @@ function validateWaitBudgetNode(node, opts) {
   if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
     return refuse('wait_budget_noninteger', `node ${node.id} wait_budget_minutes must be a strict base-10 integer (got "${raw}")`);
   }
-  if (node.role === MAIN_SESSION_GATE || node.role === TERMINAL_ROLE) {
+  // #758: an expansion point is not dispatched at all — its frontier (and therefore its per-unit
+  // tier and wait budget) is composed at OPEN time, so a frozen wait budget on it is meaningless.
+  // Same non-delegable family as the sink and the main-session gate.
+  if (node.role === MAIN_SESSION_GATE || node.role === TERMINAL_ROLE || node.role === SPINE_EXPANSION_ROLE) {
     return refuse('wait_budget_nondelegable', `node ${node.id} role ${node.role} is not delegated and cannot declare wait_budget_minutes`);
   }
   const resolveModel = opts.resolveModel || (role => resolveAgentModel(role));
@@ -3074,6 +3173,24 @@ function validatePlan(content, opts) {
   if (!schema.WRITE_OVERLAP_POLICY_LEGAL.includes(writePolicy)) {
     return { result: 'refuse', reason: 'write_overlap_policy_unsupported', operator_hint: getOperatorHint('write_overlap_policy_unsupported', { value: writePolicy }), errors: ['write_overlap_policy: "' + writePolicy + '" is not supported at freeze (legal: ' + schema.WRITE_OVERLAP_POLICY_LEGAL.join('|') + '; exact is deferred)'], planHash: computePlanHash(content) };
   }
+  // #758: resolve the plan FORM before anything else reads the node table. `plan_form` is absent in
+  // every legacy plan and resolves to `dag`, so this whole block is inert for them (no new field, no
+  // new emission). A DUPLICATE field is refused outright: two `plan_form:` lines would let a decoy
+  // re-shape which grammar the plan is judged under, and Meta is hash-covered as a whole — the same
+  // soundness argument as plan_schema_version_duplicate. An out-of-vocab value refuses like the two
+  // policy tokens above rather than silently falling back to `dag`.
+  const planFormInfo = parsePlanForm(content);
+  if (planFormInfo.values.length > 1) {
+    return { result: 'refuse', reason: 'plan_form_duplicate', operator_hint: getOperatorHint('plan_invalid'),
+      errors: ['## Meta carries more than one plan_form field (values: ' + planFormInfo.values.join(', ') + ') — exactly one shape discriminator per plan'],
+      planHash: computePlanHash(content) };
+  }
+  if (!PLAN_FORM_LEGAL.includes(planFormInfo.form)) {
+    return { result: 'refuse', reason: 'plan_form_unsupported', operator_hint: getOperatorHint('plan_invalid'),
+      errors: ['plan_form: "' + planFormInfo.form + '" is not a legal plan shape (legal: ' + PLAN_FORM_LEGAL.join('|') + ')'],
+      planHash: computePlanHash(content) };
+  }
+  const isSpine = planFormInfo.form === 'spine';
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
   const errors = [];
@@ -3186,6 +3303,10 @@ function validatePlan(content, opts) {
     // #334: MAIN_SESSION_GATE is a built-in non-subagent token (like the finalize sink) — skip
     // the installed-library lookup (it has no agents/*.md profile and is never dispatched).
     if (n.role === TERMINAL_ROLE || n.role === MAIN_SESSION_GATE) continue;
+    // #758: the expansion-point token is built-in ONLY under `plan_form: spine`. In a `dag` plan it
+    // falls through to the unchanged unknown-role error — a legacy plan can never gain the token by
+    // accident, and the spine grammar is never reachable without the explicit discriminator.
+    if (isSpine && n.role === SPINE_EXPANSION_ROLE) continue;
     if (!roles.has(n.role)) errors.push(`unknown role "${n.role}" not in installed library (node ${n.id})`);
   }
   // dangling deps
@@ -3885,9 +4006,107 @@ function validatePlan(content, opts) {
     }
   }
 
+  // --- #758 SPINE form: typed expansion points ---------------------------------------------
+  // Every rule below is gated on `isSpine`, so a legacy `dag` plan reaches ZERO of it. All
+  // failures fold into the EXISTING `plan_invalid` refusal family (no parallel vocabulary): a
+  // spine missing its sink already refuses through the unchanged unique-sink error above, and a
+  // spine missing its review wall refuses through SPINE-5 below — both `plan_invalid`.
+  //
+  // What is NOT here, on purpose: no interior shape proof over an expansion point. Its interior
+  // (units, roles, tiers, write surfaces, mode) does not exist at freeze, so there is nothing to
+  // post-dominate or prove disjoint. The spine-level proofs — unique sink, sink post-dominance
+  // over the spine, reviewed-before-sink, closed library, caps, risk governance — are the
+  // unchanged global checks above; they range over the spine because the spine IS the node table.
+  if (isSpine) {
+    const expansionNodes = nodes.filter(n => n.role === SPINE_EXPANSION_ROLE);
+    const expansionIds = new Set(expansionNodes.map(n => n.id));
+    const expansionContracts = parseExpansionContracts(content);
+    const expansionHeaders = expansionHeaderCounts(content);
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
+
+    // SPINE-1: the discriminator must mean something. A `plan_form: spine` plan with no expansion
+    // point is a full DAG wearing the spine label — accept it and the discriminator decays into
+    // noise that future readers cannot trust.
+    if (!expansionNodes.length) {
+      errors.push(`SPINE-1: plan_form: spine declares no ${SPINE_EXPANSION_ROLE} node — a spine plan must carry at least one typed expansion point (author plan_form: dag when the whole DAG is known at freeze)`);
+    }
+
+    // SPINE-2: exactly one expansion(<id>) contract per expansion point, and every contract keys
+    // one. Mirrors OPT-1 including the duplicate-header wall (a second block last-wins-clobbers).
+    for (const id of expansionIds) {
+      const count = expansionHeaders.get(id) || 0;
+      if (count === 0) {
+        errors.push(`SPINE-2: expansion point ${id} has no expansion(${id}) block in ## Meta — every expansion point needs exactly one expansion contract`);
+      } else if (count > 1) {
+        errors.push(`SPINE-2: expansion point ${id} has ${count} expansion(${id}) blocks in ## Meta — exactly one expansion contract per expansion point (a duplicate header silently clobbers the earlier block; remove the extra/decoy)`);
+      }
+    }
+    for (const [id] of expansionContracts) {
+      if (!nodeById.has(id)) {
+        errors.push(`SPINE-2: expansion(${id}) names a node "${id}" that does not exist in ## Nodes`);
+      } else if (!expansionIds.has(id)) {
+        errors.push(`SPINE-2: expansion(${id}) keys node "${id}" whose role is "${nodeById.get(id).role}", not ${SPINE_EXPANSION_ROLE} — an expansion contract may only key an expansion point`);
+      }
+    }
+
+    for (const n of expansionNodes) {
+      // SPINE-3: node-shape rules. An expansion point is a spine MILESTONE: it is composed into a
+      // frontier at open time, so it can never itself be a fan-out member, a loop body, a select
+      // arm, or the sink; and it carries no model tier (per-unit tier choice belongs to expansion
+      // time, not freeze). Its write set is already refused by the read-only-role rule above.
+      if (n.shape.kind !== 'sequence') {
+        errors.push(`SPINE-3: expansion point ${n.id} has shape "${n.shape.raw || n.shape.kind}" — an expansion point must be shape sequence (its interior frontier is composed at open time, not pre-declared as a fan-out/loop/select)`);
+      }
+      if (n.id === sink) {
+        errors.push(`SPINE-3: expansion point ${n.id} is the plan's terminal node — the unique sink must be a ${TERMINAL_ROLE} node, and an expansion point must be post-dominated by its review wall before the sink`);
+      }
+      if (n.model) {
+        errors.push(`SPINE-3: expansion point ${n.id} declares model "${n.model}" — an expansion point is never dispatched as a subagent; per-unit model tier is chosen when the frontier is composed at open time`);
+      }
+
+      // SPINE-4: the declared contract must be complete. Every field is REQUIRED — an omitted
+      // milestone goal or join constraint is exactly the information the open-time composer has no
+      // other source for, and an omitted review_class would silently void the SPINE-5 wall.
+      const c = expansionContracts.get(n.id);
+      if (!c) continue; // SPINE-2 already reported the missing block
+      if (!c.milestone_goal) {
+        errors.push(`SPINE-4: expansion(${n.id}) declares no milestone_goal — name what this milestone must achieve`);
+      }
+      if (!c.expected_surfaces.length) {
+        errors.push(`SPINE-4: expansion(${n.id}) declares no expected_surfaces — name the coarse directories/areas the milestone is expected to touch (ADVISORY: never a write grant, a barrier input, or a disjointness input)`);
+      }
+      if (!c.join_constraints) {
+        errors.push(`SPINE-4: expansion(${n.id}) declares no join_constraints — state the known join constraints, or the literal "none"`);
+      }
+      if (!c.review_class.length) {
+        errors.push(`SPINE-4: expansion(${n.id}) declares no review_class — name the review obligation this expansion discharges before the sink (one or more of: ${[...GATE_VERDICT_ROLES].join(', ')})`);
+      }
+      const illegalClasses = c.review_class.filter(r => !GATE_VERDICT_ROLES.has(r));
+      if (illegalClasses.length) {
+        errors.push(`SPINE-4: expansion(${n.id}) review_class token(s) "${illegalClasses.join('", "')}" are not gate roles — the review obligation vocabulary is closed over: ${[...GATE_VERDICT_ROLES].join(', ')}`);
+      }
+
+      // SPINE-5: the reviewed-before-sink wall. This is the spine-level survivor of G1/G2 — those
+      // range over producesCode/nodeIsSensitive nodes, which an expansion point is not (its writes
+      // do not exist yet), so without this rule a spine could reach the sink with no wall at all.
+      // Same post-dominance mechanism (gateUncovered over the unique sink) as G1/G2/G3, so the
+      // wall means exactly what it means everywhere else in the grammar.
+      if (sink) {
+        for (const role of c.review_class) {
+          if (!GATE_VERDICT_ROLES.has(role)) continue; // already reported as out-of-vocabulary
+          if (gateUncovered(nodes, x => x.id === n.id, role, sink).length) {
+            errors.push(`SPINE-5: ${role} does not post-dominate expansion point ${n.id} — the declared review obligation must be discharged before the sink; place a ${role} node on the spine between ${n.id} and the ${TERMINAL_ROLE} sink`);
+          }
+        }
+      }
+    }
+  }
+
   const planHash = computePlanHash(content);
   if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink,
-    plan_schema_version: planSchemaVersion, contract_version: contractVersion };
+    plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+    // #758: emitted ONLY for a spine plan, so every legacy emission stays byte-identical.
+    ...(isSpine ? { plan_form: 'spine' } : {}) };
 
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
   const reasons = [];
@@ -3908,6 +4127,8 @@ function validatePlan(content, opts) {
     plan_schema_version: planSchemaVersion,
     contract_version: contractVersion,
     diagnostics: { wideFanout: wideFanouts },
+    // #758: emitted ONLY for a spine plan, so every legacy emission stays byte-identical.
+    ...(isSpine ? { plan_form: 'spine' } : {}),
   };
 }
 
@@ -3938,15 +4159,24 @@ function revalidateForResume(content, opts) {
   }
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
+  // #758: the resume wall is the SECOND closed-library reader. A frozen spine plan would brick at
+  // every resume (unknown_role "expansion-point") if only the freeze wall knew the token, so the
+  // exemption is bound here too — under the SAME `plan_form: spine` discriminator, read from the
+  // hash-verified Meta above. Structural only: the SPINE-1..5 rules stay freeze-only, matching the
+  // established policy that a tightened rubric must never brick an in-flight plan.
+  const resumeIsSpine = parsePlanForm(content).form === 'spine';
   for (const n of nodes) {
     // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.
-    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return refuse('unknown_role', `unknown role "${n.role}" (node ${n.id})`, { role: n.role, nodeId: n.id });
+    if (resumeIsSpine && n.role === SPINE_EXPANSION_ROLE) { /* built-in spine token */ }
+    else if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return refuse('unknown_role', `unknown role "${n.role}" (node ${n.id})`, { role: n.role, nodeId: n.id });
     for (const d of n.dependsOn) if (!ids.has(d)) return refuse('dangling_depends_on', `node ${n.id} depends_on unknown "${d}"`, { nodeId: n.id });
   }
   if (hasCycle(nodes)) return refuse('cycle', 'cycle detected');
   if (!uniqueSink(nodes)) return refuse('no_unique_sink', 'no unique sink');
   return { ok: true, result: 'pass', reasonCode: null, planHash: computed,
-    plan_schema_version: contract.plan_schema_version, contract_version: contract.contract_version };
+    plan_schema_version: contract.plan_schema_version, contract_version: contract.contract_version,
+    // #758: emitted ONLY for a spine plan, so every legacy emission stays byte-identical.
+    ...(resumeIsSpine ? { plan_form: 'spine' } : {}) };
 }
 
 // #719: PRODUCER-COMPLETES the compliance artifact at its authoring boundary.
@@ -5567,6 +5797,14 @@ module.exports = {
   parseWriteOverlapPolicy,
   parseOptimizeContracts,
   optimizeHeaderCounts,
+  // #758 spine form: the shape discriminator + the expansion-point contract readers. Exported so
+  // the expansion transaction (which composes an expansion point's frontier at open time) reads the
+  // SAME frozen contract this wall proved, rather than re-parsing `## Meta` on its own terms.
+  parsePlanForm,
+  parseExpansionContracts,
+  expansionHeaderCounts,
+  SPINE_EXPANSION_ROLE,
+  PLAN_FORM_LEGAL,
   parseValidationCommand,
   parseValidationPolicy,
   parseValidationTestConsumes,
