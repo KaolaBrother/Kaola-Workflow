@@ -925,6 +925,35 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
       tag + ' CONTROL: the honest interior reviewer gate is fresh on its own surface: '
       + verdict().r.stdout + verdict().r.stderr);
 
+    // SECOND FRONTIER, in-process. repair-state does NOT go through the CLI — it calls
+    // verifyVerdictBlock directly with its own readCache/globCache plus root/planPath. The
+    // widening binds there too, but every arm in this block drives the CLI, so that shape was
+    // unexercised. Assert the honest chain is fresh through repair-state's exact call, and that
+    // dropping root/planPath collapses it to stale — which is what makes the threading
+    // load-bearing rather than decorative.
+    {
+      const planValidator = require('./kaola-workflow-plan-validator');
+      const planText = fs.readFileSync(planPath, 'utf8');
+      const readCacheIP = fileName => {
+        try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; }
+      };
+      const globCacheIP = prefix => {
+        try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; }
+      };
+      const threaded = planValidator.verifyVerdictBlock(planText,
+        { readCache: readCacheIP, globCache: globCacheIP, root: tmp7, planPath });
+      assert(threaded && threaded.ok === true,
+        tag + ' SECOND FRONTIER: repair-state\'s in-process call shape sees the interior gate as fresh, got '
+        + JSON.stringify(threaded && threaded.failures));
+
+      const unthreaded = planValidator.verifyVerdictBlock(planText,
+        { readCache: readCacheIP, globCache: globCacheIP });
+      assert(unthreaded && unthreaded.ok === false && Array.isArray(unthreaded.failures)
+        && unthreaded.failures.some(f => f && f.nodeId === 'probe' && /stale/.test(String(f.reason || ''))),
+        tag + ' SECOND FRONTIER: without root/planPath the same call reports the gate stale, so the '
+        + 'threading is load-bearing, got ' + JSON.stringify(unthreaded && unthreaded.failures));
+    }
+
     const withJournal = mutate => {
       const parsed = JSON.parse(honestJournal);
       const probeAttempt = parsed.attempts.find(a => a && a.logical_gate

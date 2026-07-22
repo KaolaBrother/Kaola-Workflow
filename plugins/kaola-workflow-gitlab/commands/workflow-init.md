@@ -116,6 +116,8 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 
 **Tighten-only boundary:** an axiom may only make an agent stricter, never looser. Never cite an axiom to skip a typed gate, refusal, or barrier — gates define the allowed space; axioms only break ties inside it.
 
+**Parallel by default:** concurrency is the standing default for independent work. Holding work serial is a positive claim that requires present-tense, checkable evidence — a named data dependency (name the artifact one unit consumes from the other), a named shared irreversible resource, or a host without isolated worktrees; guesses and anticipations ("might overlap") never justify serial. Wrongly-parallel work costs one bounded reconcile inside isolated legs; wrongly-serial work silently costs wall-clock on every frontier. This governs whether to run work concurrently — width stays sized to the true shape of the task.
+
 ## Kaola-Workflow
 
 - Use `/workflow-next` as the workflow entrypoint and router.
@@ -143,7 +145,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, `workflow-plan.md` (the `## Node Ledger`), and the compliance ledger before continuing.
 - State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from `workflow-plan.md` and its `## Node Ledger`, run the state repair helper and repair `workflow-state.md` before routing.
-- The adaptive DAG is the default workflow; `fast` and `full` are install-time opt-ins (`--with-fast` / `--with-full`) that run only on an explicit keyword.
+- The adaptive DAG is the only workflow path.
 - End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
 - Active issue work runs in a repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` by default; set `KAOLA_WORKTREE_NATIVE=0` to disable. See README for the full contract.
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
