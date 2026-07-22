@@ -40,10 +40,20 @@ Issue selection is an agent decision, not a hidden script decision.
 The objective is **minimum makespan and minimum wasted work at fixed correctness.** Efficiency comes from faithfully decomposing a task into its genuinely-independent units and running them at the highest *safe* concurrency — **not** from maximizing fan-out width (over-fanning fragments context and adds synthesis overhead — itself a cost), and **not** from cutting correctness gates (rework is the most expensive inefficiency of all). The adaptive path composes a task-shaped DAG for *any* shape of work; serve a new shape by composing existing roles, never a special-case lane.
 
 - **Decompose to genuine independence, then dispatch concurrently** — fan out exactly as wide as the task decomposes, no wider, no narrower. Reserve `sequence` for true dependencies.
-- **Read frontiers run concurrently today** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`; the `adversarial-verifier` majority-refute fan-out is the parallel-skeptic shape). **Planner-proven-disjoint (`parallel_safe` antichain) write** frontiers co-open in isolated legs by default — contained per-leg + reconciled by the synthesizer; only uncertain/overlapping writes stay serial or consent-gated.
+- **Read frontiers run concurrently today** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`; the `adversarial-verifier` majority-refute fan-out is the parallel-skeptic shape). **Planner-proven-disjoint (`parallel_safe` antichain) write** frontiers co-open in isolated legs by default — contained per-leg + reconciled by the synthesizer; serial holds only on an evidence-named serializer or a consent-gated surface (next principle).
 - **Schedule critical-path-first; right-size the model tier** (don't spend Opus where Sonnet suffices — raise only at the reasoning floor); consider `speculative_open_policy` where a gate is very likely to pass.
 - **Correctness is efficiency.** Fail-closed gates + adversarial verify prevent the rework that dwarfs any parallelism win. Investigation composes as probe → assume → adversarial critique → converge (read phases fanned out; shape-first read-only then re-plan when the shape depends on findings, freeze-once). Question/bug-shaped handling is not yet shipped.
 - **Escalate values, not facts** — route value / standing / irreversible calls to the `consent`-halt valve; never bolt an approval gate onto the planner.
+
+### Parallel by Default; Serial Requires Evidence
+
+Concurrency is the standing default for any frontier. Holding work serial is a positive claim that must cite **present-tense, checkable evidence** for a named serializer — never a guess, anticipation, or prediction:
+
+- **S1 — data dependency**: name the concrete artifact one unit consumes from another ("name it or co-open").
+- **S2 — shared irreversible effect**: name the shared resource both units mutate (resource identity, not a conflict forecast).
+- **S3 — environment**: a failed worktree-support probe (a measurement).
+
+Uncertainty is not a serializer — uncertain writes co-open in isolated legs and reconcile at the join. Rationale: wrong-parallel costs one bounded, visible synthesis pass; wrong-serial costs invisible wall-clock on every frontier, so the burden of proof sits on serial. This governs **mode** only: width stays governed by faithful decomposition, and the recorded evidence line is audit-only (the only mechanical check allowed is that it exists).
 
 ### Self-Sufficient by Default; CI/CD Is Not a Gate
 

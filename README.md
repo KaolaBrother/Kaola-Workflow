@@ -28,6 +28,8 @@ A few beliefs follow from that order.
 
 **Parallelism is a means, not a goal.** The agent runs genuinely independent work at the same time to save you time — but it never forces fan-out for its own sake. Over-parallelizing just burns tokens and context for no real gain. **Width is sized to the true shape of the task.**
 
+**Serial requires evidence; parallel doesn't.** Concurrency is the standing default for independent work. Holding a frontier serial is a positive claim that must cite present-tense, checkable evidence — a named data dependency ("name the artifact one unit consumes from the other, or co-open"), a named shared irreversible resource, or a host without worktree support. Guesses and anticipations ("might overlap") are inadmissible: wrongly-parallel work costs one bounded synthesis pass inside isolated worktrees, while wrongly-serial work silently costs wall-clock on every frontier. The burden of proof always sits on serial — this decides *whether* to parallelize; *how wide* stays sized to the true shape of the task.
+
 **One engine, not a mode per problem.** A single adaptive planner composes a task-shaped plan for *any* kind of work — building a feature, fixing a bug, or investigating an open question — from a small set of **reusable roles**. There's no separate pipeline to learn for each problem type.
 
 **Spend to match the work.** Parallel width, number of agents, and model strength all scale to the genuine scope of the issue. Small work stays small. Nothing is over-engineered.
