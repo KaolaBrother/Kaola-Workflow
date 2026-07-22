@@ -457,11 +457,14 @@ function makePlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
-// Test 14 (#390b): the per-node model tier is validated at the POINT OF USE.
-// A plan carrying an out-of-tier `model` (e.g. `haiku`, a real harness alias)
-// passes --resume-check (revalidateForResume is freeze-only, untouched) but
-// computeNextAction REFUSES it (model_invalid) so the dispatch prose never passes
-// it verbatim on Agent(model=…). opus/sonnet/absent must pass through unchanged.
+// Test 14: the per-node model tier is validated ONCE, at FREEZE. computeNextAction
+// carries no second tier wall — it accepts whatever vocabulary the frozen plan holds
+// (neutral tokens, legacy aliases, absent cells) and preserves the cell verbatim.
+// The two checks that make that safe are pinned here:
+//   (a) an out-of-vocabulary cell is refused at freeze by validatePlan (model_invalid);
+//   (d) the one silently-corrupting sub-case — a reasoning-floor role dropped below
+//       reasoning class — is refused on the dispatchable frontier by the reasoning-floor
+//       check, for an in-vocabulary downgrade AND an out-of-vocabulary token alike.
 // Builds a 7-col ## Nodes table (the model column is the 7th cell).
 // -----------------------------------------------------------------------
 function makeModelPlan(nodesRows, ledgerRows) {
@@ -476,17 +479,33 @@ function makeModelPlan(nodesRows, ledgerRows) {
   ].join('\n');
 }
 {
-  // (a) haiku → refuse model_invalid (does NOT reach readySet/nextNode emit).
-  const haiku = makeModelPlan(
+  // (a) SAFETY DEMONSTRATION 1 — an out-of-vocabulary cell (`haiku`, a real harness alias)
+  //     never reaches a frozen plan: validatePlan refuses it at FREEZE with model_invalid.
+  const { validatePlan } = require('./kaola-workflow-plan-validator');
+  const haikuBody = ['# Plan', '', '## Meta', 'labels: area:scripts', '', makeModelPlan(
+    ['| a | implementer | — | scripts/foo.js | 1 | sequence | haiku |',
+     '| review | code-reviewer | a | — | 1 | sequence | |',
+     '| finalize | finalize | review | — | 1 | sequence | |'],
+    ['| a | pending |', '| review | pending |', '| finalize | pending |'])].join('\n');
+  const vh = validatePlan(haikuBody, {});
+  assert(vh.result === 'refuse', 'test14 (freeze wall): haiku model must refuse at freeze, got ' + JSON.stringify(vh));
+  assert((vh.errors || []).join(';').includes('model_invalid'),
+    'test14 (freeze wall): freeze refusal must name model_invalid, got ' + JSON.stringify(vh.errors));
+  assert((vh.errors || []).join(';').includes('node a'),
+    'test14 (freeze wall): freeze refusal must name the offending node, got ' + JSON.stringify(vh.errors));
+  assert((vh.errors || []).join(';').includes('reasoning') && (vh.errors || []).join(';').includes('standard')
+    && /legacy aliases/i.test((vh.errors || []).join(';')),
+    'test14 (freeze wall): model_invalid names neutral tokens + notes legacy aliases, got ' + JSON.stringify(vh.errors));
+
+  // (a2) computeNextAction itself no longer re-walls the tier: the same out-of-vocabulary cell on a
+  //      NON-floor role passes through and is preserved verbatim (the pruned point-of-use wall).
+  const legacyOov = makeModelPlan(
     ['| a | tdd-guide | — | scripts/foo.js | 1 | sequence | haiku |',
      '| finalize | finalize | a | — | 1 | sequence | |'],
     ['| a | pending |', '| finalize | pending |']);
-  const rh = computeNextAction(haiku, { resolveModel: stub });
-  assert(rh.result === 'refuse', 'test14 (#390b): haiku model must refuse, got ' + JSON.stringify(rh));
-  assert((rh.errors || []).join(';').includes('model_invalid'),
-    'test14 (#390b): refusal must name model_invalid, got ' + JSON.stringify(rh.errors));
-  assert(rh.errors.join(';').includes('node a'),
-    'test14 (#390b): refusal must name the offending node, got ' + JSON.stringify(rh.errors));
+  const rOov = computeNextAction(legacyOov, { resolveModel: stub });
+  assert(rOov.result === 'ok' && rOov.nextNode && rOov.nextNode.model === 'haiku',
+    'test14 (no second wall): computeNextAction carries no tier wall — the cell passes through verbatim, got ' + JSON.stringify(rOov));
 
   // (b) #610 BACK-COMPAT: legacy opus + sonnet + absent all pass through (a frozen plan resumes green).
   const ok = makeModelPlan(
@@ -509,10 +528,27 @@ function makeModelPlan(nodesRows, ledgerRows) {
   assert(rn.result === 'ok', 'test14 (#610): neutral reasoning/standard tokens must pass, got ' + JSON.stringify(rn));
   assert(rn.nextNode.model === 'reasoning', 'test14 (#610): nextNode.model honors the neutral reasoning cell, got ' + JSON.stringify(rn.nextNode && rn.nextNode.model));
 
-  // (d) #610: the model_invalid message lists the NEUTRAL tokens AND notes legacy aliases are accepted.
-  assert(rh.errors.join(';').includes('reasoning') && rh.errors.join(';').includes('standard')
-    && /legacy aliases/i.test(rh.errors.join(';')),
-    'test14 (#610): model_invalid names neutral tokens + notes legacy aliases, got ' + JSON.stringify(rh.errors));
+  // (d) SAFETY DEMONSTRATION 2 — the reasoning-floor check on the dispatchable frontier refuses a
+  //     synthesizer whose EFFECTIVE model is not reasoning-class. This covers the tier wall's one
+  //     genuinely-corrupting sub-case: an in-vocabulary downgrade (standard/sonnet) AND an
+  //     out-of-vocabulary token (haiku) are all rejected before the node can be dispatched.
+  const synPlan = synModel => makeModelPlan(
+    ['| impl | tdd-guide | — | scripts/foo.js | 1 | sequence | standard |',
+     '| syn | synthesizer | impl | scripts/bar.js | 1 | sequence | ' + synModel + ' |',
+     '| finalize | finalize | syn | — | 1 | sequence | |'],
+    ['| impl | complete |', '| syn | pending |', '| finalize | pending |']);
+  for (const bad of ['standard', 'sonnet', 'haiku']) {
+    const rf = computeNextAction(synPlan(bad), { resolveModel: stub });
+    assert(rf.result === 'refuse' && rf.reason === 'reasoning_floor_violation' && rf.node === 'syn',
+      'test14 (reasoning floor): a synthesizer at "' + bad + '" must refuse reasoning_floor_violation, got ' + JSON.stringify(rf));
+    assert(rf.model === bad,
+      'test14 (reasoning floor): refusal names the resolved model "' + bad + '", got ' + JSON.stringify(rf.model));
+  }
+  for (const good of ['reasoning', 'opus']) {
+    const rp = computeNextAction(synPlan(good), { resolveModel: stub });
+    assert(rp.result === 'ok',
+      'test14 (reasoning floor): a reasoning-class synthesizer at "' + good + '" must pass, got ' + JSON.stringify(rp));
+  }
 }
 
 // -----------------------------------------------------------------------
