@@ -554,6 +554,93 @@ function computeReviewCandidateDigest(repoRoot, project) {
   return schema.sha256Hex(Buffer.from(lines.join('\n') + (lines.length ? '\n' : ''), 'utf8'));
 }
 
+// #729 — the route/ownership row the source attempt ALREADY resolved, carried forward for the
+// child planner. `route_candidates` is a REQUIRED attempt field in both journal validators, and
+// it is where the reviewer's write-set lookup landed (ownership_candidates / owning_node). This
+// is pure carriage: no ownership is derived here that the source did not record.
+//
+// Normalized to a FIXED key set with `null` (never `undefined`) defaults for two reasons. First,
+// `source` is canonical-JSON digested into `source_evidence_digest`, and canonicalJson REFUSES
+// undefined — a schema-1 route row whose finding omitted `scope=`/`file=` carries undefined
+// values and would throw mid-prepare. Second, the two review lanes produce different raw shapes
+// (schema-1 flat rows keyed by `id`; schema-2 rows keyed by the canonical `uid`), and the child
+// planner must be able to read ONE shape.
+const ROUTE_CANDIDATE_STRING_KEYS = Object.freeze(['status', 'scope', 'action', 'severity',
+  'fix_role', 'file', 'source_node', 'owning_node']);
+
+function canonicalRouteCandidates(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(row => row && typeof row === 'object' && !Array.isArray(row)).map(row => {
+    const id = row.finding_id == null ? row.id : row.finding_id;
+    const out = { finding_id: id == null ? null : String(id) };
+    for (const key of ROUTE_CANDIDATE_STRING_KEYS) {
+      out[key] = row[key] == null ? null : String(row[key]);
+    }
+    out.ownership_candidates = Array.isArray(row.ownership_candidates)
+      ? row.ownership_candidates.filter(owner => owner != null).map(String) : [];
+    return out;
+  });
+}
+
+// The anchor PATHS a finding declares, in both lanes: a schema-2 finding's primary plus secondary
+// anchors (an `evidence_observation` anchor legally carries none — report that, never invent one),
+// or a schema-1 finding's flat `file=` token. Sorted and de-duplicated; never widened with a path
+// the finding did not state. Read from the FINDING only, never from its route row: the journal
+// validator already pins `route.file` to the finding's own `file` key (present on exactly the same
+// findings, with the same value), so a route-side fallback could only ever restate this one.
+function findingAnchorPathList(finding) {
+  const anchors = [finding && finding.primary_anchor,
+    ...(Array.isArray(finding && finding.secondary_anchors) ? finding.secondary_anchors : [])];
+  const paths = anchors.filter(anchor => anchor && typeof anchor.path === 'string' && anchor.path)
+    .map(anchor => anchor.path);
+  if (!paths.length && finding && typeof finding.file === 'string' && finding.file) paths.push(finding.file);
+  return Array.from(new Set(paths)).sort();
+}
+
+// #729 — the frontier the child planner is expected to route, joined into ONE readable projection:
+// the immutable finding id, its anchor, its status, and the route/ownership the source carried.
+// Findings are the authority (the empty-frontier wall is on `findings`), so there is exactly one
+// row per source finding and route rows that match nothing are not smuggled in as extra work.
+// Order follows the source, which is already canonical (uid-sorted in the schema-2 lane).
+//
+// PLUMBING ONLY. Nothing here decides whether a child plan COVERS a row — that is a set comparison
+// against a child-plan declaration the plan grammar does not yet carry. Deriving a coverage verdict
+// from this projection would have to guess (an anchor records where a defect was OBSERVED, not
+// where its repair belongs), and enforcing a guessed obligation would loop the planner until the
+// transition budget escalated.
+function buildPlannerFrontier(source) {
+  const findings = Array.isArray(source && source.findings) ? source.findings : [];
+  const routes = canonicalRouteCandidates(source && source.route_candidates);
+  const routeById = new Map();
+  for (const row of routes) {
+    if (row.finding_id !== null && !routeById.has(row.finding_id)) routeById.set(row.finding_id, row);
+  }
+  return findings.filter(finding => finding && typeof finding === 'object' && !Array.isArray(finding))
+    .map(finding => {
+      const id = finding.uid == null ? finding.id : finding.uid;
+      const uid = id == null ? null : String(id);
+      const route = uid === null ? null : (routeById.get(uid) || null);
+      const pick = key => (finding[key] == null
+        ? (route && route[key] != null ? route[key] : null) : String(finding[key]));
+      return {
+        uid,
+        status: pick('status'),
+        scope: pick('scope'),
+        action: pick('action'),
+        severity: pick('severity'),
+        failure_class: finding.failure_class == null ? null : String(finding.failure_class),
+        primary_anchor: finding.primary_anchor && typeof finding.primary_anchor === 'object'
+          && !Array.isArray(finding.primary_anchor) ? finding.primary_anchor : null,
+        anchor_paths: findingAnchorPathList(finding),
+        fix_role: pick('fix_role'),
+        source_node: finding.source_node == null
+          ? (route && route.source_node !== null ? route.source_node : null) : String(finding.source_node),
+        owning_node: route ? route.owning_node : null,
+        ownership_candidates: route ? route.ownership_candidates : [],
+      };
+    });
+}
+
 function readSource(paths, planHash, sourceAttemptId, options) {
   const journalPath = path.join(paths.cacheDir, 'review-attempts.json');
   const sourcePath = path.join(paths.cacheDir, 'replan-source.json');
@@ -695,6 +782,7 @@ function readSource(paths, planHash, sourceAttemptId, options) {
     source_reason: 'review_repair_requires_replan',
     producer_slice: producerSlice,
     findings: Array.isArray(attempt.findings) ? attempt.findings : [],
+    route_candidates: canonicalRouteCandidates(attempt.route_candidates),
     rebind: Array.isArray(attempt.rebind) ? attempt.rebind : [],
     case_b_evidence: null,
     scope_lineage_id: HEX64_RE.test(String(attempt.scope_lineage_id || '').toLowerCase())
@@ -947,6 +1035,7 @@ function readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage) {
     source_reason: 'diagnosis_to_build',
     producer_slice: proof.payload.writers.map(row => row.id).sort(),
     findings: [],
+    route_candidates: [],
     rebind: [],
     case_b_evidence: proof.payload.artifacts,
     scope_lineage_id: null,
@@ -1815,6 +1904,10 @@ function buildPlannerPacket(paths, transaction) {
       findings: transaction.source.findings,
       rebind: transaction.source.rebind,
     },
+    // The frontier the child epoch exists to repair, in one shape the planner can read:
+    // one row per source finding, carrying its immutable id, anchor, status, and the
+    // route/ownership the source already resolved. Absent ownership arrives as absent.
+    frontier: buildPlannerFrontier(transaction.source),
     claim: {
       claim_identity_digest: transaction.parent.claim_identity_digest,
       claim_root_base_digest: transaction.parent.claim_root_base_digest,
