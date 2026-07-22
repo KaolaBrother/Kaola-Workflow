@@ -901,6 +901,189 @@ const specPlanAuto = (nodes, ledger) => '## Meta\nspeculative_open_policy: auto\
   }
 }
 
+
+// -----------------------------------------------------------------------
+// #759 — EXPANSION RECORDS on the ready-set derivation.
+//
+// The two directed predicates are the whole point of this block. Each is pinned in BOTH directions,
+// and each is pinned against a record that OMITS every optional field, because a population that
+// silently drops rows lacking an optional field is the exact defect class this design guards against.
+// -----------------------------------------------------------------------
+{
+  const validator = require('./kaola-workflow-plan-validator');
+  const SPINE = (ledgerRows, tail) => [
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):',
+    '  milestone_goal: land it',
+    '  expected_surfaces: scripts/',
+    '  join_constraints: none',
+    '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    ...ledgerRows, '',
+    ...(tail || []),
+  ].join('\n');
+  const BASE_LEDGER = ['| probe | complete |', '| m1 | pending |', '| wall | pending |', '| done | pending |'];
+  // A record that omits EVERY optional field: no plan_hash line, no open() block, no discharge block.
+  const RECORD_MINIMAL = ['## Expansion Records', '',
+    'record(m1#1):',
+    '  point: m1',
+    '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+    '  unit: u1 | code-explorer | — | — | co_open | —',
+    '  unit: u2 | code-explorer | — | — | co_open | —',
+    '  unit: u3 | doc-updater | standard | docs/c.md | serial | u1', ''];
+  const OPEN_BLOCK = ['open(m1#1):', '  at: 2026-07-22T00:00:00Z', ''];
+
+  // (1) No records: the expansion point is READY but is NOT a dispatchable frontier member. It stays
+  //     in readySet (so allDone / the stall refusal are unchanged) and surfaces on expansionPending.
+  {
+    const r = computeNextAction(SPINE(BASE_LEDGER), { resolveModel: stub });
+    assert(r.result === 'ok', '#759 (1): a spine plan with no records must not refuse, got ' + JSON.stringify(r));
+    assert(!r.readyPending.some(n => n.id === 'm1'),
+      '#759 (1): an expansion point must never reach readyPending (it has no agent profile to dispatch)');
+    assert(r.readySet.some(n => n.id === 'm1'),
+      '#759 (1): the expansion point must stay in readySet — dropping it would trip the stall refusal');
+    assert(r.readyPending.length === 0,
+      '#759 (1): nothing else is openable, got ' + JSON.stringify(r.readyPending.map(n => n.id)));
+    assert((r.expansionPending || []).length === 1 && r.expansionPending[0].id === 'm1',
+      '#759 (1): the ready expansion point must surface on expansionPending, got ' + JSON.stringify(r.expansionPending));
+    assert(r.expansionPending[0].readyToExpand === true && r.expansionPending[0].readyToDischarge === false,
+      '#759 (1): a never-composed point is expandable but not dischargeable, got ' + JSON.stringify(r.expansionPending[0]));
+  }
+
+  // (2) A record with units: the composed interior IS the frontier, ordered by the recorded edges.
+  //     u3 declares mode serial with a named edge to u1, so it is withheld until u1 is terminal.
+  {
+    const content = SPINE(BASE_LEDGER.concat(['| m1-r1-u1 | pending |', '| m1-r1-u2 | pending |', '| m1-r1-u3 | pending |']),
+      RECORD_MINIMAL.concat(OPEN_BLOCK));
+    const r = computeNextAction(content, { resolveModel: stub });
+    assert(r.result === 'ok', '#759 (2): expected ok, got ' + JSON.stringify(r));
+    assert(deepEqual(r.readyPending.map(n => n.id).sort(), ['m1-r1-u1', 'm1-r1-u2']),
+      '#759 (2): only the two edge-free units are ready; the serial unit waits on its named edge. got '
+      + JSON.stringify(r.readyPending.map(n => n.id)));
+    const u3 = r.readySet.find(n => n.id === 'm1-r1-u3');
+    assert(!u3, '#759 (2): the serial unit must not be ready while its named predecessor is pending');
+    const u1 = r.readyPending.find(n => n.id === 'm1-r1-u1');
+    assert(u1.expansion_record === 'm1#1' && u1.expansion_point === 'm1' && u1.expansion_mode === 'co_open',
+      '#759 (2): a unit descriptor must carry its expansion provenance, got ' + JSON.stringify(u1));
+    // MODEL-TIER SEAM: a unit with no model column falls through to the SAME resolveModel seam a spine
+    // node uses; a unit that declares one wins over it. One owner, before and after expansion.
+    assert(u1.model === stub('code-explorer'),
+      '#759 (2): a unit with no declared tier resolves through the same descriptor seam, got ' + u1.model);
+    const withU1Done = SPINE(BASE_LEDGER.concat(['| m1-r1-u1 | complete |', '| m1-r1-u2 | complete |', '| m1-r1-u3 | pending |']),
+      RECORD_MINIMAL.concat(OPEN_BLOCK));
+    const r2 = computeNextAction(withU1Done, { resolveModel: stub });
+    assert(deepEqual(r2.readyPending.map(n => n.id), ['m1-r1-u3']),
+      '#759 (2): the serial unit opens once its named predecessor is terminal, got ' + JSON.stringify(r2.readyPending.map(n => n.id)));
+    assert(r2.readyPending[0].model === 'standard',
+      '#759 (2): a unit that declares a tier keeps it, got ' + r2.readyPending[0].model);
+  }
+
+  // (3) The expansion point cannot advance past its own units: while any unit is live the point is NOT
+  //     ready, so the spine wall behind it is withheld too.
+  {
+    const content = SPINE(BASE_LEDGER.concat(['| m1-r1-u1 | complete |', '| m1-r1-u2 | in_progress |', '| m1-r1-u3 | pending |']),
+      RECORD_MINIMAL.concat(OPEN_BLOCK));
+    const r = computeNextAction(content, { resolveModel: stub });
+    assert(!r.readySet.some(n => n.id === 'm1'),
+      '#759 (3): the milestone must not be ready while a unit is still running');
+    assert(!r.readySet.some(n => n.id === 'wall'),
+      '#759 (3): the review wall behind the milestone must be withheld too');
+  }
+
+  // (4) PREDICATE DIRECTION — expansionRecordOpened answers "positively proven opened?" and FAILS
+  //     CLOSED. A record with no open() block (the minimal record above omits it) is NOT-opened, so
+  //     the resume path re-opens it. The presence of the block is the only thing that flips it.
+  {
+    const noProof = validator.parseExpansionRecords(SPINE(BASE_LEDGER, RECORD_MINIMAL));
+    assert(validator.expansionRecordOpened(noProof, 'm1#1') === false,
+      '#759 (4): a record omitting the open() proof must answer NOT-opened (fail closed)');
+    const withProof = validator.parseExpansionRecords(SPINE(BASE_LEDGER, RECORD_MINIMAL.concat(OPEN_BLOCK)));
+    assert(validator.expansionRecordOpened(withProof, 'm1#1') === true,
+      '#759 (4): a record carrying the open() proof must answer OPENED');
+    // ...and it never answers OPENED for a DIFFERENT record id, so one record cannot vouch for another.
+    assert(validator.expansionRecordOpened(withProof, 'm1#2') === false,
+      '#759 (4): an open() proof is record-scoped — it must not vouch for a sibling record');
+    assert(validator.expansionRecordOpened(null, 'm1#1') === false,
+      '#759 (4): an unreadable record channel must answer NOT-opened, never opened-by-default');
+  }
+
+  // (5) PREDICATE DIRECTION — expansionRecordSettled answers "positively proven finished?" and FAILS
+  //     CLOSED the other way: a MISSING ledger row is not evidence of completion, so it BLOCKS.
+  {
+    const rec = validator.parseExpansionRecords(SPINE(BASE_LEDGER, RECORD_MINIMAL)).records[0];
+    assert(validator.expansionRecordSettled(rec, {}) === false,
+      '#759 (5): a record whose units have NO ledger rows at all must answer NOT-settled (blocks)');
+    assert(validator.expansionRecordSettled(rec, { 'm1-r1-u1': 'complete', 'm1-r1-u2': 'complete' }) === false,
+      '#759 (5): one missing unit row is enough to block — the predicate demands every unit positively');
+    assert(validator.expansionRecordSettled(rec, { 'm1-r1-u1': 'complete', 'm1-r1-u2': 'complete', 'm1-r1-u3': 'in_progress' }) === false,
+      '#759 (5): a live unit blocks');
+    assert(validator.expansionRecordSettled(rec, { 'm1-r1-u1': 'complete', 'm1-r1-u2': 'n/a', 'm1-r1-u3': 'complete' }) === true,
+      '#759 (5): every unit terminal (n/a counts) answers SETTLED');
+    assert(validator.expansionRecordSettled({ units: [] }, {}) === false,
+      '#759 (5): a unitless record can never be settled — an empty population must not read as "all done"');
+    assert(validator.expansionRecordSettled(null, {}) === false,
+      '#759 (5): an absent record answers NOT-settled');
+  }
+
+  // (6) Once every unit is terminal the point becomes dischargeable, and the record is settled.
+  {
+    const content = SPINE(BASE_LEDGER.concat(['| m1-r1-u1 | complete |', '| m1-r1-u2 | complete |', '| m1-r1-u3 | complete |']),
+      RECORD_MINIMAL.concat(OPEN_BLOCK));
+    const r = computeNextAction(content, { resolveModel: stub });
+    assert(r.expansionPending.length === 1 && r.expansionPending[0].readyToDischarge === true,
+      '#759 (6): a fully-settled point must report readyToDischarge, got ' + JSON.stringify(r.expansionPending));
+    assert(r.expansionPending[0].readyToExpand === true,
+      '#759 (6): ...and a re-expansion is legal on it');
+    assert(r.readyPending.length === 0,
+      '#759 (6): the point itself is still not dispatchable, got ' + JSON.stringify(r.readyPending.map(n => n.id)));
+  }
+
+  // (7) A point whose record is appended but NOT proven opened reports openIncomplete and is NOT
+  //     expandable — the re-expansion gate refuses to co-open a second frontier over an unresolved one.
+  {
+    const content = SPINE(BASE_LEDGER.concat(['| m1-r1-u1 | complete |', '| m1-r1-u2 | complete |', '| m1-r1-u3 | complete |']),
+      RECORD_MINIMAL);
+    const r = computeNextAction(content, { resolveModel: stub });
+    assert(deepEqual(r.expansionPending[0].openIncomplete, ['m1#1']),
+      '#759 (7): a record with no open() proof must be reported openIncomplete, got ' + JSON.stringify(r.expansionPending[0]));
+    assert(r.expansionPending[0].readyToExpand === false && r.expansionPending[0].readyToDischarge === false,
+      '#759 (7): neither a re-expansion nor a discharge may proceed over an unproven open');
+  }
+
+  // (8) LEGACY BYTE-IDENTITY: a plan with no `## Expansion Records` section is unchanged, and the
+  //     additive key is OMITTED entirely rather than emitted empty.
+  {
+    const legacy = makePlan(
+      ['| a | code-explorer | — | — | 1 | sequence |', '| b | finalize | a | — | 1 | sequence |'],
+      ['| a | pending |', '| b | pending |']);
+    const r = computeNextAction(legacy, { resolveModel: stub });
+    assert(!Object.prototype.hasOwnProperty.call(r, 'expansionPending'),
+      '#759 (8): a plan with no ready expansion point must not gain an expansionPending key');
+    assert(!JSON.stringify(r).includes('expansion_'),
+      '#759 (8): no legacy descriptor may gain an expansion_* provenance key');
+  }
+
+  // (9) A record keying an UNKNOWN node id contributes no units (it is refused at expand-open, and
+  //     must not silently inject orphan rows into the ready-set graph here).
+  {
+    const content = SPINE(BASE_LEDGER, ['## Expansion Records', '',
+      'record(ghost#1):', '  point: ghost',
+      '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+      '  unit: z | code-explorer | — | — | co_open | —', '']);
+    const r = computeNextAction(content, { resolveModel: stub });
+    assert(r.result === 'ok', '#759 (9): a record keying an unknown node must not crash the derivation');
+    assert(!r.readySet.some(n => n.id.startsWith('ghost')),
+      '#759 (9): an orphan record must contribute no nodes, got ' + JSON.stringify(r.readySet.map(n => n.id)));
+  }
+}
+
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {
