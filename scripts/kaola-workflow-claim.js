@@ -2162,10 +2162,11 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   let authorityDowngraded = null;
   if (!snapshots.ok) {
     const reason = snapshots.reason || snapshots.detail || 'snapshot_invalid';
-    const failures = Array.isArray(snapshots.deferred_failures) && snapshots.deferred_failures.length
-      ? snapshots.deferred_failures.map(entry => entry.reason) : [reason];
-    if (statusValue !== 'abandoned' || snapshots.deferrable_only !== true
-        || !failures.every(name => ABANDON_DOWNGRADABLE_AUTHORITY_REASONS.has(name))) {
+    // `deferrable_only` is the whole-ladder verdict: it is set ONLY when every tier ran and
+    // every failure met was one this call authorized deferring. A first-failure reason-set
+    // test here (what this used to be) could not distinguish "the only faults are
+    // downgradable" from "a downgradable fault happened to be checked first".
+    if (statusValue !== 'abandoned' || snapshots.deferrable_only !== true) {
       return { skipped: undefined, archived: false, archive_incomplete: true,
         missing: [], snapshot_error: reason };
     }
