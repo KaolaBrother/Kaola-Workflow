@@ -1,0 +1,5 @@
+issue: #762
+title: feat(barrier): declared-not-walled write surfaces — append-only surface amendments with attribution; overflow becomes attribution + re-review
+status: queued — epic #757 child 5 (depends on #759 + #761)
+workflow_project: —
+next_step: Write surfaces become declarations for attribution/review-scoping, not walls. Out-of-surface companion file → append a surface AMENDMENT to the owning expansion record + route to re-review via #761; write_set_overflow stops refusing attributable source-tree files. Certifier candidate digest/staleness computed against declared+AMENDED surfaces (invalidates exactly the re-review unit, no whole-candidate staling). HARD anchors kept: unattributed out-of-surface write at sink = fail-closed tamper refusal; consent-gated curated/irreversible roots (S2) still require the consent valve — amendment loosens attribution, never consent. AC: #756 dead-ends 1/2/5 gone in the repro; tamper case still refuses.
