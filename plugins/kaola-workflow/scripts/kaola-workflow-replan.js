@@ -1968,6 +1968,13 @@ function buildPlannerPacket(paths, transaction) {
       'Preserve the claim, branch, worktree, claim root, and epoch lineage.',
       'Author a schema-2 child plan whose complete ledger is pending.',
       'Carry every inherited code/security frontier and unresolved finding to reachable certifier work.',
+      // #729 case (b): the prose requirement above passes vacuously against a child that simply
+      // has no repairing writer. This names the mechanical form the wall checks, so the planner
+      // is told the obligation in the same packet that shows it the frontier it must discharge.
+      'Declare `finding_owners` in the child ## Meta: one `<uid>=<node_id>` pair per source '
+        + 'finding still needing repair (suffix `@relocated` when the repair site is deliberately '
+        + 'not the observation anchor, `@anchorless` when the finding declares no anchor path), '
+        + 'or the literal `none` when no source finding needs one.',
       'Write only the exact child output path and return the digest-bound planner attestation.',
     ],
     child_output_path: schema.REPLAN_PLAN_NEXT_NAME,
@@ -2312,6 +2319,285 @@ function metaFields(planContent) {
   return out;
 }
 
+// Every `## Meta` line that declares `key`. `metaFields` keeps the LAST occurrence, which is
+// the wrong reading for a carry-forward declaration: a second `finding_owners:` line would
+// silently replace the first, so the wall counts them and refuses a duplicate instead.
+function metaFieldOccurrences(planContent, key) {
+  const located = schema.locateSection(planContent, 'Meta');
+  if (located.start < 0) return [];
+  const body = planContent.slice(located.start, located.next < 0 ? planContent.length : located.next);
+  const values = [];
+  for (const line of body.split(/\r?\n/)) {
+    const match = /^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$/.exec(line);
+    if (match && match[1] === key) values.push(match[2].trim());
+  }
+  return values;
+}
+
+// #729 case (b) — the THIRD finding predicate in this codebase, and deliberately not either
+// of the two in adaptive-schema. Read all three together before touching any of them; they
+// answer three different questions and therefore fail in three directions:
+//
+//   * `unresolvedInScopeFixes` — "does this finding BLOCK closing a node?" Fail-OPEN by
+//     design: it requires an EXPLICIT `scope=in_scope action=fix`, so a reviewer cannot
+//     manufacture a blocker by omitting fields.
+//   * `repairResponsibleFindings` — "is this WRITER responsible for this finding?" Fail-CLOSED
+//     on status, but it still excludes any row whose `scope` is explicitly present and not
+//     `in_scope`.
+//   * THIS ONE — "must the CHILD EPOCH contain a declared repair owner for this source
+//     finding?" Fail-CLOSED on everything the source did not explicitly discharge.
+//
+// Why neither sibling can be reused here. `unresolvedInScopeFixes` is fail-open by
+// construction, so a corrupted source that dropped `scope`/`action` would produce an EMPTY
+// obligation set and the wall would pass vacuously — the precise shape this issue exists to
+// catch. `repairResponsibleFindings` is closer, but its scope clause is fatal at this seam:
+// the canonical schema-2 finding vocabulary is FREE-FORM (`scope: "product"` is what
+// normalizeFindingSet produces and what the live repro carried), and reading `scope !==
+// in_scope` as "explicitly out of scope" would exclude exactly the lane the defect came from.
+//
+// Discharge is therefore by POSITIVE reviewer statement only, and only on two axes:
+//   * `status` EXPLICITLY `resolved` (already fixed) or `deferred` (explicitly not now); and
+//   * `action` EXPLICITLY present and not `fix` (the reviewer said this is not a repair).
+// A row missing status, missing action, or carrying any other scope is INCLUDED. `scope` is
+// never consulted.
+function findingRequiresChildOwner(row) {
+  if (!row || typeof row !== 'object') return false;
+  const text = value => (value == null ? '' : String(value).toLowerCase());
+  const status = text(row.status);
+  if (status === 'resolved' || status === 'deferred') return false;
+  const action = text(row.action);
+  if (action !== '' && action !== 'fix') return false;
+  return true;
+}
+
+// Does `writeSet` (a validator-normalized declared write set) provably cover `anchorPath`?
+//
+// EXACT membership only — deliberately no directory-prefix or glob matching. That is not a
+// simplification, it is the same semantics the rest of the system already commits to: the
+// per-node barrier matches exact file paths, and the validator's freeze wall REFUSES a
+// directory-shaped (`src/`) or glob (`src/*.js`) write-set token outright for precisely that
+// reason. A child that reaches this wall has therefore already been proven to declare exact
+// paths, so any prefix logic here would be dead code that could only ever widen coverage
+// beyond what the barrier will actually admit at run time.
+function writeSetCoversAnchor(writeSet, anchorPath) {
+  const anchor = String(anchorPath || '');
+  if (!anchor) return false;
+  for (const raw of writeSet || []) if (String(raw || '') === anchor) return true;
+  return false;
+}
+
+// Forward reachability over the child's depends_on edges (a node reaches every node that
+// transitively depends on it). Local rather than imported because the validator does not
+// export its adjacency/reachableSet pair; the edge relation is the same one `parseNodes`
+// already published.
+function childNodesReachableFrom(nodes, startId) {
+  const forward = new Map(nodes.map(node => [node.id, []]));
+  for (const node of nodes) {
+    for (const parent of node.dependsOn || []) {
+      if (forward.has(parent)) forward.get(parent).push(node.id);
+    }
+  }
+  const seen = new Set();
+  const queue = [startId];
+  while (queue.length) {
+    const current = queue.shift();
+    for (const next of forward.get(current) || []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return seen;
+}
+
+// The `finding_owners` token grammar: `<uid>=<node_id>` with an optional single policy
+// suffix. `none` is the whole-line empty declaration and never mixes with pairs.
+//
+//   * `@relocated` — the finding HAS an anchor path, and the planner asserts the repair site
+//     is deliberately elsewhere (a defect observed in the caller, fixed in the callee).
+//     Waives anchor containment ONLY.
+//   * `@anchorless` — the finding carries NO anchor path at all (a schema-2
+//     `evidence_observation` anchor legally has none), and the planner asserts it has chosen
+//     the owner on the evidence rather than on a path.
+//
+// The two are NOT interchangeable and neither is ever inferred. An anchorless finding that
+// arrives without `@anchorless` refuses: the whole point of the typed policy is that an
+// anchorless finding must never be absorbed by DEFAULT classification — the planner has to
+// say, in the hash-covered plan, that it knows the anchor constrains nothing here.
+const FINDING_OWNER_POLICIES = Object.freeze(['@relocated', '@anchorless']);
+
+// #729 case (b) — THE CHILD CARRY-FORWARD WALL.
+//
+// The question: "does this child plan provably contain a repair owner for every source
+// finding the parent epoch failed on?" The answer must be NO unless the child PROVES it, so
+// every form of absence — an absent `finding_owners` line, an absent uid row, an absent
+// owner node, an absent write set — refuses. Absence is the corruption signature, never an
+// exemption.
+//
+// Coverage is a SET COMPARISON against a declaration, not an inference from the graph. That
+// distinction is what makes this seam sound where every earlier proxy was not: an anchor
+// records where a defect was OBSERVED, not where its repair belongs; `fix_role` is advisory
+// routing, not a contract; and "the child has some writer" does not even catch the live repro
+// (that child HAD a documentation writer). The child therefore DECLARES, in its hash-covered
+// `## Meta`, which node owns each inherited uid, and this function verifies the declaration:
+//
+//   1. every source finding that still requires an owner (findingRequiresChildOwner) has
+//      exactly one declaration, and every declaration names a uid the source actually carried;
+//   2. the named owner is a node of the child whose declared write set is non-empty and whose
+//      role is not the terminal sink — a read-only gate or `finalize` can never be an owner;
+//   3. the owner's declared write set covers one of the finding's anchor paths, UNLESS the
+//      planner explicitly asserted `@relocated` (the repair site legitimately differs from the
+//      observation anchor — an explicit assertion, never an inference);
+//   4. the owner reaches every member of the applicable designated certifier and is not itself
+//      a member of it, so a repair can never be certified by itself and can never vanish merely
+//      because the child happens to contain an inherited-frontier certifier.
+//
+// ANCHORLESS / evidence-observation findings get the explicit TYPED policy the issue calls for.
+// A schema-2 `evidence_observation` anchor legally carries no path, so rule 3 has nothing to
+// compute — and that is exactly why it may not simply be skipped: a silently-skipped rule is how
+// the live repro's child swallowed its finding. Such a finding must be declared with the
+// `@anchorless` suffix, which is REQUIRED where no anchor exists and REFUSED where one does (so
+// it can never double as a containment bypass). Rules 1, 2 and 4 bind unchanged, so a child with
+// no real writer still cannot absorb one.
+//
+// PURE: no fs, no transaction phase, no mutation. It reads the child bytes and the stored
+// source frontier, which is why the same verdict can be taken before the child is frozen and
+// again on every later resume without a second implementation.
+function childFindingCoverage(childContent, transaction) {
+  const refuse = (reason, errors) => ({ ok: false, reason,
+    detail: errors.join('; '), errors: errors.slice() });
+  const source = transaction && transaction.source ? transaction.source : {};
+  const rawFindings = Array.isArray(source.findings) ? source.findings : [];
+  const index = buildFindingIndex(source);
+  if (index.length !== rawFindings.length || index.some(row => row.uid === null)) {
+    return refuse('replan_child_finding_owners_invalid',
+      ['source frontier carries a finding with no usable identity; coverage is undecidable']);
+  }
+  const required = index.filter(findingRequiresChildOwner);
+  const declarations = metaFieldOccurrences(childContent, 'finding_owners');
+  if (declarations.length !== 1) {
+    return refuse('replan_child_finding_owners_invalid', [declarations.length === 0
+      ? 'child ## Meta declares no finding_owners; an absent carry-forward declaration never '
+        + 'discharges the ' + required.length + ' inherited finding(s)'
+      : 'child ## Meta declares finding_owners ' + declarations.length + ' times']);
+  }
+  const raw = declarations[0];
+  const tokens = raw.split(',').map(token => token.trim()).filter(token => token !== '');
+  // An EMPTY value is not the empty declaration. `none` is a positive statement that the source
+  // carries nothing to repair; a blank value states nothing at all, and reading it as `none`
+  // would restore exactly the absence-is-fine hole this wall closes.
+  if (!tokens.length) {
+    return refuse('replan_child_finding_owners_invalid',
+      ['child ## Meta declares an empty finding_owners value; write the literal `none` to state '
+        + 'that no source finding needs an owner']);
+  }
+  const errors = [];
+  const owners = new Map();
+  if (tokens.length === 1 && tokens[0] === 'none') {
+    if (required.length) {
+      return refuse('replan_child_finding_uncovered', required.map(row =>
+        'uncovered finding uid=' + row.uid + ' path=' + (row.anchor_paths[0] || 'none')
+        + ' node=none cause=declared_none_with_live_frontier'));
+    }
+    return { ok: true, owners: [], required: 0 };
+  }
+  for (const token of tokens) {
+    if (token === 'none') {
+      errors.push('finding_owners mixes the empty declaration `none` with real pairs');
+      continue;
+    }
+    const split = token.indexOf('=');
+    if (split <= 0) { errors.push('malformed finding_owners token "' + token + '"'); continue; }
+    const uid = token.slice(0, split);
+    let owner = token.slice(split + 1);
+    const policy = FINDING_OWNER_POLICIES.find(suffix => owner.endsWith(suffix)) || null;
+    if (policy) owner = owner.slice(0, -policy.length);
+    if (owner.indexOf('@') !== -1) {
+      errors.push('finding_owners token "' + token + '" carries an unknown policy suffix; legal '
+        + 'suffixes are ' + FINDING_OWNER_POLICIES.join(' and '));
+      continue;
+    }
+    if (!owner) { errors.push('finding_owners token "' + token + '" names no owner node'); continue; }
+    if (owners.has(uid)) { errors.push('finding_owners declares uid ' + uid + ' more than once'); continue; }
+    owners.set(uid, { owner, policy });
+  }
+  const byUid = new Map(index.map(row => [row.uid, row]));
+  for (const uid of owners.keys()) {
+    if (!byUid.has(uid)) {
+      errors.push('finding_owners names uid ' + uid + ', which the source frontier never carried');
+    }
+  }
+  if (errors.length) return refuse('replan_child_finding_owners_invalid', errors);
+
+  const nodes = validator.parseNodes(childContent);
+  const nodeById = new Map(nodes.map(node => [node.id, node]));
+  const meta = metaFields(childContent);
+  // The APPLICABLE designated certifier: the code wall when the child names one, otherwise
+  // the security wall. Naming neither is itself a coverage failure — an epoch with a live
+  // frontier and no certifier has nowhere to certify a repair.
+  const certifierRef = ['code_certifier', 'security_certifier']
+    .map(key => [key, String(meta[key] || '')])
+    .find(([, value]) => value && value !== 'none');
+  let certifierMembers = null;
+  if (certifierRef) {
+    const resolved = validator.resolveNamedCertifier(nodes, certifierRef[1],
+      certifierRef[0] === 'code_certifier' ? 'code-reviewer' : 'security-reviewer');
+    if (resolved) certifierMembers = new Set(resolved.members.map(member => member.id));
+  }
+
+  const uncovered = [];
+  const report = (row, node, cause) => uncovered.push('uncovered finding uid=' + row.uid
+    + ' path=' + (row.anchor_paths[0] || 'none') + ' node=' + (node || 'none') + ' cause=' + cause);
+  const covered = [];
+  for (const row of required) {
+    const declaration = owners.get(row.uid);
+    if (!declaration) { report(row, null, 'no_declared_owner'); continue; }
+    const node = nodeById.get(declaration.owner);
+    if (!node) { report(row, declaration.owner, 'owner_not_a_child_node'); continue; }
+    if (node.role === 'finalize' || !node.writeSet || node.writeSet.size === 0) {
+      report(row, node.id, 'owner_not_write_capable');
+      continue;
+    }
+    if (!certifierMembers) { report(row, node.id, 'no_resolvable_designated_certifier'); continue; }
+    if (certifierMembers.has(node.id)) { report(row, node.id, 'owner_is_the_designated_certifier'); continue; }
+    // EVERY member, not any. A `sequence` certifier has one member so nothing changes there;
+    // a `partitioned_all` / `replicated_majority` wall only certifies the repair if the whole
+    // wall sits downstream of it, which is the same reading namedGateUncovered applies to the
+    // producers it does cover. Members of one gate share an origin, so a writer upstream of
+    // that origin reaches all of them — this tightens the check without narrowing legal plans.
+    const reach = childNodesReachableFrom(nodes, node.id);
+    if (![...certifierMembers].every(member => reach.has(member))) {
+      report(row, node.id, 'owner_does_not_reach_the_designated_certifier');
+      continue;
+    }
+    // The anchor axis. An anchorless finding is the one case where containment cannot be
+    // computed at all, so it is the one case that demands an explicit typed acknowledgement
+    // instead of a default verdict — in either direction. A finding WITH an anchor may not
+    // borrow the anchorless policy either; that would be a free bypass of containment.
+    let anchorPolicy;
+    if (!row.anchor_paths.length) {
+      if (declaration.policy !== '@anchorless') {
+        report(row, node.id, 'anchorless_finding_requires_the_explicit_anchorless_policy');
+        continue;
+      }
+      anchorPolicy = 'anchorless_named_writer';
+    } else if (declaration.policy === '@anchorless') {
+      report(row, node.id, 'anchorless_policy_declared_on_an_anchored_finding');
+      continue;
+    } else if (declaration.policy === '@relocated') {
+      anchorPolicy = 'relocated_repair_site';
+    } else if (!row.anchor_paths.some(anchor => writeSetCoversAnchor(node.writeSet, anchor))) {
+      report(row, node.id, 'anchor_outside_owner_write_set');
+      continue;
+    } else {
+      anchorPolicy = 'anchor_covered';
+    }
+    covered.push({ uid: row.uid, owner: node.id, policy: anchorPolicy });
+  }
+  if (uncovered.length) return refuse('replan_child_finding_uncovered', uncovered);
+  return { ok: true, owners: covered, required: required.length };
+}
+
 function validateChildPlan(childBytes, transaction) {
   const content = Buffer.from(childBytes).toString('utf8');
   const stored = validator.readStoredHash(content);
@@ -2355,6 +2641,15 @@ function validateChildPlan(childBytes, transaction) {
   const nodes = validator.parseNodes(content);
   if (!nodes.length || ledger.size !== nodes.length || nodes.some(node => ledger.get(node.id) !== 'pending')) {
     return { ok: false, reason: 'replan_child_ledger_not_pending' };
+  }
+  // #729 case (b): the carry-forward wall lives inside the ONE child validator every seam
+  // already routes through — the freeze at planner_pending AND the re-verification at
+  // child_frozen — so a crash between them replays into the same verdict rather than around
+  // it. It runs LAST because it is the only check that reads the child's semantics; a plan
+  // that is out of grammar or mis-bound must still refuse with its own reason.
+  const coverage = childFindingCoverage(content, transaction);
+  if (!coverage.ok) {
+    return { ok: false, reason: coverage.reason, detail: coverage.detail, errors: coverage.errors };
   }
   return {
     ok: true,
@@ -3546,12 +3841,26 @@ function resumeReplanUnlocked(paths, opts) {
       // authority tuple against the same attested image.
       updateTransaction(paths, transaction, opts, 'after_tx_pre_freeze_cas');
     }
+    // #729 case (b): take the carry-forward verdict on the ATTESTED image, before the handoff
+    // writes a single child byte. The identical check runs again inside validateChildPlan
+    // below (and at child_frozen on every later resume), so this early copy can only make the
+    // refusal cheaper — never weaker — and it keeps a coverage failure a genuinely
+    // write-free event: the parent stays authoritative, no epoch is spent, and the planner
+    // repairs in place inside the same transaction.
+    const attestedCoverage = childFindingCoverage(attested.child.toString('utf8'), transaction);
+    if (!attestedCoverage.ok) {
+      return schema.refuse(attestedCoverage.reason,
+        { detail: attestedCoverage.detail, errors: attestedCoverage.errors });
+    }
     const handoff = freezeAttestedChildWithHandoff(paths, transaction, attested, opts);
     if (!handoff || handoff.result !== 'child_frozen') {
       return handoff || schema.refuse('replan_child_invalid');
     }
     const child = validateChildPlan(handoff.child_bytes, transaction);
-    if (!child.ok) return schema.refuse(child.reason, { field: child.field || null, errors: child.errors || [] });
+    if (!child.ok) {
+      return schema.refuse(child.reason, { field: child.field || null,
+        detail: child.detail || null, errors: child.errors || [] });
+    }
     if (child.plan_hash !== handoff.child_plan_hash) return schema.refuse('replan_child_integrity_failure');
     transaction.planner.attestation_digest = attested.attestation_digest;
     transaction.planner.attestation_file_digest = attested.attestation_file_digest;
@@ -3838,6 +4147,10 @@ module.exports = {
   validateChildHandoffAuthority,
   buildPlannerPacket,
   buildFindingIndex,
+  // #729 case (b): the child carry-forward wall + the fail-CLOSED obligation predicate it
+  // rests on, exported so both can be driven directly instead of only through a transaction.
+  childFindingCoverage,
+  findingRequiresChildOwner,
   sourceEvidenceDigest,
   buildSnapshotAuthorityProjection,
   verifyActivePlanningEvidence,

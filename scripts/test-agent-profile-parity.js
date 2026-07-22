@@ -57,6 +57,11 @@ const FEATURE_TOKENS = [
   // agents/metric-optimizer.md's ratchet-protocol reject step, so this enforces its three .toml
   // twins carry it (md↔toml parity coverage for the new bounded metric-ratchet role).
   'git reset --hard',
+  // #729: the child carry-forward declaration — the re-plan child names, per inherited finding
+  // uid, the node that repairs it. Present in agents/workflow-planner.md's schema-2 ## Meta
+  // authoring paragraph, so this enforces all three .toml twins carry it (md↔toml parity for a
+  // lever whose absence makes the replan transaction refuse the whole child).
+  'finding_owners',
   'wait_budget_minutes',
   'planner_override',
   'difficulty alone is not evidence',

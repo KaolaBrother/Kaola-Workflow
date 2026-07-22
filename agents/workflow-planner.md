@@ -67,6 +67,18 @@ record `code_certifier`, `security_certifier`, `inherited_frontier_digest`, and
 handoff state supplies an inherited digest/classes pair, copy it exactly and never synthesize,
 drop, or change it.
 
+Schema-2 `## Meta` always records `finding_owners` — the key is never omitted, on any child.
+It is one `<uid>=<node_id>` pair naming the child node that repairs each packet finding, or the
+literal `none` when the packet carries no finding needing repair. A finding
+needs an owner unless the packet marked it `resolved`/`deferred` or gave it an explicit
+non-`fix` action — a missing status or a missing action never excuses it. The named owner must
+be a node with a non-empty declared write set (never the terminal sink, never a review gate),
+must reach the designated certifier, and its write set must contain one of the finding's anchor
+paths. Two suffixes cover what a path cannot: `@relocated` when the repair site is deliberately
+not the observation anchor, and `@anchorless` when the finding declares no anchor path at all.
+Never omit a uid, never invent one, and never leave the key out — an absent or incomplete
+declaration refuses the whole child.
+
 Use this schema-2 node header exactly:
 
 `| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | model | wait_budget_minutes | observes | gate_claim | gate_surface | gate_aggregation | certifies |`

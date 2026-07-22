@@ -1630,7 +1630,36 @@ opening a re-plan transaction. The carried route rows are deliberately excluded 
 `journal_digest`), so a transaction prepared by an earlier build still resumes. Child validation
 requires schema/contract version 2, a fully pending Ledger,
 parent/lineage/root/frontier/source/planner bindings, and the inherited G4 code/security certifier
-declarations. Despite its historical name, the child's `parent_snapshot_manifest_digest` equals the
+declarations.
+
+**Child carry-forward coverage.** Certifier coverage is proved at the class level from the candidate
+diff, so it does not by itself prove that the child can repair the findings the parent failed on — a
+child with no repairing writer satisfies it. The child therefore also declares, in its hash-covered
+`## Meta`, a `finding_owners` line: `<uid>=<node_id>` pairs (comma-separated) naming the child node
+that repairs each source finding, or the literal `none` when no source finding needs one. Two policy
+suffixes are legal and never inferred — `@relocated` asserts the repair site is deliberately not the
+observation anchor (waiving anchor containment only), and `@anchorless` asserts the finding carries
+no anchor path at all (an `evidence_observation` anchor legally has none). `@anchorless` is
+*required* where no anchor exists and *refused* where one does, so an anchorless finding can never
+be absorbed by default classification nor used as a containment bypass.
+
+`childFindingCoverage(childContent, transaction)` verifies the declaration against the graph and is
+pure (no fs, no transaction phase): every source finding that still needs an owner has exactly one
+declaration; no declaration names a uid the source never carried; the named owner is a child node
+with a non-empty declared write set that is not the terminal sink; its write set contains one of the
+finding's anchor paths (exact-path membership — the same semantics as the per-node barrier, and the
+freeze wall already refuses directory-shaped and glob tokens); and the owner reaches the applicable
+designated certifier (`code_certifier`, else `security_certifier`) without being a member of it. A
+finding needs an owner unless the source explicitly discharged it with a `resolved`/`deferred`
+status or an explicit non-`fix` action — `scope` is never consulted, because the schema-2 finding
+vocabulary is free-form and reading a non-`in_scope` scope as out-of-scope would fail open on the
+canonical lane. Every form of absence refuses: a missing `finding_owners` line
+(`replan_child_finding_owners_invalid`), a missing uid row, owner node, or write set
+(`replan_child_finding_uncovered`, whose `errors` enumerate `uid=… path=… node=… cause=…` per
+uncovered row). The verdict is taken on the attested image before any child byte is written and
+again inside `validateChildPlan` at freeze and on every later resume, so a coverage failure is
+write-free, replays identically after a crash, spends no epoch, does not increment
+`automatic_review_replans`, and is repairable in place inside the same transaction. Despite its historical name, the child's `parent_snapshot_manifest_digest` equals the
 projection digest—not the later full manifest-file digest. A zero-new-writer child therefore cannot
 turn inherited code or sensitive work into baseline; final certifier receipts must still bind the
 relevant final digest.
@@ -2688,6 +2717,8 @@ The following functions are exported from sink, claim, re-plan, and forge module
 - `validateChildPlan(childBytes, transaction)` / `validateChildHandoffAuthority(paths, transaction)` — Enforce schema-2 child bindings, all-pending Ledger, exact child path, and durable pre-freeze CAS authority.
 - `buildPlannerPacket(paths, transaction)` — Produce the topology-free evidence packet consumed by `workflow-planner` re-plan mode, including the precomputed `transaction.snapshot.authority_projection` and `authority_digest` plus the `source.finding_index` projection of `transaction.source.{findings,route_candidates}`; callers must pass a full transaction built by `buildTransaction`, not a partial legacy fixture. Pure over the transaction (no fs), so a crash-prefix retry rebuilds byte-identical packet bytes.
 - `buildFindingIndex(attempt)` — Pure projection of an attempt-shaped `{ findings, route_candidates }` bag (a review journal attempt, or a re-plan transaction's `source` projection of one) into the packet's `source.finding_index` rows. No fs, no transaction identity, no re-plan phase; total on malformed input.
+- `childFindingCoverage(childContent, transaction)` — Pure child carry-forward wall: verifies the child's `finding_owners` declaration against the source frontier and the child graph. Returns `{ ok: true, owners, required }` or `{ ok: false, reason, detail, errors }` with `replan_child_finding_owners_invalid` (grammar/identity) or `replan_child_finding_uncovered` (per-row `uid=… path=… node=… cause=…`).
+- `findingRequiresChildOwner(row)` — The fail-CLOSED obligation predicate behind that wall: a source finding needs a child repair owner unless it was explicitly discharged (`status` `resolved`/`deferred`, or an explicit non-`fix` action). Deliberately distinct from `unresolvedInScopeFixes` (the fail-open gate predicate) and `repairResponsibleFindings` (which excludes any explicitly non-`in_scope` scope); `scope` is never consulted here.
 - `sourceEvidenceDigest(source)` — The review source's authority digest, computed over the source with its carried `route_candidates` excluded, so that carriage-only field never changes an already-stored transaction's digest.
 
 **`scripts/kaola-workflow-roadmap.js`:**
