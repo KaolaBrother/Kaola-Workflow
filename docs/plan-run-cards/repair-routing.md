@@ -185,6 +185,11 @@ settled fail with findings present but none of them blocking; `unstructured_revi
 settled fail with no structured finding at all. In both cases nothing is pre-assigned, no empty
 `repair_brief_assigned_uids:` line is emitted, and the reviewer evidence paths are named instead.
 
+**Scope limit (known gap).** The brief is seeded on the DIRECT `repair-node` path only. A writer
+reopened by a replan CHILD (`kaola-workflow-replan.js`) still receives the inherited frontier without
+this digest-bound brief, so the two feedback-delivery paths are not yet identical; a replan-child fixer
+must still read the reviewer evidence named in `.cache/replan-source.json`. Unifying them is deferred.
+
 ## 1. Reading the refusal envelope
 
 When `close-and-open-next` refuses, the output is a typed envelope:
