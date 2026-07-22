@@ -377,6 +377,13 @@ attribution-blind union barrier).
   consent — no cross-contamination, no silent loss. No consent flag is needed for any disjoint,
   shared-infra, or coarse frontier.
 
+**Serial requires evidence.** Every serial fallback above is an evidence-named exception — an
+exact-path overlap you can name, a directory entry that provably cannot resolve to disjoint paths,
+a failed worktree-support probe, an explicit operator opt-out — never a comfort choice. Do not
+serialize or narrow a frontier on a guess or an anticipated conflict: wrongly-parallel work costs
+one bounded synthesizer reconcile inside isolated legs, while wrongly-serial work silently costs
+wall-clock on every frontier.
+
 <!-- CARD: speculative-open -->
 On `open-next` → `gate_not_complete` with a speculative gate (`speculative_open_policy: auto` — the
 freeze-time default — or `consent`, in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`

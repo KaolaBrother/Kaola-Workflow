@@ -144,7 +144,10 @@ refusals teach the walls at freeze — author to them, never clamp around them.
 
 - **Author EFFICIENT DAGs, not merely valid ones.** Minimize the safe critical path; expose
   independent work as siblings (a shared ready frontier); serialize only for true deps, shared file
-  lanes, selectors, loops, or gates. Read-only research/review siblings fan out freely; write-role
+  lanes, selectors, loops, or gates — a `sequence` edge between potentially-independent nodes is a
+  positive claim requiring present-tense evidence (name the artifact the dependent consumes, the
+  shared lane, or the gate; nothing nameable → author siblings), and uncertainty is resolved by
+  declaring exact disjoint paths, never by defaulting to sequence. Read-only research/review siblings fan out freely; write-role
   siblings need DISJOINT declared write sets. Disjoint-write antichains co-open in isolated per-leg
   worktrees BY DEFAULT (serial only on `KAOLA_PARALLEL_WRITES=0`); never hand-add `parallel_safe`
   (validator-derived → `invalid_annotation`). Under `speculative_open_policy: auto` a node whose sole
