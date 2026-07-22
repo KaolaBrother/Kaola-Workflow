@@ -2550,8 +2550,13 @@ function childFindingCoverage(childContent, transaction) {
     }
     if (!certifierMembers) { report(row, node.id, 'no_resolvable_designated_certifier'); continue; }
     if (certifierMembers.has(node.id)) { report(row, node.id, 'owner_is_the_designated_certifier'); continue; }
+    // EVERY member, not any. A `sequence` certifier has one member so nothing changes there;
+    // a `partitioned_all` / `replicated_majority` wall only certifies the repair if the whole
+    // wall sits downstream of it, which is the same reading namedGateUncovered applies to the
+    // producers it does cover. Members of one gate share an origin, so a writer upstream of
+    // that origin reaches all of them — this tightens the check without narrowing legal plans.
     const reach = childNodesReachableFrom(nodes, node.id);
-    if (![...certifierMembers].some(member => reach.has(member))) {
+    if (![...certifierMembers].every(member => reach.has(member))) {
       report(row, node.id, 'owner_does_not_reach_the_designated_certifier');
       continue;
     }
