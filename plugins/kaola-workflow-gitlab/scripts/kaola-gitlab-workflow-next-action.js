@@ -75,10 +75,19 @@ function computeNextAction(content, opts) {
   }
 
   // The per-node model tier is validated once, at FREEZE, by the plan validator (`model_invalid`).
-  // No second tier wall runs here: an out-of-vocabulary cell cannot enter a frozen plan, and the one
-  // sub-case that would silently corrupt output — a reasoning-floor role dropped to a non-reasoning
-  // tier — is refused below by the reasoning-floor check on the dispatchable frontier, which rejects
-  // any non-reasoning-class model (in-vocabulary or not) for that role.
+  // No second tier wall runs here.
+  //
+  // This is deliberately NOT a claim that an out-of-vocabulary cell cannot reach this point. It can:
+  // a plan whose `plan_hash` was hand-stamped (computed via the exported computePlanHash rather than
+  // produced by --freeze), or one frozen by a validator predating the tier vocabulary, passes
+  // --resume-check and arrives here carrying e.g. `model: haiku`. Measured: such a cell is emitted
+  // verbatim on the ready frontier. What makes that acceptable is scope, not impossibility —
+  //   - the only sub-case that silently corrupts OUTPUT is a reasoning-floor role dropped below
+  //     reasoning class, and that is refused below on the dispatchable frontier for any
+  //     non-reasoning-class model, in-vocabulary or not;
+  //   - any other bad token is a loud dispatch-time failure, not a silent downgrade;
+  //   - the archived corpus carries zero out-of-vocabulary tokens, so no legacy plan needs rescuing.
+  // Re-add a wall here only if a silent-corruption sub-case appears that the floor check misses.
 
   // Upgrade compatibility wall: a pre-feature validator could freeze an unknown
   // hash-covered column. Re-apply current semantics before projecting/dispatching
