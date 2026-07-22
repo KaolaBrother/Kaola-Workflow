@@ -1069,7 +1069,31 @@ function sectionHasOnlyTableContent(content, heading) {
   return true;
 }
 
-function verifyCurrentEpochAuthority(projectDir) {
+// `opts.deferReasons` is an OPT-IN caller policy: a Set/array of reasons the caller is
+// prepared to handle itself. Only the four RUN-STATE PROGRESS tiers below (ledger
+// authority/progress, compliance authority/progress) can be deferred — they are the only
+// tiers nothing later in the ladder reads, so evaluation can legally continue past them.
+// A deferred failure is recorded and the remaining tiers (epoch position, replan
+// transaction, committed-transaction history) still run; any failure that is NOT deferrable
+// returns immediately, exactly as the default does. Without the option every tier returns on
+// its first failure, so every existing caller is byte-identical.
+//
+// This is what makes a caller's "these reasons are downgradable" policy true rather than
+// merely intended: a downgradable failure can no longer hide the tiers behind it, because
+// the ladder is finished before the verdict is formed, and the verdict names EVERY failure.
+function verifyCurrentEpochAuthority(projectDir, opts) {
+  const deferSet = opts && opts.deferReasons
+    ? (typeof opts.deferReasons.has === 'function'
+      ? opts.deferReasons : new Set(opts.deferReasons))
+    : null;
+  const deferred = [];
+  // Returns true when the caller authorized deferring this reason (failure recorded,
+  // evaluation continues); false means the caller must return the refusal now.
+  const deferFailure = (reason, extra) => {
+    if (!deferSet || !deferSet.has(reason)) return false;
+    deferred.push(Object.assign({ reason }, extra || {}));
+    return true;
+  };
   const statePath = path.join(projectDir, 'workflow-state.md');
   if (!fs.existsSync(statePath)) return schema.refuse('state_missing');
   const state = parseStateFields(fs.readFileSync(statePath, 'utf8'));
@@ -1121,33 +1145,47 @@ function verifyCurrentEpochAuthority(projectDir) {
   }
   const ledgerRows = sectionTableRows(plan, 'Node Ledger');
   const nodeIds = nodes.map(node => node.id);
+  // A deferred ledger tier leaves no trustworthy status map, so the two progress checks
+  // that READ it are skipped rather than evaluated against garbage; their own tiers are
+  // moot once the table they project is already reported broken.
+  let ledger = null;
   if (ledgerRows.length !== nodes.length
       || new Set(ledgerRows.map(row => row.id)).size !== nodes.length
       || ledgerRows.some(row => !nodeIds.includes(row.id)
         || !['pending', 'in_progress', 'complete', 'n/a'].includes(row.status))) {
-    return schema.refuse('state_ledger_authority_invalid');
+    if (!deferFailure('state_ledger_authority_invalid')) return schema.refuse('state_ledger_authority_invalid');
+  } else {
+    ledger = new Map(ledgerRows.map(row => [row.id, row.status]));
   }
-  const ledger = new Map(ledgerRows.map(row => [row.id, row.status]));
-  for (const node of nodes) {
-    if (['in_progress', 'complete', 'n/a'].includes(ledger.get(node.id))
-        && node.dependsOn.some(dep => !['complete', 'n/a'].includes(ledger.get(dep)))) {
-      return schema.refuse('state_ledger_progress_invalid');
+  if (ledger) {
+    for (const node of nodes) {
+      if (['in_progress', 'complete', 'n/a'].includes(ledger.get(node.id))
+          && node.dependsOn.some(dep => !['complete', 'n/a'].includes(ledger.get(dep)))) {
+        if (!deferFailure('state_ledger_progress_invalid')) return schema.refuse('state_ledger_progress_invalid');
+        break;
+      }
     }
   }
   const complianceAuthority = validator.validateRequiredAgentCompliance(plan, nodes);
+  let complianceRows = null;
   if (!complianceAuthority.ok) {
-    return schema.refuse('state_compliance_authority_invalid', {
-      detail: complianceAuthority.detail || complianceAuthority.reason,
-    });
+    const complianceDetail = { detail: complianceAuthority.detail || complianceAuthority.reason };
+    if (!deferFailure('state_compliance_authority_invalid', complianceDetail)) {
+      return schema.refuse('state_compliance_authority_invalid', complianceDetail);
+    }
+  } else {
+    complianceRows = complianceAuthority.rows;
   }
-  const complianceRows = complianceAuthority.rows;
-  const expectedRequirements = new Map(nodes.map(node => [node.role + ' (' + node.id + ')', node.id]));
-  for (const row of complianceRows) {
-    const id = expectedRequirements.get(row.requirement);
-    const status = String(row.status || '').toLowerCase();
-    if (ledger.get(id) === 'complete' && (status === 'pending'
-        || (!row.evidence && !row.skip_reason))) {
-      return schema.refuse('state_compliance_progress_invalid');
+  if (complianceRows && ledger) {
+    const expectedRequirements = new Map(nodes.map(node => [node.role + ' (' + node.id + ')', node.id]));
+    for (const row of complianceRows) {
+      const id = expectedRequirements.get(row.requirement);
+      const status = String(row.status || '').toLowerCase();
+      if (ledger.get(id) === 'complete' && (status === 'pending'
+          || (!row.evidence && !row.skip_reason))) {
+        if (!deferFailure('state_compliance_progress_invalid')) return schema.refuse('state_compliance_progress_invalid');
+        break;
+      }
     }
   }
   // `workflow-tasks.json` is NOT an authority tier and is deliberately not compared here.
@@ -1191,6 +1229,14 @@ function verifyCurrentEpochAuthority(projectDir) {
       const history = readCommittedTransactionAuthority(projectDir, transaction.transaction_id);
       if (!history.ok) return schema.refuse(history.reason, { detail: history.detail || null });
     }
+  }
+  // The ladder ran to completion and every failure it met was one the caller authorized
+  // deferring. Report the whole failure list, not just the first: a caller downgrading on
+  // reason membership must be able to check EVERY reason it is about to accept.
+  if (deferred.length) {
+    return Object.assign(
+      schema.refuse(deferred[0].reason, deferred[0].detail ? { detail: deferred[0].detail } : undefined),
+      { deferrable_only: true, deferred_failures: deferred });
   }
   return { ok: true, authority_kind: 'planned', plan_hash: activeHash,
     first_node_id: nodes[0].id, first_node_role: nodes[0].role,
