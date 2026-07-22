@@ -1456,6 +1456,16 @@ function verifyParentAuthority(paths, transaction) {
 }
 
 function verifySourceAuthority(paths, transaction) {
+  // #729 frontier: every resume phase routes through here, so this is the single wall that
+  // covers the STORED frontier at `prepared` (before the planner packet copies it verbatim),
+  // at `planner_pending` (before the child freeze), and at `child_frozen`/`parent_archived`
+  // (before the snapshot authority projection digests it). The readSource re-read below only
+  // proves the source on DISK is unchanged and digest-identical — it never inspects the
+  // transaction's own copy of `findings`, which validateReplanTransaction does not recompute
+  // either. Without this the empty array survives the whole transaction unexamined.
+  if (!reviewSourceCarriesFrontier(transaction.source)) {
+    return { ok: false, reason: 'replan_source_findings_missing', detail: 'stored_frontier_empty' };
+  }
   if (transaction.source.authority_kind === 'diagnosis_to_build') {
     const parentPlan = Buffer.from(transaction.parent.plan_bytes_base64, 'base64').toString('utf8');
     const proof = verifyCaseBProof(paths, parentPlan, null, 'diagnosis_to_build', {
@@ -3316,13 +3326,6 @@ function resumeReplanUnlocked(paths, opts) {
     const observed = observeCas(paths, transaction, 'prepare', opts);
     if (!observed.ok) return schema.refuse(observed.reason);
     if (!sameCasTuple(casTuple(transaction.cas.prepare), casTuple(observed))) return candidateChanged(paths, transaction, observed, opts);
-    // #729 frontier: the packet is what the child planner actually reads, and it copies
-    // `transaction.source.findings` verbatim. The transaction's stored copy is not
-    // recomputed by validateReplanTransaction, so an empty array reaches here even when
-    // the journal on disk re-reads clean. Refuse before it can author a child epoch.
-    if (!reviewSourceCarriesFrontier(transaction.source)) {
-      return schema.refuse('replan_source_findings_missing', { detail: 'packet_frontier_empty' });
-    }
     const packet = buildPlannerPacket(paths, transaction);
     durableWriteJson(paths.packetPath, packet, opts, 'after_packet_written');
     const seeded = seedPlannerOutput(paths, opts);

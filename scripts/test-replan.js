@@ -3892,31 +3892,50 @@ function installEmptyFrontierSource(fx) {
 }
 
 {
-  // Frontier 2 — the planner packet. The journal on disk is untouched and re-reads
-  // clean, so readSource passes; only the transaction's own stored copy is empty.
-  // This is the literal defect: the empty array is copied into the planner packet.
-  const fx = initFixture();
-  try {
-    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
-      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
-    'prepared', 'the packet-frontier fixture prepares from a real six-finding source');
-    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
-    const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
-    ok(tx.source.findings.length > 0, 'the prepared transaction carries the real frontier');
-    tx.source.findings = [];
-    fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
-    ok(schema.validateReplanTransaction(JSON.parse(fs.readFileSync(txPath, 'utf8'))).ok,
-      'the transaction schema does NOT recompute source.findings — the packet frontier is '
-      + 'genuinely reachable with an empty array and needs its own wall');
-    const resumed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
-    equal(resumed.reason, 'replan_source_findings_missing',
-      'an empty stored frontier is refused BEFORE it can be copied into the planner packet: '
-      + JSON.stringify(resumed));
-    ok(!fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json')),
-      'no planner packet is written for an empty stored frontier');
-    equal(JSON.parse(fs.readFileSync(txPath, 'utf8')).phase, 'prepared',
-      'the packet-frontier refusal does not advance the transaction phase');
-  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  // Frontier 2 — the STORED transaction source, at EVERY resume phase. The journal on
+  // disk is untouched and re-reads clean, so readSource passes; only the transaction's
+  // own copy is empty, and validateReplanTransaction does not recompute it.
+  //
+  //   * `prepared`        — the literal defect: the empty array is copied verbatim into
+  //                         the planner packet the child planner reads.
+  //   * `planner_pending` — the empty array would otherwise survive the child freeze and
+  //                         be digested into the snapshot authority projection. Binding
+  //                         only the packet site leaves this second frontier open, which
+  //                         is exactly the shape of miss this pin exists to prevent.
+  for (const entryPhase of ['prepared', 'planner_pending']) {
+    const label = '#729 stored frontier @' + entryPhase;
+    const fx = initFixture();
+    try {
+      equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+        sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
+      'prepared', label + ': prepares from a real six-finding source');
+      if (entryPhase === 'planner_pending') {
+        equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
+          'replan_planner_dispatch_required', label + ': reaches the planner-pending phase');
+      }
+      const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+      const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+      equal(tx.phase, entryPhase, label + ': the transaction is parked at the entry phase');
+      ok(tx.source.findings.length > 0, label + ': the transaction carries the real frontier');
+      tx.source.findings = [];
+      fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
+      ok(schema.validateReplanTransaction(JSON.parse(fs.readFileSync(txPath, 'utf8'))).ok,
+        label + ': the transaction schema does NOT recompute source.findings — the stored '
+        + 'frontier is genuinely reachable with an empty array and needs its own wall');
+      const packetBefore = fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json'))
+        ? fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8') : null;
+      if (entryPhase === 'planner_pending') writePlannerResult(fx, tx);
+      const resumed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+      equal(resumed.reason, 'replan_source_findings_missing',
+        label + ': an empty stored frontier is refused: ' + JSON.stringify(resumed));
+      equal(fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json'))
+        ? fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8') : null,
+      packetBefore, label + ': the refusal writes no planner packet');
+      const after = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+      equal(after.phase, entryPhase, label + ': the refusal does not advance the transaction phase');
+      equal(after.child.digest, null, label + ': the refusal freezes no child plan');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
 }
 
 {
