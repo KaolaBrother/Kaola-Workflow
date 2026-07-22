@@ -1581,8 +1581,8 @@ function testAdaptiveValidatorGovernance() {
     }
 
     // #610 LEGACY-ALIAS FIXTURE: an archived plan with legacy {opus,sonnet} cells resumes green with
-    // UNCHANGED bytes / plan_hash, computeNextAction accepts it (point-of-use tier wall), and its dispatch
-    // efforts are byte-identical to the neutral tokens (opus≡reasoning≡xhigh, sonnet≡standard≡medium) — zero
+    // UNCHANGED bytes / plan_hash, computeNextAction accepts it, and its dispatch efforts are
+    // byte-identical to the neutral tokens (opus≡reasoning≡xhigh, sonnet≡standard≡medium) — zero
     // behavior change across the rename.
     {
       const pv = require('./kaola-workflow-plan-validator');
@@ -1603,7 +1603,8 @@ function testAdaptiveValidatorGovernance() {
       const resume = pv.revalidateForResume(frozenLegacy);
       assert(resume.ok === true, '#610: a frozen legacy {opus,sonnet} plan must PASS --resume-check unchanged, got: ' + JSON.stringify(resume));
       assert(pv.computePlanHash(legacyBody) === hash, '#610: plan_hash is stable — legacy cells are not rewritten');
-      // point-of-use tier wall accepts the legacy tokens and preserves them verbatim.
+      // computeNextAction accepts the legacy tokens and preserves them verbatim (the tier vocabulary
+      // is validated once at freeze; the aggregator carries no second wall).
       const rNa = na.computeNextAction(frozenLegacy, { resolveModel: () => 'sonnet' });
       assert(rNa.result === 'ok' && rNa.nextNode && rNa.nextNode.model === 'opus',
         '#610: computeNextAction accepts the legacy plan and preserves its opus cell, got: ' + JSON.stringify(rNa));

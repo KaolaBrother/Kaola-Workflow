@@ -27,7 +27,7 @@
 const fs = require('fs');
 const { parseNodes, parseLedger, parseSpeculativePolicy, parseOptimizeContracts, validateWaitBudgetNode, uniqueSink, hasUnresolvableEntry } = require('./kaola-gitlab-workflow-plan-validator');
 const { parseWriteSetCell, isProtected } = require('./kaola-gitlab-workflow-classifier');
-const { LEDGER_STATUSES, NODE_MODEL_TIERS, normalizeTier, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
+const { LEDGER_STATUSES, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
 const { enforceReasoningFloor, loadCodexSessionProof, isCodexPluginScriptDir } = require('./kaola-workflow-resolve-agent-model');
 
 // Terminal statuses: a node in either state counts as "done" for dependency
@@ -74,23 +74,11 @@ function computeNextAction(content, opts) {
     }
   }
 
-  // #390(b): validate the per-node model tier at the POINT OF USE. The freeze-time check
-  // (plan-validator computeNextAction-adjacent) only guards plans frozen by a #382-aware
-  // validator. A plan frozen pre-#382 (or hash-stamped via the exported computePlanHash/
-  // injectHash to dodge --freeze) passes --resume-check ok:true yet may carry `model: haiku` —
-  // a real harness alias the dispatch prose would pass verbatim on every Agent(model=…) call.
-  // revalidateForResume deliberately stays untouched (the #381 freeze-only landmine: a legacy
-  // plan must still resume-check), so the tier wall lives HERE, where the model is consumed.
-  // #610: validate via normalizeTier — a neutral token (reasoning|standard) OR a legacy alias
-  // (opus|sonnet, on a frozen/archived plan) resolves; only an out-of-vocab cell (e.g. haiku) refuses.
-  for (const node of nodes) {
-    if (node.model && normalizeTier(node.model) === null) {
-      return {
-        result: 'refuse',
-        errors: ['node ' + node.id + ' model "' + node.model + '" is not in NODE_MODEL_TIERS (model_invalid) — use one of: ' + NODE_MODEL_TIERS.join(', ') + ' (legacy aliases opus/sonnet are also accepted)'],
-      };
-    }
-  }
+  // The per-node model tier is validated once, at FREEZE, by the plan validator (`model_invalid`).
+  // No second tier wall runs here: an out-of-vocabulary cell cannot enter a frozen plan, and the one
+  // sub-case that would silently corrupt output — a reasoning-floor role dropped to a non-reasoning
+  // tier — is refused below by the reasoning-floor check on the dispatchable frontier, which rejects
+  // any non-reasoning-class model (in-vocabulary or not) for that role.
 
   // Upgrade compatibility wall: a pre-feature validator could freeze an unknown
   // hash-covered column. Re-apply current semantics before projecting/dispatching
