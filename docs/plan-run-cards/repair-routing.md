@@ -349,6 +349,7 @@ octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, an
 | `barrier_failed` | Read `findings-route.json` → dispatch fix agent → close repair loop |
 | `repair_requires_replan` | `kaola-workflow-replan.js prepare` from the settled attempt, then `resume`; never edit the frozen parent |
 | `replan_source_outcome_missing` / `replan_source_journal_missing` | Re-run/inspect the exact direct-repair transaction; never create `.cache/replan-source.json` manually |
+| `replan_source_findings_missing` | The settled failed-review attempt carries an EMPTY canonical frontier, so a child epoch would have nothing to repair. Do **not** hand-edit the journal or the source. Re-run the review gate so it settles with a real canonical frontier — the gate now refuses to settle a failed verdict with an empty frontier, so a re-run produces a usable source. A run whose journal settled under older code and is mid-flight at upgrade is the one case with no forward path from the source itself: discard and re-plan from the parent, preserving the base. Case B (`diagnosis_to_build`) is unaffected and legitimately carries no findings. |
 | `case_b_review_authority_present` | Do not use Case B; settle/consume the review-driven authority through its typed route |
 | `replan_candidate_changed` | No epoch/counter advance; resume planner re-authoring against the current candidate |
 | `replan_in_progress` | Run only `kaola-workflow-replan.js resume --project {project}` |
