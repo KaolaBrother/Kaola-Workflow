@@ -4575,6 +4575,41 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
 }
 
 {
+  // #729 — a coverage refusal leaves the authored child UNCORRUPTED, so the planner can repair in
+  // place inside the same transaction.
+  //
+  // READ THIS BEFORE USING IT AS AN ORDERING PIN, BECAUSE IT IS NOT ONE. The wall is applied twice:
+  // early in `resumeReplanUnlocked` on the attested image, and again inside `validateChildPlan`
+  // after `freezeAttestedChildWithHandoff`. It is tempting to assume the early copy is what keeps a
+  // coverage failure write-free, and to pin it by asserting the child bytes are untouched. That was
+  // MEASURED AND IS FALSE: the freeze writes `attested.child` VERBATIM to the same path the planner
+  // already wrote, so the bytes are identical either way. Stubbing the early check to `{ok: true}`
+  // leaves this whole block green.
+  //
+  // So the early placement remains UNPINNED by any outcome assertion here, and the two placements
+  // are not distinguishable by final state — only by which durable-write labels the crash journal
+  // passes through. Anything that reworks this seam must pin it on the journal, or accept that
+  // deleting one of the two copies is invisible to this suite. What IS pinned below: the refusal
+  // itself, its typed reason, and non-corruption of the authored child.
+  const fx = initFixture();
+  try {
+    const tx = pendingTransactionFor(fx);
+    writeChildPlan(fx, tx, {}, REVIEW_ONLY_CHILD_NODES);
+    const childPath = path.join(fx.projectDir, schema.REPLAN_PLAN_NEXT_NAME);
+    const authored = fs.readFileSync(childPath).toString('base64');
+    const result = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(result.result, 'refuse',
+      '#729: the uncovered child refuses: ' + JSON.stringify(result));
+    equal(result.reason, 'replan_child_finding_owners_invalid',
+      '#729: with a typed reason, never a silent pass');
+    equal(fs.readFileSync(childPath).toString('base64'), authored,
+      '#729: the authored child is left byte-identical by a coverage refusal, so the planner can '
+      + 'repair it in place inside the same transaction (see the note above: this does NOT pin '
+      + 'which of the two wall placements produced the refusal)');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
   // AC3/AC4 — the SAME review-only child, now declaring the documentation writer as the
   // owner of every finding. A declaration is not authority: the docs node cannot write
   // `product.js`, so the refusal must name the uid, the anchor path, and the node.
@@ -4773,6 +4808,22 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     + 'positively states that nothing needs an owner');
   equal(check('F1=w,,F1=w', [open]).reason, 'replan_child_finding_owners_invalid',
     '#729: an empty token between pairs does not silently collapse a duplicate declaration');
+  // A REPEATED `finding_owners:` LINE, which is the case `metaFieldOccurrences` exists for and
+  // the only one its `metaFields`-vs-occurrences distinction can decide. Every case above
+  // repeats a token inside ONE line, so all of them still pass if the wall reads a single
+  // last-wins value — which means the duplicate-LINE defence was previously unpinned.
+  const duplicateLinePlan = plan('F1=w').replace(/^finding_owners:.*$/m,
+    match => match + '\nfinding_owners: F1=z');
+  ok(/^finding_owners:/m.test(duplicateLinePlan)
+    && duplicateLinePlan.match(/^finding_owners:/gm).length === 2,
+  '#729: the duplicate-line fixture really does declare finding_owners twice');
+  const duplicateLine = replan.childFindingCoverage(duplicateLinePlan, tx([open]));
+  equal(duplicateLine.reason, 'replan_child_finding_owners_invalid',
+    '#729: a REPEATED finding_owners LINE refuses — a second line must never silently replace '
+    + 'the first, which is what a last-wins read would do: ' + JSON.stringify(duplicateLine));
+  ok(/2 times/.test(duplicateLine.detail || ''),
+    '#729: the duplicate-line refusal names the occurrence count rather than a token error, so '
+    + 'the two failure shapes stay distinguishable: ' + JSON.stringify(duplicateLine.detail));
   equal(replan.childFindingCoverage(
     frozenPlan('p', { plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
       code_certifier: 'g', security_certifier: 'none' }, nodes, {}).text, tx([open])).reason,
