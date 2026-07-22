@@ -92,6 +92,9 @@ const ADAPTIVE_NODE_SCRIPT = 'node scripts/kaola-workflow-adaptive-node.js';
 const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'write-halt', 'clear-halt',
+  // #759: the expansion transaction writes the plan (record block + unit ledger rows), the baselines
+  // and the running set — a mutating lifecycle command like every other opener.
+  'expand-open', 'expand-close',
   'reopen-node', 'revert-overflow', 'repair-node', 'route-findings', 'record-evidence',
   // #439: the speculative-read discard is a mutating lifecycle transaction (ledger reset + baseline
   // drop + running-set removal) and must run from the worktree like every other mutator.
@@ -104,6 +107,7 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
 const REPLAN_GUARDED_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'record-evidence', 'write-halt', 'clear-halt',
+  'expand-open', 'expand-close',
   'reopen-node', 'repair-node', 'revert-overflow', 'route-findings',
   'discard-speculative', 'mirror-project',
 ]);
@@ -158,6 +162,8 @@ function readProjectReplanFence(statePath, cacheDir, readFile) {
 const LEDGER_MUTATING_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'reopen-node', 'repair-node', 'write-halt', 'clear-halt',
+  // #759: expand-open appends unit rows and opens them; expand-close flips the milestone row.
+  'expand-open', 'expand-close',
 ]);
 
 // #439 (D-419 Part 4): resolve the per-plan `speculative_open_policy` from the frozen plan content.
@@ -170,6 +176,28 @@ function resolveSpeculativePolicy(content) {
     return parseSpeculativePolicy(content) || 'off';
   } catch (_) { return 'off'; }
 }
+
+// #759: the expansion-record grammar lives in the same-edition plan-validator — the ONE owner of both
+// the reader (parseExpansionRecords) and the vocabulary. This accessor reads the constants from there
+// rather than re-declaring them here, so the WRITER in this file can never drift from the PARSER.
+let expansionGrammarCache = null;
+function expansionGrammar() {
+  if (expansionGrammarCache) return expansionGrammarCache;
+  const v = require('./kaola-workflow-plan-validator');
+  expansionGrammarCache = {
+    HEADING: v.EXPANSION_RECORDS_HEADING,
+    MODES: v.EXPANSION_UNIT_MODES,
+    DERIVATION_KEYS: v.EXPANSION_DERIVATION_KEYS,
+  };
+  return expansionGrammarCache;
+}
+
+// #759: composition caps + the role tokens a composed unit may NEVER take. The three built-ins are
+// structural spine positions (the unique sink, the main-session gate, the expansion point itself) —
+// a composed interior unit taking one would either duplicate the sink or nest an expansion point
+// inside its own frontier.
+const EXPANSION_UNITS_CAP = 12;
+const RESERVED_EXPANSION_UNIT_ROLES = new Set(['finalize', 'main-session-gate', 'expansion-point']);
 
 const OPERATOR_HINT_REGISTRY = {
   // --- guard prologue (#383/#387/#391b) ---
@@ -2258,13 +2286,19 @@ function spliceStateMarker(content, key, value) {
 }
 
 // ---------------------------------------------------------------------------
-// parseNodesFromContent — read-only require of plan-validator's parseNodes.
+// parseNodesFromContent — read-only require of the plan-validator's EXECUTION-TIME node view.
 // Returns [] on any error (fail-closed).
+//
+// #759: this is the executor's single node reader, so routing it through planNodesWithExpansions is
+// what makes every downstream lifecycle consumer — close-node's role/evidence resolution, the
+// dispatch descriptor, the compliance rows, the consumed-proof channel — see a composed expansion
+// unit WITHOUT any of them being modified. The freeze walls keep reading the narrower `parseNodes`
+// (spine only), so no interior shape proof is re-applied at execution time.
 // ---------------------------------------------------------------------------
 function parseNodesFromContent(content) {
   try {
-    const { parseNodes } = require('./kaola-workflow-plan-validator');
-    return parseNodes(content);
+    const { planNodesWithExpansions } = require('./kaola-workflow-plan-validator');
+    return planNodesWithExpansions(content);
   } catch (_) {
     return [];
   }
@@ -11489,8 +11523,18 @@ function runReconcileRunningSet(opts) {
   }
 
   if (!running) {
-    return { result: 'ok', reconciled: false, reason: 'no_running_set',
+    // #759: EXPANSION ROLL-FORWARD (no-running-set arm). An expansion record appended in Phase 1 whose
+    // frontier never opened (a Phase 2/3 crash) leaves NO running-set trace at all — the most common
+    // shape of that crash reaches exactly this early return, so the repair must live here as well as
+    // on the reconciled path below. The predicate fails CLOSED to not-opened, so an unproven record is
+    // re-opened rather than abandoned; re-opening is idempotent. Roll FORWARD only: a record is the
+    // durable statement that a frontier was composed, and rolling it back would discard the
+    // composition and its recorded derivation with no operator signal.
+    const rolled = rollForwardExpansions(opts);
+    return { result: 'ok', reconciled: rolled.rolledForward.length > 0, reason: 'no_running_set',
       ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
+      ...(rolled.rolledForward.length ? { expansionsRolledForward: rolled.rolledForward } : {}),
+      ...(rolled.refusals.length ? { expansionRefusals: rolled.refusals } : {}),
       taskTransitions: [] };
   }
 
@@ -11762,6 +11806,10 @@ function runReconcileRunningSet(opts) {
     writeFile(runningSetPath, JSON.stringify({ ...reconciledTop, nodes: survivors }, null, 2));
   }
 
+  // #759: expansion roll-forward, placed AFTER the running-set journal is written so the re-open sees
+  // a settled ('open') set rather than the 'opening' transaction it would refuse on (reconcile_first).
+  const expansionRoll = rollForwardExpansions(opts);
+
   return {
     result: 'ok',
     reconciled: true,
@@ -11771,6 +11819,11 @@ function runReconcileRunningSet(opts) {
     // #680 (Part B): sanitized ids of pre-journal orphan baselines dropped by the sweep above (absent when
     // none — the sweep found no barrier-base file without a live owner).
     ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
+    // #759: expansion roll-forward on the reconciled path. Runs AFTER the running-set repair above, so
+    // an 'opening' transaction is already resolved before a record's frontier is (re-)opened. Same
+    // fail-closed predicate, same idempotent re-open, same forward-only direction.
+    ...(expansionRoll.rolledForward.length ? { expansionsRolledForward: expansionRoll.rolledForward } : {}),
+    ...(expansionRoll.refusals.length ? { expansionRefusals: expansionRoll.refusals } : {}),
     // #384: members dropped because their ledger row was already terminal (close-crash recovery).
     closedDropped: closed,
     // #293/S-fix: members dropped because they were stale non-opening pending (or otherwise not-in-flight)
@@ -11790,6 +11843,390 @@ function runReconcileRunningSet(opts) {
     taskTransitions: [],
     taskMirror: refreshTaskMirror(project, shell),
   };
+}
+
+// ===========================================================================
+// #759 — THE EXPANSION TRANSACTION.
+//
+// An `expansion-point` spine node declares a milestone at freeze and nothing else: its FRONTIER is
+// composed here, at open time, with current information. `expand-open` takes the executor's
+// composition (units, each with role / model tier / write surfaces / mode / intra-frontier dependency
+// edges) plus the five recorded derivation lines, APPENDS an expansion record to the plan's
+// append-at-tail `## Expansion Records` channel, and opens the frontier through the EXISTING
+// running-set scheduler. `open-ready` and `close-node` are unchanged and unaware of expansion: the
+// units are ordinary ledger rows by the time the scheduler sees them.
+//
+// WRITE ORDER (crash-safe; the record is the durable intent, the open is the effect):
+//   Phase 1  ONE atomic plan write: the `record(<point>#<n>)` block + the unit ledger rows.
+//   Phase 2  the frontier open (runOpenReady — the same scheduler every other frontier uses).
+//   Phase 3  ONE atomic plan write: the `open(<point>#<n>)` block — the POSITIVE proof of Phase 2.
+//
+// A crash anywhere between Phase 1 and Phase 3 leaves a record with no `open()` block.
+// `reconcile-running-set` ROLLS THAT FORWARD (re-runs Phases 2+3). Roll-forward is idempotent:
+// Phase 2 re-opens nothing that is already live or already non-pending, and Phase 3 appends the proof
+// block only when it is absent.
+//
+// A RE-EXPANSION (a second record on the same point) is the SAME transaction — same subcommand, same
+// three phases, same code. The only difference is the gate: `expansionRecordSettled` must positively
+// prove every prior record finished first.
+//
+// APPEND-ONLY: every mutation of `## Expansion Records` appends ONE block at the tail of the section;
+// no already-written byte is rewritten. The `## Node Ledger` likewise only ever GAINS rows here — the
+// unit rows are appended after the last existing row and never re-ordered or removed.
+// ===========================================================================
+
+// appendLedgerRows — append `| <id> | pending |` rows at the TAIL of `## Node Ledger`, matching the
+// table's own header width so a plan with extra ledger columns stays parseable. Rows for ids that
+// already have a row are skipped (idempotent under roll-forward). Never rewrites an existing row.
+function appendLedgerRows(content, ids) {
+  const { start, next } = locateSection(content, LEDGER_HEADING);
+  if (start < 0) return { ok: false, reason: 'ledger_missing', content, appended: [] };
+  const block = next >= 0 ? content.slice(start, next) : content.slice(start);
+  const lines = block.split('\n');
+  const tableLines = lines.filter(l => l.trim().startsWith('|'));
+  if (tableLines.length < 2) return { ok: false, reason: 'ledger_unparseable', content, appended: [] };
+  const header = tableLines[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  if (header.indexOf('id') < 0 || header.indexOf('status') < 0) {
+    return { ok: false, reason: 'ledger_unparseable', content, appended: [] };
+  }
+  const existing = readLedgerStatuses(content);
+  const toAdd = ids.filter(id => !Object.prototype.hasOwnProperty.call(existing, id));
+  if (!toAdd.length) return { ok: true, content, appended: [] };
+  const mkRow = id => '| ' + header.map(h => (h === 'id' ? id : (h === 'status' ? 'pending' : '—'))).join(' | ') + ' |';
+  let lastTable = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i].trim().startsWith('|')) lastTable = i;
+  const newBlock = lines.slice(0, lastTable + 1)
+    .concat(toAdd.map(mkRow))
+    .concat(lines.slice(lastTable + 1))
+    .join('\n');
+  const newContent = next >= 0
+    ? content.slice(0, start) + newBlock + content.slice(next)
+    : content.slice(0, start) + newBlock;
+  return { ok: true, content: newContent, appended: toAdd };
+}
+
+// appendExpansionBlock — append ONE block at the TAIL of `## Expansion Records`, creating the section
+// at end-of-file when it is absent. The section lives OUTSIDE the plan_hash body, so this never
+// perturbs the frozen spine identity.
+function appendExpansionBlock(content, blockText) {
+  const heading = '## ' + expansionGrammar().HEADING;
+  const { start, next } = locateSection(content, expansionGrammar().HEADING);
+  if (start < 0) {
+    const base = content.endsWith('\n') ? content : content + '\n';
+    return base + '\n' + heading + '\n\n' + blockText;
+  }
+  if (next >= 0) return content.slice(0, next) + blockText + content.slice(next);
+  const base = content.endsWith('\n') ? content : content + '\n';
+  return base + blockText;
+}
+
+// renderExpansionRecord — the ONE writer of the record block grammar (parseExpansionRecords is the ONE
+// reader). Field order is fixed so a record diff is readable.
+function renderExpansionRecord(recordId, point, planHash, derivation, units) {
+  const lines = ['record(' + recordId + '):', '  point: ' + point];
+  if (planHash) lines.push('  plan_hash: ' + planHash);
+  for (const k of expansionGrammar().DERIVATION_KEYS) lines.push('  ' + k + ': ' + derivation[k]);
+  for (const u of units) {
+    lines.push('  unit: ' + [
+      u.name, u.role, u.model || '—', u.write_set || '—', u.mode,
+      (u.depends_on && u.depends_on.length) ? u.depends_on.join(', ') : '—',
+    ].join(' | '));
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+// validateComposition — pure. Turn the executor's frontier composition into the normalized unit list
+// the record writer consumes, or a typed refusal. Every rule here is a SHAPE rule; none of them
+// re-decides an agent judgement (grain / path / join / probe / serializer are recorded verbatim and
+// checked only for PRESENCE, per the audit-only evidence-line contract).
+function validateComposition(composition, ctx) {
+  const grammar = expansionGrammar();
+  const modelTiers = reviewSchema.NODE_MODEL_TIERS || [];
+  const bad = (reason, detail) => ({ ok: false, refusal: refuse(reason, { detail, node_id: ctx.point }) });
+  if (!composition || typeof composition !== 'object') return bad('expansion_composition_malformed', 'composition must be a JSON object');
+  const derivation = composition.derivation || {};
+  const missing = grammar.DERIVATION_KEYS.filter(k => !String(derivation[k] || '').trim());
+  if (missing.length) {
+    return bad('expansion_derivation_incomplete',
+      'the expansion decision protocol records ONE line each for ' + grammar.DERIVATION_KEYS.join(' / ')
+      + '; missing: ' + missing.join(', '));
+  }
+  const rawUnits = Array.isArray(composition.units) ? composition.units : null;
+  if (!rawUnits || !rawUnits.length) return bad('expansion_units_empty', 'a composition must declare at least one unit');
+  if (rawUnits.length > EXPANSION_UNITS_CAP) {
+    return bad('expansion_units_over_cap', 'composition declares ' + rawUnits.length + ' units (cap ' + EXPANSION_UNITS_CAP + ')');
+  }
+  const names = new Set();
+  const units = [];
+  for (const raw of rawUnits) {
+    const name = String((raw && raw.name) || '').trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) return bad('expansion_unit_name_invalid', 'unit name "' + name + '" must match [A-Za-z0-9_-]+');
+    if (names.has(name)) return bad('expansion_unit_name_duplicate', 'unit name "' + name + '" appears twice');
+    names.add(name);
+    const role = String((raw && raw.role) || '').trim();
+    // Reserved BEFORE the library lookup: the three built-ins have no agents/*.md profile, so the
+    // library check would answer them with the vaguer unknown-role reason and hide the real rule.
+    if (RESERVED_EXPANSION_UNIT_ROLES.has(role)) return bad('expansion_unit_role_reserved', 'unit ' + name + ' may not take the built-in role "' + role + '"');
+    if (!ctx.installedRoles.has(role)) return bad('expansion_unit_role_unknown', 'unit ' + name + ' role "' + role + '" is not in the installed role library');
+    const mode = String((raw && raw.mode) || '').trim().toLowerCase();
+    if (!grammar.MODES.includes(mode)) {
+      return bad('expansion_unit_mode_unsupported', 'unit ' + name + ' mode "' + mode + '" is not one of ' + grammar.MODES.join('|'));
+    }
+    const dependsOn = (Array.isArray(raw.depends_on) ? raw.depends_on : []).map(d => String(d).trim()).filter(Boolean);
+    // Serial is a positive claim that must NAME its serializer. The recorded `serializer` line is the
+    // audit evidence; the dependency edge is the only form the scheduler can actually enforce, so a
+    // `serial` unit with no edge is a mode nobody honours — refuse rather than record a decorative one.
+    if (mode === 'serial' && !dependsOn.length) {
+      return bad('expansion_serial_without_edge',
+        'unit ' + name + ' declares mode serial but names no depends_on unit — serial requires a named serializer edge (co_open is the default)');
+    }
+    const model = String((raw && raw.model) || '').trim().toLowerCase();
+    if (model && !modelTiers.includes(model)) {
+      return bad('expansion_unit_model_invalid', 'unit ' + name + ' model "' + model + '" is not one of ' + modelTiers.join('|'));
+    }
+    const writeSet = String((raw && raw.write_set) || '').trim();
+    if (/[|\n]/.test(writeSet) || /[|\n]/.test(role) || /[|\n]/.test(model)) {
+      return bad('expansion_unit_field_illegal', 'unit ' + name + ' carries a "|" or newline in a record cell');
+    }
+    units.push({ name, role, model, write_set: writeSet, mode, depends_on: dependsOn });
+  }
+  // Intra-frontier edges must resolve inside the record, must not self-loop, and must not cycle: a
+  // cycle would make every unit permanently un-ready (a silent stall), which the ready-set derivation
+  // would report as a corrupt plan long after the record was written.
+  for (const u of units) {
+    for (const d of u.depends_on) {
+      if (!names.has(d)) return bad('expansion_unit_edge_unresolved', 'unit ' + u.name + ' depends on "' + d + '", which is not a unit of this composition');
+      if (d === u.name) return bad('expansion_unit_edge_self', 'unit ' + u.name + ' depends on itself');
+    }
+  }
+  {
+    const state = new Map(units.map(u => [u.name, 0]));
+    const edges = new Map(units.map(u => [u.name, u.depends_on]));
+    const visit = (n) => {
+      if (state.get(n) === 2) return true;
+      if (state.get(n) === 1) return false;
+      state.set(n, 1);
+      for (const d of (edges.get(n) || [])) if (!visit(d)) return false;
+      state.set(n, 2);
+      return true;
+    };
+    for (const u of units) if (!visit(u.name)) return bad('expansion_unit_edge_cycle', 'the composition\'s depends_on edges form a cycle');
+  }
+  if (!units.some(u => !u.depends_on.length)) {
+    return bad('expansion_unit_no_root', 'every unit declares a depends_on edge — at least one unit must be a root of the frontier');
+  }
+  return { ok: true, units, derivation };
+}
+
+// runExpandOpen — MUTATES the plan (record block + unit ledger rows + open proof block), the
+// baselines and the running set. See the transaction header above for the phase order.
+function runExpandOpen(opts) {
+  const { planPath, project, nodeId, composition, readFile, writeFile, now } = opts;
+
+  // == UNIFIED GUARD PROLOGUE — the SAME matrix open-ready runs (integrity / halt fence /
+  // excl-serial). Expansion is a MUTATING subcommand and is not exempt from any layer. No
+  // excl-scheduler: like open-ready, this command OWNS the running-set open. ==
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'] });
+  if (guard) return guard;
+
+  if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point to expand' });
+
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+
+  const validator = require('./kaola-workflow-plan-validator');
+  if (validator.parsePlanForm(content).form !== 'spine') {
+    return refuse('not_a_spine_plan', {
+      node_id: nodeId,
+      detail: 'expand-open applies only to a plan frozen with plan_form: spine; a dag plan declares its whole shape at freeze',
+    });
+  }
+  const nodes = validator.parseNodes(content);
+  const point = nodes.find(n => n.id === nodeId);
+  if (!point) return refuse('node_not_found', { node_id: nodeId, detail: 'no such node in ## Nodes' });
+  if (point.role !== validator.SPINE_EXPANSION_ROLE) {
+    return refuse('node_not_expansion_point', { node_id: nodeId, detail: 'role is "' + point.role + '"; only an ' + validator.SPINE_EXPANSION_ROLE + ' node has a frontier to compose' });
+  }
+
+  const ledger = readLedgerStatuses(content);
+  const terminal = new Set(['complete', 'n/a']);
+  if (terminal.has(String(ledger[nodeId] || '').toLowerCase())) {
+    return refuse('expansion_point_discharged', { node_id: nodeId, detail: 'the milestone is already terminal — a discharged point cannot be re-expanded in place' });
+  }
+  const notReady = point.dependsOn.filter(d => !terminal.has(String(ledger[d] || '').toLowerCase()));
+  if (notReady.length) {
+    return refuse('expansion_point_not_ready', { node_id: nodeId, detail: 'frozen dependencies not terminal: ' + notReady.join(', ') });
+  }
+
+  // GATE (fail-closed): a prior record on this point must be POSITIVELY proven opened AND positively
+  // proven settled before a re-expansion may append a second one. An unopened prior record routes to
+  // reconcile (roll-forward), never to a second co-opened frontier.
+  const parsed = validator.parseExpansionRecords(content);
+  const priors = parsed.records.filter(r => r.point === nodeId);
+  const malformed = priors.filter(r => r.malformed.length);
+  if (malformed.length) {
+    return refuse('expansion_records_malformed', { node_id: nodeId, detail: malformed.map(r => r.id + ': ' + r.malformed.join('; ')).join(' | ') });
+  }
+  const unopened = priors.filter(r => !validator.expansionRecordOpened(parsed, r.id));
+  if (unopened.length) {
+    return refuse('expansion_open_incomplete', {
+      node_id: nodeId, records: unopened.map(r => r.id),
+      repair: 'run reconcile-running-set to roll the appended record forward, then retry',
+    });
+  }
+  const unsettled = priors.filter(r => !validator.expansionRecordSettled(r, ledger));
+  if (unsettled.length) {
+    return refuse('expansion_not_settled', {
+      node_id: nodeId, records: unsettled.map(r => r.id),
+      detail: 'a re-expansion may only append once every prior unit on this point is positively terminal',
+    });
+  }
+
+  let installed;
+  try { installed = new Set(validator.installedRoles(getRoot())); } catch (_) { installed = new Set(); }
+  const composed = validateComposition(composition, { point: nodeId, installedRoles: installed });
+  if (!composed.ok) return composed.refusal;
+
+  const ordinal = priors.reduce((m, r) => Math.max(m, r.ordinal || 0), 0) + 1;
+  const recordId = nodeId + '#' + ordinal;
+  const unitIds = composed.units.map(u => validator.expansionUnitId(nodeId, ordinal, u.name));
+
+  // Id-space safety: a unit id must not collide with an existing plan node id, an existing ledger row,
+  // or another unit's barrier/ref key (`.cache/barrier-base-<sanitized>` is keyed on the sanitized id,
+  // so two ids that sanitize alike would share one baseline).
+  const takenIds = new Set(nodes.map(n => n.id).concat(Object.keys(ledger)));
+  const takenSan = new Map(nodes.map(n => [sanitizeNodeId(n.id), n.id]));
+  for (const r of parsed.records) for (const u of r.units) { takenIds.add(u.id); takenSan.set(sanitizeNodeId(u.id), u.id); }
+  for (const id of unitIds) {
+    if (takenIds.has(id)) return refuse('expansion_unit_id_collision', { node_id: nodeId, detail: 'derived unit id "' + id + '" already exists in this plan' });
+    const san = sanitizeNodeId(id);
+    if (takenSan.has(san)) return refuse('expansion_unit_id_collision', { node_id: nodeId, detail: 'derived unit id "' + id + '" collides with "' + takenSan.get(san) + '" on the barrier key "' + san + '"' });
+    takenIds.add(id); takenSan.set(san, id);
+  }
+
+  // ---- Phase 1: ONE atomic plan write (record block + unit ledger rows). ----
+  const planHash = planHashFromContent(content) || '';
+  const block = renderExpansionRecord(recordId, nodeId, planHash, composed.derivation, composed.units);
+  const withRecord = appendExpansionBlock(content, block);
+  const led = appendLedgerRows(withRecord, unitIds);
+  if (!led.ok) return refuse(led.reason, { node_id: nodeId, detail: 'cannot append unit rows to ## Node Ledger' });
+  writeFile(planPath, led.content);
+
+  // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
+  const rolled = openExpansionFrontier(opts, recordId);
+  return {
+    ...rolled,
+    expansion_id: recordId,
+    expansion_point: nodeId,
+    ordinal,
+    units: composed.units.map((u, i) => ({ ...u, id: unitIds[i] })),
+    derivation: composed.derivation,
+    // The review journal binds to (SPINE plan_hash, expansion record id). plan_hash covers the spine
+    // only, so it is invariant across every expansion and re-expansion on this plan — which is exactly
+    // why a later re-expansion cannot orphan a completed review journal. The record id is the second
+    // component: it names WHICH composed frontier a review discharged.
+    review_binding: { plan_hash: planHash, expansion_id: recordId },
+  };
+}
+
+// openExpansionFrontier — Phases 2+3, factored out so `expand-open` and the reconcile ROLL-FORWARD run
+// byte-identical code. IDEMPOTENT by construction: runOpenReady opens only pending-and-not-live nodes,
+// and the `open()` proof block is appended only when it is absent.
+function openExpansionFrontier(opts, recordId) {
+  const { planPath, readFile, writeFile, now } = opts;
+  const opened = runOpenReady(opts);
+  if (opened && opened.result === 'refuse') {
+    return { ...opened, expansion_phase: 'open', expansion_id: recordId };
+  }
+  const after = readFile(planPath);
+  const validator = require('./kaola-workflow-plan-validator');
+  if (!validator.expansionRecordOpened(validator.parseExpansionRecords(after), recordId)) {
+    const stamp = (typeof now === 'function') ? now() : new Date().toISOString();
+    writeFile(planPath, appendExpansionBlock(after, 'open(' + recordId + '):\n  at: ' + stamp + '\n'));
+  }
+  return { ...opened, result: 'ok' };
+}
+
+// rollForwardExpansions — the crash-repair arm reconcile-running-set runs for this transaction. For
+// EVERY record on the plan that is not POSITIVELY proven opened, re-run Phases 2+3. The predicate
+// (expansionRecordOpened) fails CLOSED to not-opened, so a record missing its proof block — including
+// one that omits every optional field — is rolled FORWARD rather than silently abandoned.
+//
+// Never rolls BACK. A record is the durable statement that this frontier was composed; discarding it
+// would lose the composition and the derivation with no operator signal, and re-opening is cheap.
+function rollForwardExpansions(opts) {
+  const { planPath, readFile } = opts;
+  let content;
+  try { content = readFile(planPath); } catch (_) { return { rolledForward: [], refusals: [] }; }
+  const validator = require('./kaola-workflow-plan-validator');
+  if (validator.parsePlanForm(content).form !== 'spine') return { rolledForward: [], refusals: [] };
+  const parsed = validator.parseExpansionRecords(content);
+  const rolledForward = [];
+  const refusals = [];
+  for (const r of parsed.records) {
+    if (r.malformed.length) { refusals.push({ expansion_id: r.id, reason: 'expansion_records_malformed', detail: r.malformed.join('; ') }); continue; }
+    if (validator.expansionRecordOpened(parsed, r.id)) continue;
+    const out = openExpansionFrontier(opts, r.id);
+    if (out && out.result === 'refuse') refusals.push({ expansion_id: r.id, reason: out.reason || 'open_failed' });
+    else rolledForward.push(r.id);
+  }
+  return { rolledForward, refusals };
+}
+
+// runExpandClose — MUTATES the ledger (the expansion point row) + appends the `discharge()` block.
+//
+// The milestone's completion is a SEPARATE, typed step rather than a hidden side effect of the last
+// unit's `close-node`, because close-node must stay unchanged: it closes ONE running-set member and
+// knows nothing about milestones. Discharging is gated by the same fail-closed settled predicate the
+// re-expansion gate uses, so a point can never go terminal over a unit that is merely missing a row.
+function runExpandClose(opts) {
+  const { planPath, nodeId, readFile, writeFile, now } = opts;
+
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'scheduler'] });
+  if (guard) return guard;
+
+  if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point to discharge' });
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+
+  const validator = require('./kaola-workflow-plan-validator');
+  if (validator.parsePlanForm(content).form !== 'spine') return refuse('not_a_spine_plan', { node_id: nodeId });
+  const nodes = validator.parseNodes(content);
+  const point = nodes.find(n => n.id === nodeId);
+  if (!point) return refuse('node_not_found', { node_id: nodeId });
+  if (point.role !== validator.SPINE_EXPANSION_ROLE) {
+    return refuse('node_not_expansion_point', { node_id: nodeId, detail: 'role is "' + point.role + '"' });
+  }
+
+  const ledger = readLedgerStatuses(content);
+  if (String(ledger[nodeId] || '').toLowerCase() === 'complete') {
+    return { result: 'ok', expansion_point: nodeId, alreadyDischarged: true, taskTransitions: [] };
+  }
+  const parsed = validator.parseExpansionRecords(content);
+  const recs = parsed.records.filter(r => r.point === nodeId);
+  if (!recs.length) {
+    return refuse('expansion_never_composed', { node_id: nodeId, detail: 'the milestone has no expansion record — expand-open it before discharging' });
+  }
+  const unopened = recs.filter(r => !validator.expansionRecordOpened(parsed, r.id)).map(r => r.id);
+  if (unopened.length) {
+    return refuse('expansion_open_incomplete', { node_id: nodeId, records: unopened, repair: 'run reconcile-running-set to roll the appended record forward' });
+  }
+  const unsettled = recs.filter(r => !validator.expansionRecordSettled(r, ledger)).map(r => r.id);
+  if (unsettled.length) {
+    return refuse('expansion_not_settled', { node_id: nodeId, records: unsettled, detail: 'every unit of every record on this point must be positively terminal before the milestone discharges' });
+  }
+
+  const spliced = spliceLedgerNode(content, nodeId, 'complete', { allowFrom: ['pending', 'in_progress'] });
+  if (!spliced.found) return refuse('ledger_row_missing', { node_id: nodeId });
+  if (!spliced.changed && !spliced.alreadyAtTarget) {
+    return refuse('ledger_status_unexpected', { node_id: nodeId, detail: 'current status is "' + (ledger[nodeId] || 'unknown') + '"' });
+  }
+  const stamp = (typeof now === 'function') ? now() : new Date().toISOString();
+  const withDischarge = appendExpansionBlock(spliced.content,
+    'discharge(' + nodeId + '):\n  at: ' + stamp + '\n  records: ' + recs.map(r => r.id).join(', ') + '\n');
+  writeFile(planPath, withDischarge);
+  return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id), taskTransitions: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -12119,6 +12556,8 @@ function main() {
       '  open-ready          --project P [--max N]   (#377 running-set scheduler)\n' +
       '  close-node          --project P --node-id N (#377 running-set scheduler)\n' +
       '  reconcile-running-set --project P           (#377 crash roll-forward/back)\n' +
+      '  expand-open         --project P --node-id N --stdin  (compose + record + open one expansion point)\n' +
+      '  expand-close        --project P --node-id N          (discharge a fully-settled expansion point)\n' +
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -12394,9 +12833,43 @@ function main() {
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
       });
     }
+  } else if (subcommand === 'expand-open') {
+    // #759: the composition arrives on STDIN as JSON — the same transit record-evidence uses, so a
+    // frontier with many units never has to survive shell argv quoting.
+    if (!hasStdin) {
+      result = { result: 'refuse', errors: ['--stdin required for expand-open (the frontier composition, as JSON)'] };
+    } else {
+      let composition = null;
+      let parseError = null;
+      try { composition = JSON.parse(fs.readFileSync(0, 'utf8')); }
+      catch (err) { parseError = String(err && err.message || err); }
+      if (parseError) {
+        result = decorateOperatorHint(refuse('expansion_composition_malformed', { node_id: nodeId, detail: 'stdin is not valid JSON: ' + parseError }));
+      } else {
+        result = runExpandOpen({
+          planPath, project, nodeId, composition, codexDispatchMode,
+          max: Number.isInteger(maxArg) && maxArg >= 1 ? maxArg : null,
+          fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
+          speculativeConsent: args.includes('--speculative-consent'),
+          writeOverlapConsent: args.includes('--write-overlap-consent'),
+          shell, readFile, writeFile, cacheExists,
+          mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+          now: () => new Date().toISOString(),
+        });
+      }
+    }
+  } else if (subcommand === 'expand-close') {
+    result = runExpandClose({
+      planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+      now: () => new Date().toISOString(),
+    });
   } else if (subcommand === 'reconcile-running-set') {
     result = runReconcileRunningSet({
       planPath, project, shell, readFile, writeFile, cacheExists,
+      codexDispatchMode,
+      fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
+      mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+      now: () => new Date().toISOString(),
       unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
     });
   } else if (subcommand === 'record-evidence') {
@@ -12591,6 +13064,15 @@ module.exports = {
   readRunningSet,
   isReadOnlyNode,
   nodeWriteSetNonempty,
+  // #759 (expansion transaction): the two subcommand bodies, the append primitives, the pure
+  // composition validator, and the reconcile roll-forward arm — exported for direct unit coverage.
+  runExpandOpen,
+  runExpandClose,
+  rollForwardExpansions,
+  validateComposition,
+  renderExpansionRecord,
+  appendExpansionBlock,
+  appendLedgerRows,
   runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
