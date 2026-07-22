@@ -71,8 +71,14 @@ here for the full contract.
   it is an ordinary ledger node with an ordinary `.cache/<id>.md` evidence file and an ordinary
   `.cache/barrier-base-<id>` baseline. Resume therefore reads the ledger exactly as before — the
   records add nodes to it, they do not replace it. An `open()` block is the **positive proof** that a
-  record's frontier was opened; a record without one is a crash between the append and the open, and
-  `reconcile-running-set` rolls it forward idempotently.
+  record's frontier was opened; a record without one is a crash somewhere between the append and the
+  proof, and `reconcile-running-set` rolls it forward idempotently. That crash window covers three
+  distinct running-set shapes — **no manifest** (crashed before the open), an **`opening`** manifest
+  (crashed during it), and a **settled `open`** manifest whose unit rows are already `in_progress`
+  (crashed after the open but before the proof) — and the roll-forward runs on all three. The last
+  shape is the one that reads as "nothing to repair": the running set itself is healthy, so a repair
+  that only ran when the manifest needed fixing would leave the record unproven forever while every
+  `expand-*` refusal told the operator to run a reconcile that did nothing.
 - `.cache/` files under an active project hold supporting evidence referenced by
   phase artifacts or summaries. Key `.cache/` entries:
   - `dispatch-log.jsonl` — written by the `kaola-workflow-subagent-dispatch-log.sh`

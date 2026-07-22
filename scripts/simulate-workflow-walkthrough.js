@@ -17113,6 +17113,37 @@ function testExpansionTransaction759() {
         '#759 (a): the UNCHANGED open-ready must open nothing over an un-expanded point, got ' + orOpen.stdout);
     }
 
+    // A COMPOSED REVIEW GATE IS REFUSED, BY NAME, WITH ZERO MUTATION.
+    //
+    // The fixture's own expansion contract declares `review_class: code-reviewer`, which reads as an
+    // invitation to compose one — so the refusal has to be pinned on the real CLI, not just the pure
+    // validator. Composing a gate unit used to succeed and then wedge the run permanently: the OPEN
+    // path resolves the review-gate contract through the FREEZE view and cannot see a composed unit
+    // (schema-1-shaped dispatch, no contract_version, no review_context_hash), while the CLOSE path
+    // resolves it through the EXECUTION view, sees the gate role, and applies the schema-2 close —
+    // `close-node` then refuses review_context_mismatch forever, with no legal transition left.
+    {
+      const before = readPlan();
+      const gated = expandOpen('m1', {
+        derivation: {
+          grain: 'one worker plus its own reviewer', path: 'critical path', join: 'mechanical',
+          probe: 'none', serializer: 'none present — co-open',
+        },
+        units: [
+          { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+          { name: 'g1', role: 'code-reviewer', model: 'standard', write_set: '', mode: 'co_open' },
+        ],
+      });
+      assert(gated.status !== 0, '#759 (a): composing a review-gate unit must REFUSE, got exit 0:\n' + gated.stdout);
+      const gp = JSON.parse(gated.stdout);
+      assert(gp.result === 'refuse' && gp.reason === 'expansion_unit_role_gate_unsupported',
+        '#759 (a): a composed gate unit must refuse expansion_unit_role_gate_unsupported, got ' + gated.stdout);
+      assert(/g1/.test(gp.detail) && /code-reviewer/.test(gp.detail) && /not yet supported/.test(gp.detail),
+        '#759 (a): the refusal must NAME the unit and the role and say composed gate units are not yet '
+        + 'supported — never a silent drop, got ' + JSON.stringify(gp.detail));
+      assert(readPlan() === before, '#759 (a): the refused composition must mutate the plan NOTHING at all');
+    }
+
     // ---- expand-open: a 3-unit co_open frontier. ----
     const first = {
       derivation: {
@@ -17202,16 +17233,69 @@ function testExpansionTransaction759() {
         '#759 (a): the spine advances to its review wall once the milestone discharges, got '
         + JSON.stringify((na.readyPending || []).map(n => n.id)));
     }
-    // Walk the spine tail to the sink (the wall + sink are ordinary spine nodes; their own lifecycle
-    // is covered elsewhere — what is under test here is that expansion left the spine walkable).
+    // ---- the spine tail, driven through the REAL close lifecycle of the schema-2 review wall. ----
+    //
+    // This used to advance the wall by literal string replacement on the ledger
+    // (`content.replace('| wall | pending |', '| wall | complete |')`), which asserted only that
+    // next-action reads a ledger. It exercised NO part of the gate lifecycle downstream of an expanded
+    // milestone — which is exactly the blind spot that let a composed gate unit reach the two-view
+    // open/close split undetected. Drive it through the production CLIs instead: open the gate, record
+    // bound schema-2 evidence, close it, and let the transaction move the ledger.
     {
-      let content = readPlan();
-      content = content.replace('| wall | pending |', '| wall | complete |');
-      fs.writeFileSync(planPath, content);
+      const openWallRun = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-759', '--json'], grepo);
+      const openedWall = JSON.parse(openWallRun.stdout);
+      assert(openedWall.result === 'ok' && openedWall.opened && openedWall.opened.id === 'wall'
+        && openedWall.opened.role === 'code-reviewer',
+      '#759 (a): the review wall must OPEN through the production opener once the milestone discharges, got '
+        + openWallRun.stdout + openWallRun.stderr);
+      const wd = openedWall.opened.dispatch;
+      // THE CONTROL FOR THE COMPOSED-GATE REFUSAL. A SPINE review gate downstream of an expanded
+      // milestone resolves its contract through the freeze view (where it lives) and gets the FULL
+      // schema-2 dispatch. A composed gate unit cannot: it is invisible to that view, which is why
+      // composing one is refused at expansion time. Pin the positive half here so the refusal is not
+      // mistaken for "gates don't work after an expansion".
+      assert(wd && wd.contract_version === 2 && /^[0-9a-f]{64}$/.test(String(wd.review_context_hash))
+        && /^[0-9a-f]{64}$/.test(String(wd.candidate_digest)) && /^[0-9a-f]{64}$/.test(String(wd.resolved_profile_hash)),
+      '#759 (a): the spine review wall must open with the bound schema-2 contract, got ' + JSON.stringify(wd));
+      const wallEvidence = [
+        'evidence-binding: wall ' + openedWall.nonce,
+        'contract_version: 2',
+        'review_context_hash: ' + wd.review_context_hash,
+        'behavior_contract_hash: ' + wd.behavior_contract_hash,
+        'resolved_profile_hash: ' + wd.resolved_profile_hash,
+        'candidate_digest: ' + wd.candidate_digest,
+        'domain_outcome: approved',
+        'gate_claim: ' + wd.gate_claim,
+        'gate_surface: ' + wd.gate_surface,
+        'gate_aggregation: ' + wd.gate_aggregation,
+        'findings_none: true', '',
+      ].join('\n');
+      const wallRecord = runNode(adaptiveNodeScript,
+        ['record-evidence', '--project', 'issue-759', '--node-id', 'wall', '--stdin', '--json'],
+        grepo, null, { input: wallEvidence });
+      assert(wallRecord.status === 0,
+        '#759 (a): the wall evidence must record, got ' + wallRecord.status + '\n' + wallRecord.stdout + wallRecord.stderr);
+      const wallClose = runNode(adaptiveNodeScript,
+        ['close-and-open-next', '--project', 'issue-759', '--node-id', 'wall', '--json'], grepo);
+      assert(wallClose.status === 0,
+        '#759 (a): the review wall must CLOSE through the real transaction, got ' + wallClose.status
+        + '\n' + wallClose.stdout + wallClose.stderr);
+      const wcp = JSON.parse(wallClose.stdout);
+      assert(wcp.result === 'ok' && wcp.closed === 'wall',
+        '#759 (a): the wall close must settle normally, got ' + JSON.stringify({ result: wcp.result, closed: wcp.closed, reason: wcp.reason }));
+      assert(/\| wall \| complete \|/.test(readPlan()),
+        '#759 (a): the close TRANSACTION (not a test-side string replacement) must move the wall row');
+      assertAppendOnly('after the real wall close');
       const na = nextAction();
       assert(na.nextNode && na.nextNode.id === 'done' && na.nextNode.role === 'finalize',
         '#759 (a): the unique finalize sink is next once the wall passes, got ' + JSON.stringify(na.nextNode));
-      fs.writeFileSync(planPath, readPlan().replace('| done | pending |', '| done | complete |'));
+      // The sink is the terminal main-session node run direct (its own finalize lifecycle is covered
+      // elsewhere); what is under test here is that expansion left the spine walkable all the way to
+      // allDone. The wall's close-and-open-next may already have advanced the sink to in_progress, so
+      // settle whichever non-terminal status it currently carries.
+      assert(/\| done \| (?:pending|in_progress) \|/.test(readPlan()),
+        '#759 (a): the sink row must still be open after the real wall close, got:\n' + readPlan());
+      fs.writeFileSync(planPath, readPlan().replace(/\| done \| (?:pending|in_progress) \|/, '| done | complete |'));
       const naDone = nextAction();
       assert(naDone.result === 'ok' && naDone.allDone === true,
         '#759 (a): the run reaches allDone with every expansion unit counted, got ' + JSON.stringify({ result: naDone.result, allDone: naDone.allDone }));
@@ -17302,6 +17386,117 @@ function testExpansionTransaction759() {
     } finally {
       fs.rmSync(crepo, { recursive: true, force: true });
       try { fs.rmSync(crepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // ---- (b2) THE OTHER TWO CRASH SHAPES IN THE SAME WINDOW. ----
+  //
+  // (b) above covers the crash BEFORE phase 2 — no running-set manifest at all, which reaches
+  // reconcile's `no_running_set` arm. The window has two more shapes, and each lands on a DIFFERENT
+  // arm of reconcile. Both are pinned here through the production CLIs, because a repair that only
+  // works on one of the three arms is a repair that emits an operator instruction which is a no-op in
+  // the states it does not cover:
+  //
+  //   (b2-i)  crash BETWEEN phase 2 and phase 3 — the frontier opened (settled 'open' manifest, unit
+  //           rows in_progress) but the open() proof never landed. The running set needs NO repair, so
+  //           the reconciled arm is never reached; without a roll-forward on the `not_opening` arm
+  //           reconcile answered {reconciled:false, reason:'not_opening'} and restored nothing, while
+  //           expand-open / expand-close refused `expansion_open_incomplete` carrying
+  //           "run reconcile-running-set to roll the appended record forward".
+  //   (b2-ii) crash DURING phase 2 — an 'opening' manifest. Here the running set DOES need repair, and
+  //           the roll-forward must run AFTER that repair settles it (a re-open against an 'opening'
+  //           manifest refuses reconcile_first).
+  {
+    const drepo = adaptiveTmp('expansion-759-window');
+    initGitRepoWithBareRemote(drepo);
+    spawnSync('git', ['-C', drepo, 'checkout', '-b', 'workflow/issue-759d'], { encoding: 'utf8' });
+    const dproj = path.join(drepo, 'kaola-workflow', 'issue-759');
+    fs.mkdirSync(dproj, { recursive: true });
+    const dplan = path.join(dproj, 'workflow-plan.md');
+    const dset = path.join(dproj, '.cache', 'running-set.json');
+    fs.writeFileSync(dplan, SPINE_PLAN_759);
+    const fz = runNode(planValidatorScript, [dplan, '--freeze', '--json'], drepo);
+    assert(fz.status === 0, '#759 (b2): freeze should exit 0, got ' + fz.stdout + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: drepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: drepo, encoding: 'utf8' });
+    try {
+      const composition = {
+        derivation: { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none present — co-open' },
+        units: [
+          { name: 'w1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+          { name: 'w2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        ],
+      };
+      const e = runNode(adaptiveNodeScript,
+        ['expand-open', '--project', 'issue-759', '--node-id', 'm1', '--json', '--stdin'],
+        drepo, null, { input: JSON.stringify(composition) });
+      assert(e.status === 0, '#759 (b2): expand-open should exit 0, got ' + e.status + '\n' + e.stdout + e.stderr);
+
+      const stripProof = () => {
+        const before = fs.readFileSync(dplan, 'utf8');
+        const after = before.replace(/open\(m1#1\):\n {2}at: [^\n]*\n/, '');
+        assert(after !== before, '#759 (b2): the fixture must be able to strip the open() proof block');
+        fs.writeFileSync(dplan, after);
+      };
+
+      // (b2-i) settled 'open' manifest, proof block lost.
+      stripProof();
+      {
+        const rs = JSON.parse(fs.readFileSync(dset, 'utf8'));
+        assert(rs.state === 'open' && (rs.nodes || []).length === 2,
+          '#759 (b2-i): the fixture must be the SETTLED-open shape (phase 2 completed), got ' + JSON.stringify(rs));
+        const ledger = fs.readFileSync(dplan, 'utf8');
+        assert(/\| m1-r1-w1 \| in_progress \|/.test(ledger) && /\| m1-r1-w2 \| in_progress \|/.test(ledger),
+          '#759 (b2-i): both unit rows must already be in_progress — the frontier DID open');
+      }
+      const r1 = runNode(adaptiveNodeScript, ['reconcile-running-set', '--project', 'issue-759', '--json'], drepo);
+      assert(r1.status === 0, '#759 (b2-i): reconcile should exit 0, got ' + r1.stdout + r1.stderr);
+      const rp1 = JSON.parse(r1.stdout);
+      assert(JSON.stringify(rp1.expansionsRolledForward) === JSON.stringify(['m1#1']),
+        '#759 (b2-i): a settled-open running set must NOT short-circuit the expansion roll-forward — the '
+        + '"run reconcile-running-set" repair hint has to be true in the state it is emitted for, got '
+        + JSON.stringify(rp1));
+      assert(rp1.reconciled === true && rp1.reason === 'expansion_rolled_forward',
+        '#759 (b2-i): a reconcile that DID repair something must say so (never a not_opening no-op), got '
+        + JSON.stringify({ reconciled: rp1.reconciled, reason: rp1.reason }));
+      assert(/open\(m1#1\)/.test(fs.readFileSync(dplan, 'utf8')),
+        '#759 (b2-i): the proof block must be restored, so the next expand-* is no longer wedged');
+      // ...and the wedge is genuinely gone: expand-open now answers with the TRUE blocker (the units
+      // really are live) instead of an instruction that does nothing.
+      const retry = runNode(adaptiveNodeScript,
+        ['expand-open', '--project', 'issue-759', '--node-id', 'm1', '--json', '--stdin'],
+        drepo, null, { input: JSON.stringify(composition) });
+      assert(retry.status !== 0 && JSON.parse(retry.stdout).reason === 'expansion_not_settled',
+        '#759 (b2-i): after the repair the refusal must name the REAL blocker, got ' + retry.stdout);
+      // IDEMPOTENCE on this arm too: a stable, fully-proven plan is back to the not_opening no-op.
+      const r1b = JSON.parse(runNode(adaptiveNodeScript, ['reconcile-running-set', '--project', 'issue-759', '--json'], drepo).stdout);
+      assert(r1b.reconciled === false && r1b.reason === 'not_opening' && !r1b.expansionsRolledForward,
+        '#759 (b2-i): a second reconcile must re-roll nothing, got ' + JSON.stringify(r1b));
+      assert((fs.readFileSync(dplan, 'utf8').match(/open\(m1#1\)/g) || []).length === 1,
+        '#759 (b2-i): exactly one open() proof block survives the repeated repair');
+
+      // (b2-ii) 'opening' manifest — the crash landed INSIDE phase 2. The running set needs repair
+      // FIRST; the roll-forward must still happen on that same reconcile.
+      stripProof();
+      {
+        const rs = JSON.parse(fs.readFileSync(dset, 'utf8'));
+        rs.state = 'opening';
+        rs.nodes = (rs.nodes || []).map(n => ({ ...n, opening: true }));
+        fs.writeFileSync(dset, JSON.stringify(rs, null, 2));
+      }
+      const r2 = runNode(adaptiveNodeScript, ['reconcile-running-set', '--project', 'issue-759', '--json'], drepo);
+      assert(r2.status === 0, '#759 (b2-ii): reconcile should exit 0, got ' + r2.stdout + r2.stderr);
+      const rp2 = JSON.parse(r2.stdout);
+      assert(rp2.reconciled === true && rp2.state === 'open',
+        '#759 (b2-ii): the interrupted open transaction must be resolved first, got ' + JSON.stringify({ reconciled: rp2.reconciled, state: rp2.state }));
+      assert(JSON.stringify(rp2.expansionsRolledForward) === JSON.stringify(['m1#1']),
+        '#759 (b2-ii): the RECONCILED path must roll the record forward too — this arm is otherwise dead '
+        + 'code and a crash inside phase 2 would leave the record unproven forever, got ' + JSON.stringify(rp2));
+      assert(/open\(m1#1\)/.test(fs.readFileSync(dplan, 'utf8')),
+        '#759 (b2-ii): the proof block must be restored on the reconciled path as well');
+    } finally {
+      fs.rmSync(drepo, { recursive: true, force: true });
+      try { fs.rmSync(drepo + '-remote', { recursive: true, force: true }); } catch (_) {}
     }
   }
 
