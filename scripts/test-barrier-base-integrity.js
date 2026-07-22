@@ -304,6 +304,12 @@ try {
             source_evidence_digest: tx.source.source_evidence_digest,
             planner_binding: tx.planner.dispatch_nonce,
             code_certifier: 'child-review', security_certifier: 'child-security',
+            // The child carry-forward declaration: which child node repairs each inherited
+            // finding uid. Derived from the transaction's own source projection so this
+            // fixture can never claim coverage for a uid the packet never published.
+            finding_owners: replan.buildFindingIndex(tx.source)
+              .map(row => row.uid + '=child-impl' + (row.anchor_paths.length ? '' : '@anchorless'))
+              .join(',') || 'none',
           }, [
             { id: 'child-impl', role: 'tdd-guide', write_set: 'product.js' },
             { id: 'child-review', role: 'code-reviewer', depends_on: 'child-impl', model: 'reasoning',
