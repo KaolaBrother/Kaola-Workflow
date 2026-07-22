@@ -813,6 +813,17 @@ for (const certKind of ['group', 'single']) {
 // so each refusal is provably caused by that perturbation and not by the scoped path being dead.
 // Exercised for BOTH newly-admitted roles; the adversarial-verifier arm consumes the same journal +
 // corroboration inputs (blocks 2 and 5 cover it end to end).
+//
+// Two guards in interiorSurfaceFresh are deliberately NOT pinned here, verified by mutation:
+//   * the mixed-receipt-candidate guard (`receipts.some(r => r.candidate_digest !== seal)`) is vacuous
+//     for a one-member gate and unreachable for the newly-eligible roles at any width — a code/security
+//     reviewer FANOUT is routed to the schema-1 provisional-fanout machinery, which materializes no
+//     schema-2 review context for its members, so such a group never reaches this comparison at all.
+//     Its only live shape is an adversarial-verifier fanout, whose eligibility this widening did not
+//     change.
+//   * `if (!attempts) return false` is an equivalent mutant of the `if (!attempt) return false` below
+//     it (an empty/absent attempt list finds no attempt either). The missing/malformed-journal arms
+//     below still pin the OBSERVABLE fail-closed behavior, which is what the contract owes.
 for (const probeRole of ['code-reviewer', 'security-reviewer']) {
   const tag = '745-F[' + probeRole + ']';
   const tmp7 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-interior-fallbacks-')));
