@@ -4035,9 +4035,15 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
     ['mid-run, compliance rows only for the CLOSED node (legacy row-by-row append)',
       { impl: 'complete', review: 'pending', finalize: 'pending' }, { complianceFor: ['impl'] },
       'state_compliance_authority_invalid'],
+    // #733 retired the task-mirror comparison from the authority ladder entirely (the mirror
+    // is a pure projection of the ledger, so comparing it could only ever report staleness).
+    // A missing mirror therefore no longer refuses AT ALL, and this window needs NO downgrade
+    // to abandon cleanly — strictly better than downgrading it. The case is kept rather than
+    // deleted because it still pins the user-facing property: a frozen-never-run project with
+    // no task mirror abandons and fully cleans up. `null` here means "no downgrade expected".
     ['frozen-never-run, best-effort freeze-time workflow-tasks.json never landed',
       { impl: 'pending', review: 'pending', finalize: 'pending' }, { dropMirror: true },
-      'state_task_mirror_mismatch'],
+      null],
   ];
   for (const [label, ledger, opts, downgraded] of abandonWindows) {
     const fx = fixture735(ledger, opts);
@@ -4045,9 +4051,15 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
       const r = runRelease735(fx);
       assert(r.status === 0 && r.json && r.json.released === true,
         '#735: discard succeeds for a user-consented abandon (' + label + '), got ' + r.raw.trim());
-      assert(r.json && r.json.authority_downgraded === downgraded,
-        '#735: the abandon records the downgraded run-state authority reason (' + label + '), got '
-          + JSON.stringify(r.json && r.json.authority_downgraded));
+      if (downgraded === null) {
+        assert(r.json && !r.json.authority_downgraded,
+          '#735: this window needs NO authority downgrade (' + label + '), got '
+            + JSON.stringify(r.json && r.json.authority_downgraded));
+      } else {
+        assert(r.json && r.json.authority_downgraded === downgraded,
+          '#735: the abandon records the downgraded run-state authority reason (' + label + '), got '
+            + JSON.stringify(r.json && r.json.authority_downgraded));
+      }
       assert(!fs.existsSync(fx.projectDir) && r.json && r.json.dest && fs.existsSync(r.json.dest),
         '#735: the live folder is archived, not left in place (' + label + ')');
       assert(!fs.existsSync(fx.worktreePath),
