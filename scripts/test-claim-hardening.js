@@ -4277,6 +4277,10 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 
   const PENDING755 = { impl: 'pending', review: 'pending', finalize: 'pending' };
+  // A ledger status outside the allowed set makes the ## Node Ledger tier unreadable
+  // (`state_ledger_authority_invalid`) — downgradable, and evaluated even earlier than
+  // the compliance tiers.
+  const BOGUS_LEDGER755 = { impl: 'bogus', review: 'pending', finalize: 'pending' };
   // A `.staging-` epoch entry is snapshot-tier residue (`snapshot_staging_incomplete`);
   // an unparseable replan transaction is `replan_transaction_invalid`, evaluated in the
   // current-epoch ladder AFTER every downgradable tier; an `.cache/epochs` symlinked out
@@ -4302,9 +4306,13 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
       { complianceFor: null }, corruptTransaction755, 'replan_transaction_invalid'],
     ['S5 .cache/epochs symlinked out of the project MASKED by a missing compliance section',
       { complianceFor: null }, symlinkEpochs755, 'snapshot_epochs_unreadable'],
+    // The compliance tier is not the only deferrable one: an unreadable ## Node Ledger is
+    // downgradable too, and it is checked EARLIER still, so it masks even more of the ladder.
+    ['S6 snapshot staging residue MASKED by an unreadable ## Node Ledger',
+      { ledger: BOGUS_LEDGER755 }, stagingResidue755, 'snapshot_staging_incomplete'],
   ];
   for (const [label, opts, mutate, expected] of maskingProbes) {
-    const fx = fixture755('issue-755', PENDING755, opts);
+    const fx = fixture755('issue-755', opts.ledger || PENDING755, opts);
     try {
       mutate(fx);
       const r = runRelease755(fx);
@@ -4342,6 +4350,23 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
         '#755 control: the only-downgradable abandon still removes the worktree and branch');
       assert(r.json.claim_label_removed === 'skipped_offline',
         '#755 control: claim-label cleanup was attempted, got ' + JSON.stringify(r.json.claim_label_removed));
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // OVER-REFUSAL CONTROL, ledger tier. Deferring the ledger tier leaves no usable status
+  // map, so the ledger-progress and compliance-progress checks that PROJECT that map must
+  // be skipped rather than run against it — and the abandon must still complete.
+  {
+    const fx = fixture755('issue-755', BOGUS_LEDGER755, {});
+    try {
+      const r = runRelease755(fx);
+      assert(r.status === 0 && r.json && r.json.released === true
+        && r.json.authority_downgraded === 'state_ledger_authority_invalid',
+        '#755 control: an ONLY-downgradable LEDGER fault must still abandon with the reason recorded, got '
+          + r.raw.trim());
+      assert(!fs.existsSync(fx.projectDir) && !fs.existsSync(fx.worktreePath)
+        && git755(fx.root, ['branch', '--list', fx.branch]) === '',
+        '#755 control: the ledger-tier abandon archives the folder and cleans up worktree + branch');
     } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
   }
 
