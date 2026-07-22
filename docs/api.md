@@ -1603,7 +1603,32 @@ The planner packet contains the repository/project identity, typed source eviden
 root, current candidate/inherited frontier, budget, acceptance requirements, exact child path,
 profile identity, dispatch nonce, and the transaction's immutable `snapshot_authority_projection`
 plus its digest. It must not prescribe nodes, roles, dependencies, write sets, cardinality, shape,
-model, or build order. Child validation requires schema/contract version 2, a fully pending Ledger,
+model, or build order.
+
+`source.finding_index` is the packet's readable index over the failure record the child epoch
+exists to repair: exactly one row per source finding, in source order, with an identical key set on
+every row. Each row carries `uid` (the immutable finding id — the schema-2 canonical uid, or the
+schema-1 `id=` token), the finding's own `status`, `scope`, `action`, `severity`, `failure_class`
+and `fix_role`, its immutable `primary_anchor` object, `anchor_paths` (the primary plus every
+secondary anchor path, sorted and de-duplicated, or the schema-1 `file=` token; empty for an
+`evidence_observation` anchor, which legally carries no path), and the route/ownership the source
+attempt already resolved: `source_nodes` (every node whose evidence produced the finding),
+`ownership_candidates` (the union of the candidate sets across every matching row of the attempt's
+`route_candidates`) and `owning_node` (carried only when every matching route row resolved the same
+owner — a fan-out gate whose members disagree, or one of whom resolved none, has resolved no owner,
+and the disagreement stays visible in the unioned candidate set). Every scalar is a string or
+`null`; ownership the source did not resolve arrives as `null` / `[]` and is never inferred here.
+The mutable fields are read from the finding itself, never from a route row that merely restates
+them with the producer's defaults substituted. The index is placed inside the packet's *source
+evidence* deliberately: the re-plan planner profile treats the packet's claim / root / epoch /
+candidate / frontier / budget fields as immutable integrity constraints, and this record is the one
+the planner must act on. The index is plumbing only — it derives no coverage verdict over the child
+plan. It is built by an exported pure function over an attempt-shaped `{ findings,
+route_candidates }` bag, so a consumer holding a review attempt can build the same index without
+opening a re-plan transaction. The carried route rows are deliberately excluded from
+`source_evidence_digest` (the journal they are read from is already pinned byte-exact by
+`journal_digest`), so a transaction prepared by an earlier build still resumes. Child validation
+requires schema/contract version 2, a fully pending Ledger,
 parent/lineage/root/frontier/source/planner bindings, and the inherited G4 code/security certifier
 declarations. Despite its historical name, the child's `parent_snapshot_manifest_digest` equals the
 projection digest—not the later full manifest-file digest. A zero-new-writer child therefore cannot
@@ -2619,7 +2644,9 @@ The following functions are exported from sink, claim, re-plan, and forge module
 - `verifySnapshotManifest(epochDir)` / `verifyAllEpochSnapshots(projectDir, expected?)` — Recursively verify immutable epoch files, manifest self-digests, sequence, lineage, active-state binding, and consent ceiling. Snapshot integrity is **content-addressed**: each file is verified by size + SHA-256 digest against the manifest row, and the manifest itself by its self-digest and recomputed authority projection. The manifest still records each file's creation `mode` as forensic metadata, but verification never compares permission bits — snapshot files are read-only evidence copies that are never executed and never restored, and mode is not preserved by the transports these snapshots travel through (git stores only `100644`/`100755`). A sealed epoch therefore keeps verifying across an archive commit, clone, or fresh worktree checkout.
 - `readStatus(opts)` — Read the current re-plan fence and transaction status without mutation.
 - `validateChildPlan(childBytes, transaction)` / `validateChildHandoffAuthority(paths, transaction)` — Enforce schema-2 child bindings, all-pending Ledger, exact child path, and durable pre-freeze CAS authority.
-- `buildPlannerPacket(paths, transaction)` — Produce the topology-free evidence packet consumed by `workflow-planner` re-plan mode, including the precomputed `transaction.snapshot.authority_projection` and `authority_digest`; callers must pass a full transaction built by `buildTransaction`, not a partial legacy fixture.
+- `buildPlannerPacket(paths, transaction)` — Produce the topology-free evidence packet consumed by `workflow-planner` re-plan mode, including the precomputed `transaction.snapshot.authority_projection` and `authority_digest` plus the `source.finding_index` projection of `transaction.source.{findings,route_candidates}`; callers must pass a full transaction built by `buildTransaction`, not a partial legacy fixture. Pure over the transaction (no fs), so a crash-prefix retry rebuilds byte-identical packet bytes.
+- `buildFindingIndex(attempt)` — Pure projection of an attempt-shaped `{ findings, route_candidates }` bag (a review journal attempt, or a re-plan transaction's `source` projection of one) into the packet's `source.finding_index` rows. No fs, no transaction identity, no re-plan phase; total on malformed input.
+- `sourceEvidenceDigest(source)` — The review source's authority digest, computed over the source with its carried `route_candidates` excluded, so that carriage-only field never changes an already-stored transaction's digest.
 
 **`scripts/kaola-workflow-roadmap.js`:**
 - `regenerateRoadmap(root)` — Silently regenerates `ROADMAP.md` from `.roadmap/issue-*.md` sources. Returns `'generated'` if content changed, `'up-to-date'` if no change. Used by claim scripts during finalization to clean up roadmap entries. Does not print to stdout.

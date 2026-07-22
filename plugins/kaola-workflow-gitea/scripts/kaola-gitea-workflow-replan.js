@@ -554,6 +554,122 @@ function computeReviewCandidateDigest(repoRoot, project) {
   return schema.sha256Hex(Buffer.from(lines.join('\n') + (lines.length ? '\n' : ''), 'utf8'));
 }
 
+// #729 — the route/ownership row the source attempt ALREADY resolved, carried forward for the
+// child planner. `route_candidates` is a REQUIRED attempt field in both journal validators, and
+// it is where the reviewer's write-set lookup landed (ownership_candidates / owning_node). This
+// is pure carriage: no ownership is derived here that the source did not record.
+//
+// Normalized to a FIXED key set with `null` (never `undefined`) defaults because the two review
+// lanes produce different raw shapes (schema-1 flat rows keyed by `id`; schema-2 rows keyed by the
+// canonical `uid`) and the child planner must be able to read ONE shape, and because `undefined`
+// is not representable in the JSON the packet is written as.
+const ROUTE_CANDIDATE_STRING_KEYS = Object.freeze(['source_node', 'owning_node']);
+
+function canonicalRouteCandidates(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(row => row && typeof row === 'object' && !Array.isArray(row)).map(row => {
+    const id = row.finding_id == null ? row.id : row.finding_id;
+    const out = { finding_id: id == null ? null : String(id) };
+    for (const key of ROUTE_CANDIDATE_STRING_KEYS) {
+      out[key] = row[key] == null ? null : String(row[key]);
+    }
+    out.ownership_candidates = Array.isArray(row.ownership_candidates)
+      ? row.ownership_candidates.filter(owner => owner != null).map(String) : [];
+    return out;
+  });
+}
+
+// The anchor PATHS a finding declares, in both lanes: a schema-2 finding's primary plus secondary
+// anchors (an `evidence_observation` anchor legally carries none — report that, never invent one),
+// or a schema-1 finding's flat `file=` token. Sorted and de-duplicated; never widened with a path
+// the finding did not state. Read from the FINDING only, never from its route row: the journal
+// validator already pins `route.file` to the finding's own `file` key (present on exactly the same
+// findings, with the same value), so a route-side fallback could only ever restate this one.
+function findingAnchorPathList(finding) {
+  const anchors = [finding && finding.primary_anchor,
+    ...(Array.isArray(finding && finding.secondary_anchors) ? finding.secondary_anchors : [])];
+  const paths = anchors.filter(anchor => anchor && typeof anchor.path === 'string' && anchor.path)
+    .map(anchor => anchor.path);
+  if (!paths.length && finding && typeof finding.file === 'string' && finding.file) paths.push(finding.file);
+  return Array.from(new Set(paths)).sort();
+}
+
+// #729 — the failure record the child epoch exists to repair, joined into ONE readable index:
+// per source finding its immutable id, its anchor, its status, and the route/ownership the source
+// already resolved. Findings are the authority (the empty-frontier wall is on `findings`), so there
+// is exactly one row per source finding and route rows that match nothing are not smuggled in as
+// extra work. Order follows the source, which is already canonical (uid-sorted in the schema-2 lane).
+//
+// PURE over an attempt-shaped bag — `{ findings, route_candidates }`, which is exactly a review
+// journal attempt as well as the transaction's `source` projection of one. It reads no fs, no
+// transaction identity, and no replan phase, so any consumer holding an attempt can build the same
+// index without opening a replan transaction.
+//
+// The two mutable axes are joined, never picked: a finding's own `status`/`scope`/`action`/
+// `severity`/`fix_role` are reported verbatim from the FINDING (a route row only ever restates
+// them, with the producer's defaults substituted for absent tokens — a default is not evidence),
+// while `source_nodes` / `ownership_candidates` union EVERY route row that names the finding and
+// `owning_node` reports only an owner every one of those rows agrees on. A fan-out gate whose
+// members legally report the same uid therefore keeps both reporters and both candidate sets;
+// nothing is dropped on a first-wins race.
+//
+// PLUMBING ONLY. Nothing here decides whether a child plan COVERS a row — that is a set comparison
+// against a child-plan declaration the plan grammar does not yet carry. Deriving a coverage verdict
+// from this projection would have to guess (an anchor records where a defect was OBSERVED, not
+// where its repair belongs), and enforcing a guessed obligation would loop the planner until the
+// transition budget escalated.
+function buildFindingIndex(attempt) {
+  const findings = Array.isArray(attempt && attempt.findings) ? attempt.findings : [];
+  const routesById = new Map();
+  for (const row of canonicalRouteCandidates(attempt && attempt.route_candidates)) {
+    if (row.finding_id === null) continue;
+    if (!routesById.has(row.finding_id)) routesById.set(row.finding_id, []);
+    routesById.get(row.finding_id).push(row);
+  }
+  const sortedUnique = values => Array.from(new Set(values.filter(value => value != null))).sort();
+  return findings.filter(finding => finding && typeof finding === 'object' && !Array.isArray(finding))
+    .map(finding => {
+      const id = finding.uid == null ? finding.id : finding.uid;
+      const uid = id == null ? null : String(id);
+      const routes = (uid === null ? null : routesById.get(uid)) || [];
+      const owners = sortedUnique(routes.map(route => route.owning_node));
+      const text = key => (finding[key] == null ? null : String(finding[key]));
+      return {
+        uid,
+        status: text('status'),
+        scope: text('scope'),
+        action: text('action'),
+        severity: text('severity'),
+        failure_class: text('failure_class'),
+        primary_anchor: finding.primary_anchor && typeof finding.primary_anchor === 'object'
+          && !Array.isArray(finding.primary_anchor) ? finding.primary_anchor : null,
+        anchor_paths: findingAnchorPathList(finding),
+        fix_role: text('fix_role'),
+        source_nodes: sortedUnique([finding.source_node == null ? null : String(finding.source_node),
+          ...routes.map(route => route.source_node)]),
+        // Unanimous or nothing: two route rows that disagree about the owner have not resolved
+        // one, and their union stays visible in ownership_candidates.
+        owning_node: owners.length === 1 && routes.every(route => route.owning_node !== null)
+          ? owners[0] : null,
+        ownership_candidates: sortedUnique(routes.flatMap(route => route.ownership_candidates)),
+      };
+    });
+}
+
+// #729 — the review source's authority digest, INVARIANT under the carried route/ownership rows.
+// This digest is only ever compared against a digest RECOMPUTED from the journal on disk, and
+// that journal is already pinned byte-exact by `journal_digest` (checked first, in
+// verifySourceAuthority) — so covering the route rows here would detect nothing new. It would,
+// however, change the digest of every source shape, wedging a transaction PREPARED by an earlier
+// build into a `replan_source_changed` refusal on its next resume, mid-flight, for a
+// carriage-only addition. Excluding them keeps the durable value byte-identical to what those
+// transactions stored.
+function sourceEvidenceDigest(source) {
+  const covered = Object.assign({}, source);
+  delete covered.route_candidates;
+  return schema.sha256Canonical(covered);
+}
+
 function readSource(paths, planHash, sourceAttemptId, options) {
   const journalPath = path.join(paths.cacheDir, 'review-attempts.json');
   const sourcePath = path.join(paths.cacheDir, 'replan-source.json');
@@ -705,7 +821,8 @@ function readSource(paths, planHash, sourceAttemptId, options) {
     handoff_digest: exactDigest(sourcePath),
     repair_outcome_digest: handoff.outcome_digest,
   };
-  source.source_evidence_digest = schema.sha256Canonical(source);
+  source.route_candidates = canonicalRouteCandidates(attempt.route_candidates);
+  source.source_evidence_digest = sourceEvidenceDigest(source);
   if (!reviewSourceCarriesFrontier(source)) {
     return { ok: false, reason: 'replan_source_findings_missing', detail: 'source_frontier_empty' };
   }
@@ -947,6 +1064,7 @@ function readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage) {
     source_reason: 'diagnosis_to_build',
     producer_slice: proof.payload.writers.map(row => row.id).sort(),
     findings: [],
+    route_candidates: [],
     rebind: [],
     case_b_evidence: proof.payload.artifacts,
     scope_lineage_id: null,
@@ -1813,6 +1931,15 @@ function buildPlannerPacket(paths, transaction) {
       source_evidence_digest: transaction.source.source_evidence_digest,
       producer_slice: transaction.source.producer_slice,
       findings: transaction.source.findings,
+      // The failure record the child epoch exists to repair, in one shape the planner can read:
+      // one row per source finding, carrying its immutable id, anchor, status, and the
+      // route/ownership the source already resolved. Absent ownership arrives as absent.
+      //
+      // Deliberately nested INSIDE `source`. The planner profile names the packet's claim / root /
+      // epoch / candidate / frontier / budget fields as immutable integrity constraints and its
+      // "source evidence" as a semantic task input — so an index of the source findings belongs
+      // where the planner is already told to READ, not beside the fields it is told not to touch.
+      finding_index: buildFindingIndex(transaction.source),
       rebind: transaction.source.rebind,
     },
     claim: {
@@ -3711,6 +3838,8 @@ module.exports = {
   validateChildPlan,
   validateChildHandoffAuthority,
   buildPlannerPacket,
+  buildFindingIndex,
+  sourceEvidenceDigest,
   buildSnapshotAuthorityProjection,
   verifyActivePlanningEvidence,
   verifyCurrentEpochAuthority,
