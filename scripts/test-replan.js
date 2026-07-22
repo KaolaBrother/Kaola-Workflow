@@ -4446,6 +4446,16 @@ function packetFromSource(fx, source) {
     route_candidates: [{ finding_id: 'R1', source_node: 'review-a' }] })[0].source_nodes,
   ['review-a', 'review-c'],
   '#729 AC2: the finding-borne reporter and the route-borne reporters are unioned and sorted');
+  {
+    // The route-borne scalars are normalized on the SAME contract as the finding-borne ones —
+    // a planner reading `owning_node` must never have to type-check a node id.
+    const routed = replan.buildFindingIndex({ findings: [{ uid: 'R1' }],
+      route_candidates: [{ finding_id: 'R1', source_node: 7, owning_node: 7 }] })[0];
+    deepEqual(routed.source_nodes, ['7'],
+      '#729 AC2: a route-borne reporter is normalized to a string');
+    equal(routed.owning_node, '7',
+      '#729 AC2: a route-borne owner is normalized to a string');
+  }
 }
 
 console.log(`test-replan: PASSED (${passed} assertions)`);
