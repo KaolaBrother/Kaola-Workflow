@@ -3773,4 +3773,214 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #729 — REPLAN-SIDE FRONTIER INVARIANT (defence in depth over the #728 settlement
+// guard). A settled FAILED review attempt whose canonical `findings` array is EMPTY
+// carries no record of what failed, so the child epoch it authorizes has nothing to
+// repair — the live financial-agent#332 epoch-2 plan was read-only adversary -> docs
+// writer -> review, and the same defect was rediscovered, costing another epoch.
+//
+// #728 closed the PRODUCER seam (a failed schema-2 gate can no longer SETTLE with an
+// empty open frontier). This pins the CONSUMER seam independently: a corrupted, hand
+// -written, or pre-#728 journal must fail closed here too, and the refusal must be
+// typed rather than a silent pass.
+//
+// Three frontiers reach the mechanism and each is pinned separately:
+//   1. readSource        — prepare, and every resume phase via verifySourceAuthority.
+//   2. buildPlannerPacket — the packet the child planner actually consumes; reachable
+//      with an empty array even when readSource is clean, because a transaction on
+//      disk carries its own copy of `source.findings` that validateReplanTransaction
+//      does not recompute.
+//   3. reauthorCandidate — the candidate-changed re-author, which rebuilds a
+//      transaction from the STORED source without re-reading the journal.
+// ---------------------------------------------------------------------------
+function installEmptyFrontierSource(fx) {
+  const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  const attempt = journal.attempts[0];
+  const receipt = attempt.receipts[0];
+  // The exact live shape: verdict:fail with no structured finding row at all. The
+  // journal stays production-valid — validateReviewJournal recomputes findings FROM
+  // the receipt bodies, so zero rows means zero canonical findings, legally.
+  const body = [`evidence-binding: ${receipt.node_id} ${receipt.generation}`,
+    'verdict: fail', 'findings_blocking: 0', ''].join('\n');
+  receipt.body = body;
+  receipt.receipt_sha256 = sha256(Buffer.from(body));
+  receipt.findings_blocking = 0;
+  receipt.effective_pass = false;
+  receipt.verdict = 'fail';
+  attempt.findings = [];
+  attempt.route_candidates = [];
+  attempt.outcome = 'fail';
+  attempt.reason = 'verdict_not_pass';
+  fs.writeFileSync(path.join(fx.cacheDir, receipt.node_id + '.md'), body);
+  fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
+  writeSchema2RepairSource(fx, journal, attempt);
+  return { journal, attempt, body };
+}
+
+{
+  // Frontier 1 — prepare. The malformed source never opens a transaction.
+  const fx = initFixture();
+  try {
+    installEmptyFrontierSource(fx);
+    const planBefore = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const stateBefore = fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8');
+    const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' });
+    equal(prepared.result, 'refuse',
+      'a settled failed review source with an EMPTY canonical frontier is refused, never prepared: '
+      + JSON.stringify(prepared));
+    equal(prepared.reason, 'replan_source_findings_missing',
+      'the empty-frontier refusal is typed, and is not a generic journal/authority reason: '
+      + JSON.stringify(prepared));
+    ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      'the empty-frontier refusal opens no replan transaction');
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'), planBefore,
+      'the empty-frontier refusal preserves the frozen parent plan bytes');
+    equal(fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8'), stateBefore,
+      'the empty-frontier refusal writes no state fence');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // Frontier 1 — the schema-2 review lane reaches the same wall. Its canonical finding
+  // set is normalized/UID-bearing rather than parsed from flat rows, so the guard must
+  // not be accidentally bound to the schema-1 shape.
+  //
+  // The gate is an ADVERSARIAL-VERIFIER refutation, which is the only schema-2 shape that
+  // can carry a failing aggregate with zero canonical findings and still be a
+  // production-valid journal: validateReviewJournal's coherence pair
+  // (`changes_requested` => at least one open finding) is explicitly gated on
+  // `role !== 'adversarial-verifier'`. It is also the exact live shape —
+  // {"outcome":"fail","findings":[],"route_candidates":[]} behind a refuted verifier.
+  const fx = initFixture();
+  try {
+    const v2 = installReviewJournalV2Source(fx);
+    const journalPath = path.join(fx.cacheDir, 'review-attempts.json');
+    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const attempt = journal.attempts[0];
+    const receipt = attempt.receipts[0];
+    receipt.domain_outcome = 'refuted';
+    receipt.findings = [];
+    receipt.blocking_findings = 0;
+    receipt.gate_effect = schema.deriveGateEffect('adversarial-verifier', 'change_gate', 'refuted', 0);
+    equal(receipt.gate_effect, 'fail', 'a refuted change-gate verifier receipt is a gate FAILURE');
+    const reduced = schema.reduceReviewReceipts({
+      aggregation: attempt.logical_gate.aggregation, role: 'adversarial-verifier',
+      gate_mode: attempt.gate_mode, expected_members: attempt.logical_gate.members,
+      expected_surfaces: [receipt.surface], receipts: [receipt],
+    });
+    attempt.reducer = { role: 'adversarial-verifier', complete: reduced.complete,
+      domain_outcome: reduced.domain_outcome, gate_effect: reduced.gate_effect,
+      blocking_findings: reduced.blocking_findings };
+    attempt.findings = [];
+    attempt.current_findings = [];
+    attempt.current_open_uids = [];
+    attempt.route_candidates = [];
+    attempt.progress.current_open_uids = [];
+    fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
+    writeSchema2RepairSource(fx, journal, attempt, { producerSlice: ['impl'] });
+    const prepared = replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: v2.attempt.attempt_id, transitionReason: 'review_repair_requires_replan' });
+    equal(prepared.reason, 'replan_source_findings_missing',
+      'the schema-2 review lane refuses an empty canonical frontier at the same wall: '
+      + JSON.stringify(prepared));
+    ok(!fs.existsSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME)),
+      'the schema-2 empty-frontier refusal opens no replan transaction');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // Frontier 2 — the STORED transaction source, at EVERY resume phase. The journal on
+  // disk is untouched and re-reads clean, so readSource passes; only the transaction's
+  // own copy is empty, and validateReplanTransaction does not recompute it.
+  //
+  //   * `prepared`        — the literal defect: the empty array is copied verbatim into
+  //                         the planner packet the child planner reads.
+  //   * `planner_pending` — the empty array would otherwise survive the child freeze and
+  //                         be digested into the snapshot authority projection. Binding
+  //                         only the packet site leaves this second frontier open, which
+  //                         is exactly the shape of miss this pin exists to prevent.
+  for (const entryPhase of ['prepared', 'planner_pending']) {
+    const label = '#729 stored frontier @' + entryPhase;
+    const fx = initFixture();
+    try {
+      equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+        sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
+      'prepared', label + ': prepares from a real six-finding source');
+      if (entryPhase === 'planner_pending') {
+        equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).reason,
+          'replan_planner_dispatch_required', label + ': reaches the planner-pending phase');
+      }
+      const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+      const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+      equal(tx.phase, entryPhase, label + ': the transaction is parked at the entry phase');
+      ok(tx.source.findings.length > 0, label + ': the transaction carries the real frontier');
+      tx.source.findings = [];
+      fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
+      ok(schema.validateReplanTransaction(JSON.parse(fs.readFileSync(txPath, 'utf8'))).ok,
+        label + ': the transaction schema does NOT recompute source.findings — the stored '
+        + 'frontier is genuinely reachable with an empty array and needs its own wall');
+      const packetBefore = fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json'))
+        ? fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8') : null;
+      if (entryPhase === 'planner_pending') writePlannerResult(fx, tx);
+      const resumed = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+      equal(resumed.reason, 'replan_source_findings_missing',
+        label + ': an empty stored frontier is refused: ' + JSON.stringify(resumed));
+      equal(fs.existsSync(path.join(fx.cacheDir, 'replan-planner-packet.json'))
+        ? fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8') : null,
+      packetBefore, label + ': the refusal writes no planner packet');
+      const after = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+      equal(after.phase, entryPhase, label + ': the refusal does not advance the transaction phase');
+      equal(after.child.digest, null, label + ': the refusal freezes no child plan');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
+{
+  // Frontier 3 — candidate-changed re-author. reauthorCandidate rebuilds the successor
+  // transaction from transaction.source WITHOUT re-reading the journal, so a stored
+  // empty frontier would otherwise be laundered into a fresh transaction.
+  const fx = initFixture();
+  try {
+    equal(replan.prepareReplan({ repoRoot: fx.root, project: fx.project,
+      sourceAttemptId: fx.sourceAttemptId, transitionReason: 'review_repair_requires_replan' }).result,
+    'prepared', 'the reauthor-frontier fixture prepares from a real six-finding source');
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project,
+      casMutation: { seam: 'prepare', axis: 'candidate_digest', value: 'f'.repeat(64) } }).reason,
+    'replan_candidate_changed', 'the fixture reaches the candidate_changed outcome');
+    const txPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    const tx = JSON.parse(fs.readFileSync(txPath, 'utf8'));
+    equal(tx.outcome, 'candidate_changed', 'the stored transaction is parked on the re-author route');
+    tx.source.findings = [];
+    fs.writeFileSync(txPath, JSON.stringify(tx, null, 2) + '\n');
+    const reauthored = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
+    equal(reauthored.reason, 'replan_source_findings_missing',
+      'the candidate-changed re-author refuses an empty stored frontier: ' + JSON.stringify(reauthored));
+    equal(JSON.parse(fs.readFileSync(txPath, 'utf8')).transaction_id, tx.transaction_id,
+      'the refused re-author writes no successor transaction');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+{
+  // OVER-REFUSAL CONTROL. A legitimate replan — real findings on the source, a real
+  // write-set-bearing fixer in the child plan — still runs end to end and ACTIVATES.
+  // The guard must cost a legal transition nothing.
+  const fx = initFixture();
+  try {
+    const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+    ok(journal.attempts[0].findings.length > 0, 'the control source carries a real frontier');
+    equal(driveReplanToCommit(fx).result, 'committed',
+      'a legitimate empty-frontier-free replan still commits its child epoch');
+    const childPlan = fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8');
+    const writers = validator.parseNodes(childPlan).filter(node => node.writeSet && node.writeSet.size > 0);
+    ok(writers.length > 0,
+      'the activated child epoch carries a real write node: ' + JSON.stringify(writers.map(n => n.id)));
+    equal(Number(replan.parseStateFields(
+      fs.readFileSync(path.join(fx.projectDir, 'workflow-state.md'), 'utf8')).plan_epoch), 2,
+    'the legitimate transition advances the epoch');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);
