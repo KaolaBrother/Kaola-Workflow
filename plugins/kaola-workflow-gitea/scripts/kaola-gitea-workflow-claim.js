@@ -1831,19 +1831,32 @@ function sanitizeBarrierTag(name) {
   return String(name).replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
-function verifyArchiveEpochAuthority(projectPath) {
+// `opts.deferReasons` (see verifyCurrentEpochAuthority) is passed ONLY by a caller that
+// intends to downgrade those exact reasons. It changes nothing for every other caller.
+function verifyArchiveEpochAuthority(projectPath, opts) {
   let replan;
   let current;
   let snapshots;
   try {
     replan = require('./kaola-gitea-workflow-replan');
-    current = replan.verifyCurrentEpochAuthority(projectPath);
-    snapshots = current && current.ok ? replan.verifyAllEpochSnapshots(projectPath) : null;
+    current = replan.verifyCurrentEpochAuthority(projectPath,
+      opts && opts.deferReasons ? { deferReasons: opts.deferReasons } : undefined);
+    // The snapshot tier ALSO runs when the current tier failed only on deferred reasons.
+    // Gating it on `current.ok` alone meant a deferrable first failure silently skipped the
+    // WHOLE snapshot ladder — staging residue, an unreadable/relocated `.cache/epochs`, a
+    // digest mismatch — none of which the caller ever agreed to downgrade.
+    snapshots = current && (current.ok === true || current.deferrable_only === true)
+      ? replan.verifyAllEpochSnapshots(projectPath) : null;
   } catch (error) {
     return { ok: false, reason: 'snapshot_verifier_unavailable', detail: error.message };
   }
-  if (!current || current.ok !== true) return current || { ok: false, reason: 'current_epoch_authority_invalid' };
+  if (!current || (current.ok !== true && current.deferrable_only !== true)) {
+    return current || { ok: false, reason: 'current_epoch_authority_invalid' };
+  }
+  // A snapshot-tier failure is never deferrable, so it outranks the deferred current-tier
+  // failures and is what the caller must see.
   if (!snapshots || snapshots.ok !== true) return snapshots || { ok: false, reason: 'snapshot_authority_invalid' };
+  if (current.ok !== true) return current;
   return { ok: true, current, snapshots };
 }
 
@@ -1884,13 +1897,22 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   if (process.env.KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL === '1') {
     return { archived: false, reason: 'archive_forced_refusal' };
   }
-  const snapshots = verifyArchiveEpochAuthority(src);
+  // #755: the downgradable set is handed to the verifier as a DEFERRAL policy rather than
+  // applied to whatever reason came back first. The verifier finishes the whole ladder —
+  // every later tier included — and reports every failure it met, so the downgrade decision
+  // below sees the complete picture instead of only the first tier that happened to fail.
+  const snapshots = verifyArchiveEpochAuthority(src, statusValue === 'abandoned'
+    ? { deferReasons: ABANDON_DOWNGRADABLE_AUTHORITY_REASONS } : undefined);
   // #735: an ABANDON downgrades a run-state-progress authority failure to a recorded note;
   // every other reason, and every `closed` archive, still refuses before any mutation.
   let authorityDowngraded = null;
   if (!snapshots.ok) {
     const reason = snapshots.reason || snapshots.detail || 'snapshot_invalid';
-    if (statusValue !== 'abandoned' || !ABANDON_DOWNGRADABLE_AUTHORITY_REASONS.has(reason)) {
+    // `deferrable_only` is the whole-ladder verdict: it is set ONLY when every tier ran and
+    // every failure met was one this call authorized deferring. A first-failure reason-set
+    // test here (what this used to be) could not distinguish "the only faults are
+    // downgradable" from "a downgradable fault happened to be checked first".
+    if (statusValue !== 'abandoned' || snapshots.deferrable_only !== true) {
       return { skipped: undefined, archived: false, archive_incomplete: true,
         missing: [], snapshot_error: reason };
     }
@@ -3668,6 +3690,13 @@ function watchMergeRequests(root, args) {
         // #715 F1: disclose the receiving (or non-receiving) branch on BOTH success and skip.
         discard_archive_branch: discardCommit2.branch };
       if (!discardCommit2.committed) cleanupEntry2.discard_archive_commit_detail = discardCommit2.detail;
+      // #755: the sweep is the SECOND caller of the relaxed abandon archive, and unlike
+      // release it is automatic — driven by remote PR state, not an operator's discard. Say
+      // out loud when it proceeded past a run-state-progress authority failure, so the
+      // downgrade is never observable only by diffing the archived folder.
+      if (archiveResult.authority_downgraded) {
+        cleanupEntry2.authority_downgraded = archiveResult.authority_downgraded;
+      }
       cleanupEntry2.receipt = folderReceipt;
       cleanupEntry2.closure_invariants = folderInvariants;
       cleanups.push(cleanupEntry2);
