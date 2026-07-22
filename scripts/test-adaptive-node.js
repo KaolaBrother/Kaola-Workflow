@@ -60,6 +60,8 @@ const {
   schema2RouteCandidates,
   findingOwnershipSummary,
   completedNonGateWriterDescendants,
+  // #730: the canonical, digest-bound repair brief handed to a reopened writer.
+  buildRepairBrief,
   // #739: in-plan descendant-replay helpers.
   structuralNonGateWriterDescendants,
   replayConeSafety,
@@ -1593,6 +1595,319 @@ for (const selected of ['arm-a', 'arm-b']) {
       assert(rImpl.result === 'repair_requires_replan' && rImpl.reason !== 'dependent_producer_replay_required'
         && rImpl.result !== 'repair_writer_ownership_mismatch',
         '#701-F: an unroutable-file (empty-ownership) journal degrades to a generic replan, got ' + JSON.stringify(rImpl));
+    } finally { f.cleanup(); }
+  }
+}
+
+// ===========================================================================
+// #730 — the reopened fixer's CANONICAL, DIGEST-BOUND repair brief, and the ownership rule that
+// decides what it is allowed to contain.
+//
+// Before this, a repair reopen seeded only `failed_review_attempt:` / `failed_review_gate:` — two IDs,
+// no finding set. The fixer had to guess what to fix. Two halves are under test:
+//
+//   1. CONTENT — buildRepairBrief joins the attempt's still-open route rows to their canonical finding
+//      records (failure_class, the four trigger digests incl. expected/observed, primary/secondary
+//      anchors, severity, proof_digest, fix_role, owner candidates, the reviewer's evidence path) and
+//      digest-binds the whole payload. Statements are emitted ONLY when real: schema-2 synthesizes
+//      `raw: 'uid=<uid>'`, which is vacuous, so it is suppressed rather than presented as reviewer prose.
+//
+//   2. OWNERSHIP — the assigned-uid set is ALWAYS the WHOLE still-open frontier, never a subset:
+//        - ownership ABSENT for every open finding (anchor-less findings / unroutable paths / a
+//          pre-#701 journal): the bridge is inert, the reopen rides the graph-maximal proof, and the
+//          single authorized writer therefore owns the WHOLE frontier — an EMPTY assigned set here was
+//          the blocking defect (the brief told the authorized fixer to fix nothing).
+//        - ownership resolvable and the writer owns EVERY open finding alone: admissible, assigned = all.
+//        - ownership PARTIAL or MIXED (some finding unowned, ambiguously owned, or owned by another
+//          writer) while the writer owns at least one: direct repair REFUSES to `repair_requires_replan`
+//          (`repair_scope_spans_writers`) rather than silently narrowing the brief and burning the
+//          attempt. This is the un-backstopped core: `consumed_by` used to be set when the selected
+//          writer owned AT LEAST ONE open finding, not all of them.
+// ===========================================================================
+{
+  // #730-U1: pure — ownership summary exposes the whole-frontier predicate + the offending uid lists.
+  const rows = [
+    { finding_id: 'f1', status: 'open', ownership_candidates: ['a'] },
+    { finding_id: 'f2', status: 'open', ownership_candidates: ['b'] },
+    { finding_id: 'f3', status: 'open', ownership_candidates: [] },
+    { finding_id: 'f4', status: 'resolved', ownership_candidates: ['a'] },
+  ];
+  const mixed = findingOwnershipSummary({ route_candidates: rows }, 'a');
+  assert(mixed.nodeOwns === true && mixed.ownsWholeFrontier === false
+    && JSON.stringify(mixed.foreignOwnedFindingIds) === JSON.stringify(['f2'])
+    && JSON.stringify(mixed.unownedFindingIds) === JSON.stringify(['f3']),
+    '#730-U1: a partial owner is not a whole-frontier owner and the foreign/unowned uids are named, got ' + JSON.stringify(mixed));
+  const sole = findingOwnershipSummary({ route_candidates: [
+    { finding_id: 'f1', status: 'open', ownership_candidates: ['a'] },
+    { finding_id: 'f2', status: 'open', ownership_candidates: ['a'] },
+  ] }, 'a');
+  assert(sole.ownsWholeFrontier === true && sole.foreignOwnedFindingIds.length === 0
+    && sole.unownedFindingIds.length === 0,
+    '#730-U1: a sole owner of every open finding owns the whole frontier, got ' + JSON.stringify(sole));
+  // AMBIGUOUS ownership (two nodes declare the same path) is NOT whole-frontier ownership.
+  const ambiguous = findingOwnershipSummary({ route_candidates: [
+    { finding_id: 'f1', status: 'open', ownership_candidates: ['a', 'b'] },
+  ] }, 'a');
+  assert(ambiguous.nodeOwns === true && ambiguous.ownsWholeFrontier === false
+    && JSON.stringify(ambiguous.ambiguousFindingIds) === JSON.stringify(['f1']),
+    '#730-U1: an ambiguously-owned finding refutes whole-frontier ownership, got ' + JSON.stringify(ambiguous));
+  // Ownership ABSENT: no open finding routes anywhere, so no writer can be a whole-frontier OWNER —
+  // authority comes from the graph-maximal proof instead, and the brief must still carry every uid.
+  const absent = findingOwnershipSummary({ route_candidates: [
+    { finding_id: 'f1', status: 'open', ownership_candidates: [] },
+  ] }, 'a');
+  assert(absent.anyOwned === false && absent.ownsWholeFrontier === false
+    && JSON.stringify(absent.unownedFindingIds) === JSON.stringify(['f1']),
+    '#730-U1: ownership-absent keeps the bridge inert, got ' + JSON.stringify(absent));
+}
+
+{
+  // #730-U2: pure — buildRepairBrief content over an ownership-ABSENT attempt. The assigned set is the
+  // WHOLE open frontier (never empty while the writer is authorized), and the canonical fields are joined.
+  const attempt = {
+    attempt_id: 'review:1',
+    logical_gate: { key: 'review', members: ['review'] },
+    validation_obligations: ['node scripts/test-adaptive-node.js'],
+    receipts: [{ node_id: 'review' }],
+    findings: [
+      { uid: 'u1', failure_class: 'behavior_mismatch', severity: 'high', scope: 'in_scope', action: 'fix',
+        status: 'open', proof_digest: 'd'.repeat(64),
+        trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+          expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+        trigger_digest: '5'.repeat(64),
+        primary_anchor: { kind: 'candidate_range', path: 'scripts/impl.js', start: 10, end: 20 },
+        secondary_anchors: [{ kind: 'candidate_range', path: 'scripts/other.js' }] },
+      { uid: 'u2', failure_class: 'evidence_gap', severity: 'medium', status: 'open',
+        primary_anchor: { kind: 'evidence_observation', observation_key: 'red-green',
+          producer_evidence_digest: '6'.repeat(64) } },
+    ],
+    route_candidates: [
+      { source_node: 'review', finding_id: 'u1', id: 'u1', status: 'open', scope: 'in_scope',
+        action: 'fix', severity: 'high', ownership_candidates: [], raw: 'uid=u1' },
+      { source_node: 'review', finding_id: 'u2', id: 'u2', status: 'open', ownership_candidates: [], raw: 'uid=u2' },
+      { source_node: 'review', finding_id: 'u3', id: 'u3', status: 'resolved', ownership_candidates: [], raw: 'uid=u3' },
+    ],
+  };
+  const brief = buildRepairBrief(attempt, 'impl');
+  assert(brief.scope === 'assigned_findings'
+    && JSON.stringify(brief.assigned_uids) === JSON.stringify(['u1', 'u2']),
+    '#730-U2: the assigned set is the whole still-open frontier (resolved rows excluded), got ' + JSON.stringify(brief.assigned_uids));
+  assert(/^[0-9a-f]{64}$/.test(brief.digest), '#730-U2: the brief is digest-bound, got ' + brief.digest);
+  const f1 = brief.findings[0];
+  assert(f1.failure_class === 'behavior_mismatch' && f1.severity === 'high'
+    && f1.anchor_kind === 'candidate_range' && f1.anchor_path === 'scripts/impl.js'
+    && f1.anchor_range && f1.anchor_range.start === 10 && f1.anchor_range.end === 20
+    && f1.trigger.expected_digest === '3'.repeat(64) && f1.trigger.observed_digest === '4'.repeat(64)
+    && f1.proof_digest === 'd'.repeat(64)
+    && JSON.stringify(f1.secondary_anchor_paths) === JSON.stringify(['scripts/other.js'])
+    && f1.reviewer_evidence === '.cache/review.md',
+    '#730-U2: the canonical failure proof / anchors / trigger digests / reviewer evidence are carried, got ' + JSON.stringify(f1));
+  // The schema-2 `raw` is a SYNTHESIZED 'uid=<uid>' — vacuous, never presented as reviewer prose.
+  assert(f1.statement === null && brief.findings[1].statement === null,
+    '#730-U2: a synthesized uid= raw is not promoted to a reviewer statement, got ' + JSON.stringify(f1.statement));
+  // An anchor-less evidence_observation still carries its observation key + producer evidence digest.
+  assert(brief.findings[1].anchor_kind === 'evidence_observation'
+    && brief.findings[1].observation_key === 'red-green'
+    && brief.findings[1].producer_evidence_digest === '6'.repeat(64),
+    '#730-U2: an anchor-less finding carries its observation binding, got ' + JSON.stringify(brief.findings[1]));
+  assert(JSON.stringify(brief.validation_obligations) === JSON.stringify(['node scripts/test-adaptive-node.js']),
+    '#730-U2: validation obligations are carried into the brief');
+  // A schema-1 flat row DOES carry a real reviewer statement — that one is preserved verbatim.
+  const flat = buildRepairBrief({ attempt_id: 'r:1', logical_gate: { members: ['r'] },
+    findings: [{ id: 'F-1', raw: 'id=F-1 file=scripts/impl.js desc=missing-guard' }],
+    route_candidates: [{ source_node: 'r', finding_id: 'F-1', id: 'F-1', status: 'open',
+      file: 'scripts/impl.js', ownership_candidates: ['impl'], raw: 'id=F-1 file=scripts/impl.js desc=missing-guard' }] }, 'impl');
+  assert(flat.findings[0].statement === 'id=F-1 file=scripts/impl.js desc=missing-guard'
+    && flat.findings[0].anchor_path === 'scripts/impl.js'
+    && JSON.stringify(flat.findings[0].owner_candidates) === JSON.stringify(['impl']),
+    '#730-U2: a schema-1 flat row keeps its verbatim statement + file anchor, got ' + JSON.stringify(flat.findings[0]));
+  // The digest is a function of the payload: a changed finding set changes it.
+  const mutated = buildRepairBrief({ ...attempt, route_candidates: attempt.route_candidates.slice(0, 1) }, 'impl');
+  assert(mutated.digest !== brief.digest, '#730-U2: the digest binds the payload (a narrowed set changes it)');
+}
+
+// #730-INT: integration through the real repair-node transaction over close-produced journals.
+{
+  const makeBriefFixture = (nodeRows, ledgerRows, reviewerEvidenceLines, ids) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-730-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-730');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan(ledgerRows, nodeRows);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const identityFor = id => ({ baseline: id.repeat(40).slice(0, 40), anchored_ref: id.repeat(40).slice(0, 40),
+      open_token: 'open-' + id, generation: id.repeat(40).slice(0, 12), ref: 'refs/kaola-workflow/barrier/issue-730/' + id });
+    const identities = {};
+    for (const id of ids) identities[id] = identityFor(id);
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    for (const id of ids) fs.writeFileSync(path.join(cacheDir, 'barrier-base-' + id), identities[id].baseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'rrrrrrrrrrrr-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review rrrrrrrrrrrr\nverdict: fail\nfindings_blocking: '
+      + reviewerEvidenceLines.length + '\n' + reviewerEvidenceLines.join('\n') + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+      JSON.stringify({ state: 'open', nodes: [{ id: 'review', role: 'code-reviewer', kind: 'read' }] }));
+    const common = { planPath, project: 'issue-730',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true, selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '9'.repeat(64),
+      captureWriterBarrierIdentity: id => identities[id] || null };
+    const closed = runCloseNode({ ...common, nodeId: 'review' });
+    const journal = fs.existsSync(journalPath) ? JSON.parse(fs.readFileSync(journalPath, 'utf8')) : { attempts: [] };
+    const attempt = journal.attempts[0];
+    return { tmp, cacheDir, planPath, common, closed, attempt,
+      runRepair: nodeId => runRepairNode({ ...common, nodeId, attemptId: attempt && attempt.attempt_id }),
+      evidence: id => fs.readFileSync(path.join(cacheDir, id + '.md'), 'utf8'),
+      statuses: () => readLedgerStatuses(fs.readFileSync(planPath, 'utf8')),
+      cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
+  };
+
+  const SERIAL_NODES = [
+    '| impl-a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl-b | implementer | impl-a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl-b | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+  const SERIAL_LEDGER = ['| impl-a | complete | |', '| impl-b | complete | |',
+    '| review | in_progress | |', '| done | pending | |'];
+
+  // #730-A: OWNERSHIP ABSENT (anchor-less findings). The graph-maximal writer is authorized on the
+  // graph proof alone, so it owns the WHOLE open frontier — the brief must carry EVERY open uid.
+  // This is the exact case the rejected attempt shipped with an EMPTY assigned set.
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-1 scope=in_scope action=fix status=open severity=high',
+      'finding: id=F-2 scope=in_scope action=fix status=open severity=medium',
+    ], ['impl-a', 'impl-b']);
+    try {
+      assert(f.closed.result === 'review_failed' && f.attempt, '#730-A: close settles a repairable attempt');
+      assert((f.attempt.route_candidates || []).every(r => (r.ownership_candidates || []).length === 0),
+        '#730-A: the fixture is genuinely ownership-ABSENT, got ' + JSON.stringify(f.attempt.route_candidates));
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'ok' && r.repaired === 'impl-b',
+        '#730-A: the graph-maximal writer is still admissible when ownership is absent, got ' + JSON.stringify(r));
+      assert(r.repair_brief && JSON.stringify(r.repair_brief.assigned_uids) === JSON.stringify(['F-1', 'F-2']),
+        '#730-A: the authorized writer is assigned the WHOLE open frontier, got ' + JSON.stringify(r.repair_brief && r.repair_brief.assigned_uids));
+      const ev = f.evidence('impl-b');
+      assert(ev.includes('failed_review_attempt: ' + f.attempt.attempt_id)
+        && ev.split('failed_review_attempt: ').length === 2,
+        '#730-A: the legacy attempt marker survives exactly once');
+      assert(ev.includes('repair_brief_assigned_uids: F-1,F-2')
+        && ev.includes('repair_brief_digest: ' + r.repair_brief.digest)
+        && ev.includes('repair_finding: uid=F-1') && ev.includes('repair_finding: uid=F-2')
+        && ev.includes('evidence=.cache/review.md'),
+        '#730-A: the evidence brief lists every assigned uid, its anchors and the reviewer evidence path, got:\n' + ev);
+      // The brief must NEVER inject a column-0 `finding:` line — that would make the reopened writer
+      // carry an unresolved in-scope fix of its own and it could never close.
+      assert(!/^finding:/m.test(ev),
+        '#730-A: the brief introduces no column-0 finding: line into the writer evidence, got:\n' + ev);
+    } finally { f.cleanup(); }
+  }
+
+  // #730-B: PARTIAL/MIXED ownership. impl-b is the graph-maximal producer AND owns one finding, but the
+  // other belongs to impl-a. Selecting impl-b must NOT build a brief holding only impl-b's finding and
+  // consume the whole attempt — it refuses to replan (the safe multi-writer outcome).
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-A scope=in_scope action=fix status=open severity=high file=scripts/a.js',
+      'finding: id=F-B scope=in_scope action=fix status=open severity=high file=scripts/b.js',
+    ], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'repair_scope_spans_writers',
+        '#730-B: a partially-owning writer refuses to replan instead of narrowing the brief, got ' + JSON.stringify(r));
+      assert(JSON.stringify(r.unowned_findings) === JSON.stringify([])
+        && JSON.stringify(r.foreign_owned_findings) === JSON.stringify(['F-A'])
+        && JSON.stringify(r.ownership_candidates) === JSON.stringify(['impl-a', 'impl-b'])
+        && typeof r.operator_hint === 'string',
+        '#730-B: the refusal names the findings that do not belong to the selected writer, got ' + JSON.stringify(r));
+      assert(f.statuses()['impl-b'] === 'complete' && f.statuses()['impl-a'] === 'complete'
+        && f.attempt.consumed_by == null,
+        '#730-B: the refusal is ZERO-mutation and does NOT consume the attempt');
+      const journal = JSON.parse(fs.readFileSync(path.join(f.cacheDir, 'review-attempts.json'), 'utf8'));
+      assert(journal.attempts[0].consumed_by == null && journal.attempts[0].repair.selected_writer == null,
+        '#730-B: the on-disk journal attempt stays unconsumed and unbound, got ' + JSON.stringify(journal.attempts[0].repair));
+    } finally { f.cleanup(); }
+  }
+
+  // #730-C: MIXED owned/unowned. impl-b owns one finding; the other is anchored at a path NO node
+  // declares. Direct repair must refuse rather than silently drop the unowned one.
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-B scope=in_scope action=fix status=open severity=high file=scripts/b.js',
+      'finding: id=F-X scope=in_scope action=fix status=open severity=high file=scripts/nowhere.js',
+    ], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'repair_scope_spans_writers'
+        && JSON.stringify(r.unowned_findings) === JSON.stringify(['F-X']),
+        '#730-C: an unowned open finding blocks direct repair by the partial owner, got ' + JSON.stringify(r));
+      assert(f.statuses()['impl-b'] === 'complete', '#730-C: the refusal is ZERO-mutation');
+    } finally { f.cleanup(); }
+  }
+
+  // #730-D: SOLE ownership — impl-b owns EVERY open finding alone. Direct repair proceeds and the brief
+  // carries the full frontier. This is the admissible half of the same rule (it must not over-refuse).
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-B1 scope=in_scope action=fix status=open severity=high file=scripts/b.js',
+      'finding: id=F-B2 scope=in_scope action=fix status=open severity=low file=scripts/b.js',
+    ], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'ok' && r.repaired === 'impl-b'
+        && JSON.stringify(r.repair_brief.assigned_uids) === JSON.stringify(['F-B1', 'F-B2']),
+        '#730-D: the sole owner of the whole frontier repairs directly with a full brief, got ' + JSON.stringify(r));
+      const ev = f.evidence('impl-b');
+      assert(ev.includes('repair_finding: uid=F-B1') && ev.includes('anchor=file:scripts/b.js')
+        && ev.includes('owner=impl-b'),
+        '#730-D: the brief names each finding anchor and its owner, got:\n' + ev);
+      // An idempotent re-repair returns the SAME digest-bound brief (a pure function of the attempt).
+      const again = f.runRepair('impl-b');
+      assert(again.result === 'ok' && again.idempotent === true
+        && again.repair_brief && again.repair_brief.digest === r.repair_brief.digest,
+        '#730-D: the idempotent re-repair returns the identical digest-bound brief, got ' + JSON.stringify(again.repair_brief));
+    } finally { f.cleanup(); }
+  }
+
+  // #730-E: the INVARIANT — across every admissible repair, an assigned-uid set that is EMPTY while
+  // the writer is authorized is impossible whenever the attempt carries any still-open finding.
+  {
+    const cases = [
+      ['finding: id=F-1 scope=in_scope action=fix status=open severity=high'],
+      ['finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/b.js'],
+      ['finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/nowhere.js'],
+    ];
+    for (const lines of cases) {
+      const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, lines, ['impl-a', 'impl-b']);
+      try {
+        const r = f.runRepair('impl-b');
+        if (r.result !== 'ok') continue;                     // refusals are a safe outcome
+        assert(r.repair_brief && r.repair_brief.assigned_uids.length > 0
+          && r.repair_brief.scope === 'assigned_findings',
+          '#730-E: an authorized repair over [' + lines.join(' | ') + '] must never carry an EMPTY assigned set, got ' + JSON.stringify(r.repair_brief));
+      } finally { f.cleanup(); }
+    }
+  }
+
+  // #730-F: a verdict-fail attempt with NO structured findings at all has nothing to assign. That is
+  // NOT a silent omission — the brief says so with a distinct typed scope and points the fixer at the
+  // reviewer's full evidence, so an empty `repair_brief_assigned_uids` line is never emitted.
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'ok' && r.repair_brief.scope === 'unstructured_reviewer_evidence'
+        && r.repair_brief.assigned_uids.length === 0,
+        '#730-F: a findings-free failed review yields the typed unstructured scope, got ' + JSON.stringify(r.repair_brief));
+      const ev = f.evidence('impl-b');
+      assert(ev.includes('repair_brief_scope: unstructured_reviewer_evidence')
+        && ev.includes('repair_brief_reviewer_evidence: .cache/review.md')
+        && !ev.includes('repair_brief_assigned_uids:'),
+        '#730-F: the unstructured brief points at the reviewer evidence and emits no empty assigned-uid line, got:\n' + ev);
     } finally { f.cleanup(); }
   }
 }
