@@ -1087,7 +1087,10 @@ for (const closeKind of ['close-node', 'close-and-open-next']) {
     const expected = { result: 'review_failed', reason: attempt.reason,
       attempt_id: attempt.attempt_id, logical_gate: attempt.logical_gate, lifecycle_settled: true,
       repair: 'repair-node --attempt-id ' + attempt.attempt_id + ' --node-id <agent-selected-writer>',
-      taskTransitions: [] };
+      // The settlement refreshes the derived task mirror like every other ledger-mutating
+      // envelope; the replay re-runs the same idempotent regeneration, which is exactly what
+      // converges a crash between the ledger fold and the mirror write.
+      taskTransitions: [], taskMirror: { status: 'updated', path: 'kaola-workflow/issue-r16/workflow-tasks.json' } };
     const snapshot = () => ({
       journal: fs.readFileSync(journalPath, 'utf8'),
       plan: fs.readFileSync(planPath, 'utf8'),
@@ -20865,6 +20868,160 @@ function rtHarness(initialFiles, opts) {
         + JSON.stringify(attempts.map(a => ({ o: a.outcome, u: a.current_open_uids }))));
     }
   } finally { fs.rmSync(tmp728, { recursive: true, force: true }); }
+}
+
+// ===========================================================================
+// #733 — a settled FAILED schema-2 review must refresh the derived task mirror.
+//
+// prepareSchema2ReviewClose / prepareReviewClose splice the folded ledger rows
+// back to `pending`, write the plan, and RETURN — both callsites early-return past
+// every `taskMirror: refreshTaskMirror(...)` in the file, so `workflow-tasks.json`
+// kept reporting the pre-fold status. The mirror is fail-OPEN at write by design,
+// so the refresh is wired at the mutation site and its failure is reported, never
+// raised: a mirror-write fault must not roll back a correct ledger transition.
+// ===========================================================================
+{
+  const { spawnSync: spawn733 } = require('child_process');
+  const NODE_CLI_733 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_CLI_733 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const baseEnv733 = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_')));
+  const env733 = { ...baseEnv733, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    KAOLA_WORKFLOW_OFFLINE: '1' };
+  const lastJson733 = result => {
+    const line = String(result.stdout || '').trim().split('\n').filter(row => row.trim().startsWith('{')).pop();
+    return line ? JSON.parse(line) : null;
+  };
+  const tmp733 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-733-mirror-')));
+  const run733 = (args, input) => spawn733(process.execPath, [NODE_CLI_733, ...args],
+    { cwd: tmp733, encoding: 'utf8', env: env733, input, timeout: 120000 });
+  try {
+    spawn733('git', ['init', '-b', 'main'], { cwd: tmp733, encoding: 'utf8', env: env733 });
+    spawn733('git', ['config', 'user.email', 'kw@test'], { cwd: tmp733, encoding: 'utf8', env: env733 });
+    spawn733('git', ['config', 'user.name', 'kw'], { cwd: tmp733, encoding: 'utf8', env: env733 });
+
+    // One frozen schema-2 project per scenario: a serial writer certified by a
+    // code-reviewer sequence gate, then the sink.
+    const setup733 = (project) => {
+      const projectDir = path.join(tmp733, 'kaola-workflow', project);
+      const cacheDir = path.join(projectDir, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const implRel = project + '-impl.js';
+      fs.writeFileSync(path.join(tmp733, implRel), 'module.exports = 0;\n');
+      const planPath = path.join(projectDir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — ' + project, '',
+        '## Meta', 'plan_schema_version: 2', 'labels: enhancement',
+        'code_certifier: codegate', 'security_certifier: none',
+        'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+        'validation_command: node --check ' + implRel, 'validation_timeout_minutes: 5', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+        '|---|---|---|---|---|---|---|---|---|---|',
+        '| writer | tdd-guide | — | ' + implRel + ' | 1 | sequence | — | — | — | — |',
+        '| codegate | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
+        '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| writer | pending |', '| codegate | pending |', '| finalize | pending |', '',
+        '## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
+        '| tdd-guide (writer) | pending | | |', '| code-reviewer (codegate) | pending | | |',
+        '| finalize (finalize) | pending | | |', '',
+      ].join('\n'));
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), '# Workflow State\nstatus: active\n');
+      const freeze = spawn733(process.execPath, [VALIDATOR_CLI_733, planPath, '--freeze', '--json'],
+        { cwd: tmp733, encoding: 'utf8', env: env733 });
+      assert(freeze.status === 0 && lastJson733(freeze) && lastJson733(freeze).frozen === true,
+        '#733: the schema-2 gate plan freezes: ' + freeze.stdout + freeze.stderr);
+      spawn733('git', ['add', '-A'], { cwd: tmp733, encoding: 'utf8', env: env733 });
+      spawn733('git', ['commit', '-m', 'fixture ' + project], { cwd: tmp733, encoding: 'utf8', env: env733 });
+      return { project, projectDir, cacheDir, planPath, implRel };
+    };
+
+    // Drives the writer, then settles the code gate with a blocking verdict.
+    const settleFailed733 = (fx) => {
+      const opened = run733(['open-next', '--project', fx.project, '--json']);
+      const openNonce = (lastJson733(opened) || {}).nonce;
+      assert(opened.status === 0 && openNonce, '#733: the writer opens: ' + opened.stdout + opened.stderr);
+      fs.writeFileSync(path.join(tmp733, fx.implRel), 'module.exports = 1;\n');
+      const rec = run733(['record-evidence', '--project', fx.project, '--node-id', 'writer',
+        '--stdin', '--json'],
+      'evidence-binding: writer ' + openNonce + '\nRED: reproduced\nGREEN: passes\n');
+      assert(rec.status === 0, '#733: writer evidence records: ' + rec.stdout + rec.stderr);
+      const closedWriter = run733(['close-and-open-next', '--project', fx.project,
+        '--node-id', 'writer', '--json']);
+      const gate = (lastJson733(closedWriter) || {}).opened;
+      assert(closedWriter.status === 0 && gate && gate.id === 'codegate',
+        '#733: the writer closes and the code gate opens: ' + closedWriter.stdout + closedWriter.stderr);
+      const finding = {
+        failure_class: 'correctness',
+        trigger: { precondition_digest: '1'.repeat(64), input_digest: '2'.repeat(64),
+          expected_digest: '3'.repeat(64), observed_digest: '4'.repeat(64) },
+        primary_anchor: { kind: 'evidence_observation',
+          producer_evidence_digest: require('crypto').createHash('sha256')
+            .update(fs.readFileSync(path.join(fx.cacheDir, 'writer.md'), 'utf8')).digest('hex'),
+          observation_key: 'writer:issue-733' },
+        secondary_anchors: [], severity: 'high', scope: 'in_scope', action: 'fix',
+        status: 'open', fix_role: 'tdd-guide', proof_digest: '6'.repeat(64),
+      };
+      const gateRec = run733(['record-evidence', '--project', fx.project, '--node-id', 'codegate',
+        '--stdin', '--json'], [
+        'evidence-binding: codegate ' + gate.nonce,
+        'contract_version: 2',
+        'review_context_hash: ' + gate.dispatch.review_context_hash,
+        'behavior_contract_hash: ' + gate.dispatch.behavior_contract_hash,
+        'resolved_profile_hash: ' + gate.dispatch.resolved_profile_hash,
+        'candidate_digest: ' + gate.dispatch.candidate_digest,
+        'verdict: fail', 'findings_blocking: 1',
+        'domain_outcome: changes_requested', 'claim_outcome: changes_requested', 'gate_mode: change_gate',
+        'gate_claim: review-change', 'gate_surface: code-tree', 'gate_aggregation: sequence',
+        'finding_json: ' + JSON.stringify(finding), '',
+      ].join('\n'));
+      assert(gateRec.status === 0, '#733: gate evidence records: ' + gateRec.stdout + gateRec.stderr);
+      return run733(['close-node', '--project', fx.project, '--node-id', 'codegate', '--json']);
+    };
+
+    // -- Pin B: the settlement refreshes the mirror, and the fold lands on disk. --
+    {
+      const fx = setup733('issue-733-refresh');
+      const close = settleFailed733(fx);
+      const payload = lastJson733(close) || {};
+      assert(close.status === 0 && payload.result === 'review_failed',
+        '#733-B: the failed code gate settles: ' + close.stdout + close.stderr);
+      assert(payload.taskMirror && payload.taskMirror.status === 'updated',
+        '#733-B: a settled FAILED review reports a REFRESHED task mirror, exactly like every other '
+        + 'ledger-mutating envelope in this file — pre-fix the field was absent entirely, got '
+        + JSON.stringify(payload.taskMirror));
+      const mirror = JSON.parse(fs.readFileSync(path.join(fx.projectDir, 'workflow-tasks.json'), 'utf8'));
+      const gateRow = mirror.tasks.find(task => task.id === 'codegate');
+      assert(gateRow && gateRow.ledger_status === 'pending' && gateRow.status === 'pending',
+        '#733-B: the folded gate reads `pending` in the on-disk mirror, matching the rewound ledger '
+        + '— pre-fix it still reported `in_progress`, got ' + JSON.stringify(gateRow));
+      const plan = fs.readFileSync(fx.planPath, 'utf8');
+      const ledger = plan.slice(plan.indexOf('## Node Ledger'));
+      assert(/\| codegate \| pending \|/.test(ledger),
+        '#733-B: the ledger itself is rewound (the settlement is unchanged), got:\n' + ledger);
+    }
+
+    // -- Pin B (fail-open guard): a mirror-write fault must not wedge the settlement. --
+    // `workflow-tasks.json` is a DIRECTORY, so the task-mirror CLI's write throws EISDIR.
+    // refreshTaskMirror swallows the non-zero exit and reports `failed`; the review still
+    // settles. A surface that is fail-open at write can never be fail-closed at read.
+    {
+      const fx = setup733('issue-733-failopen');
+      fs.mkdirSync(path.join(fx.projectDir, 'workflow-tasks.json'), { recursive: true });
+      const close = settleFailed733(fx);
+      const payload = lastJson733(close) || {};
+      assert(close.status === 0 && payload.result === 'review_failed',
+        '#733-B-failopen: a mirror-write fault does NOT roll back a correct settlement: '
+        + close.stdout + close.stderr);
+      assert(payload.taskMirror && payload.taskMirror.status === 'failed',
+        '#733-B-failopen: the fault is REPORTED on the envelope rather than raised, got '
+        + JSON.stringify(payload.taskMirror));
+      const plan = fs.readFileSync(fx.planPath, 'utf8');
+      assert(/\| codegate \| pending \|/.test(plan.slice(plan.indexOf('## Node Ledger'))),
+        '#733-B-failopen: the ledger fold still landed');
+    }
+  } finally { fs.rmSync(tmp733, { recursive: true, force: true }); }
 }
 
 if (failed > 0) {

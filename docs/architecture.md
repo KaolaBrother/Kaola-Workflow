@@ -89,9 +89,12 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   archive, finalize, and watch caller verifies the *active* epoch through one shared
   `verifyCurrentEpochAuthority` function rather than a private variant. It closes the self-host defect
   where legal execution progress was mistaken for authoring tamper: the plan's `Meta`/`Nodes`/`Node
-  Briefs` bytes are the only hash-compared authored surface, while `Node Ledger`, `Required Agent
-  Compliance`, and the `workflow-tasks.json` mirror are runtime surfaces that legally progress after
-  commitment and are validated by parse/consistency rules instead of byte comparison. The claim-scoped
+  Briefs` bytes are the only hash-compared authored surface, while `Node Ledger` and `Required Agent
+  Compliance` are runtime surfaces that legally progress after commitment and are validated by
+  parse/consistency rules instead of byte comparison. The `workflow-tasks.json` mirror is not an
+  authority tier at all — it is a generated projection of the same plan bytes, with one writer and no
+  consumer that reads its content for a decision, and its write is fail-open by contract, so checking
+  it fail-closed on read could only wedge a project whose ledger was legally rewound. The claim-scoped
   `epoch_schema_version`/`epoch_lineage_id` envelope (with its identity/root-digest basis) is a third,
   separately verified tier: fully absent reads as pre-epoch legacy state, while a partial or
   recomputed-mismatched envelope refuses. `kaola-workflow-claim.js` composes this current-epoch result

@@ -896,7 +896,7 @@ const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'finalize', 'stash_re
 // live dir (no workflow-state.md — it holds nothing but the sink's own receipt) recorded nothing
 // the archive could lose, so skipping it is benign and refusing would brick resumes. Every other
 // authority/snapshot refusal — state_compliance_progress_invalid, state_ledger_progress_invalid,
-// state_active_plan_hash_mismatch, state_task_mirror_mismatch, snapshot_authority_invalid,
+// state_active_plan_hash_mismatch, state_planning_evidence_stale_first_node, snapshot_authority_invalid,
 // snapshot_verifier_unavailable, … — is a real post-run incompleteness and must fail the sink
 // loudly rather than be laundered into status:sinked over an un-archived project. Default is
 // fail-closed: an unrecognized reason refuses.

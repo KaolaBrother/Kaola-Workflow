@@ -1607,8 +1607,11 @@ for (const variant of ['pending', 'arbitrary', 'live-substitution']) {
     }
     const activeStatePath = path.join(fx.projectDir, 'workflow-state.md');
     const activePlanPath = path.join(fx.projectDir, 'workflow-plan.md');
-    const activeTasksPath = path.join(fx.projectDir, 'workflow-tasks.json');
     const activeTxPath = path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME);
+    // No `workflow-tasks.json` row: the mirror is a pure projection of this plan with no
+    // consumer that reads its content for a decision, so "tampering" it only makes a
+    // regenerable file stale. Its authority tier is pinned at the bottom of this file
+    // instead — a settlement-folded ledger with a lagging mirror KEEPS authority.
     for (const [name, file, mutate, reason] of [
       ['final state receipt', activeStatePath,
         text => text.replace(/^automatic_review_replans: 2$/m, 'automatic_review_replans: 1'),
@@ -1617,9 +1620,6 @@ for (const variant of ['pending', 'arbitrary', 'live-substitution']) {
         text => text.replace(/^labels: (.*)$/m, 'labels: $1,tampered'), 'state_active_plan_invalid'],
       ['authored Nodes', activePlanPath,
         text => text.replace('| child-impl | tdd-guide |', '| child-impl | implementer |'), 'state_active_plan_invalid'],
-      ['task mirror', activeTasksPath,
-        text => text.replace('"ledger_status": "pending"', '"ledger_status": "complete"'),
-        'state_task_mirror_mismatch'],
       ['child first node receipt', activeTxPath,
         text => { const tx = JSON.parse(text); tx.child.first_node_id = 'forged-first';
           return schema.canonicalJson(tx) + '\n'; }, 'state_epoch_receipt_mismatch'],
@@ -3483,6 +3483,62 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
       equal(result.reason, 'snapshot_child_binding_invalid',
         'a forged frozen witness sharing the sealed plan_hash is refused: ' + JSON.stringify(result));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// A settled failed review folds ledger rows back to `pending` and returns without
+// regenerating the derived task mirror. The mirror is a pure projection of the plan
+// (source hash + one row per node, all re-derived from the same bytes the authority
+// already parsed), so a not-yet-regenerated mirror is a lag in a regenerable file,
+// never a divergent authority — current-epoch authority must survive it. The guard
+// below proves the assertion is not vacuous: the SAME lagging-mirror state, mutated
+// into a genuinely illegal ledger progression, still refuses.
+{
+  const fx = initFixture();
+  try {
+    driveReplanToCommit(fx);
+    const planPath = path.join(fx.projectDir, 'workflow-plan.md');
+    const tasksPath = path.join(fx.projectDir, 'workflow-tasks.json');
+    const nodes = validator.parseNodes(fs.readFileSync(planPath, 'utf8'));
+    const writer = nodes[0];
+    const gate = nodes[1];
+
+    // Run the child epoch forward to the shape a live gate has: writer complete, gate live.
+    const setRow = (text, id, status) => text.replace(
+      new RegExp('^\\| ' + id + ' \\| (?:pending|in_progress|complete) \\|$', 'm'),
+      `| ${id} | ${status} |`);
+    let progressed = setRow(fs.readFileSync(planPath, 'utf8'), writer.id, 'complete');
+    progressed = progressed.replace(
+      new RegExp('^\\| ' + writer.role + ' \\(' + writer.id + '\\) \\| pending \\| \\| \\|$', 'm'),
+      `| ${writer.role} (${writer.id}) | invoked | .cache/${writer.id}.md | |`);
+    progressed = setRow(progressed, gate.id, 'in_progress');
+    fs.writeFileSync(path.join(fx.cacheDir, writer.id + '.md'),
+      `evidence-binding: ${writer.id} progress-proof\nGREEN: legal runtime progress\n`);
+    fs.writeFileSync(planPath, progressed);
+    fs.writeFileSync(tasksPath, JSON.stringify(
+      generateMirror({ planContent: progressed, now: '2026-07-21T00:00:00.000Z' }), null, 2) + '\n');
+    ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok,
+      'baseline: the live-gate child epoch holds current authority with a freshly derived mirror');
+
+    // The settlement transaction: fold the gate row back to `pending`, write the plan, return.
+    // No mirror regeneration — exactly what prepareSchema2ReviewClose / prepareReviewClose do.
+    const folded = setRow(fs.readFileSync(planPath, 'utf8'), gate.id, 'pending');
+    fs.writeFileSync(planPath, folded);
+    const staleMirror = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+    equal(staleMirror.tasks.find(task => task.id === gate.id).ledger_status, 'in_progress',
+      'the settlement leaves the mirror reporting the pre-fold status');
+    const afterFold = replan.verifyCurrentEpochAuthority(fx.projectDir);
+    ok(afterFold.ok && afterFold.authority_kind === 'planned',
+      'a settlement-folded ledger KEEPS current-epoch authority while its derived task mirror '
+      + 'still reports the pre-fold status: ' + JSON.stringify(afterFold));
+
+    // Non-tautology guard: the SAME lagging mirror over a genuinely illegal ledger
+    // progression (a settled row above a `pending` dependency) must still refuse.
+    const illegal = setRow(folded, nodes[2].id, 'complete');
+    fs.writeFileSync(planPath, illegal);
+    equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, 'state_ledger_progress_invalid',
+      'the lagging mirror does not launder an illegal ledger progression — a `complete` row above a '
+      + '`pending` dependency still refuses, so the authority function is not merely gutted');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 

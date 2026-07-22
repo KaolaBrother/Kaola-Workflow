@@ -1150,22 +1150,19 @@ function verifyCurrentEpochAuthority(projectDir) {
       return schema.refuse('state_compliance_progress_invalid');
     }
   }
-  let mirror;
-  try { mirror = JSON.parse(fs.readFileSync(taskPath, 'utf8')); } catch (_) {
-    return schema.refuse('state_task_mirror_mismatch');
-  }
-  if (!mirror || mirror.source_plan_hash !== activeHash || !Array.isArray(mirror.tasks)
-      || mirror.tasks.length !== nodes.length) return schema.refuse('state_task_mirror_mismatch');
-  for (let index = 0; index < nodes.length; index++) {
-    const task = mirror.tasks[index];
-    const node = nodes[index];
-    const raw = ledger.get(node.id);
-    const status = raw === 'complete' || raw === 'n/a' ? 'completed' : raw;
-    if (!task || task.id !== node.id || task.role !== node.role
-        || task.ledger_status !== raw || task.status !== status) {
-      return schema.refuse('state_task_mirror_mismatch');
-    }
-  }
+  // `workflow-tasks.json` is NOT an authority tier and is deliberately not compared here.
+  // It is a pure projection of this very plan — `generateMirror` derives its source hash,
+  // its row set, and every row's status from the same `readStoredHash`/`parseNodes`/
+  // `parseLedger` reads this function has already performed — with exactly one writer
+  // (the task-mirror CLI) and no consumer that reads its CONTENT for a decision. Comparing
+  // it against re-derivations of its own input can only report that some caller has not
+  // regenerated it yet, which is a lag in a regenerable file, never a divergent authority.
+  // Worse, it was fail-CLOSED over a surface whose write is deliberately fail-OPEN, and it
+  // ran in a prologue that precedes `orient` — the designated mirror reconciler — so a
+  // settlement that legally rewinds ledger rows without regenerating (or any swallowed
+  // mirror-write fault) wedged the project with `legal_mutation: "none"` and no in-band
+  // exit. The immutable exact-hash tier and the ledger/compliance tiers above already carry
+  // every authority claim this block could make.
   const fields = metaFields(plan);
   if (fields.plan_epoch && Number(fields.plan_epoch) !== Number(state.plan_epoch)) {
     return schema.refuse('state_epoch_position_mismatch');
@@ -1199,8 +1196,6 @@ function verifyCurrentEpochAuthority(projectDir) {
     first_node_id: nodes[0].id, first_node_role: nodes[0].role,
     mutable_progress_digest: schema.sha256Canonical({
       ledger: ledgerRows, compliance: complianceRows,
-      tasks: mirror.tasks.map(task => ({ id: task.id, role: task.role,
-        status: task.status, ledger_status: task.ledger_status })),
     }) };
 }
 

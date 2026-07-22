@@ -588,8 +588,8 @@ Epoch 1 has exactly two legal active-authority representations:
 
 | Form | State authority | Filesystem authority |
 |---|---|---|
-| `planless` | `plan_epoch: 1`; `active_plan_hash`, Planning Evidence `plan_hash`, `first_node_id`, and `first_node_role` are all `none`; no active snapshot | `workflow-plan.md` absent and zero numeric epoch directories |
-| `planned` | `plan_epoch: 1`; `active_plan_hash` equals Planning Evidence `plan_hash`; first-node id/role equal the frozen plan's first row; no active snapshot | exactly one valid frozen `workflow-plan.md`; task mirror, when present, names the same source hash |
+| `planless` | `plan_epoch: 1`; `active_plan_hash`, Planning Evidence `plan_hash`, `first_node_id`, and `first_node_role` are all `none`; no active snapshot | `workflow-plan.md` absent and zero numeric epoch directories; a `workflow-tasks.json`, if present at all, must name no source plan hash and carry no tasks (a populated mirror with no plan is a contradiction, not a lag) |
+| `planned` | `plan_epoch: 1`; `active_plan_hash` equals Planning Evidence `plan_hash`; first-node id/role equal the frozen plan's first row; no active snapshot | exactly one valid frozen `workflow-plan.md` |
 
 Claim writes only `planless`; initial adaptive handoff publishes `planned` by replacing the active
 hash and complete Planning Evidence tuple in one state-file operation. A mixed tuple refuses rather
@@ -619,7 +619,15 @@ progress is never mistaken for authoring tamper:
 |---|---|---|---|
 | Epoch envelope | `epoch_schema_version`, `epoch_lineage_id`, and their identity/root-digest basis | Recomputed and compared; a fully absent envelope reads as pre-epoch legacy state | `state_epoch_schema_missing`, `state_epoch_schema_unsupported`, `state_epoch_lineage_missing`, `state_epoch_lineage_invalid`, `state_epoch_lineage_basis_invalid`, `state_epoch_lineage_mismatch` |
 | Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs` | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
-| Legal runtime progress | `## Node Ledger`, `## Required Agent Compliance`, `workflow-tasks.json` mirror | Parsed and consistency-checked, not byte-compared; closed-node evidence and dependency-consistent status required | `state_ledger_authority_invalid`, `state_ledger_progress_invalid`, `state_compliance_authority_invalid`, `state_compliance_progress_invalid`, `state_task_mirror_mismatch` |
+| Legal runtime progress | `## Node Ledger`, `## Required Agent Compliance` | Parsed and consistency-checked, not byte-compared; closed-node evidence and dependency-consistent status required | `state_ledger_authority_invalid`, `state_ledger_progress_invalid`, `state_compliance_authority_invalid`, `state_compliance_progress_invalid` |
+
+`workflow-tasks.json` is deliberately **not** an authority tier. It is a pure projection of the same
+plan bytes this check already parses, with one writer and no consumer that reads its content for a
+decision, so comparing it could only report that some caller had not regenerated it yet — a lag in a
+regenerable file, never a divergent authority. It was also fail-closed over a surface whose write is
+fail-open by contract, and it ran ahead of `orient`, the command that regenerates it, so a legal
+ledger rewind (or a swallowed mirror-write fault) could wedge a project with `legal_mutation: "none"`
+and no in-band exit.
 
 A stale first-node tuple refuses `state_planning_evidence_stale_first_node`; a plan-declared epoch
 position that disagrees with `plan_epoch` refuses `state_epoch_position_mismatch`; and, while a
@@ -823,7 +831,12 @@ The three levels of task state must never be confused:
    record of node lifecycle state. Scripts and barrier logic read only this.
 2. `workflow-tasks.json` — **durable mirror** derived from the `## Node Ledger` (and
    the `## Nodes` table). Generated; regenerated on resume when missing, unparseable,
-   or when the stored `source_plan_hash` does not match the current plan hash.
+   or when the stored `source_plan_hash` does not match the current plan hash. Because
+   it is generated, it is **never** an authority: no check may refuse on its content,
+   and its write is fail-open — a mirror-write fault is reported on the emitting
+   envelope (`taskMirror.status`) and never rolls back a correct ledger transition.
+   Every ledger-mutating command refreshes it at the mutation site, so a lag is
+   transient and, in the worst case, self-heals on the next `orient`.
 3. Codex UI task list — **ephemeral UI mirror** of `workflow-tasks.json`. It mirrors
    the file; it is **NOT correctness state** and must never be treated as the reverse.
    Writing a task item complete in the UI does not update the `## Node Ledger` and
@@ -912,14 +925,16 @@ holds a settled row whose dependency is `pending`/`in_progress`, the epoch-autho
 rejects it as `state_ledger_progress_invalid`, and every scripted command then reports
 `legal_mutation: "none"` with no sanctioned exit.
 
-For that already-wedged project only, recover in two steps, from the project root:
+For that already-wedged project only, recover from the project root by editing the ONE offending
+`## Node Ledger` row in `kaola-workflow/{project}/workflow-plan.md` — the stranded node, most often
+the `finalize` sink — back to `pending`. Change nothing else: no other row, no
+`## Required Agent Compliance` row, no `## Meta` field, and never the plan hash comment.
 
-1. Edit the ONE offending `## Node Ledger` row in `kaola-workflow/{project}/workflow-plan.md` —
-   the stranded node, most often the `finalize` sink — back to `pending`. Change nothing else:
-   no other row, no `## Required Agent Compliance` row, no `## Meta` field, and never the plan
-   hash comment.
-2. Re-derive the task mirror so `workflow-tasks.json` matches the corrected ledger:
-   `node scripts/kaola-workflow-task-mirror.js --project {project} --json`.
+No task-mirror step is required. `workflow-tasks.json` is not an authority tier, so a mirror that
+still reports the pre-edit status does not block anything; the next `orient` regenerates it. (On a
+runtime older than this one the mirror WAS compared, and correcting the ledger row alone then left
+the project refusing `state_task_mirror_mismatch`; there, run
+`node scripts/kaola-workflow-task-mirror.js --project {project} --json` as a second step.)
 
 The project is then an ordinary mid-run state and the normal commands resume. If the sink had
 already committed, pushed, or merged, do NOT resume in place — that work is irreversible and

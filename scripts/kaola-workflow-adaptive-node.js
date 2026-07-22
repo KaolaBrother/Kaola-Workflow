@@ -5030,7 +5030,8 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
     removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
     return { handled: true, result: { result: 'ok', closed: ctx.nodeInfo.id, provisional: true,
       contract_version: 2, review_context_hash: review.dispatch.review_context_hash,
-      taskTransitions: [buildTransition(ctx.nodeInfo.id, 'complete', ctx.command)] } };
+      taskTransitions: [buildTransition(ctx.nodeInfo.id, 'complete', ctx.command)],
+      taskMirror: refreshTaskMirror(opts.project, opts.shell) } };
   }
   const reduced = reviewSchema.reduceReviewReceipts({
     aggregation: review.context.logical_gate.aggregation,
@@ -5074,7 +5075,8 @@ function prepareSchema2ReviewClose(opts, ctx, review) {
     attempt_id: begun.attempt.attempt_id, logical_gate: begun.attempt.logical_gate,
     contract_version: 2, lifecycle_settled: true,
     repair: 'repair-node --attempt-id ' + begun.attempt.attempt_id + ' --node-id <agent-selected-writer>',
-    taskTransitions: folded.map(id => buildTransition(id, 'pending', 'review-failed')) } };
+    taskTransitions: folded.map(id => buildTransition(id, 'pending', 'review-failed')),
+    taskMirror: refreshTaskMirror(opts.project, opts.shell) } };
 }
 
 function prepareReviewClose(opts, ctx) {
@@ -5087,10 +5089,14 @@ function prepareReviewClose(opts, ctx) {
   const attempt = begun.attempt;
   const gate = attempt.logical_gate;
   const statuses = readLedgerStatuses(opts.readFile(opts.planPath));
+  // #733: the settlement rewinds ledger rows, so it refreshes the derived task mirror like every
+  // other ledger-mutating envelope here. Fail-OPEN by contract — refreshTaskMirror returns
+  // {status:'skipped'} on a falsy project and {status:'failed'} on any throw, so a mirror-write
+  // fault is reported on the envelope and never rolls back a correct settlement.
   const failedResult = taskTransitions => ({ handled: true, result: { result: 'review_failed', reason: attempt.reason,
     attempt_id: attempt.attempt_id, logical_gate: gate, lifecycle_settled: true,
     repair: 'repair-node --attempt-id ' + attempt.attempt_id + ' --node-id <agent-selected-writer>',
-    taskTransitions } });
+    taskTransitions, taskMirror: refreshTaskMirror(opts.project, opts.shell) } });
 
   // Settlement is the terminal commit. After beginReviewAttempt has proved the retry carries the
   // exact transaction and receipt, replay its result without re-entering fan-out aggregation or
@@ -5116,7 +5122,8 @@ function prepareReviewClose(opts, ctx) {
         removeReviewMembersFromRunningSet(opts, [ctx.nodeInfo.id]);
         return { handled: true, result: { result: 'ok', closed: ctx.nodeInfo.id, provisional: true,
           attempt_id: attempt.attempt_id, lifecycle_settled: false,
-          taskTransitions: [buildTransition(ctx.nodeInfo.id, 'complete', ctx.command)] } };
+          taskTransitions: [buildTransition(ctx.nodeInfo.id, 'complete', ctx.command)],
+          taskMirror: refreshTaskMirror(opts.project, opts.shell) } };
       }
       // Re-evaluate every exact stored body under the frozen logical-group
       // aggregation; cached verdict fields are audit data only.

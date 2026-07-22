@@ -1494,12 +1494,18 @@ where legal execution progress was mistaken for authoring tamper:
   divergence refuses `state_active_plan_invalid` or `state_active_plan_hash_mismatch`.
 - **Legal runtime surfaces** — `## Node Ledger` (exactly one row per authored node, legal status
   vocabulary, dependency-consistent progress; refuses `state_ledger_authority_invalid` /
-  `state_ledger_progress_invalid`), `## Required Agent Compliance` (exact authored requirement rows
-  with closed-node evidence binding; refuses `state_compliance_authority_invalid` /
-  `state_compliance_progress_invalid`), and the `workflow-tasks.json` mirror (semantic equivalence to
-  Nodes plus Ledger status and source plan hash, timestamps excluded; refuses
-  `state_task_mirror_mismatch`). These surfaces legally progress after commitment and are validated
-  by parse/consistency rules, never by raw-byte comparison against a staged copy.
+  `state_ledger_progress_invalid`) and `## Required Agent Compliance` (exact authored requirement
+  rows with closed-node evidence binding; refuses `state_compliance_authority_invalid` /
+  `state_compliance_progress_invalid`). These surfaces legally progress after commitment and are
+  validated by parse/consistency rules, never by raw-byte comparison against a staged copy. The
+  `workflow-tasks.json` mirror is **not** among them: it is a pure projection of the same plan bytes
+  this check already parses, with one writer and no consumer that reads its content for a decision,
+  so a comparison could only report that some caller had not regenerated it yet. It was additionally
+  fail-closed over a surface whose write is fail-open by contract and it ran ahead of `orient` — the
+  command that regenerates it — so a legal ledger rewind, or a swallowed mirror-write fault, wedged
+  the project with `legal_mutation: "none"` and no in-band exit. `state_task_mirror_mismatch` is
+  retired; the mirror's only remaining invariant is in the `planless` branch, where a populated
+  mirror with no plan at all refuses `state_planless_authority_invalid`.
 - **Epoch envelope authority** — `epoch_schema_version` and `epoch_lineage_id` (plus their
   `claim_identity_digest`/`claim_root_base_digest` basis) are stable per-claim fields checked by
   `validateEpochStateAuthority`. A state that omits the entire envelope reads as pre-epoch legacy
@@ -1509,7 +1515,7 @@ where legal execution progress was mistaken for authoring tamper:
   `state_epoch_lineage_basis_invalid` / `state_epoch_lineage_mismatch`.
 
 The result carries `authority_kind: 'planless' | 'planned'` and, for `planned`, a
-`mutable_progress_digest` over the current Ledger/Compliance/task-mirror snapshot (informational, not
+`mutable_progress_digest` over the current Ledger/Compliance snapshot (informational, not
 a compare-and-swap key). Stale first-node fields refuse `state_planning_evidence_stale_first_node`; a
 plan-declared epoch position that disagrees with state refuses `state_epoch_position_mismatch`; and,
 while a re-plan transaction is fenced, a mismatched committed receipt refuses
@@ -3364,7 +3370,7 @@ roadmap never reconciled. The discriminator is now allowlist-narrowed: the sink 
 outside the benign allowlist. That allowlist holds exactly one reason — `state_missing`, the
 journal-only live dir holding nothing but the sink's own receipt, where nothing was recorded and
 therefore nothing can be lost. Every other reason (`state_ledger_progress_invalid`,
-`state_active_plan_hash_mismatch`, `state_task_mirror_mismatch`, `snapshot_authority_invalid`,
+`state_active_plan_hash_mismatch`, `state_planning_evidence_stale_first_node`, `snapshot_authority_invalid`,
 `snapshot_verifier_unavailable`, …) fails closed and surfaces as `archive_refusal` with
 `missing: []`.
 
