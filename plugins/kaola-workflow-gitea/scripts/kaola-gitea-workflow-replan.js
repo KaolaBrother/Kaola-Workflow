@@ -735,6 +735,28 @@ function readSource(paths, planHash, sourceAttemptId, options) {
 // carries findings whose status is all `resolved`: the record of what failed is intact and
 // the child has something to route. Demanding an open UID there would false-refuse a legal
 // transition; demanding a non-empty ARRAY refuses exactly the case with no record at all.
+//
+// NOT DECIDED HERE (#729 case b) — "the findings exist but the child plan contains no write
+// node capable of repairing them". Coverage is deliberately left unbound rather than
+// approximated, because every mechanical proxy available at this seam is unsound:
+//   * Anchor-path containment (each open anchor path must fall inside the union of the child's
+//     declared write sets) fails three ways. `evidence_observation` is a legal anchor kind that
+//     carries NO path at all — it is what the canonical schema-2 fixture uses; a schema-1
+//     finding's `file=` token is optional and never validated; and a declared write set may
+//     legally be directory-shaped or a glob, which the validator itself (hasUnresolvableEntry)
+//     refuses to reason about for exact-path membership. Worse, the anchor records where the
+//     defect was OBSERVED, not where the repair belongs — a defect anchored in the caller is
+//     routinely fixed in the callee, so containment would false-refuse correct plans.
+//   * `fix_role` presence (the child must contain a node of the reviewer's suggested role) is
+//     advisory routing, not a contract: a planner that repairs a `fix_role: tdd-guide` finding
+//     with an implementer plus a test node is legal and would be false-refused.
+//   * "at least one node with a non-empty write set" is sound but useless here: it does not
+//     catch the observed defect (that child HAD a docs writer), and it contradicts the
+//     validator's documented affordance that a zero-writer child may satisfy an inherited
+//     frontier through its named certifier alone.
+// A sound check needs the child plan to DECLARE which inherited finding uids each writer owns,
+// so coverage becomes set comparison rather than inference. That is a plan-grammar addition in
+// the validator, not something this seam can derive from what it is handed.
 function reviewSourceCarriesFrontier(source) {
   if (!source) return false;
   if (source.authority_kind === 'diagnosis_to_build') return true;
