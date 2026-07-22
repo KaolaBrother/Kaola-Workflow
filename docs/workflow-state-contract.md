@@ -110,6 +110,21 @@ here for the full contract.
     schema-1 journal upgrade. Complete investigation adversarial receipts are analytical evidence
     only and create no product-repair journal attempt.
 
+    Across a committed repair→replan epoch boundary the active journal is deliberately preserved —
+    cross-epoch review history is indexed by scope lineage, so activation does not delete it — and it
+    therefore still carries the *parent* `plan_hash` until the child epoch's first attempt lands. The
+    first reader in the child epoch rotates it: behind a committed, digest-verified replan transaction
+    and its epoch snapshot it mints a child journal bound to the child `plan_hash` with empty
+    `attempts` and an immutable `legacy_import` pointer, and projects the parent's attempts as a
+    read-only overlay that is never copied into the child's own rows. The child journal inherits the
+    parent journal's schema: a schema-1 parent keeps the child epoch on the imported schema-1 attempt
+    chain, a schema-2 parent keeps it on the contract-2 lane. Gate open and gate close both route on
+    that resolved journal, so they never disagree about which lane a child-epoch gate runs. Nothing
+    here relaxes the binding: with no committed transaction behind it the raw journal is still
+    validated against the active plan and a `plan_hash` mismatch still refuses, and a declared
+    `legacy_import` that has no committed transaction behind it — or that does not match the
+    transaction's canonical pointer byte for byte — fails closed.
+
     The journal is evidence for the existing ledger/running-set lifecycle, not another scheduler.
     An attempt is written before a gate lifecycle transition. A failed sequence or fully-voted
     fan-out folds every logical-gate member to `pending`, removes those members from the running set,
