@@ -4110,6 +4110,271 @@ assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: 
   }
 }
 
+// ---------------------------------------------------------------------------
+// #755: the abandon authority downgrade must never MASK a non-downgradable fault.
+// The five downgradable reasons are all run-state-progress tiers, and every one of
+// them is evaluated BEFORE the epoch-position, replan-transaction, committed-history,
+// and snapshot tiers. With a first-failure-wins ladder, an abandon whose FIRST failure
+// was downgradable proceeded with every later tier UNEVALUATED — the composed archive
+// authority even skipped the entire snapshot ladder (`current.ok ? verifyAll... : null`).
+// The stated contract is "only these five absence-of-run-product reasons are
+// downgraded"; the actual behavior downgraded whatever hid behind them.
+//
+// The control at the end is as load-bearing as the refusals: a project whose ONLY
+// faults are downgradable must still abandon cleanly AND fully clean up.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync, spawnSync } = require('child_process');
+  const schema755 = require('./kaola-workflow-adaptive-schema.js');
+  const validator755 = require('./kaola-workflow-plan-validator.js');
+  const { generateMirror: generateMirror755 } = require('./kaola-workflow-task-mirror.js');
+
+  const gitEnv755 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  });
+  const git755 = (root, args) => execFileSync('git', ['-C', root, ...args],
+    { encoding: 'utf8', env: gitEnv755, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  function plan755(project, nodes, ledger, opts) {
+    const options = opts || {};
+    const rows = nodes.map(n => `| ${n.id} | ${n.role} | ${n.depends_on || '—'} | ${n.write_set || '—'} | 1 | ${n.shape || 'sequence'} | ${n.model || 'standard'} | — | — | — | — |`).join('\n');
+    const ledgerRows = nodes.map(n => `| ${n.id} | ${ledger[n.id] || 'pending'} |`).join('\n');
+    const which = options.complianceFor === undefined ? nodes.map(n => n.id) : options.complianceFor;
+    let text = [
+      `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
+      'labels: enhancement', 'speculative_open_policy: auto',
+      'validation_command: node scripts/simulate-workflow-walkthrough.js',
+      'validation_timeout_minutes: 30', 'plan_schema_version: 2', 'contract_version: 2',
+      '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |', rows,
+      '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows, '',
+    ].join('\n');
+    if (which !== null) {
+      const complianceRows = nodes.filter(n => which.includes(n.id)).map(n =>
+        (ledger[n.id] || 'pending') === 'complete'
+          ? `| ${n.role} (${n.id}) | subagent-invoked | .cache/${n.id}.md | |`
+          : `| ${n.role} (${n.id}) | pending | | |`).join('\n');
+      text += ['## Required Agent Compliance', '',
+        '| Requirement | Status | Evidence | Skip Reason |',
+        '| --- | --- | --- | --- |', complianceRows, ''].join('\n');
+    }
+    const hash = validator755.computePlanHash(text);
+    return { text: text.replace(/^# Workflow Plan[^\n]*\n/, m => m + `\n<!-- plan_hash: ${hash} -->\n`), hash };
+  }
+
+  // A frozen, claimed, schema-2 adaptive project with a real linked worktree and feature
+  // branch. `opts.sinkPr` makes it a PR-sink folder so the watch-pr CLOSED sweep — the
+  // SECOND production caller of the relaxed archive path, and an AUTOMATIC one — picks it up.
+  function fixture755(project, ledger, opts) {
+    const options = opts || {};
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw755-')));
+    git755(root, ['init', '-b', 'main']);
+    git755(root, ['config', 'user.name', 'Test']);
+    git755(root, ['config', 'user.email', 't@example.com']);
+    git755(root, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
+    git755(root, ['add', 'product.js']);
+    git755(root, ['commit', '-m', 'root']);
+    const commit = git755(root, ['rev-parse', 'HEAD']);
+    const tree = git755(root, ['rev-parse', 'HEAD^{tree}']);
+    const branch = 'workflow/' + project;
+    const worktreePath = path.join(root, '.kw', 'worktrees', project);
+    git755(root, ['worktree', 'add', '-b', branch, worktreePath]);
+    const projectDir = path.join(root, 'kaola-workflow', project);
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const nodes = [
+      { id: 'impl', role: 'tdd-guide', write_set: 'product.js' },
+      { id: 'review', role: 'code-reviewer', depends_on: 'impl', model: 'reasoning' },
+      { id: 'finalize', role: 'finalize', depends_on: 'review', model: '—' },
+    ];
+    const plan = plan755(project, nodes, ledger, options);
+    const identity = schema755.buildClaimIdentity({
+      schema_version: 2, repository_id: 'local:' + root, issue_numbers: [755], primary_issue: 755,
+      bundle_id: null, closure_policy: 'all_or_nothing', branch, worktree_path: worktreePath,
+      claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
+    });
+    const rootBase = schema755.buildClaimRootBase({
+      schema_version: 2, object_format: commit.length === 64 ? 'sha256' : 'sha1',
+      commit, tree, branch,
+    });
+    const lineage = schema755.buildEpochLineage(identity, rootBase);
+    const stateText = [
+      '# Kaola-Workflow State', '', '## Project', `name: ${project}`, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+      'step: start', `next_command: /kaola-workflow-plan-run ${project}`,
+      `next_skill: kaola-workflow-plan-run ${project}`,
+      '', '## Planning Evidence', `plan_hash: ${plan.hash}`, 'decision: auto-run',
+      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
+      'first_node_id: impl', 'first_node_role: tdd-guide', '', '## Sink',
+      `branch: ${branch}`, 'issue_number: 755',
+      options.sinkPr ? 'sink: pr' : 'sink: merge',
+      ...(options.sinkPr ? ['pr_url: https://github.com/test/repo/pull/9'] : []),
+      `main_root: ${root}`,
+      'session_marker: test-session', 'claim_ts: 2026-07-16T00:00:00.000Z',
+      `worktree_path: ${worktreePath}`,
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
+      schema755.writeEpochStateBlock(stateText, {
+        epoch_schema_version: 2,
+        claim_repository_id: identity.repository_id,
+        claim_identity_digest: lineage.claim_identity_digest,
+        claim_root_object_format: rootBase.object_format,
+        claim_root_base_commit: rootBase.commit,
+        claim_root_base_tree: rootBase.tree,
+        claim_root_base_digest: lineage.claim_root_base_digest,
+        epoch_lineage_id: lineage.epoch_lineage_id,
+        plan_epoch: 1, active_plan_hash: plan.hash,
+        inherited_frontier_digest: 'none', inherited_frontier_classes: 'none',
+        automatic_review_replans: 0, authorized_epoch_ceiling: 2,
+        case_b_exemption_consumed: false, replan_status: 'none',
+        replan_transaction_id: 'none', replan_phase: 'none',
+        active_snapshot_manifest_digest: 'none',
+      }));
+    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), plan.text);
+    fs.writeFileSync(path.join(projectDir, 'workflow-tasks.json'), JSON.stringify(
+      generateMirror755({ planContent: plan.text, now: '2026-07-16T00:00:00.000Z' }), null, 2) + '\n');
+    for (const [id, status] of Object.entries(ledger)) {
+      if (status === 'complete') fs.writeFileSync(path.join(cacheDir, id + '.md'), 'evidence-binding: ' + id + ' abc\n');
+    }
+    return { root, project, projectDir, branch, worktreePath };
+  }
+
+  function runRelease755(fx) {
+    const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'release',
+      '--project', fx.project, '--json'], {
+      cwd: fx.root, encoding: 'utf8',
+      env: Object.assign({}, gitEnv755, { KAOLA_WORKFLOW_OFFLINE: '1' }),
+    });
+    let json = null;
+    try { json = JSON.parse((r.stdout || '').trim()); } catch (_) {}
+    return { status: r.status, json, raw: (r.stdout || '') + (r.stderr || '') };
+  }
+
+  // watch-pr is online by construction (OFFLINE early-returns), so drive it through the
+  // supported gh mock seam with a PR that reports CLOSED.
+  function runWatchPrClosed755(fx) {
+    const binDir = path.join(fx.root, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const shim = path.join(binDir, 'gh.js');
+    fs.writeFileSync(shim, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('pr view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":9}\\n'); }",
+      "else if (a.includes('issue view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":755,\"labels\":[]}\\n'); }",
+      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else { process.stdout.write('[]\\n'); }",
+    ].join('\n'));
+    const r = spawnSync('node', [path.join(__dirname, 'kaola-workflow-claim.js'), 'watch-pr', '--json'], {
+      cwd: fx.root, encoding: 'utf8',
+      env: Object.assign({}, gitEnv755, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: shim }),
+    });
+    let json = null;
+    try { json = JSON.parse((r.stdout || '').trim()); } catch (_) {}
+    return { status: r.status, json, raw: (r.stdout || '') + (r.stderr || '') };
+  }
+
+  const PENDING755 = { impl: 'pending', review: 'pending', finalize: 'pending' };
+  // A `.staging-` epoch entry is snapshot-tier residue (`snapshot_staging_incomplete`);
+  // an unparseable replan transaction is `replan_transaction_invalid`, evaluated in the
+  // current-epoch ladder AFTER every downgradable tier; an `.cache/epochs` symlinked out
+  // of the project is `snapshot_epochs_unreadable`. None is in the downgradable set.
+  const stagingResidue755 = fx =>
+    fs.mkdirSync(path.join(fx.projectDir, '.cache', 'epochs', '.staging-abc'), { recursive: true });
+  const corruptTransaction755 = fx =>
+    fs.writeFileSync(path.join(fx.projectDir, '.cache', schema755.REPLAN_TRANSACTION_NAME), '{not json');
+  const symlinkEpochs755 = (fx) => {
+    const outside = path.join(fx.root, 'outside-epochs');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, path.join(fx.projectDir, '.cache', 'epochs'));
+  };
+
+  // S1/S3 (alone) already refused; S2/S4/S5 are the same faults with a DOWNGRADABLE
+  // failure in front of them, and must refuse identically.
+  const maskingProbes = [
+    ['S1 snapshot staging residue, alone', {}, stagingResidue755, 'snapshot_staging_incomplete'],
+    ['S2 snapshot staging residue MASKED by a missing compliance section',
+      { complianceFor: null }, stagingResidue755, 'snapshot_staging_incomplete'],
+    ['S3 corrupt replan transaction, alone', {}, corruptTransaction755, 'replan_transaction_invalid'],
+    ['S4 corrupt replan transaction MASKED by a missing compliance section',
+      { complianceFor: null }, corruptTransaction755, 'replan_transaction_invalid'],
+    ['S5 .cache/epochs symlinked out of the project MASKED by a missing compliance section',
+      { complianceFor: null }, symlinkEpochs755, 'snapshot_epochs_unreadable'],
+  ];
+  for (const [label, opts, mutate, expected] of maskingProbes) {
+    const fx = fixture755('issue-755', PENDING755, opts);
+    try {
+      mutate(fx);
+      const r = runRelease755(fx);
+      assert(r.status === 1 && r.json && r.json.released === false && r.json.reason === expected,
+        '#755: a non-downgradable fault must refuse the abandon even behind a downgradable one ('
+          + label + '), expected ' + expected + ', got ' + r.raw.trim());
+      assert(fs.existsSync(fx.projectDir) && fs.existsSync(fx.worktreePath)
+        && git755(fx.root, ['branch', '--list', fx.branch]) !== '',
+        '#755: the refused abandon must leave the live folder, worktree, and branch untouched ('
+          + label + ')');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // OVER-REFUSAL CONTROL — the whole point of the #735 carve-out. A project whose ONLY
+  // faults are downgradable still abandons cleanly and fully cleans up (folder archived,
+  // worktree removed, branch deleted, claim label attempted). Tightening the ladder must
+  // not re-break this. The emitted `warnings[]` entry is asserted directly: reading
+  // `authority_downgraded` off the result spread alone left the non-silence property
+  // unpinned (the warning push could be deleted with every assertion still green).
+  {
+    const fx = fixture755('issue-755', PENDING755, { complianceFor: null });
+    try {
+      const r = runRelease755(fx);
+      assert(r.status === 0 && r.json && r.json.released === true
+        && r.json.authority_downgraded === 'state_compliance_authority_invalid',
+        '#755 control: an ONLY-downgradable abandon must still succeed with the reason recorded, got '
+          + r.raw.trim());
+      assert(Array.isArray(r.json.warnings) && r.json.warnings.some(w =>
+        String(w).startsWith('run-state authority downgraded: state_compliance_authority_invalid')),
+        '#755 control: the downgrade must be surfaced in the EMITTED warnings[], got '
+          + JSON.stringify(r.json.warnings));
+      assert(!fs.existsSync(fx.projectDir) && r.json.dest && fs.existsSync(r.json.dest),
+        '#755 control: the only-downgradable abandon archives the live folder');
+      assert(!fs.existsSync(fx.worktreePath) && git755(fx.root, ['branch', '--list', fx.branch]) === '',
+        '#755 control: the only-downgradable abandon still removes the worktree and branch');
+      assert(r.json.claim_label_removed === 'skipped_offline',
+        '#755 control: claim-label cleanup was attempted, got ' + JSON.stringify(r.json.claim_label_removed));
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+
+  // SWEEP PATH — cmdWatchPr's PR-CLOSED branch is the second production caller of the
+  // relaxed archive, and unlike release it is AUTOMATIC (driven by remote PR state, not an
+  // operator's discard). It had no coverage at all with a downgradable window open.
+  {
+    const fx = fixture755('issue-755', PENDING755, { complianceFor: null, sinkPr: true });
+    try {
+      stagingResidue755(fx);
+      const r = runWatchPrClosed755(fx);
+      const refusals = (r.json && r.json.archive_refusals) || [];
+      assert(refusals.length === 1 && refusals[0].reason === 'snapshot_staging_incomplete',
+        '#755 sweep: the automatic PR-CLOSED sweep must refuse a masked non-downgradable fault, got '
+          + r.raw.trim());
+      assert(fs.existsSync(fx.projectDir),
+        '#755 sweep: the refused sweep must leave the live folder in place');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+  {
+    const fx = fixture755('issue-755', PENDING755, { complianceFor: null, sinkPr: true });
+    try {
+      const r = runWatchPrClosed755(fx);
+      const entry = ((r.json && r.json.cleanups) || [])[0] || {};
+      assert(!fs.existsSync(fx.projectDir) && entry.folder === fx.project,
+        '#755 sweep control: an ONLY-downgradable sweep still archives the folder, got ' + r.raw.trim());
+      assert(entry.authority_downgraded === 'state_compliance_authority_invalid',
+        '#755 sweep: the automatic cleanup must not be silent about the downgrade, got '
+          + JSON.stringify(entry));
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
