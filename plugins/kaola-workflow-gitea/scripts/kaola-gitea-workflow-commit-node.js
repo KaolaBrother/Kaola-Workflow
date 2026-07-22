@@ -13,8 +13,8 @@
 //
 // Modes:
 //   --node-id ID --start   per-node-start: record-base only (idempotent)
-//   --node-id ID           per-node end:   barrier-check + gate-verify (informational) + verdict-check (informational)
-//   (no --node-id)         whole-plan:     barrier-check + gate-verify (both blocking)
+//   --node-id ID           per-node end:   barrier-check + selector-check (both blocking)
+//   (no --node-id)         whole-plan:     barrier-check + gate-verify + verdict-check (all blocking)
 //
 // JSON output schema:
 //   { result:'ok'|'refuse', mode, nodeId:string|null,
@@ -145,6 +145,10 @@ function combineResults(steps, opts) {
     // Barrier-check is blocking; gate-verify is INFORMATIONAL only (prevents deadlock:
     // downstream reviewer is still pending when this node commits).
     // verdict-check is also INFORMATIONAL per-node (no deadlock when reviewer hasn't run yet).
+    // #744: main() no longer REQUESTS either in per-node mode, so both arrive null on the CLI
+    // path. The informational tagging below is retained for a direct combineResults caller that
+    // still supplies them — it is the reason they can never move overallOk, and deleting it would
+    // silently make a supplied gate/verdict payload look blocking.
     const barrierPass = !!(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
     // #263: selector-check is BLOCKING per-node (checks the completing node's own .cache, like
     // barrier-check — no deadlock risk). A non-selector node returns isSelector:false/ok:true
@@ -222,7 +226,7 @@ function main() {
     process.stdout.write(
       'usage: kaola-gitea-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json\n' +
       '  --node-id ID --start  per-node-start: record-base only (idempotent)\n' +
-      '  --node-id ID          per-node end:   barrier-check + gate-verify + verdict-check (all informational)\n' +
+      '  --node-id ID          per-node end:   barrier-check + selector-check (both blocking)\n' +
       '  (no --node-id)        whole-plan:     barrier-check + gate-verify + verdict-check (all blocking)\n'
     );
     return;
@@ -273,21 +277,22 @@ function main() {
     // Shell: --record-base --node-id ID --json
     recordBase = shellValidator(validatorPath, planPath, ['--record-base', '--node-id', nodeIdValue, '--json']);
   } else if (mode === 'per-node') {
-    // #366: ONE fused validator spawn (--node-end) replaces the four separate barrier/gate/verdict/
-    // selector spawns. The fused envelope carries the same per-check payloads; we synthesize the
-    // per-check exitCode each separate spawn would have set so combineResults is unchanged.
+    // #366: ONE fused validator spawn (--node-end) replaces the separate barrier/selector spawns.
+    // The fused envelope carries the same per-check payloads; we synthesize the per-check exitCode
+    // each separate spawn would have set so combineResults is unchanged.
+    // #744: gate-verify and verdict-check are NOT requested per-node any more. They were
+    // INFORMATIONAL here — tagged `informational:true` and excluded from overallOk (deadlock
+    // prevention: the post-dominating reviewer is still pending when the writer commits), which
+    // makes the gate_failed / verdict_failed refuse branches structurally unreachable in this mode
+    // — and no caller ever consumed the payloads. They stay BLOCKING in whole-plan mode below.
     const fused = shellValidator(validatorPath, planPath, ['--node-end', '--node-id', nodeIdValue, '--json']);
     if (fused && fused.mode === 'node-end') {
       const withExit = (sub, ok) => (sub == null) ? sub : Object.assign({}, sub, { exitCode: ok ? 0 : 1 });
       barrierCheck = withExit(fused.barrierCheck, fused.barrierCheck && fused.barrierCheck.result === 'pass');
-      gateVerify = withExit(fused.gateVerify, fused.gateVerify && fused.gateVerify.ok === true);
-      verdictCheck = withExit(fused.verdictCheck, fused.verdictCheck && fused.verdictCheck.ok === true);
       selectorCheck = withExit(fused.selectorCheck, fused.selectorCheck && fused.selectorCheck.ok === true);
     } else {
-      // Fallback (older validator without --node-end, or a parse miss): the legacy four spawns.
+      // Fallback (older validator without --node-end, or a parse miss): the legacy per-node spawns.
       barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--node-id', nodeIdValue, '--json']);
-      gateVerify = shellValidator(validatorPath, planPath, ['--gate-verify', '--json']);
-      verdictCheck = shellValidator(validatorPath, planPath, ['--verdict-check', '--node-id', nodeIdValue, '--json']);
       selectorCheck = shellValidator(validatorPath, planPath, ['--selector-check', '--node-id', nodeIdValue, '--json']);
     }
   } else {
