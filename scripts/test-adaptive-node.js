@@ -13842,6 +13842,8 @@ function rtHarness(initialFiles, opts) {
     'invalid_project',
     // #463 Slice 5: synthesizer / write-overlap escalation envelope
     'group_barrier_failed', 'leg_capture_failed', 'merge_conflict',
+    // #727: the reviewer-contract domain_outcome enum refusal
+    'review_domain_outcome_invalid',
   ];
   for (const r of knownReasons) {
     assert(
@@ -21022,6 +21024,101 @@ function rtHarness(initialFiles, opts) {
         '#733-B-failopen: the ledger fold still landed');
     }
   } finally { fs.rmSync(tmp733, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #727: the domain_outcome ENUM is named at BOTH ends — the open-time seeded stub and the
+// close-time refusal hint — and BOTH derive from the SAME source of truth the validator uses
+// (adaptive-schema's ADVERSARIAL_OUTCOMES / APPROVAL_OUTCOMES). The generic
+// `<!-- domain_outcome: paste domain_outcome here -->` stub plus a hintless
+// review_domain_outcome_invalid refusal made `domain_outcome: pass` (the gate EFFECT vocabulary)
+// a plausible, only-discovered-at-close mistake.
+// ---------------------------------------------------------------------------
+{
+  const {
+    ADVERSARIAL_OUTCOMES: SCHEMA_ADVERSARIAL_OUTCOMES,
+    APPROVAL_OUTCOMES: SCHEMA_APPROVAL_OUTCOMES,
+  } = require('./kaola-workflow-adaptive-schema');
+  const { allowedDomainOutcomes } = require('./kaola-workflow-adaptive-node');
+
+  // (a) the single role-kind selector is EXPORTED and returns the validator's own frozen arrays —
+  // not a hand-copied duplicate that can drift.
+  assert(typeof allowedDomainOutcomes === 'function',
+    '#727-A: allowedDomainOutcomes(role) is exported as the single role-kind enum selector');
+  if (typeof allowedDomainOutcomes === 'function') {
+    assert(allowedDomainOutcomes('adversarial-verifier') === SCHEMA_ADVERSARIAL_OUTCOMES,
+      '#727-A: adversarial-verifier resolves to the schema ADVERSARIAL_OUTCOMES array IDENTITY (no copy)');
+    assert(allowedDomainOutcomes('code-reviewer') === SCHEMA_APPROVAL_OUTCOMES
+      && allowedDomainOutcomes('security-reviewer') === SCHEMA_APPROVAL_OUTCOMES,
+      '#727-A: approval gates resolve to the schema APPROVAL_OUTCOMES array IDENTITY (no copy)');
+  }
+
+  // (b) OPEN END — the seeded stub names the allowed values for THAT gate's role kind.
+  const tmp727 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-727-seed-'));
+  try {
+    const projectDir = path.join(tmp727, 'kaola-workflow', 'issue-727');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '# plan\n');
+    const reviewOpen = { ok: true, required_tokens: ['evidence-binding', 'contract_version',
+      'review_context_hash', 'behavior_contract_hash', 'resolved_profile_hash', 'candidate_digest',
+      'domain_outcome', 'gate_claim', 'gate_surface', 'gate_aggregation', 'finding_json|findings_none'] };
+    seedEvidenceFile(planPath, 'gate-approval', 'nonce727aaaa', 'code-reviewer', true, reviewOpen);
+    const approvalSeed = fs.readFileSync(path.join(projectDir, '.cache', 'gate-approval.md'), 'utf8');
+    const approvalStub = (approvalSeed.match(/^<!--[ \t]*domain_outcome:.*-->$/m) || [''])[0];
+    assert(SCHEMA_APPROVAL_OUTCOMES.every(v => approvalStub.includes(v)),
+      '#727-B: the approval-gate domain_outcome stub NAMES ' + SCHEMA_APPROVAL_OUTCOMES.join('|')
+      + ', got: ' + JSON.stringify(approvalStub));
+    assert(!SCHEMA_ADVERSARIAL_OUTCOMES.some(v => approvalStub.includes(v)),
+      '#727-B: the approval-gate stub does NOT leak the adversarial vocabulary, got: ' + JSON.stringify(approvalStub));
+    assert(!/paste domain_outcome here/.test(approvalSeed),
+      '#727-B: the generic "paste domain_outcome here" stub is gone for a review gate');
+    // The stub comment stays NON-column-0-anchored on the token key, so it can never satisfy a
+    // present-and-non-empty token check (the seeded value line remains empty).
+    assert(/^domain_outcome:[ \t]*$/m.test(approvalSeed),
+      '#727-B: the seeded domain_outcome VALUE line stays empty (hollow-seed guard unchanged)');
+
+    seedEvidenceFile(planPath, 'gate-adversarial', 'nonce727bbbb', 'adversarial-verifier', true,
+      { ok: true, required_tokens: ['evidence-binding', 'contract_version', 'review_context_hash',
+        'behavior_contract_hash', 'resolved_profile_hash', 'candidate_digest', 'domain_outcome',
+        'claim_outcome'] });
+    const advSeed = fs.readFileSync(path.join(projectDir, '.cache', 'gate-adversarial.md'), 'utf8');
+    const advStub = (advSeed.match(/^<!--[ \t]*domain_outcome:.*-->$/m) || [''])[0];
+    assert(SCHEMA_ADVERSARIAL_OUTCOMES.every(v => advStub.includes(v)),
+      '#727-B: the adversarial-verifier domain_outcome stub NAMES '
+      + SCHEMA_ADVERSARIAL_OUTCOMES.join('|') + ', got: ' + JSON.stringify(advStub));
+    assert(!advStub.includes('approved'),
+      '#727-B: the adversarial stub does NOT leak the approval vocabulary, got: ' + JSON.stringify(advStub));
+
+    // A NON-review role is untouched — the generic stub shape is preserved everywhere else.
+    seedEvidenceFile(planPath, 'w1', 'nonce727cccc', 'implementer', true);
+    const implSeed = fs.readFileSync(path.join(projectDir, '.cache', 'w1.md'), 'utf8');
+    assert(/paste non_tdd_reason here/.test(implSeed),
+      '#727-B: a non-review role keeps the generic stub shape, got:\n' + implSeed);
+  } finally { fs.rmSync(tmp727, { recursive: true, force: true }); }
+
+  // (c) CLOSE END — review_domain_outcome_invalid has a registered hint that names the enum for the
+  // role kind involved (it previously fell through to the generic "run orient" fallback).
+  assert(typeof OPERATOR_HINT_REGISTRY.review_domain_outcome_invalid === 'function',
+    '#727-C: OPERATOR_HINT_REGISTRY.review_domain_outcome_invalid is registered');
+  const hintApproval = getOperatorHint('review_domain_outcome_invalid',
+    { nodeId: 'gate-approval', role: 'code-reviewer' });
+  assert(SCHEMA_APPROVAL_OUTCOMES.every(v => hintApproval.includes(v))
+    && !SCHEMA_ADVERSARIAL_OUTCOMES.some(v => hintApproval.includes(v)),
+    '#727-C: the approval-gate hint names ' + SCHEMA_APPROVAL_OUTCOMES.join('|') + ' only, got: ' + hintApproval);
+  const hintAdversarial = getOperatorHint('review_domain_outcome_invalid',
+    { nodeId: 'gate-adversarial', role: 'adversarial-verifier' });
+  assert(SCHEMA_ADVERSARIAL_OUTCOMES.every(v => hintAdversarial.includes(v))
+    && !hintAdversarial.includes('approved'),
+    '#727-C: the adversarial hint names ' + SCHEMA_ADVERSARIAL_OUTCOMES.join('|') + ' only, got: ' + hintAdversarial);
+  // The observed mistake — `domain_outcome: pass` (the gate EFFECT vocabulary) — is named as such.
+  assert(/pass/.test(hintApproval) && /pass/.test(hintAdversarial),
+    '#727-C: both hints warn that the gate EFFECT vocabulary (pass/fail) is not a domain_outcome');
+  // Role-less emit context still names BOTH enums rather than degrading to the generic fallback.
+  const hintNoRole = getOperatorHint('review_domain_outcome_invalid', { nodeId: 'g' });
+  assert(SCHEMA_APPROVAL_OUTCOMES.concat(SCHEMA_ADVERSARIAL_OUTCOMES).every(v => hintNoRole.includes(v))
+    && !/Run orient to inspect the plan \+ ledger state and the relevant plan-run recovery card\./.test(hintNoRole),
+    '#727-C: a role-less context names BOTH enums (never the generic fallback), got: ' + hintNoRole);
 }
 
 if (failed > 0) {

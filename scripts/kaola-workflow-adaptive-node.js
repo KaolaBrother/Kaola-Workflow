@@ -49,6 +49,19 @@ const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSe
 const reviewSchema = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
+// allowedDomainOutcomes (#727) — the SINGLE role-kind selector for the reviewer-contract
+// `domain_outcome` vocabulary. The valid values are role-kind-dependent (approval gates take
+// APPROVAL_OUTCOMES; an adversarial-verifier takes ADVERSARIAL_OUTCOMES) and BOTH ends of the
+// contract — the open-time seeded stub and the close-time refusal hint — must name the same set the
+// validator enforces. It RETURNS the schema's frozen arrays by identity (never a copy), so there is
+// exactly one place the enum can be edited and no second copy that can silently drift.
+// ---------------------------------------------------------------------------
+function allowedDomainOutcomes(role) {
+  return String(role || '') === 'adversarial-verifier'
+    ? reviewSchema.ADVERSARIAL_OUTCOMES : reviewSchema.APPROVAL_OUTCOMES;
+}
+
+// ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
 // reason → templateFn(ctx). Each entry returns ONE actionable sentence + (where
 // applicable) the exact next workflow command, materialized at EMIT time by
@@ -302,6 +315,23 @@ const OPERATOR_HINT_REGISTRY = {
     'Evidence for ' + (ctx.nodeId || '<id>') + ' is bound to a DIFFERENT node id (copied across nodes). Re-author it with this node\'s evidence-binding header — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
   upstream_not_consumed: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' did not prove it consumed upstream "' + (ctx.offending || '<up-id>') + '". OPEN ' + (ctx.expected || 'the upstream evidence file') + ', read its line-1 `evidence-binding: ' + (ctx.offending || '<up-id>') + ' <nonce>` header, and record a column-0 `upstream_read: ' + (ctx.offending || '<up-id>') + ' <nonce>` line in this node\'s evidence, then re-close.',
+  // #727: the domain_outcome vocabulary is ROLE-KIND-dependent, and the closest-looking wrong answer
+  // (`pass` / `fail`) is the gate EFFECT the reducer DERIVES from domain_outcome — a plausible enough
+  // mistake that it was observed in the field. Name the exact allowed set for the role that refused;
+  // with no role on the envelope, name BOTH sets rather than degrade to the generic fallback.
+  review_domain_outcome_invalid: (ctx) => {
+    const role = String((ctx && ctx.role) || '');
+    const named = reviewSchema.REVIEW_GATE_ROLES.includes(role);
+    const allowed = named
+      ? allowedDomainOutcomes(role).join(' | ')
+      : reviewSchema.APPROVAL_OUTCOMES.join(' | ') + ' (approval gates), '
+        + reviewSchema.ADVERSARIAL_OUTCOMES.join(' | ') + ' (adversarial-verifier)';
+    return 'Evidence for ' + (ctx.nodeId || '<id>')
+      + ' carries a `domain_outcome:` value outside the allowed set for '
+      + (named ? 'a ' + role + ' gate' : 'this gate\'s role kind')
+      + ' — allowed: ' + allowed
+      + '. Note `pass` / `fail` is the derived gate EFFECT, never a domain_outcome. Rewrite the column-0 `domain_outcome:` line with one of the allowed values (an adversarial-verifier must also keep `claim_outcome:` identical to it), then re-close.';
+  },
 
   // --- halt (#391/#360) ---
   invalid_reason: (ctx) =>
@@ -1769,9 +1799,12 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
     })) return { ok: false, reason: 'review_resolution_frontier_mismatch' };
   }
   const domainOutcome = identity.domain_outcome;
-  const allowed = nodeInfo.role === 'adversarial-verifier'
-    ? reviewSchema.ADVERSARIAL_OUTCOMES : reviewSchema.APPROVAL_OUTCOMES;
-  if (!allowed.includes(domainOutcome)) return { ok: false, reason: 'review_domain_outcome_invalid' };
+  // #727: ONE selector shared with the open-time seeded stub + the operator hint, so the enum the
+  // reviewer is shown, the enum named on refusal, and the enum enforced here can never diverge.
+  const allowed = allowedDomainOutcomes(nodeInfo.role);
+  if (!allowed.includes(domainOutcome)) {
+    return { ok: false, reason: 'review_domain_outcome_invalid', role: nodeInfo.role, allowed: allowed.slice() };
+  }
   const openFindings = normalized.findings.filter(finding => finding.status !== 'resolved');
   if (nodeInfo.role !== 'adversarial-verifier') {
     if (domainOutcome === 'approved' && openFindings.length) {
@@ -1872,6 +1905,16 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
         if (tokenClass.includes('|')) {
           freshContent += '<!-- ' + tokenClass + ' -->\n';
           freshContent += firstAlt + ': \n';
+        } else if (tokenClass === 'domain_outcome') {
+          // #727: the reviewer-contract `domain_outcome` vocabulary is ROLE-KIND-dependent, and the
+          // close-time validator is the only place that used to name it. Seed the ALLOWED SET for THIS
+          // gate's role kind (from the same allowedDomainOutcomes selector the validator uses) instead
+          // of a generic "paste domain_outcome here" — a reviewer that guessed the derived gate EFFECT
+          // vocabulary (`pass`) only discovered the mistake at close. The comment stays a `<!-- ... -->`
+          // line (NOT column-0 anchored on the token key), so the hollow-seed guards are unchanged.
+          freshContent += '<!-- ' + tokenClass + ': one of '
+            + allowedDomainOutcomes(role).join(' | ') + ' (not the derived gate effect pass/fail) -->\n';
+          freshContent += tokenClass + ': \n';
         } else {
           freshContent += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
           freshContent += tokenClass + ': \n';
@@ -12234,6 +12277,8 @@ module.exports = {
   // #424/#433: exported for testing the provenance log + evidence seeding.
   appendProvenanceLog,
   seedEvidenceFile,
+  // #727: the single role-kind selector for the reviewer-contract domain_outcome vocabulary.
+  allowedDomainOutcomes,
   // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.
   deriveMaxSimultaneousOpen,
   runOrient,
