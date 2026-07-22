@@ -16728,6 +16728,240 @@ function testReviewerContractV2Conformance() {
   console.log('testReviewerContractV2Conformance: PASSED');
 }
 
+// ── #758 SPINE plan form ────────────────────────────────────────────────────────────────────
+// A spine plan is an ordered milestone spine + the unique finalize sink, where a spine node is
+// either a concrete single-role node (unchanged semantics) or a typed `expansion-point` whose
+// frontier is composed at OPEN time. Covered here:
+//   (a) a spine with TWO expansion points, a review wall and a sink freezes green through the
+//       production `--freeze` CLI, and resume-checks green;
+//   (b) plan_hash covers the SPINE ONLY — ledger-side expansion records never perturb it;
+//   (c) a spine missing its review wall, and a spine missing its sink, refuse WITHIN the existing
+//       typed families (`plan_invalid`), not a parallel vocabulary;
+//   (d) the discriminator is load-bearing in BOTH directions (an expansion-point token in a `dag`
+//       plan still refuses; a `spine` label with no expansion point refuses);
+//   (e) the legacy no-regression pin over the real archived plan corpus.
+const SPINE_PLAN_758 = [
+  '# Workflow Plan — issue #758', '',
+  '## Meta', '',
+  'project: issue-758',
+  'labels: enhancement',
+  'plan_schema_version: 2',
+  'plan_form: spine',
+  'validation_command: node scripts/simulate-workflow-walkthrough.js',
+  'validation_timeout_minutes: 20',
+  'code_certifier: wall',
+  'security_certifier: none',
+  'inherited_frontier_digest: none',
+  'inherited_frontier_classes: none', '',
+  'expansion(m1):',
+  '  milestone_goal: land the reader seam in the core script',
+  '  expected_surfaces: scripts/, docs/',
+  '  join_constraints: none',
+  '  review_class: code-reviewer', '',
+  'expansion(m2):',
+  '  milestone_goal: mirror the reader seam into the edition trees',
+  '  expected_surfaces: plugins/',
+  '  join_constraints: consumes the m1 evidence packet',
+  '  review_class: code-reviewer', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+  '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+  '| m2 | expansion-point | m1 | — | 1 | sequence | — | — | — | — |',
+  '| wall | code-reviewer | m2 | — | 1 | sequence | both milestone expansions land their declared goal with no unreviewed surface | the accumulated candidate across both expansions | sequence | — |',
+  '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Node Ledger', '',
+  '| id | status |',
+  '|---|---|',
+  '| probe | pending |',
+  '| m1 | pending |',
+  '| m2 | pending |',
+  '| wall | pending |',
+  '| done | pending |', '',
+].join('\n');
+
+function testSpinePlanFormFreeze758() {
+  const validator = require('./kaola-workflow-plan-validator');
+  const refuses = (content, label, needle) => {
+    const r = validator.validatePlan(content, { root: repoRoot });
+    assert(r.result === 'refuse', '#758 ' + label + ': expected refuse, got ' + r.result);
+    assert(r.reason === 'plan_invalid' || r.reason === 'plan_form_duplicate' || r.reason === 'plan_form_unsupported',
+      '#758 ' + label + ': refusal must stay in an existing typed family, got reason=' + r.reason);
+    assert((r.errors || []).some(e => e.includes(needle)),
+      '#758 ' + label + ': expected an error containing "' + needle + '", got ' + JSON.stringify(r.errors));
+    return r;
+  };
+
+  // (a) green freeze + resume through the production CLI.
+  const tmp = adaptiveTmp('spine-758');
+  try {
+    const dir = path.join(tmp, 'kaola-workflow', 'issue-758');
+    fs.mkdirSync(dir, { recursive: true });
+    const planPath = path.join(dir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, SPINE_PLAN_758);
+    const fr = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);
+    assert(fr.status === 0, '#758 (a): spine plan must freeze green, got ' + fr.status + ' ' + fr.stdout + fr.stderr);
+    const frozen = JSON.parse(fr.stdout);
+    assert(frozen.frozen === true && frozen.result === 'in-grammar',
+      '#758 (a): spine freeze payload must report frozen in-grammar: ' + fr.stdout);
+    const rc = runNode(planValidatorScript, [planPath, '--resume-check', '--json'], tmp);
+    assert(rc.status === 0, '#758 (a): frozen spine plan must resume-check green, got ' + rc.stdout + rc.stderr);
+    const resumed = JSON.parse(rc.stdout);
+    assert(resumed.ok === true && resumed.plan_form === 'spine',
+      '#758 (a): resume must recognize the spine form (the closed-library exemption is bound on BOTH walls): ' + rc.stdout);
+
+    // (b) plan_hash covers the SPINE ONLY. Ledger-side expansion records — the append-only channel
+    // the expansion transaction will write — must never perturb the frozen identity.
+    const frozenText = fs.readFileSync(planPath, 'utf8');
+    const hashBefore = validator.computePlanHash(frozenText);
+    const withExpansionRecords = frozenText
+      .replace('| m1 | pending |', '| m1 | in-progress |')
+      + ['', '## Expansion Records', '',
+        '| expansion_id | unit | role | mode |',
+        '|---|---|---|---|',
+        '| m1 | m1-u1 | tdd-guide | parallel |',
+        '| m1 | m1-u2 | tdd-guide | parallel |', ''].join('\n');
+    assert(validator.computePlanHash(withExpansionRecords) === hashBefore,
+      '#758 (b): ledger-side expansion records must not perturb plan_hash (the hash covers the spine only)');
+    fs.writeFileSync(planPath, withExpansionRecords);
+    const rc2 = runNode(planValidatorScript, [planPath, '--resume-check', '--json'], tmp);
+    assert(rc2.status === 0 && JSON.parse(rc2.stdout).ok === true,
+      '#758 (b): a spine plan carrying expansion records must still resume-check green: ' + rc2.stdout + rc2.stderr);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+
+  // (c) the two acceptance refusals, both inside the existing `plan_invalid` family.
+  refuses(SPINE_PLAN_758
+    .replace(/\| wall \| code-reviewer \| m2 \|[^\n]*\n/, '')
+    .replace('| done | finalize | wall |', '| done | finalize | m2 |'),
+  'missing review wall', 'SPINE-5: code-reviewer does not post-dominate expansion point m1');
+  // A wall that EXISTS but does not post-dominate the tail expansion is the same violation — the
+  // rule is post-dominance (the G1/G2/G3 mechanism), not mere presence.
+  refuses(SPINE_PLAN_758
+    .replace('| wall | code-reviewer | m2 |', '| wall | code-reviewer | m1 |')
+    .replace('| done | finalize | wall |', '| done | finalize | wall, m2 |'),
+  'review wall not post-dominating', 'SPINE-5: code-reviewer does not post-dominate expansion point m2');
+  refuses(SPINE_PLAN_758
+    .replace('| done | finalize | wall | — | 1 | sequence | — | — | — | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — |\n| stray | doc-updater | probe | docs/stray.md | 1 | sequence | — | — | — | — |'),
+  'missing unique sink', 'no unique finalize sink');
+
+  // (d) the expansion contract is complete-or-refuse, and the discriminator is load-bearing.
+  refuses(SPINE_PLAN_758.replace(/expansion\(m2\):[\s\S]*?review_class: code-reviewer\n/, ''),
+    'missing expansion contract', 'SPINE-2: expansion point m2 has no expansion(m2) block');
+  refuses(SPINE_PLAN_758.replace('expansion(m2):', 'expansion(m1):'),
+    'duplicate expansion header', 'SPINE-2: expansion point m1 has 2 expansion(m1) blocks');
+  refuses(SPINE_PLAN_758.replace('  milestone_goal: land the reader seam in the core script\n', ''),
+    'missing milestone_goal', 'SPINE-4: expansion(m1) declares no milestone_goal');
+  refuses(SPINE_PLAN_758.replace('  expected_surfaces: scripts/, docs/\n', ''),
+    'missing expected_surfaces', 'SPINE-4: expansion(m1) declares no expected_surfaces');
+  refuses(SPINE_PLAN_758.replace('  join_constraints: none\n', ''),
+    'missing join_constraints', 'SPINE-4: expansion(m1) declares no join_constraints');
+  refuses(SPINE_PLAN_758.replace('  review_class: code-reviewer\n\nexpansion(m2)', '\nexpansion(m2)'),
+    'missing review_class', 'SPINE-4: expansion(m1) declares no review_class');
+  refuses(SPINE_PLAN_758.replace('  review_class: code-reviewer\n\nexpansion(m2)', '  review_class: implementer\n\nexpansion(m2)'),
+    'review_class out of vocabulary', 'SPINE-4: expansion(m1) review_class token(s) "implementer" are not gate roles');
+  refuses(SPINE_PLAN_758.replace('| m1 | expansion-point | probe | — | 1 | sequence |', '| m1 | expansion-point | probe | — | 1 | fanout(g) |'),
+    'expansion point pre-declares a fan-out', 'SPINE-3: expansion point m1 has shape');
+  refuses(SPINE_PLAN_758.replace('| m1 | expansion-point | probe | — |', '| m1 | expansion-point | probe | scripts/x.js |'),
+    'expansion point declares a write set', 'read-only role expansion-point (node m1) declares a write set');
+  // The `expansion-point` token is built-in ONLY under the discriminator; in a `dag` plan it stays
+  // an unknown role, so a legacy plan can never acquire the spine grammar by accident.
+  refuses(SPINE_PLAN_758.replace('plan_form: spine\n', ''),
+    'expansion point in a dag plan', 'unknown role "expansion-point" not in installed library');
+  // ...and the label alone buys nothing: a spine with no expansion point is a DAG wearing the label.
+  refuses(SPINE_PLAN_758
+    .replace(/expansion\(m1\):[\s\S]*?review_class: code-reviewer\n\nexpansion\(m2\):[\s\S]*?review_class: code-reviewer\n/, '')
+    .replace('| m1 | expansion-point | probe |', '| m1 | code-explorer | probe |')
+    .replace('| m2 | expansion-point | m1 |', '| m2 | code-explorer | m1 |'),
+  'spine label with no expansion point', 'SPINE-1: plan_form: spine declares no expansion-point node');
+  refuses(SPINE_PLAN_758.replace('plan_form: spine', 'plan_form: spine\nplan_form: dag'),
+    'duplicate plan_form', 'more than one plan_form field');
+  refuses(SPINE_PLAN_758.replace('plan_form: spine', 'plan_form: tree'),
+    'unknown plan_form', 'is not a legal plan shape');
+  refuses(SPINE_PLAN_758.replace('expansion(m2):', 'expansion(ghost):'),
+    'expansion contract keys an unknown node', 'SPINE-2: expansion(ghost) names a node "ghost" that does not exist');
+  refuses(SPINE_PLAN_758.replace('expansion(m2):', 'expansion(probe):'),
+    'expansion contract keys a concrete node', 'SPINE-2: expansion(probe) keys node "probe" whose role is "code-explorer"');
+  // An expansion point can never BE the sink: nothing post-dominates the sink, so its declared
+  // review obligation would be undischargeable by construction.
+  refuses(SPINE_PLAN_758
+    .replace('| wall | code-reviewer | m2 |', '| wall | code-reviewer | probe |')
+    .replace(/\| done \| finalize \| wall \|[^\n]*\n/, '')
+    .replace('| m2 | expansion-point | m1 |', '| m2 | expansion-point | m1, wall |'),
+  'expansion point is the sink', 'SPINE-3: expansion point m2 is the plan\'s terminal node');
+  // An expansion point is not dispatched, so a frozen wait budget on it is meaningless — the same
+  // non-delegable family as the sink and the main-session gate (a typed reason, not plan_invalid).
+  {
+    const withBudget = SPINE_PLAN_758
+      .replace('| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | wait_budget_minutes | gate_claim')
+      .replace('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+      .replace('| m1 | expansion-point | probe | — | 1 | sequence | —',
+        '| m1 | expansion-point | probe | — | 1 | sequence | 45 | —');
+    const r = validator.validatePlan(withBudget, { root: repoRoot });
+    assert(r.result === 'refuse' && r.reason === 'wait_budget_nondelegable',
+      '#758 expansion point wait budget: expected wait_budget_nondelegable, got '
+      + r.result + '/' + r.reason + ' ' + JSON.stringify(r.errors || []));
+  }
+  // ...and no model tier: per-unit tier choice belongs to expansion time, not freeze.
+  {
+    const withModel = SPINE_PLAN_758
+      .replace('| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | model | gate_claim')
+      .replace('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+      .replace('| m1 | expansion-point | probe | — | 1 | sequence | —',
+        '| m1 | expansion-point | probe | — | 1 | sequence | reasoning | —');
+    refuses(withModel, 'expansion point declares a model', 'SPINE-3: expansion point m1 declares model "reasoning"');
+  }
+
+  // (e) LEGACY NO-REGRESSION PIN over the real archived corpus (200+ frozen plans, a mix of
+  // in-grammar and every typed refusal family). Two invariants, both stable under repo evolution:
+  //   1. no archived plan emits the new `plan_form` field — every legacy emission is untouched;
+  //   2. the implicit legacy path and an EXPLICIT `plan_form: dag` are the same path, field for
+  //      field (planHash aside, which necessarily moves when a Meta line is added).
+  // Deliberately NOT pinned: absolute verdict counts. Several legacy refusals key off live repo
+  // facts (the generated-aggregator set, on-disk directory shapes), so a count pin would go red on
+  // unrelated repo growth rather than on a spine regression.
+  {
+    const archiveRoot = path.join(repoRoot, 'kaola-workflow', 'archive');
+    const plans = [];
+    if (fs.existsSync(archiveRoot)) {
+      (function walk(dir) {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const p = path.join(dir, e.name);
+          if (e.isDirectory()) walk(p);
+          else if (/^workflow-plan.*\.md$/.test(e.name)) plans.push(p);
+        }
+      })(archiveRoot);
+    }
+    assert(plans.length >= 150,
+      '#758 (e): the archived-plan regression pin needs the real corpus; found only ' + plans.length + ' plans');
+    let inGrammar = 0;
+    let refused = 0;
+    for (const p of plans.sort()) {
+      const content = fs.readFileSync(p, 'utf8');
+      const legacy = validator.validatePlan(content, { root: repoRoot });
+      assert(legacy.plan_form === undefined,
+        '#758 (e): archived legacy plan ' + p + ' must not gain a plan_form field');
+      if (legacy.result === 'in-grammar') inGrammar++; else refused++;
+      const explicitDag = validator.validatePlan(
+        content.replace(/^(## Meta[ \t]*)$/m, '$1\nplan_form: dag'), { root: repoRoot });
+      const strip = r => JSON.stringify({ ...r, planHash: null });
+      assert(strip(legacy) === strip(explicitDag),
+        '#758 (e): implicit legacy and explicit plan_form: dag must be the SAME path for ' + p
+        + '\n  implicit: ' + strip(legacy).slice(0, 300) + '\n  explicit: ' + strip(explicitDag).slice(0, 300));
+    }
+    assert(inGrammar > 0 && refused > 0,
+      '#758 (e): the corpus pin must exercise BOTH the in-grammar and the refusing legacy paths (in-grammar='
+      + inGrammar + ', refused=' + refused + ')');
+  }
+
+  console.log('testSpinePlanFormFreeze758: PASSED');
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -17008,6 +17242,7 @@ function buildRegistry() {
   add('testOfflineNoHistoryClaimRoot699',                 testOfflineNoHistoryClaimRoot699);
   add('testReviewOutcomeTransport699',                    testReviewOutcomeTransport699);
   add('testReviewerContractV2Conformance',                testReviewerContractV2Conformance);
+  add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
   return reg;
 }
 
