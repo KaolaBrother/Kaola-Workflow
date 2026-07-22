@@ -1992,6 +1992,47 @@ for (const selected of ['arm-a', 'arm-b']) {
     } finally { f.cleanup(); }
   }
 
+  // #730-C2: the FAIL-OPEN counterexample. Identical in shape to #730-C, except the cross-writer
+  // finding carries NO scope/action tokens — a legal schema-1 flat row. Under the GATE predicate
+  // (`unresolvedInScopeFixes`, which demands scope===in_scope && action===fix) F-A is not in the
+  // population at all, so the partition sees only impl-b's own finding, concludes it owns the whole
+  // frontier, and issues a silently narrowed single-writer brief while consuming the whole attempt —
+  // the exact defect this issue exists to prevent, re-introduced through a predicate that looks
+  // stricter. The repair predicate must include F-A and refuse.
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-A status=open severity=high file=scripts/a.js',
+      'finding: id=F-B scope=in_scope action=fix status=open severity=high file=scripts/b.js',
+    ], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'repair_requires_replan' && r.reason === 'repair_scope_spans_writers',
+        '#730-C2: a token-less open finding owned by ANOTHER writer must block direct repair, got '
+          + JSON.stringify(r));
+      assert(JSON.stringify(r.foreign_owned_findings) === JSON.stringify(['F-A']),
+        '#730-C2: the refusal must name the foreign-owned token-less finding, got ' + JSON.stringify(r));
+      assert(f.statuses()['impl-b'] === 'complete', '#730-C2: the refusal is ZERO-mutation');
+    } finally { f.cleanup(); }
+  }
+
+  // #730-C3: the OVER-REFUSAL control for the same predicate. An explicitly `deferred` finding owned
+  // by another writer is the reviewer's own statement that it is not to be fixed now, so it must NOT
+  // force a replan — this is the boundary the previous attempt crossed by partitioning on every
+  // still-open row.
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-A scope=in_scope action=fix status=deferred severity=low file=scripts/a.js',
+      'finding: id=F-B scope=in_scope action=fix status=open severity=high file=scripts/b.js',
+    ], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'ok',
+        '#730-C3: a DEFERRED foreign finding must not force a replan, got ' + JSON.stringify(r));
+      assert(r.repair_brief && JSON.stringify(r.repair_brief.assigned_uids) === JSON.stringify(['F-B']),
+        '#730-C3: the deferred finding is not assigned as must-fix, got ' + JSON.stringify(r.repair_brief));
+    } finally { f.cleanup(); }
+  }
+
   // #730-D: SOLE ownership — impl-b owns EVERY open finding alone. Direct repair proceeds and the brief
   // carries the full frontier. This is the admissible half of the same rule (it must not over-refuse).
   {
@@ -2023,6 +2064,13 @@ for (const selected of ['arm-a', 'arm-b']) {
       ['finding: id=F-1 scope=in_scope action=fix status=open severity=high'],
       ['finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/b.js'],
       ['finding: id=F-1 scope=in_scope action=fix status=open severity=high file=scripts/nowhere.js'],
+      // TOKEN-LESS schema-1 flat rows: legal today, and the ONLY shape that distinguishes the repair
+      // predicate from the gate predicate. Every case above carries explicit scope/action, so a
+      // gate-predicate partition satisfies them all while still dropping these — which is exactly how
+      // a fail-open partition survived the suite once already.
+      ['finding: id=F-1 status=open severity=high'],
+      ['finding: id=F-1 status=open severity=high file=scripts/b.js'],
+      ['finding: id=F-1 severity=high file=scripts/b.js'],
     ];
     for (const lines of cases) {
       const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, lines, ['impl-a', 'impl-b']);

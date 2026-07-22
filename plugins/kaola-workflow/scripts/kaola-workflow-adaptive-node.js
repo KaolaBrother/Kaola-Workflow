@@ -3313,11 +3313,14 @@ function stillOpenRouteCandidates(attempt) {
 // the reopened writer's brief assigns the whole must-fix set, so any must-fix finding it cannot fix
 // must block direct repair.
 //
-// The population here is the BLOCKING set, NOT every still-open row. `unresolvedInScopeFixes` (the one
-// shipped definition of "must be fixed before this gate can pass": scope in_scope + action fix + status
-// neither resolved nor deferred) is reused verbatim rather than re-derived. A `deferred`, out-of-scope,
-// pre-existing or follow_up/document/none finding is explicitly NON-blocking — the gate can pass with it
-// still open — so it must never force a replan, and partitioning on the wider still-open set was an
+// The population here is `repairResponsibleFindings`, NOT the gate predicate and NOT every still-open
+// row. The gate predicate (`unresolvedInScopeFixes`) requires scope and action to be EXPLICITLY
+// in_scope/fix, which is right for the gate but FAIL-OPEN here: a schema-1 flat row carrying neither
+// token would drop out of the partition and the brief would silently narrow to one writer. The repair
+// predicate excludes only PROVABLY non-blocking rows (explicit resolved/deferred status, explicit
+// non-in_scope scope, explicit non-fix action) and includes anything else still open. A `deferred`,
+// out-of-scope, pre-existing or follow_up/document/none finding is explicitly NON-blocking — the gate can
+// pass with it still open — so it must never force a replan, and partitioning on the wider still-open set was an
 // over-refusal (strictly stricter than the contract).
 //   blockingFindings              the still-open route rows that actually block the gate.
 //   unownedBlockingFindingIds     blocking findings that route to NO writer (anchor-less / unroutable).
@@ -3341,7 +3344,7 @@ function findingOwnershipSummary(attempt, nodeId) {
     for (const o of owners) { if (o) ownersUnion.add(o); }
     if (owners.includes(nodeId)) nodeOwns = true;
   }
-  const blockingFindings = reviewSchema.unresolvedInScopeFixes(openFindings);
+  const blockingFindings = reviewSchema.repairResponsibleFindings(openFindings);
   const unownedBlockingFindingIds = [];
   const ambiguousBlockingFindingIds = [];
   const foreignOwnedBlockingFindingIds = [];
@@ -3384,8 +3387,9 @@ function findingOwnershipSummary(attempt, nodeId) {
 // future non-repair re-expansion of a single finding — gets the byte-identical brief for the same
 // attempt. `nodeId` is recorded as `writer` and is NOT used to filter or reorder anything.
 //
-// The ASSIGNED (must-fix) set is the BLOCKING population — `unresolvedInScopeFixes`, the one shipped
-// definition of what has to be fixed before the gate can pass. A `deferred`, out-of-scope, pre-existing
+// The ASSIGNED (must-fix) set is `repairResponsibleFindings` — open minus PROVABLY non-blocking, which
+// fails closed on a row that omits scope/action rather than dropping it the way the gate predicate
+// would. A `deferred`, out-of-scope, pre-existing
 // or follow_up/document/none row is still open but NOT something the contract obliges anyone to fix, so
 // ordering a fixer to repair it would be an instruction the workflow itself does not require. Those rows
 // are carried in a SEPARATE, explicitly non-obligatory `context_findings` section: visible for judgement,
@@ -3408,7 +3412,7 @@ function findingOwnershipSummary(attempt, nodeId) {
 function buildRepairBrief(attempt, nodeId) {
   const openRows = stillOpenRouteCandidates(attempt);
   // The must-fix population, reusing the gate's own predicate rather than re-deriving it.
-  const blockingRows = reviewSchema.unresolvedInScopeFixes(openRows);
+  const blockingRows = reviewSchema.repairResponsibleFindings(openRows);
   const blockingSet = new Set(blockingRows);
   const contextRows = openRows.filter(row => !blockingSet.has(row));
   const isObj = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -8169,8 +8173,9 @@ function runRepairNodeCore(opts) {
       // whole attempt. Refuse to replan instead, which is the safe multi-writer outcome (a replacement
       // plan can give each blocking finding its own writer).
       //
-      // The predicate is BLOCKING-scoped (`unresolvedInScopeFixes`), not "every still-open row": a
-      // deferred / out-of-scope / follow_up finding owned by another writer does not block this gate,
+      // The predicate is `repairResponsibleFindings`, not the gate predicate and not "every still-open
+      // row": it fails CLOSED on a row omitting scope/action (which the gate predicate would drop), while
+      // a deferred / out-of-scope / follow_up finding owned by another writer does not block this gate,
       // so it must not force a replan. An EMPTY blocking set leaves `spansForeignWriters` false and the
       // repair proceeds — there is nothing that spans anyone.
       //
