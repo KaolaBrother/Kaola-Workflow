@@ -1870,10 +1870,10 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --json
 
 - `recordBase` is populated only in `per-node-start` mode; `null` otherwise.
 - `barrierCheck` is populated in `per-node` and `whole-plan` modes; `null` in `per-node-start`.
-- `gateVerify` is populated in `per-node` mode (tagged `informational:true`) and `whole-plan` mode; `null` in `per-node-start`.
-- `verdictCheck` is populated in `per-node` mode (tagged `informational:true`) and `whole-plan` mode; `null` in `per-node-start`.
+- `gateVerify` is populated in `whole-plan` mode only (blocking); `null` in `per-node-start` **and in `per-node`**.
+- `verdictCheck` is populated in `whole-plan` mode only (blocking); `null` in `per-node-start` **and in `per-node`**.
 - `selectorCheck` is populated in `per-node` mode (blocking); `null` in `per-node-start` and `whole-plan`. When the node is a `selector_source`, `selectorCheck.isSelector` is `true` and `selectorCheck.armsToNa` lists the arms the contractor marks `n/a`.
-- In per-node mode, `gateVerify` and `verdictCheck` carry `"informational": true` — this field signals the caller not to gate on the result.
+- **Per-node mode no longer computes gate-verify or verdict-check at all (#744).** Both were informational-only there — tagged `informational:true` and excluded from `overallOk` (deadlock prevention: the post-dominating reviewer is still pending when the writer commits), which made the `gate_failed` / `verdict_failed` refuse reasons structurally unreachable in that mode — and no consumer read the payloads. The fused validator `--node-end` subcommand pins both keys at `null`; the per-node verdict is decided by `barrierCheck` and `selectorCheck` alone, exactly as before. The `combineResults` core still tags a caller-supplied `gateVerify`/`verdictCheck` `informational:true` in `per-node` mode, so a direct API caller sees unchanged semantics.
 - Early-refuse shapes (invalid flags, no shelling occurs):
   ```json
   {
