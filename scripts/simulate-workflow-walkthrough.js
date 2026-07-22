@@ -17305,6 +17305,67 @@ function testExpansionTransaction759() {
     }
   }
 
+  // ---- (e) PARALLEL BY DEFAULT for a composed WRITE frontier. ----
+  // Two disjoint write units must CO-OPEN as a lane group with provisioned legs, exactly like a
+  // frozen disjoint write frontier does. This pins the execution-time node view on the co-open
+  // disjointness re-check (`--parallel-safe`): resolved against the spine alone the members are
+  // node_not_found, the group never forms, and EVERY expansion write frontier silently degrades to
+  // serial — a wrong-serial that costs invisible wall-clock on every frontier with no signal.
+  {
+    const wrepo = adaptiveTmp('expansion-759-write');
+    initGitRepoWithBareRemote(wrepo);
+    spawnSync('git', ['-C', wrepo, 'checkout', '-b', 'workflow/issue-759w'], { encoding: 'utf8' });
+    fs.mkdirSync(path.join(wrepo, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(wrepo, 'lib', 'a.js'), '// a\n');
+    fs.writeFileSync(path.join(wrepo, 'lib', 'b.js'), '// b\n');
+    // The leg worktrees are provisioned under <mainRoot>/.kw/legs/; the production repo gitignores
+    // that path, so the fixture must too or the parent-clean fence sees the legs as production dirt.
+    fs.writeFileSync(path.join(wrepo, '.gitignore'), '.kw/\n');
+    const wproj = path.join(wrepo, 'kaola-workflow', 'issue-759');
+    fs.mkdirSync(wproj, { recursive: true });
+    const wplan = path.join(wproj, 'workflow-plan.md');
+    fs.writeFileSync(wplan, SPINE_PLAN_759.replace('  expected_surfaces: scripts/', '  expected_surfaces: lib/'));
+    const fz = runNode(planValidatorScript, [wplan, '--freeze', '--json'], wrepo);
+    assert(fz.status === 0, '#759 (e): freeze should exit 0, got ' + fz.stdout + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: wrepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: wrepo, encoding: 'utf8' });
+    try {
+      const composition = {
+        derivation: {
+          grain: 'each unit owns one file — well over its setup cost',
+          path: 'critical path',
+          join: 'mechanical — the declared surfaces are disjoint',
+          probe: 'neither outcome reshapes the other',
+          serializer: 'none present — no S1 artifact, no S2 shared resource, worktrees available',
+        },
+        units: [
+          { name: 'w1', role: 'tdd-guide', model: 'standard', write_set: 'lib/a.js', mode: 'co_open' },
+          { name: 'w2', role: 'tdd-guide', model: 'standard', write_set: 'lib/b.js', mode: 'co_open' },
+        ],
+      };
+      const e = runNode(adaptiveNodeScript,
+        ['expand-open', '--project', 'issue-759', '--node-id', 'm1', '--json', '--stdin'],
+        wrepo, null, { input: JSON.stringify(composition) });
+      assert(e.status === 0, '#759 (e): expand-open should exit 0, got ' + e.status + '\n' + e.stdout + e.stderr);
+      const parsed = JSON.parse(e.stdout);
+      assert(parsed.kind === 'write', '#759 (e): a composed write frontier must open as kind "write", got ' + parsed.kind);
+      assert(JSON.stringify((parsed.opened || []).map(n => n.id).sort()) === JSON.stringify(['m1-r1-w1', 'm1-r1-w2']),
+        '#759 (e): BOTH disjoint write units must co-open (a single opened id means the group degraded '
+        + 'to serial — the disjointness re-check could not resolve them), got '
+        + JSON.stringify((parsed.opened || []).map(n => n.id)));
+      const rs = JSON.parse(fs.readFileSync(path.join(wproj, '.cache', 'running-set.json'), 'utf8'));
+      assert(rs.lane_group && rs.lane_group.members.length === 2,
+        '#759 (e): the co-open must form a lane group over both units, got ' + JSON.stringify(rs.lane_group));
+      assert(JSON.stringify(rs.lane_group.write_union.slice().sort()) === JSON.stringify(['lib/a.js', 'lib/b.js']),
+        '#759 (e): the group write union must come from the RECORDED unit surfaces, got ' + JSON.stringify(rs.lane_group.write_union));
+      assert(rs.lane_group.legs && Object.keys(rs.lane_group.legs).length === 2,
+        '#759 (e): each co-opened unit must get an isolated leg worktree, got ' + JSON.stringify(rs.lane_group.legs));
+    } finally {
+      fs.rmSync(wrepo, { recursive: true, force: true });
+      try { fs.rmSync(wrepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
   console.log('testExpansionTransaction759: PASSED');
 }
 

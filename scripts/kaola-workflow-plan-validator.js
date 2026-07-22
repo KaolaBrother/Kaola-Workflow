@@ -4956,7 +4956,11 @@ function main() {
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
-    const allNodes = parseNodes(content);
+    // #759: the co-open disjointness re-check is an EXECUTION-time check (the scheduler asks it about
+    // a frontier it is about to open), so it ranges over the execution node view. Without this a
+    // composed write frontier resolves to node_not_found, the lane group never forms, and every
+    // expansion write frontier silently degrades to serial — the exact opposite of parallel-by-default.
+    const allNodes = planNodesWithExpansions(content);
     const sel = ids.map(id => allNodes.find(n => n.id === id));
     const missing = ids.filter((id, i) => !sel[i]);
     if (missing.length) {
