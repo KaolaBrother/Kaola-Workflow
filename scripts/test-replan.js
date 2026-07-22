@@ -4042,7 +4042,7 @@ function absenceAnchor(anchorPath, seed) {
 
 // A minimal transaction shell for the seams reachable only by calling the EXPORTED
 // buildPlannerPacket directly (a hand-built source the journal validators would refuse
-// to produce, but which every forge contract validator is free to pass in).
+// to produce, but which the contract/edition suites are free to pass in).
 function packetFromSource(fx, source) {
   return replan.buildPlannerPacket({ project: fx.project }, {
     transaction_id: '8'.repeat(64), transition_reason: 'review_repair_requires_replan',
@@ -4243,7 +4243,8 @@ function packetFromSource(fx, source) {
   //
   // Exercised at the packet seam with a hand-built source: a genuine two-member schema-2
   // fan-out journal is a fixture, not a behavior, and buildPlannerPacket is exported precisely
-  // so this seam can be driven directly (the forge contract validators call it that way too).
+  // so this seam can be driven directly — the same way validate-kaola-workflow-contracts.js and
+  // each edition's test-*-workflow-scripts.js drive it with a hand-built transaction.
   const fx = initFixture();
   try {
     const finding = { uid: 'R1', status: 'open', scope: 'in_scope', action: 'fix', file: 'product.js' };
@@ -4284,8 +4285,9 @@ function packetFromSource(fx, source) {
 {
   // A source that carries NO route rows at all. Both journal validators refuse such an attempt
   // outright (route cardinality must equal the canonical finding set), so this cannot be reached
-  // through prepare — but buildPlannerPacket is EXPORTED and every forge contract validator calls
-  // it directly with a hand-built transaction whose source omits `route_candidates`. The
+  // through prepare — but buildPlannerPacket is EXPORTED, and validate-kaola-workflow-contracts.js
+  // plus each edition's test-*-workflow-scripts.js call it directly with a hand-built transaction
+  // whose source omits `route_candidates` entirely. The
   // projection must therefore stay total: no throw, the whole record still projected, and route
   // fields absent-shaped rather than fabricated.
   const fx = initFixture();
