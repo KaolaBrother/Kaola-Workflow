@@ -99,7 +99,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, `workflow-plan.md` (the `## Node Ledger`), and the compliance ledger before continuing.
 - State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from `workflow-plan.md` and its `## Node Ledger`, run the state repair helper and repair `workflow-state.md` before routing.
-- The adaptive DAG is the default workflow; `fast` and `full` are install-time opt-ins (`--with-fast` / `--with-full`) that run only on an explicit keyword.
+- The adaptive DAG is the only workflow path.
 - End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
 - Active issue work runs in a repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` by default; set `KAOLA_WORKTREE_NATIVE=0` to disable. See README for the full contract.
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
@@ -174,28 +174,17 @@ The supported role-aware V2 form is `multi_agent_v2 = { enabled = true, tool_nam
 Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
 exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
 
-### Install-time path opt-ins (`--with-fast` / `--with-full`)
+### The adaptive path is the only path
 
-The adaptive path is the unconditional default and is **always** installed; there
-is no per-session switch. The fast and full six-phase paths are install-time
-opt-ins, passed to the same `install-codex-agent-profiles.js` step above:
+Adaptive is installed unconditionally — there is no install-time opt-in and no
+per-session switch. The `fast` and `full` six-phase paths are retired: their
+commands, skills and transaction scripts are deleted, and the installer does not
+parse path opt-in flags.
 
-```bash
-node "$plugin_root/scripts/install-codex-agent-profiles.js" --global --with-fast   # also install the fast path
-node "$plugin_root/scripts/install-codex-agent-profiles.js" --global --with-full   # also install the full six-phase path
-node "$plugin_root/scripts/install-codex-agent-profiles.js" --global --with-fast --with-full  # both opt-ins
-```
-
-The opt-in is recorded in the shared `~/.config/kaola-workflow/config.json`
-`installed_paths` field via a UNION read-modify-write: a re-install **never
-removes** a previously-installed path (`--with-fast` once, then a bare re-install,
-preserves `fast`). Adaptive is implicit-always and never appears in
-`installed_paths`; only `fast`/`full` can. Uninstall then reinstall is the reset to
-adaptive-only. `--enable-adaptive` is retired and accepted-but-ignored.
-
-At runtime, a `KAOLA_PATH` (or `--workflow-path`) naming a path that is not
-installed returns a typed `path_not_installed` refusal — never a silent adaptive
-substitution.
+At runtime, a `KAOLA_PATH` (or `--workflow-path`) naming a non-adaptive path
+returns a typed `path_not_installed` refusal — never a silent adaptive
+substitution. A stale `installed_paths` field left by a pre-retirement install is
+tolerated on read and never re-written.
 
 6. Create only missing scaffold files:
 
