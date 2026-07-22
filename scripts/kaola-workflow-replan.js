@@ -1968,6 +1968,13 @@ function buildPlannerPacket(paths, transaction) {
       'Preserve the claim, branch, worktree, claim root, and epoch lineage.',
       'Author a schema-2 child plan whose complete ledger is pending.',
       'Carry every inherited code/security frontier and unresolved finding to reachable certifier work.',
+      // #729 case (b): the prose requirement above passes vacuously against a child that simply
+      // has no repairing writer. This names the mechanical form the wall checks, so the planner
+      // is told the obligation in the same packet that shows it the frontier it must discharge.
+      'Declare `finding_owners` in the child ## Meta: one `<uid>=<node_id>` pair per source '
+        + 'finding still needing repair (suffix `@relocated` when the repair site is deliberately '
+        + 'not the observation anchor, `@anchorless` when the finding declares no anchor path), '
+        + 'or the literal `none` when no source finding needs one.',
       'Write only the exact child output path and return the digest-bound planner attestation.',
     ],
     child_output_path: schema.REPLAN_PLAN_NEXT_NAME,
