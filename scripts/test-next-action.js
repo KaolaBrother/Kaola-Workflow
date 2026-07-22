@@ -867,6 +867,40 @@ const specPlanAuto = (nodes, ledger) => '## Meta\nspeculative_open_policy: auto\
   assert(rNotReady.readySet.every(n => n.id !== 'synth'), 'FLOOR-4: the synthesizer is not in the ready frontier');
 }
 
+// -----------------------------------------------------------------------
+// FLOOR-5: the reasoning floor binds the SPECULATIVE frontier too.
+//
+// `speculativePending` is a second dispatchable frontier — `open-ready` hands it straight to
+// dispatch and adaptive-node re-checks nothing — and it is built to EXCLUDE readySet members,
+// so a floor check walking only readySet could never see it. Before this pin, a synthesizer
+// behind an open gate was emitted for dispatch at ANY tier. Covers both halves:
+//   - out-of-vocabulary (`haiku`): regressed when the point-of-use tier wall was pruned;
+//   - in-vocabulary downgrade (`standard`): never caught on this frontier, pruned or not.
+// -----------------------------------------------------------------------
+{
+  const specFloorPlan = (model) => '## Meta\nspeculative_open_policy: auto\n\n' + makeModelPlan(
+    ['| n1 | tdd-guide | — | scripts/foo.js | 1 | sequence | sonnet |',
+     '| g1 | code-reviewer | n1 | — | 1 | gate | sonnet |',
+     '| syn | synthesizer | g1 | scripts/bar.js | 1 | sequence | ' + model + ' |',
+     '| fin | finalize | syn | — | 1 | sequence | sonnet |'],
+    ['| n1 | complete |', '| g1 | in_progress |', '| syn | pending |', '| fin | pending |']);
+
+  for (const bad of ['haiku', 'standard']) {
+    const r = computeNextAction(specFloorPlan(bad), { resolveModel: () => 'sonnet' });
+    assert(r.result === 'refuse' && r.reason === 'reasoning_floor_violation' && r.node === 'syn',
+      'FLOOR-5: a sub-floor synthesizer on the SPECULATIVE frontier must refuse at "' + bad
+        + '", got ' + JSON.stringify(r));
+  }
+
+  // Over-refusal control: a floor-satisfying tier still opens speculatively.
+  for (const good of ['reasoning', 'opus']) {
+    const r = computeNextAction(specFloorPlan(good), { resolveModel: () => 'sonnet' });
+    assert(r.result === 'ok', 'FLOOR-5 control: "' + good + '" must not refuse, got ' + JSON.stringify(r));
+    assert((r.speculativePending || []).some(n => n.id === 'syn'),
+      'FLOOR-5 control: the synthesizer must still be speculative-eligible at "' + good + '"');
+  }
+}
+
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

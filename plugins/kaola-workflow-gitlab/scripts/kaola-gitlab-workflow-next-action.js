@@ -83,8 +83,8 @@ function computeNextAction(content, opts) {
   // --resume-check and arrives here carrying e.g. `model: haiku`. Measured: such a cell is emitted
   // verbatim on the ready frontier. What makes that acceptable is scope, not impossibility —
   //   - the only sub-case that silently corrupts OUTPUT is a reasoning-floor role dropped below
-  //     reasoning class, and that is refused below on the dispatchable frontier for any
-  //     non-reasoning-class model, in-vocabulary or not;
+  //     reasoning class, and that is refused below on EVERY dispatchable frontier — ready and
+  //     speculative alike — for any non-reasoning-class model, in-vocabulary or not;
   //   - any other bad token is a loud dispatch-time failure, not a silent downgrade;
   //   - the archived corpus carries zero out-of-vocabulary tokens, so no legacy plan needs rescuing.
   // Re-add a wall here only if a silent-corruption sub-case appears that the floor check misses.
@@ -152,20 +152,29 @@ function computeNextAction(content, opts) {
   // (the authored `model` column OR the resolved default) is not reasoning-class is a fail-closed
   // refusal — the aggregator never emits a silently-lowered floor role for dispatch. The EFFECTIVE
   // model is checked (not just the resolved default), since an authored column bypasses resolveModel.
-  for (const n of readySet) {
-    const check = enforceReasoningFloor(n.role, n.model, { runtime, currentThreadId, sessionProof });
-    if (!check.ok) {
-      return {
-        result: 'refuse',
-        reason: check.reason,
-        node: n.id,
-        role: n.role,
-        model: check.model,
-        floor: check.floor,
-        errors: [check.operator_hint],
-      };
+  // Applied to EVERY frontier this function can emit for dispatch, not just the ready one.
+  // `speculativePending` is a second dispatchable frontier (open-ready hands it straight to
+  // dispatch) and is built to EXCLUDE readySet members, so a floor check that walked only
+  // readySet could never see it.
+  const floorRefusal = (frontier) => {
+    for (const n of frontier) {
+      const check = enforceReasoningFloor(n.role, n.model, { runtime, currentThreadId, sessionProof });
+      if (!check.ok) {
+        return {
+          result: 'refuse',
+          reason: check.reason,
+          node: n.id,
+          role: n.role,
+          model: check.model,
+          floor: check.floor,
+          errors: [check.operator_hint],
+        };
+      }
     }
-  }
+    return null;
+  };
+  const readyFloorRefusal = floorRefusal(readySet);
+  if (readyFloorRefusal) return readyFloorRefusal;
 
   // 5. allDone: every node is in a terminal state.
   const allDone = nodes.every(n => TERMINAL.has(st(n.id)));
@@ -266,6 +275,13 @@ function computeNextAction(content, opts) {
         longestPathToSink: longestPathToSink(node.id),
       }))
       .sort((a, b) => (b.longestPathToSink - a.longestPathToSink) || (docIndex.get(a.id) - docIndex.get(b.id)));
+
+    // The speculative frontier is dispatched by open-ready exactly like the ready one, and
+    // adaptive-node re-checks nothing, so the floor must hold here too. This also closes a
+    // hole that predates the tier-wall prune: an IN-vocabulary downgrade (a floor role at
+    // `standard`) was never caught on this frontier by the pruned wall either.
+    const specFloorRefusal = floorRefusal(speculativePending);
+    if (specFloorRefusal) return specFloorRefusal;
   }
 
   return {
