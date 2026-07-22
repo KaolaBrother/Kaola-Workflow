@@ -232,7 +232,9 @@ function assert(condition, message) {
 // ---------------------------------------------------------------------------
 // Test 7 (#366): per-node end-mode makes ONE fused --node-end validator spawn instead of FOUR
 // (barrier + gate + verdict + selector) — ≥40% reduction. A logging stub counts validator
-// invocations. The fallback (stub without --node-end support) re-runs the legacy four spawns.
+// invocations. The fallback (stub without --node-end support) re-runs the legacy spawns.
+// #744: the fallback is now TWO legacy spawns (barrier + selector) — gate-verify and
+// verdict-check are no longer requested per-node on EITHER arm.
 // ---------------------------------------------------------------------------
 {
   const { execFileSync } = require('child_process');
@@ -262,7 +264,10 @@ function assert(condition, message) {
   assert(fusedCalls.length === 1, 'test7: per-node end shells the validator exactly ONCE (--node-end), got ' + fusedCalls.length + ': ' + JSON.stringify(fusedCalls));
   assert(fusedCalls[0].includes('--node-end'), 'test7: the single spawn is --node-end, got ' + fusedCalls[0]);
 
-  // (b) legacy stub (no --node-end support: returns {} ) → fallback to FOUR spawns.
+  assert(fusedCalls.filter(c => c.includes('--gate-verify') || c.includes('--verdict-check')).length === 0,
+    'test7 (#744): the per-node fused arm never requests gate-verify / verdict-check, got ' + JSON.stringify(fusedCalls));
+
+  // (b) legacy stub (no --node-end support: returns {} ) → fallback to the legacy per-node spawns.
   const legacyStub =
     "const a=process.argv.slice(2);\n" +
     "if(a.includes('--barrier-check'))process.stdout.write(JSON.stringify({result:'pass',errors:[]}));\n" +
@@ -270,9 +275,34 @@ function assert(condition, message) {
     "else if(a.includes('--gate-verify')||a.includes('--verdict-check'))process.stdout.write(JSON.stringify({ok:true}));\n" +
     "else process.stdout.write('{}');\n"; // --node-end → {} (no mode) → fallback
   const legacyCalls = runWithStub(legacyStub);
-  assert(legacyCalls.length === 5, 'test7: fallback path = 1 (--node-end probe) + 4 legacy spawns = 5, got ' + legacyCalls.length + ': ' + JSON.stringify(legacyCalls));
+  assert(legacyCalls.length === 3, 'test7 (#744): fallback path = 1 (--node-end probe) + 2 legacy spawns (barrier + selector) = 3, got ' + legacyCalls.length + ': ' + JSON.stringify(legacyCalls));
   assert(legacyCalls.filter(c => c.includes('--node-end')).length === 1, 'test7: fallback probes --node-end once');
   assert(legacyCalls.filter(c => c.includes('--barrier-check')).length === 1, 'test7: fallback runs the legacy barrier-check');
+  assert(legacyCalls.filter(c => c.includes('--selector-check')).length === 1, 'test7: fallback runs the legacy selector-check');
+  assert(legacyCalls.filter(c => c.includes('--gate-verify') || c.includes('--verdict-check')).length === 0,
+    'test7 (#744): the per-node FALLBACK arm never requests gate-verify / verdict-check either, got ' + JSON.stringify(legacyCalls));
+
+  // (c) whole-plan mode is UNTOUCHED — gate-verify and verdict-check are BLOCKING there and
+  //     must still be shelled (3 spawns: barrier + gate + verdict).
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-spawn-wp-'));
+    const stub = path.join(dir, 'vstub.js');
+    const log = path.join(dir, 'calls.log');
+    fs.writeFileSync(stub, "const fs=require('fs');\nfs.appendFileSync(" + JSON.stringify(log) + ", process.argv.slice(2).join(' ') + '\\n');\n"
+      + "const a=process.argv.slice(2);\n"
+      + "if(a.includes('--barrier-check'))process.stdout.write(JSON.stringify({result:'pass',errors:[]}));\n"
+      + "else process.stdout.write(JSON.stringify({ok:true}));\n");
+    try {
+      execFileSync(process.execPath, [commitNode, path.join(dir, 'plan.md'), '--json'], {
+        encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_COMMIT_NODE_VALIDATOR: stub }),
+      });
+    } catch (_) { /* exit code irrelevant to the spawn count */ }
+    const wpCalls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert(wpCalls.length === 3, 'test7 (#744): whole-plan still shells 3 (barrier + gate-verify + verdict-check), got ' + wpCalls.length + ': ' + JSON.stringify(wpCalls));
+    assert(wpCalls.filter(c => c.includes('--gate-verify')).length === 1, 'test7 (#744): whole-plan gate-verify is retained (blocking)');
+    assert(wpCalls.filter(c => c.includes('--verdict-check')).length === 1, 'test7 (#744): whole-plan verdict-check is retained (blocking)');
+  }
 }
 
 // ---------------------------------------------------------------------------
