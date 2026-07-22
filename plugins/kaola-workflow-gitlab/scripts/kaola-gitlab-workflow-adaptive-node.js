@@ -3298,7 +3298,7 @@ function stillOpenRouteCandidates(attempt) {
 }
 
 // #701 — the semantic-ownership summary of a failed attempt, relative to a candidate writer nodeId.
-//   openFindings       the still-open blocking route rows.
+//   openFindings       every still-open route row (status !== 'resolved'), blocking or not.
 //   ownersUnionSorted  sorted union of ownership_candidates across the open findings (the semantic owners).
 //   anyOwned           at least one open finding RESOLVED to ≥1 owner. FALSE ⇒ ownership is ABSENT for
 //                      every open finding — anchor-less findings (evidence_observation carries no path,
