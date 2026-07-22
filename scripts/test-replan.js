@@ -4800,6 +4800,47 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     '#729: the anchorless policy on an ANCHORED finding refuses — it is not a containment bypass');
   equal(check('F1=w@guessed', [open]).reason, 'replan_child_finding_owners_invalid',
     '#729: an unknown policy suffix refuses rather than being parsed away as part of the node id');
+  // Two clauses that the cases above cannot reach, because a simpler clause fires first on
+  // those fixtures. Both assert the exact CAUSE, not just the reason: the causes are how the
+  // planner is told WHICH rule it broke, and a cause that silently degrades to a neighbouring
+  // one is the same defect as a rule that stops firing.
+  {
+    // Write-capability, isolated. An anchorless finding waives anchor containment, so a
+    // read-only node declared as its owner reaches the capability clause with nothing else in
+    // front of it — this is the exact shape a review-only child would use to absorb one.
+    const readOnlyOwner = frozenPlan('p', {
+      plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
+      code_certifier: 'g', security_certifier: 'none', finding_owners: 'F1=r@anchorless' }, [
+      { id: 'r', role: 'code-explorer' },
+      { id: 'g', role: 'code-reviewer', depends_on: 'r', model: 'reasoning',
+        gate_claim: 'approved', gate_surface: 'candidate', gate_aggregation: 'sequence' },
+      { id: 'z', role: 'finalize', depends_on: 'g', model: '—' },
+    ], {}).text;
+    const verdict = replan.childFindingCoverage(readOnlyOwner,
+      { source: { findings: [{ id: 'F1', status: 'open', action: 'fix' }] } });
+    deepEqual(verdict.errors, ['uncovered finding uid=F1 path=none node=r cause=owner_not_write_capable'],
+      '#729: a READ-ONLY node cannot own even an anchorless finding — the explicit policy waives '
+      + 'the anchor check, never write-capability: ' + JSON.stringify(verdict));
+  }
+  {
+    // Self-certification, isolated. A security-reviewer is a legal writer, so a child may name
+    // the designated security wall itself as the repair owner; that is the "the finding vanishes
+    // because the child contains a certifier" shape, and it must be reported as such.
+    const selfCertifying = frozenPlan('p', {
+      plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
+      code_certifier: 'none', security_certifier: 's', finding_owners: 'F1=s@relocated' }, [
+      { id: 'w', role: 'tdd-guide', write_set: 'src/a.js' },
+      { id: 's', role: 'security-reviewer', depends_on: 'w', write_set: 'src/b.js', model: 'reasoning',
+        gate_claim: 'approved', gate_surface: 'candidate', gate_aggregation: 'sequence' },
+      { id: 'z', role: 'finalize', depends_on: 's', model: '—' },
+    ], {}).text;
+    const verdict = replan.childFindingCoverage(selfCertifying,
+      { source: { findings: [{ id: 'F1', status: 'open', action: 'fix', file: 'src/a.js' }] } });
+    deepEqual(verdict.errors,
+      ['uncovered finding uid=F1 path=src/a.js node=s cause=owner_is_the_designated_certifier'],
+      '#729: a write-capable certifier cannot certify its own repair, and the cause says so '
+      + 'rather than degrading to the generic reachability message: ' + JSON.stringify(verdict));
+  }
   // Anchor containment is EXACT-path, matching the per-node barrier. Neither a
   // directory-shaped nor a glob token proves coverage — and neither can reach this wall in the
   // first place, because the validator's freeze wall refuses both shapes outright.
