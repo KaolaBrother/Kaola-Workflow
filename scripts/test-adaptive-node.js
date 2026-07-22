@@ -60,8 +60,9 @@ const {
   schema2RouteCandidates,
   findingOwnershipSummary,
   completedNonGateWriterDescendants,
-  // #730: the canonical, digest-bound repair brief handed to a reopened writer.
+  // #730: the canonical, digest-bound repair brief handed to a reopened writer (+ its renderer).
   buildRepairBrief,
+  renderRepairBrief,
   // #739: in-plan descendant-replay helpers.
   structuralNonGateWriterDescendants,
   replayConeSafety,
@@ -1612,58 +1613,97 @@ for (const selected of ['arm-a', 'arm-b']) {
 //      digest-binds the whole payload. Statements are emitted ONLY when real: schema-2 synthesizes
 //      `raw: 'uid=<uid>'`, which is vacuous, so it is suppressed rather than presented as reviewer prose.
 //
-//   2. OWNERSHIP — the assigned-uid set is ALWAYS the WHOLE still-open frontier, never a subset:
+//   2. OWNERSHIP — the assigned-uid set is ALWAYS the whole BLOCKING frontier, never a subset:
 //        - ownership ABSENT for every open finding (anchor-less findings / unroutable paths / a
 //          pre-#701 journal): the bridge is inert, the reopen rides the graph-maximal proof, and the
 //          single authorized writer therefore owns the WHOLE frontier — an EMPTY assigned set here was
 //          the blocking defect (the brief told the authorized fixer to fix nothing).
-//        - ownership resolvable and the writer owns EVERY open finding alone: admissible, assigned = all.
-//        - ownership PARTIAL or MIXED (some finding unowned, ambiguously owned, or owned by another
-//          writer) while the writer owns at least one: direct repair REFUSES to `repair_requires_replan`
-//          (`repair_scope_spans_writers`) rather than silently narrowing the brief and burning the
-//          attempt. This is the un-backstopped core: `consumed_by` used to be set when the selected
-//          writer owned AT LEAST ONE open finding, not all of them.
+//        - ownership resolvable and the writer owns EVERY blocking finding alone: admissible.
+//        - ownership PARTIAL or MIXED over the BLOCKING findings (one unowned, ambiguously owned, or
+//          owned by another writer) while the writer owns at least one: direct repair REFUSES to
+//          `repair_requires_replan` (`repair_scope_spans_writers`) rather than silently narrowing the
+//          brief and burning the attempt. `consumed_by` used to be set when the selected writer owned
+//          AT LEAST ONE open finding, not all of them.
+//
+//   3. THE POPULATION — both halves partition on the BLOCKING set (`unresolvedInScopeFixes`: in_scope +
+//      fix + neither resolved nor deferred), NOT on every still-open row. A `deferred` / out-of-scope /
+//      follow_up row does not block the gate, so it must neither force a replan (over-refusal) nor be
+//      ordered fixed (an instruction the contract does not require). Non-blocking rows ride along in a
+//      SEPARATE, explicitly non-obligatory context section.
 // ===========================================================================
 {
-  // #730-U1: pure — ownership summary exposes the whole-frontier predicate + the offending uid lists.
+  // #730-U1: pure — ownership summary partitions the BLOCKING frontier and names the offending uids.
+  const blocking = extra => Object.assign({ status: 'open', scope: 'in_scope', action: 'fix' }, extra);
   const rows = [
-    { finding_id: 'f1', status: 'open', ownership_candidates: ['a'] },
-    { finding_id: 'f2', status: 'open', ownership_candidates: ['b'] },
-    { finding_id: 'f3', status: 'open', ownership_candidates: [] },
-    { finding_id: 'f4', status: 'resolved', ownership_candidates: ['a'] },
+    blocking({ finding_id: 'f1', ownership_candidates: ['a'] }),
+    blocking({ finding_id: 'f2', ownership_candidates: ['b'] }),
+    blocking({ finding_id: 'f3', ownership_candidates: [] }),
+    blocking({ finding_id: 'f4', status: 'resolved', ownership_candidates: ['a'] }),
   ];
   const mixed = findingOwnershipSummary({ route_candidates: rows }, 'a');
-  assert(mixed.nodeOwns === true && mixed.ownsWholeFrontier === false
-    && JSON.stringify(mixed.foreignOwnedFindingIds) === JSON.stringify(['f2'])
-    && JSON.stringify(mixed.unownedFindingIds) === JSON.stringify(['f3']),
+  assert(mixed.nodeOwns === true && mixed.ownsWholeBlockingFrontier === false
+    && mixed.spansForeignWriters === true
+    && JSON.stringify(mixed.foreignOwnedBlockingFindingIds) === JSON.stringify(['f2'])
+    && JSON.stringify(mixed.unownedBlockingFindingIds) === JSON.stringify(['f3']),
     '#730-U1: a partial owner is not a whole-frontier owner and the foreign/unowned uids are named, got ' + JSON.stringify(mixed));
   const sole = findingOwnershipSummary({ route_candidates: [
-    { finding_id: 'f1', status: 'open', ownership_candidates: ['a'] },
-    { finding_id: 'f2', status: 'open', ownership_candidates: ['a'] },
+    blocking({ finding_id: 'f1', ownership_candidates: ['a'] }),
+    blocking({ finding_id: 'f2', ownership_candidates: ['a'] }),
   ] }, 'a');
-  assert(sole.ownsWholeFrontier === true && sole.foreignOwnedFindingIds.length === 0
-    && sole.unownedFindingIds.length === 0,
-    '#730-U1: a sole owner of every open finding owns the whole frontier, got ' + JSON.stringify(sole));
+  assert(sole.ownsWholeBlockingFrontier === true && sole.spansForeignWriters === false
+    && sole.foreignOwnedBlockingFindingIds.length === 0
+    && sole.unownedBlockingFindingIds.length === 0,
+    '#730-U1: a sole owner of every blocking finding owns the whole frontier, got ' + JSON.stringify(sole));
   // AMBIGUOUS ownership (two nodes declare the same path) is NOT whole-frontier ownership.
   const ambiguous = findingOwnershipSummary({ route_candidates: [
-    { finding_id: 'f1', status: 'open', ownership_candidates: ['a', 'b'] },
+    blocking({ finding_id: 'f1', ownership_candidates: ['a', 'b'] }),
   ] }, 'a');
-  assert(ambiguous.nodeOwns === true && ambiguous.ownsWholeFrontier === false
-    && JSON.stringify(ambiguous.ambiguousFindingIds) === JSON.stringify(['f1']),
+  assert(ambiguous.nodeOwns === true && ambiguous.ownsWholeBlockingFrontier === false
+    && ambiguous.spansForeignWriters === true
+    && JSON.stringify(ambiguous.ambiguousBlockingFindingIds) === JSON.stringify(['f1']),
     '#730-U1: an ambiguously-owned finding refutes whole-frontier ownership, got ' + JSON.stringify(ambiguous));
   // Ownership ABSENT: no open finding routes anywhere, so no writer can be a whole-frontier OWNER —
   // authority comes from the graph-maximal proof instead, and the brief must still carry every uid.
   const absent = findingOwnershipSummary({ route_candidates: [
-    { finding_id: 'f1', status: 'open', ownership_candidates: [] },
+    blocking({ finding_id: 'f1', ownership_candidates: [] }),
   ] }, 'a');
-  assert(absent.anyOwned === false && absent.ownsWholeFrontier === false
-    && JSON.stringify(absent.unownedFindingIds) === JSON.stringify(['f1']),
+  assert(absent.anyOwned === false && absent.ownsWholeBlockingFrontier === false
+    && JSON.stringify(absent.unownedBlockingFindingIds) === JSON.stringify(['f1']),
     '#730-U1: ownership-absent keeps the bridge inert, got ' + JSON.stringify(absent));
+
+  // #730-U1b: THE POPULATION. A foreign-owned row that does NOT block the gate must not make the
+  // frontier span writers — the blocking predicate is `unresolvedInScopeFixes`, where `deferred`,
+  // out-of-scope and non-`fix` actions are all explicitly NON-blocking. Partitioning on the wider
+  // still-open set (status !== 'resolved') was strictly stricter than the contract.
+  const nonBlockingForeign = [
+    { finding_id: 'd1', status: 'deferred', scope: 'in_scope', action: 'fix', ownership_candidates: ['b'] },
+    { finding_id: 'o1', status: 'open', scope: 'out_of_scope', action: 'fix', ownership_candidates: ['b'] },
+    { finding_id: 'p1', status: 'open', scope: 'pre_existing', action: 'fix', ownership_candidates: ['b'] },
+    { finding_id: 'n1', status: 'open', scope: 'in_scope', action: 'follow_up', ownership_candidates: ['b'] },
+    { finding_id: 'n2', status: 'open', scope: 'in_scope', action: 'document', ownership_candidates: ['b'] },
+    { finding_id: 'n3', status: 'open', scope: 'in_scope', action: 'none', ownership_candidates: [] },
+  ];
+  for (const row of nonBlockingForeign) {
+    const summary = findingOwnershipSummary({ route_candidates: [
+      blocking({ finding_id: 'f1', ownership_candidates: ['a'] }), row,
+    ] }, 'a');
+    assert(summary.spansForeignWriters === false && summary.ownsWholeBlockingFrontier === true
+      && summary.blockingFindings.length === 1,
+      '#730-U1b: a NON-blocking row (' + JSON.stringify(row) + ') must not make the frontier span writers, got '
+      + JSON.stringify(summary));
+  }
+  // An attempt whose open rows are ALL non-blocking spans nothing at all — there is nothing to fix,
+  // so `spansForeignWriters` must be false (a true here would refuse a repair the contract permits).
+  const allNonBlocking = findingOwnershipSummary({ route_candidates: nonBlockingForeign }, 'a');
+  assert(allNonBlocking.spansForeignWriters === false
+    && allNonBlocking.blockingFindings.length === 0
+    && allNonBlocking.ownsWholeBlockingFrontier === false,
+    '#730-U1b: an all-non-blocking frontier spans nothing, got ' + JSON.stringify(allNonBlocking));
 }
 
 {
   // #730-U2: pure — buildRepairBrief content over an ownership-ABSENT attempt. The assigned set is the
-  // WHOLE open frontier (never empty while the writer is authorized), and the canonical fields are joined.
+  // WHOLE blocking frontier (never empty while the writer is authorized), and the canonical fields are joined.
   const attempt = {
     attempt_id: 'review:1',
     logical_gate: { key: 'review', members: ['review'] },
@@ -1684,14 +1724,17 @@ for (const selected of ['arm-a', 'arm-b']) {
     route_candidates: [
       { source_node: 'review', finding_id: 'u1', id: 'u1', status: 'open', scope: 'in_scope',
         action: 'fix', severity: 'high', ownership_candidates: [], raw: 'uid=u1' },
-      { source_node: 'review', finding_id: 'u2', id: 'u2', status: 'open', ownership_candidates: [], raw: 'uid=u2' },
-      { source_node: 'review', finding_id: 'u3', id: 'u3', status: 'resolved', ownership_candidates: [], raw: 'uid=u3' },
+      { source_node: 'review', finding_id: 'u2', id: 'u2', status: 'open', scope: 'in_scope',
+        action: 'fix', ownership_candidates: [], raw: 'uid=u2' },
+      { source_node: 'review', finding_id: 'u3', id: 'u3', status: 'resolved', scope: 'in_scope',
+        action: 'fix', ownership_candidates: [], raw: 'uid=u3' },
     ],
   };
   const brief = buildRepairBrief(attempt, 'impl');
   assert(brief.scope === 'assigned_findings'
-    && JSON.stringify(brief.assigned_uids) === JSON.stringify(['u1', 'u2']),
-    '#730-U2: the assigned set is the whole still-open frontier (resolved rows excluded), got ' + JSON.stringify(brief.assigned_uids));
+    && JSON.stringify(brief.assigned_uids) === JSON.stringify(['u1', 'u2'])
+    && brief.context_findings.length === 0,
+    '#730-U2: the assigned set is the whole blocking frontier (resolved rows excluded), got ' + JSON.stringify(brief.assigned_uids));
   assert(/^[0-9a-f]{64}$/.test(brief.digest), '#730-U2: the brief is digest-bound, got ' + brief.digest);
   const f1 = brief.findings[0];
   assert(f1.failure_class === 'behavior_mismatch' && f1.severity === 'high'
@@ -1716,6 +1759,7 @@ for (const selected of ['arm-a', 'arm-b']) {
   const flat = buildRepairBrief({ attempt_id: 'r:1', logical_gate: { members: ['r'] },
     findings: [{ id: 'F-1', raw: 'id=F-1 file=scripts/impl.js desc=missing-guard' }],
     route_candidates: [{ source_node: 'r', finding_id: 'F-1', id: 'F-1', status: 'open',
+      scope: 'in_scope', action: 'fix',
       file: 'scripts/impl.js', ownership_candidates: ['impl'], raw: 'id=F-1 file=scripts/impl.js desc=missing-guard' }] }, 'impl');
   assert(flat.findings[0].statement === 'id=F-1 file=scripts/impl.js desc=missing-guard'
     && flat.findings[0].anchor_path === 'scripts/impl.js'
@@ -1724,6 +1768,105 @@ for (const selected of ['arm-a', 'arm-b']) {
   // The digest is a function of the payload: a changed finding set changes it.
   const mutated = buildRepairBrief({ ...attempt, route_candidates: attempt.route_candidates.slice(0, 1) }, 'impl');
   assert(mutated.digest !== brief.digest, '#730-U2: the digest binds the payload (a narrowed set changes it)');
+}
+
+{
+  // #730-U3: THE PARTITION. `assigned_uids` is the MUST-FIX set only. An open-but-non-blocking row
+  // (deferred / out-of-scope / pre_existing / follow_up / document / none) is not something the contract
+  // obliges anyone to repair, so ordering a fixer to repair it would be an instruction the workflow does
+  // not require. Such rows appear ONLY in the separate, explicitly non-obligatory context section.
+  const row = (id, extra) => Object.assign({ source_node: 'review', finding_id: id, id,
+    status: 'open', scope: 'in_scope', action: 'fix', ownership_candidates: ['impl'],
+    raw: 'uid=' + id }, extra);
+  const attempt = {
+    attempt_id: 'review:1', logical_gate: { key: 'review', members: ['review'] },
+    receipts: [{ node_id: 'review' }],
+    findings: [],
+    route_candidates: [
+      row('BLOCK-1'),
+      row('DEFER-1', { status: 'deferred' }),
+      row('OUT-1', { scope: 'out_of_scope' }),
+      row('PRE-1', { scope: 'pre_existing' }),
+      row('FOLLOW-1', { action: 'follow_up' }),
+      row('DOC-1', { action: 'document' }),
+      row('NONE-1', { action: 'none' }),
+      row('GONE-1', { status: 'resolved' }),
+    ],
+  };
+  const brief = buildRepairBrief(attempt, 'impl');
+  assert(JSON.stringify(brief.assigned_uids) === JSON.stringify(['BLOCK-1']),
+    '#730-U3: only the BLOCKING finding is assigned, got ' + JSON.stringify(brief.assigned_uids));
+  assert(JSON.stringify(brief.context_uids)
+    === JSON.stringify(['DEFER-1', 'OUT-1', 'PRE-1', 'FOLLOW-1', 'DOC-1', 'NONE-1']),
+    '#730-U3: open-but-non-blocking rows are carried as CONTEXT (resolved rows dropped entirely), got '
+    + JSON.stringify(brief.context_uids));
+  const rendered = renderRepairBrief(brief);
+  // The obligation directive names only the assigned key, and every context row is rendered under the
+  // distinct `repair_context_finding:` key — never under `repair_finding:`.
+  assert(/repair_brief_assigned_uids: BLOCK-1\n/.test(rendered)
+    && /fix EVERY assigned uid below \(the repair_finding: lines\)/.test(rendered),
+    '#730-U3: the fix-every directive is scoped to the assigned repair_finding lines, got:\n' + rendered);
+  assert(/repair brief CONTEXT ONLY[\s\S]*NOT[\s\S]*required to be fixed/.test(rendered),
+    '#730-U3: the context section is explicitly labelled non-obligatory, got:\n' + rendered);
+  for (const uid of brief.context_uids) {
+    assert(rendered.includes('repair_context_finding: uid=' + uid),
+      '#730-U3: context finding ' + uid + ' is rendered under the context key, got:\n' + rendered);
+    assert(!rendered.includes('repair_finding: uid=' + uid),
+      '#730-U3: context finding ' + uid + ' must NOT appear as an assigned repair_finding, got:\n' + rendered);
+  }
+  assert(!rendered.includes('GONE-1'), '#730-U3: a resolved row is in neither section, got:\n' + rendered);
+  assert(!/^finding:/m.test(rendered),
+    '#730-U3: neither section emits a column-0 finding: line, got:\n' + rendered);
+
+  // All-non-blocking: a typed scope says so. Nothing is assigned, no empty assigned-uid line is emitted,
+  // and the rows still reach the fixer as context.
+  const noneBlocking = buildRepairBrief({ ...attempt,
+    route_candidates: attempt.route_candidates.filter(r => r.finding_id !== 'BLOCK-1') }, 'impl');
+  assert(noneBlocking.scope === 'no_blocking_findings' && noneBlocking.assigned_uids.length === 0
+    && noneBlocking.context_uids.length === 6,
+    '#730-U3: an all-non-blocking frontier gets its own typed scope, got ' + JSON.stringify(noneBlocking.scope));
+  const noneRendered = renderRepairBrief(noneBlocking);
+  assert(!noneRendered.includes('repair_brief_assigned_uids:')
+    && noneRendered.includes('repair_brief_scope: no_blocking_findings')
+    && !/fix EVERY assigned uid/.test(noneRendered),
+    '#730-U3: no empty assigned-uid line and no fix-every directive without a blocking finding, got:\n' + noneRendered);
+}
+
+{
+  // #730-U4: the CONSTRUCTOR is not welded to repair-dispatch. buildRepairBrief must stay a pure total
+  // function of (attempt, nodeId) — no fs, no ownership decision, no repair-node control flow — so a
+  // future caller that re-expands a single finding outside repair-dispatch can reuse it verbatim.
+  const attempt = {
+    attempt_id: 'review:2', logical_gate: { key: 'review', members: ['review'] },
+    receipts: [{ node_id: 'review' }],
+    route_candidates: [
+      { source_node: 'review', finding_id: 'X-1', id: 'X-1', status: 'open', scope: 'in_scope',
+        action: 'fix', ownership_candidates: ['other-writer'], raw: 'uid=X-1' },
+    ],
+  };
+  // A writer that owns NOTHING still gets the full brief — no ownership decision is consulted.
+  const stranger = buildRepairBrief(attempt, 'unrelated-node');
+  assert(stranger.scope === 'assigned_findings'
+    && JSON.stringify(stranger.assigned_uids) === JSON.stringify(['X-1'])
+    && stranger.writer === 'unrelated-node',
+    '#730-U4: the brief is built without any ownership precondition, got ' + JSON.stringify(stranger));
+  // nodeId is recorded, never used to filter: the assigned set is identical across writers.
+  const owner = buildRepairBrief(attempt, 'other-writer');
+  assert(JSON.stringify(owner.assigned_uids) === JSON.stringify(stranger.assigned_uids)
+    && owner.digest !== stranger.digest,
+    '#730-U4: nodeId only labels the brief; it never narrows the assigned set, got ' + JSON.stringify(owner));
+  // Total on a degenerate/legacy attempt: no throw, typed scope, no fabricated uids.
+  for (const degenerate of [{}, { route_candidates: [] }, { route_candidates: null }, { findings: [] }]) {
+    const b = buildRepairBrief(degenerate, 'n1');
+    assert(b.scope === 'unstructured_reviewer_evidence' && b.assigned_uids.length === 0
+      && b.context_uids.length === 0 && /^[0-9a-f]{64}$/.test(b.digest),
+      '#730-U4: a degenerate attempt yields the typed empty brief, got ' + JSON.stringify(b));
+  }
+  // PURITY: the same input yields a byte-identical payload and the input is not mutated.
+  const before = JSON.stringify(attempt);
+  const again = buildRepairBrief(attempt, 'unrelated-node');
+  assert(JSON.stringify(again) === JSON.stringify(stranger) && JSON.stringify(attempt) === before,
+    '#730-U4: buildRepairBrief is deterministic and non-mutating');
 }
 
 // #730-INT: integration through the real repair-node transaction over close-produced journals.
@@ -1908,6 +2051,69 @@ for (const selected of ['arm-a', 'arm-b']) {
         && ev.includes('repair_brief_reviewer_evidence: .cache/review.md')
         && !ev.includes('repair_brief_assigned_uids:'),
         '#730-F: the unstructured brief points at the reviewer evidence and emits no empty assigned-uid line, got:\n' + ev);
+    } finally { f.cleanup(); }
+  }
+
+  // #730-G: THE OVER-REFUSAL GUARD, end-to-end. impl-b solely owns the one BLOCKING finding; the other
+  // findings belong to impl-a but are NON-blocking (deferred / out-of-scope / follow_up). The gate's own
+  // blocking predicate (`unresolvedInScopeFixes`) does not require any of them to be fixed, so a direct
+  // repair by impl-b is admissible and must NOT refuse `repair_scope_spans_writers`. Partitioning on the
+  // wider still-open population made every one of these refuse.
+  {
+    const nonBlockingByImplA = [
+      'finding: id=F-D scope=in_scope action=fix status=deferred severity=medium file=scripts/a.js',
+      'finding: id=F-O scope=out_of_scope action=fix status=open severity=medium file=scripts/a.js',
+      'finding: id=F-P scope=pre_existing action=fix status=open severity=low file=scripts/a.js',
+      'finding: id=F-U scope=in_scope action=follow_up status=open severity=low file=scripts/a.js',
+      'finding: id=F-N scope=in_scope action=none status=open severity=low file=scripts/nowhere.js',
+    ];
+    for (const nonBlocking of nonBlockingByImplA) {
+      const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+        'finding: id=F-B scope=in_scope action=fix status=open severity=high file=scripts/b.js',
+        nonBlocking,
+      ], ['impl-a', 'impl-b']);
+      try {
+        const r = f.runRepair('impl-b');
+        assert(r.result === 'ok' && r.repaired === 'impl-b',
+          '#730-G: a non-blocking foreign finding [' + nonBlocking + '] must not refuse a direct repair, got '
+          + JSON.stringify(r));
+        // The assigned (must-fix) set is the blocking finding ALONE — the fixer is never ordered to
+        // repair a finding the contract does not require repairing.
+        assert(JSON.stringify(r.repair_brief.assigned_uids) === JSON.stringify(['F-B']),
+          '#730-G: only the blocking finding is assigned, got ' + JSON.stringify(r.repair_brief.assigned_uids));
+        const contextUid = nonBlocking.match(/id=(\S+)/)[1];
+        assert(JSON.stringify(r.repair_brief.context_uids) === JSON.stringify([contextUid]),
+          '#730-G: the non-blocking finding rides along as CONTEXT, got ' + JSON.stringify(r.repair_brief.context_uids));
+        const ev = f.evidence('impl-b');
+        assert(ev.includes('repair_brief_assigned_uids: F-B')
+          && ev.includes('repair_context_finding: uid=' + contextUid)
+          && !ev.includes('repair_finding: uid=' + contextUid)
+          && /repair brief CONTEXT ONLY/.test(ev),
+          '#730-G: the evidence separates the assigned directive from the context section, got:\n' + ev);
+      } finally { f.cleanup(); }
+    }
+  }
+
+  // #730-H: an attempt whose findings are ALL non-blocking still repairs (the verdict itself failed).
+  // Nothing is assigned, the typed `no_blocking_findings` scope says why, and no fix-every directive is
+  // emitted over findings the contract does not require fixing.
+  {
+    const f = makeBriefFixture(SERIAL_NODES, SERIAL_LEDGER, [
+      'finding: id=F-D scope=in_scope action=fix status=deferred severity=medium file=scripts/a.js',
+      'finding: id=F-O scope=out_of_scope action=fix status=open severity=medium file=scripts/b.js',
+    ], ['impl-a', 'impl-b']);
+    try {
+      const r = f.runRepair('impl-b');
+      assert(r.result === 'ok' && r.repair_brief.scope === 'no_blocking_findings'
+        && r.repair_brief.assigned_uids.length === 0
+        && JSON.stringify(r.repair_brief.context_uids) === JSON.stringify(['F-D', 'F-O']),
+        '#730-H: an all-non-blocking frontier repairs with nothing assigned, got ' + JSON.stringify(r.repair_brief));
+      const ev = f.evidence('impl-b');
+      assert(ev.includes('repair_brief_scope: no_blocking_findings')
+        && !ev.includes('repair_brief_assigned_uids:')
+        && !/fix EVERY assigned uid/.test(ev)
+        && ev.includes('repair_context_finding: uid=F-D'),
+        '#730-H: no assigned-uid line and no fix-every directive without a blocking finding, got:\n' + ev);
     } finally { f.cleanup(); }
   }
 }
