@@ -198,6 +198,11 @@ function expansionGrammar() {
 // inside its own frontier.
 const EXPANSION_UNITS_CAP = 12;
 const RESERVED_EXPANSION_UNIT_ROLES = new Set(['finalize', 'main-session-gate', 'expansion-point']);
+// #759 (B1): the REVIEW-GATE roles are equally un-composable, for a different and strictly mechanical
+// reason — see the refusal at the composition validator below. Derived from the schema's own
+// REVIEW_GATE_ROLES so the two can never drift; main-session-gate is intentionally in BOTH sets (the
+// structural reservation above wins first, keeping its long-standing reason code).
+const GATE_EXPANSION_UNIT_ROLES = new Set(reviewSchema.REVIEW_GATE_ROLES || []);
 
 const OPERATOR_HINT_REGISTRY = {
   // --- guard prologue (#383/#387/#391b) ---
@@ -11567,11 +11572,34 @@ function runReconcileRunningSet(opts) {
     ? (running.nodes || []).filter(n => !n.opening && NONLIVE_DROPPABLE(ledger[n.id])).map(n => n.id)
     : [];
 
-  // No opening transaction AND no stale terminal member AND no stale pending member → nothing to do.
+  // No opening transaction AND no stale terminal member AND no stale pending member → the RUNNING SET
+  // needs nothing. That is NOT the same as "this reconcile has nothing to do".
+  //
+  // #759 (B2) — THE PHASE-2→PHASE-3 CRASH WINDOW. The expansion transaction's sub-window where the
+  // frontier DID open (Phase 2 completed: the running set is settled 'open' and the unit rows are
+  // in_progress) but the `open(<record>)` proof block never landed (Phase 3 lost to the crash) reaches
+  // EXACTLY this early return. Before this arm existed, reconcile answered `not_opening` and restored
+  // nothing, while expand-open / expand-close refused `expansion_open_incomplete` carrying
+  // "run reconcile-running-set to roll the appended record forward" — an operator instruction that was a
+  // NO-OP in the one state it was emitted for. So the roll-forward must run here too, not only on the
+  // reconciled path below. Safe by construction: this arm is reached only when the set is NOT mid-open
+  // (wholeOpening false, no opening:true member), so the re-open never races an interrupted transaction.
+  // Idempotent: an already-proven record is skipped, so a stable plan still answers `not_opening`.
   if (!wholeOpening && openingNodes.length === 0 && closed.length === 0 && stale.length === 0) {
-    return { result: 'ok', reconciled: false, reason: 'not_opening', state: running.state,
+    const stableRoll = rollForwardExpansions(opts);
+    const rolledAny = stableRoll.rolledForward.length > 0;
+    // Re-read the manifest only when something actually rolled: the re-open may have admitted members.
+    let stateAfter = running.state;
+    if (rolledAny) {
+      const reread = readRunningSet(runningSetPath, cacheExists, readFile);
+      if (reread && reread.state) stateAfter = reread.state;
+    }
+    return { result: 'ok', reconciled: rolledAny,
+      reason: rolledAny ? 'expansion_rolled_forward' : 'not_opening', state: stateAfter,
       // #680 (Part B): surface any orphan baseline the hoisted sweep dropped even on the not_opening exit.
       ...(orphanBaselinesDropped.length ? { orphanBaselinesDropped } : {}),
+      ...(rolledAny ? { expansionsRolledForward: stableRoll.rolledForward } : {}),
+      ...(stableRoll.refusals.length ? { expansionRefusals: stableRoll.refusals } : {}),
       taskTransitions: [] };
   }
 
@@ -11866,6 +11894,16 @@ function runReconcileRunningSet(opts) {
 // Phase 2 re-opens nothing that is already live or already non-pending, and Phase 3 appends the proof
 // block only when it is absent.
 //
+// "Anywhere" is literal, and it takes THREE arms in reconcile-running-set because the crash window
+// spans three different running-set shapes — every one of them has to reach rollForwardExpansions:
+//   * crashed BEFORE Phase 2 wrote a manifest  → no running set at all  → the `no_running_set` arm;
+//   * crashed DURING Phase 2                   → an 'opening' manifest  → the reconciled arm, AFTER the
+//                                                                         running-set repair settles it;
+//   * crashed BETWEEN Phase 2 and Phase 3      → a settled 'open' manifest with the units already
+//                                                in_progress → the `not_opening` arm.
+// The last one is the easy one to miss: the running set needs no repair, so the reconciled arm is
+// never reached — and a refusal whose `repair:` hint names reconcile would otherwise be a no-op.
+//
 // A RE-EXPANSION (a second record on the same point) is the SAME transaction — same subcommand, same
 // three phases, same code. The only difference is the gate: `expansionRecordSettled` must positively
 // prove every prior record finished first.
@@ -11968,6 +12006,32 @@ function validateComposition(composition, ctx) {
     // Reserved BEFORE the library lookup: the three built-ins have no agents/*.md profile, so the
     // library check would answer them with the vaguer unknown-role reason and hide the real rule.
     if (RESERVED_EXPANSION_UNIT_ROLES.has(role)) return bad('expansion_unit_role_reserved', 'unit ' + name + ' may not take the built-in role "' + role + '"');
+    // A COMPOSED REVIEW GATE IS A HARD WEDGE TODAY — refuse it at compose time, by name.
+    //
+    // The review-gate contract is resolved on TWO DIFFERENT node views, and they disagree about a
+    // composed unit:
+    //   OPEN  (prepareReviewOpen) resolves the node through the FREEZE view (validator.parseNodes —
+    //         the spine only), so a composed unit is INVISIBLE to it: the gate falls through the
+    //         non-review-gate return and is dispatched schema-1-shaped — required_tokens
+    //         [evidence-binding, verdict, findings_blocking], NO contract_version, NO
+    //         review_context_hash, no persisted review context.
+    //   CLOSE resolves the node through the EXECUTION view (parseNodesFromContent →
+    //         planNodesWithExpansions), SEES the gate role, and applies the schema-2 review close.
+    // The close then demands a review context the open never minted and refuses
+    // `review_context_mismatch` — permanently. There is no legal transition out of that state:
+    // expand-close refuses `scheduler_active` over the still-live unit, reconcile-running-set is a
+    // no-op on a stable set, and the ready set is empty. The whole run is unrecoverable.
+    //
+    // So this is NOT "invisible to the checks and therefore fail-closed" — it is invisible at OPEN and
+    // ENFORCED at CLOSE, which is precisely the wedge. Until the review-context seam is widened so the
+    // open resolves composed units through the SAME view the close uses, the only safe answer is a
+    // typed compose-time refusal: it costs one visible retry, and it names the role.
+    if (GATE_EXPANSION_UNIT_ROLES.has(role)) {
+      return bad('expansion_unit_role_gate_unsupported',
+        'unit ' + name + ' takes the review-gate role "' + role + '": composed gate units are not yet supported. '
+        + 'A frontier is reviewed by the spine\'s own review wall (the expansion contract\'s review_class), '
+        + 'never by a gate unit inside the composition.');
+    }
     if (!ctx.installedRoles.has(role)) return bad('expansion_unit_role_unknown', 'unit ' + name + ' role "' + role + '" is not in the installed role library');
     const mode = String((raw && raw.mode) || '').trim().toLowerCase();
     if (!grammar.MODES.includes(mode)) {
