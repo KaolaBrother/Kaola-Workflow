@@ -1449,6 +1449,51 @@ deepEqual(liveFixture.source.rebind, [], 'fixture preserves the explicit empty r
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// Snapshot integrity is CONTENT-addressed: a sealed epoch that round-trips through a
+// mode-lossy transport (git stores only 100644/100755, so the 0600 replan stages some
+// staged files with comes back 0644) still verifies, while any content substitution —
+// even one that preserves the exact byte length — still fails closed.
+{
+  const fx = initFixture();
+  try {
+    advanceToAttestedChild(fx);
+    // Production writes its exclusive authority files (replan-source.json, the committed
+    // transaction receipts, the rotated sources) 0600; the fixture writes them 0644, so the
+    // restrictive mode is reproduced here on a file the snapshot certainly carries.
+    fs.chmodSync(path.join(fx.cacheDir, 'review-attempts.json'), 0o600);
+    equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result,
+      'committed', 'round-trip fixture commits');
+    const epochDir = path.join(fx.cacheDir, 'epochs', '1');
+    ok(replan.verifySnapshotManifest(epochDir).ok, 'the sealed epoch verifies before any round-trip');
+    const manifest = JSON.parse(fs.readFileSync(path.join(epochDir, 'manifest.json'), 'utf8'));
+    ok(manifest.files.some(file => file.mode !== '644'),
+      'the fixture really does stage a file whose mode git cannot carry: '
+      + JSON.stringify([...new Set(manifest.files.map(file => file.mode))]));
+    ok(manifest.files.every(file => (parseInt(file.mode, 8) & 0o111) === 0),
+      'no snapshot file is recorded executable — these are read-only evidence copies');
+    // A git checkout / clone / fresh worktree materializes every non-executable blob 0644.
+    for (const file of manifest.files) {
+      fs.chmodSync(path.join(epochDir, 'files', ...file.path.split('/')), 0o644);
+    }
+    const roundTripped = replan.verifySnapshotManifest(epochDir);
+    ok(roundTripped.ok && roundTripped.binding_status === 'schema2_projection_bound',
+      'a git-round-tripped epoch snapshot still verifies: ' + JSON.stringify(roundTripped));
+    // The load-bearing check is untouched: a length-preserving content edit still refuses,
+    // so the size column alone cannot be what catches it.
+    const tamperRel = 'workflow-plan.md';
+    const tamperAbs = path.join(epochDir, 'files', tamperRel);
+    const original = fs.readFileSync(tamperAbs);
+    const mutated = Buffer.from(original);
+    mutated[mutated.length - 2] = mutated[mutated.length - 2] === 0x41 ? 0x42 : 0x41;
+    fs.writeFileSync(tamperAbs, mutated);
+    equal(mutated.length, original.length, 'the content mutation preserves the recorded size exactly');
+    const tampered = replan.verifySnapshotManifest(epochDir);
+    ok(!tampered.ok && tampered.reason === 'snapshot_file_digest_mismatch' && tampered.path === tamperRel,
+      'a same-size content substitution in a round-tripped snapshot still fails closed: '
+      + JSON.stringify(tampered));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
 // A child changed after freeze is not replaced from transaction memory and an
 // arbitrary correct-width projection digest cannot advance to snapshot.
 for (const variant of ['pending', 'arbitrary', 'live-substitution']) {

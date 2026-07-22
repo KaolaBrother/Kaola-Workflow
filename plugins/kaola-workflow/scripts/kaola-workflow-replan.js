@@ -2714,11 +2714,21 @@ function verifySnapshotManifest(epochDir) {
       ? { ok: false, reason: 'legacy_snapshot_binding_unsealed', detail: 'snapshot_file_index_mismatch' }
       : { ok: false, reason: 'snapshot_file_index_mismatch' };
   }
+  // Snapshot integrity is CONTENT-addressed: size + per-file digest here, plus the
+  // recomputed authority projection below. The manifest still RECORDS each file's
+  // creation mode as forensic metadata, but verification deliberately does NOT compare
+  // it. Permission bits are not part of the seal's security argument — nothing ever
+  // executes or restores a snapshot file (they are read as bytes and never copied back
+  // or chmod'ed), and no consumer reads the recorded `mode`. They are also not carried
+  // by the transports these snapshots travel through: git stores only 100644/100755, so
+  // the 0600 that the exclusive-authority writers create comes back 0644 through any
+  // archive commit, clone, or fresh worktree checkout — and archive extraction or a
+  // `core.fileMode=false` / non-POSIX checkout loses even the executable bit. Comparing
+  // modes therefore generated permanent false negatives on byte-perfect evidence.
   for (let index = 0; index < actual.length; index++) {
     const got = actual[index];
     const want = manifest.files[index];
-    const mode = (got.stat.mode & 0o777).toString(8).padStart(3, '0');
-    if (got.stat.size !== want.size || mode !== want.mode || schema.sha256Hex(fs.readFileSync(got.abs)) !== want.digest) {
+    if (got.stat.size !== want.size || schema.sha256Hex(fs.readFileSync(got.abs)) !== want.digest) {
       return manifest.schema_version === 1
         ? { ok: false, reason: 'legacy_snapshot_binding_unsealed', detail: 'snapshot_file_digest_mismatch', path: want.path }
         : { ok: false, reason: 'snapshot_file_digest_mismatch', path: want.path };
