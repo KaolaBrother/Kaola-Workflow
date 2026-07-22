@@ -3309,40 +3309,62 @@ function stillOpenRouteCandidates(attempt) {
 //   nodeOwns           nodeId owns ≥1 still-open finding.
 //   uniqueOwner        the sole owner across the whole open set, or null when ownership spans >1 writer.
 //
-// #730 adds the SCOPE partition — which open findings a direct repair by nodeId would have to leave
-// unfixed. Owning "at least one" is NOT authority to consume the attempt: the reopened writer's brief
-// carries the WHOLE open frontier, so any open finding it cannot fix must block direct repair.
-//   unownedFindingIds        open findings that route to NO writer (anchor-less / unroutable path).
-//   ambiguousFindingIds      open findings whose ownership spans >1 candidate (no single fixer).
-//   foreignOwnedFindingIds   open findings solely owned by a DIFFERENT writer.
-//   ownsWholeFrontier        nodeId is the sole, unambiguous owner of EVERY still-open finding —
-//                            the only ownership-resolvable shape a direct repair may consume.
+// #730 adds the SCOPE partition — which of the findings a direct repair by nodeId is CONTRACTUALLY
+// OBLIGED to fix would be left unfixed. Owning "at least one" is NOT authority to consume the attempt:
+// the reopened writer's brief assigns the whole must-fix set, so any must-fix finding it cannot fix
+// must block direct repair.
+//
+// The population here is the BLOCKING set, NOT every still-open row. `unresolvedInScopeFixes` (the one
+// shipped definition of "must be fixed before this gate can pass": scope in_scope + action fix + status
+// neither resolved nor deferred) is reused verbatim rather than re-derived. A `deferred`, out-of-scope,
+// pre-existing or follow_up/document/none finding is explicitly NON-blocking — the gate can pass with it
+// still open — so it must never force a replan, and partitioning on the wider still-open set was an
+// over-refusal (strictly stricter than the contract).
+//   blockingFindings              the still-open route rows that actually block the gate.
+//   unownedBlockingFindingIds     blocking findings that route to NO writer (anchor-less / unroutable).
+//   ambiguousBlockingFindingIds   blocking findings whose ownership spans >1 candidate (no single fixer).
+//   foreignOwnedBlockingFindingIds blocking findings solely owned by a DIFFERENT writer.
+//   spansForeignWriters           ≥1 blocking finding this writer cannot fix alone ⇒ direct repair is
+//                                 inadmissible. FALSE when the blocking set is empty (nothing to fix
+//                                 spans anything — that must NOT refuse).
+//   ownsWholeBlockingFrontier     nodeId is the sole, unambiguous owner of EVERY blocking finding.
+//
+// DELIBERATE ASYMMETRY: `anyOwned` / `nodeOwns` / `uniqueOwner` keep the FULL still-open population.
+// They are #701's shipped ownership-ATTRIBUTION bridge (who does this evidence point at?), and narrowing
+// them would LOOSEN existing refusals — the opposite of the tighten-only boundary. #730's partition is
+// blocking-only because it answers a different question (what must this writer FIX?).
 function findingOwnershipSummary(attempt, nodeId) {
   const openFindings = stillOpenRouteCandidates(attempt);
   const ownersUnion = new Set();
   let nodeOwns = false;
-  const unownedFindingIds = [];
-  const ambiguousFindingIds = [];
-  const foreignOwnedFindingIds = [];
   for (const row of openFindings) {
     const owners = Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [];
     for (const o of owners) { if (o) ownersUnion.add(o); }
     if (owners.includes(nodeId)) nodeOwns = true;
-    const uid = String(row.finding_id != null ? row.finding_id : (row.id != null ? row.id : ''));
-    if (!owners.length) unownedFindingIds.push(uid);
-    else if (owners.length > 1) ambiguousFindingIds.push(uid);
-    else if (owners[0] !== nodeId) foreignOwnedFindingIds.push(uid);
   }
+  const blockingFindings = reviewSchema.unresolvedInScopeFixes(openFindings);
+  const unownedBlockingFindingIds = [];
+  const ambiguousBlockingFindingIds = [];
+  const foreignOwnedBlockingFindingIds = [];
+  for (const row of blockingFindings) {
+    const owners = Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [];
+    const uid = String(row.finding_id != null ? row.finding_id : (row.id != null ? row.id : ''));
+    if (!owners.length) unownedBlockingFindingIds.push(uid);
+    else if (owners.length > 1) ambiguousBlockingFindingIds.push(uid);
+    else if (owners[0] !== nodeId) foreignOwnedBlockingFindingIds.push(uid);
+  }
+  const spansForeignWriters = unownedBlockingFindingIds.length > 0
+    || ambiguousBlockingFindingIds.length > 0 || foreignOwnedBlockingFindingIds.length > 0;
   const ownersUnionSorted = Array.from(ownersUnion).sort();
   return {
     openFindings, ownersUnionSorted,
     anyOwned: ownersUnionSorted.length > 0,
     nodeOwns,
     uniqueOwner: ownersUnionSorted.length === 1 ? ownersUnionSorted[0] : null,
-    unownedFindingIds, ambiguousFindingIds, foreignOwnedFindingIds,
-    ownsWholeFrontier: openFindings.length > 0 && ownersUnionSorted.length > 0
-      && unownedFindingIds.length === 0 && ambiguousFindingIds.length === 0
-      && foreignOwnedFindingIds.length === 0,
+    blockingFindings,
+    unownedBlockingFindingIds, ambiguousBlockingFindingIds, foreignOwnedBlockingFindingIds,
+    spansForeignWriters,
+    ownsWholeBlockingFrontier: blockingFindings.length > 0 && !spansForeignWriters,
   };
 }
 
@@ -3357,25 +3379,39 @@ function findingOwnershipSummary(attempt, nodeId) {
 // its file/tree/evidence anchors, severity, proof digest, fix role, owning writer(s), and the exact
 // reviewer evidence path to re-read.
 //
-// PURE (no fs, no mutation): a function of (attempt, nodeId) only, so every entry point — the repair
-// transaction, its consumption-resume short-circuit, and the idempotent re-repair — returns the
-// byte-identical brief for the same attempt.
+// PURE (no fs, no mutation, no hidden reads): a TOTAL function of (attempt, nodeId) only. It never
+// consults repair-node's control flow and never assumes an ownership decision already ran, so any
+// caller — the repair transaction, its consumption-resume short-circuit, the idempotent re-repair, or a
+// future non-repair re-expansion of a single finding — gets the byte-identical brief for the same
+// attempt. `nodeId` is recorded as `writer` and is NOT used to filter or reorder anything.
+//
+// The ASSIGNED (must-fix) set is the BLOCKING population — `unresolvedInScopeFixes`, the one shipped
+// definition of what has to be fixed before the gate can pass. A `deferred`, out-of-scope, pre-existing
+// or follow_up/document/none row is still open but NOT something the contract obliges anyone to fix, so
+// ordering a fixer to repair it would be an instruction the workflow itself does not require. Those rows
+// are carried in a SEPARATE, explicitly non-obligatory `context_findings` section: visible for judgement,
+// never inside `assigned_uids`, never under a "fix every one of these" directive.
 //
 // Two deliberate non-promises:
 //   - NO reviewer prose for schema-2. schema2RouteCandidates synthesizes `raw: 'uid=<uid>'`, and a
 //     canonical finding carries no human-readable statement field at all. `statement` is emitted ONLY
 //     when the row's raw text is something other than that synthesized form (i.e. a schema-1 flat row),
 //     never fabricated from the digests.
-//   - `scope` is TYPED, never silently empty. `assigned_findings` carries the whole still-open
-//     frontier; `unstructured_reviewer_evidence` is the distinct state of an attempt that settled fail
-//     with no structured findings at all — there is nothing to assign, and the brief says so and names
-//     the reviewer evidence instead of emitting an empty uid list.
-//
-// The assigned set is ALWAYS the entire still-open frontier. Narrowing it is the caller's problem to
-// avoid: the ownership decision refuses direct repair unless the writer can own the whole set.
+//   - `scope` is TYPED, never silently empty. Three states, all distinguishable by an operator:
+//       assigned_findings             ≥1 blocking finding — those uids are assigned and must be fixed.
+//       no_blocking_findings          open rows exist but NONE of them block (all deferred/out-of-scope
+//                                     /non-fix). Nothing is pre-assigned; the context section + the
+//                                     reviewer evidence carry what there is.
+//       unstructured_reviewer_evidence the attempt settled fail with no structured finding at all —
+//                                     re-read the named reviewer evidence in full.
+//     An empty `assigned_uids` LINE is never rendered; the scope says why instead.
 // ---------------------------------------------------------------------------
 function buildRepairBrief(attempt, nodeId) {
   const openRows = stillOpenRouteCandidates(attempt);
+  // The must-fix population, reusing the gate's own predicate rather than re-deriving it.
+  const blockingRows = reviewSchema.unresolvedInScopeFixes(openRows);
+  const blockingSet = new Set(blockingRows);
+  const contextRows = openRows.filter(row => !blockingSet.has(row));
   const isObj = value => !!value && typeof value === 'object' && !Array.isArray(value);
   const str = value => (value == null ? null : String(value));
   const canonicalByUid = new Map();
@@ -3390,7 +3426,7 @@ function buildRepairBrief(attempt, nodeId) {
   for (const receipt of (Array.isArray(attempt && attempt.receipts) ? attempt.receipts : [])) {
     if (receipt && receipt.node_id) reviewerNodes.add(String(receipt.node_id));
   }
-  const findings = openRows.map(row => {
+  const describe = row => {
     const uid = String(row.finding_id != null ? row.finding_id : (row.id != null ? row.id : ''));
     const canonical = canonicalByUid.get(uid) || {};
     const anchor = isObj(canonical.primary_anchor) ? canonical.primary_anchor : null;
@@ -3429,15 +3465,22 @@ function buildRepairBrief(attempt, nodeId) {
       // Suppressed for schema-2: `uid=<uid>` is a synthesized routing key, not reviewer prose.
       statement: raw && raw !== 'uid=' + uid ? raw : null,
     };
-  });
+  };
+  const findings = blockingRows.map(describe);
+  const contextFindings = contextRows.map(describe);
   const payload = {
     attempt_id: str(attempt && attempt.attempt_id) || '',
     writer: String(nodeId),
     gate_members: (attempt && attempt.logical_gate && Array.isArray(attempt.logical_gate.members))
       ? attempt.logical_gate.members.map(String) : [],
-    scope: findings.length ? 'assigned_findings' : 'unstructured_reviewer_evidence',
+    scope: findings.length ? 'assigned_findings'
+      : (openRows.length ? 'no_blocking_findings' : 'unstructured_reviewer_evidence'),
     assigned_uids: findings.map(f => f.uid),
     findings,
+    // NON-obligatory. Open but non-blocking (deferred / out-of-scope / non-fix) rows, shown for
+    // judgement only. Deliberately OUTSIDE assigned_uids — the contract does not require fixing these.
+    context_uids: contextFindings.map(f => f.uid),
+    context_findings: contextFindings,
     validation_obligations: (Array.isArray(attempt && attempt.validation_obligations)
       ? attempt.validation_obligations : []).map(o => typeof o === 'string' ? o : canonicalJson(o)),
     reviewer_evidence: [...reviewerNodes].sort().map(evidenceOf),
@@ -3453,57 +3496,77 @@ function buildRepairBrief(attempt, nodeId) {
 //
 // Every added key is prefixed `repair_` on purpose: `parseNodeFindings` is FENCE-BLIND and recognises
 // a finding at column 0 as `^finding:`, so a brief line starting `finding:` would give the reopened
-// WRITER an unresolved in-scope fix of its own and it could never close. `repair_finding:` cannot
-// match that anchor.
+// WRITER an unresolved in-scope fix of its own and it could never close. `repair_finding:` /
+// `repair_context_finding:` cannot match that anchor.
+//
+// The two finding sections are kept VISIBLY distinct and only one of them is an instruction:
+//   repair_finding:          ASSIGNED. Blocking, must-fix, under the "fix EVERY assigned uid" directive.
+//   repair_context_finding:  CONTEXT ONLY. Open but non-blocking; explicitly labelled as not required.
+// A non-blocking row is never emitted under the assigned directive, and the context section carries no
+// obligation language at all.
 function renderRepairBrief(brief) {
   const lines = ['', 'failed_review_attempt: ' + brief.attempt_id,
     'failed_review_gate: ' + brief.gate_members.join(','),
     'repair_brief_digest: ' + brief.digest,
     'repair_brief_scope: ' + brief.scope];
+  const renderFinding = (key, f) => {
+    const parts = [key + ': uid=' + f.uid];
+    const push = (k, value) => { if (value != null && value !== '') parts.push(k + '=' + value); };
+    push('severity', f.severity);
+    push('scope', f.scope);
+    push('action', f.action);
+    push('status', f.status);
+    push('failure_class', f.failure_class);
+    if (f.anchor_kind) {
+      parts.push('anchor=' + f.anchor_kind + (f.anchor_path ? ':' + f.anchor_path : '')
+        + (f.anchor_range ? '@' + f.anchor_range.start + '-' + f.anchor_range.end : ''));
+    }
+    if (f.observation_key) parts.push('observation=' + f.observation_key);
+    if (f.secondary_anchor_paths.length) parts.push('also=' + f.secondary_anchor_paths.join(','));
+    parts.push('owner=' + (f.owner_candidates.length ? f.owner_candidates.join('|') : 'unowned'));
+    push('fix_role', f.fix_role);
+    push('source', f.source_node);
+    push('evidence', f.reviewer_evidence);
+    lines.push(parts.join(' '));
+    if (f.trigger || f.proof_digest || f.producer_evidence_digest) {
+      const proof = [key + '_proof: uid=' + f.uid];
+      if (f.trigger) {
+        proof.push('precondition=' + f.trigger.precondition_digest);
+        proof.push('input=' + f.trigger.input_digest);
+        proof.push('expected=' + f.trigger.expected_digest);
+        proof.push('observed=' + f.trigger.observed_digest);
+      }
+      if (f.trigger_digest) proof.push('trigger=' + f.trigger_digest);
+      if (f.proof_digest) proof.push('proof=' + f.proof_digest);
+      if (f.producer_evidence_digest) proof.push('producer_evidence=' + f.producer_evidence_digest);
+      lines.push(proof.join(' '));
+    }
+    if (f.statement) lines.push(key + '_statement: uid=' + f.uid + ' ' + f.statement);
+  };
   if (brief.scope === 'assigned_findings') {
     lines.push('repair_brief_assigned_uids: ' + brief.assigned_uids.join(','));
-    lines.push('<!-- repair brief: fix EVERY assigned uid below. The closure re-review carries these'
-      + ' forward and refuses to pass without a per-uid resolution. -->');
-    for (const f of brief.findings) {
-      const parts = ['repair_finding: uid=' + f.uid];
-      const push = (key, value) => { if (value != null && value !== '') parts.push(key + '=' + value); };
-      push('severity', f.severity);
-      push('scope', f.scope);
-      push('action', f.action);
-      push('status', f.status);
-      push('failure_class', f.failure_class);
-      if (f.anchor_kind) {
-        parts.push('anchor=' + f.anchor_kind + (f.anchor_path ? ':' + f.anchor_path : '')
-          + (f.anchor_range ? '@' + f.anchor_range.start + '-' + f.anchor_range.end : ''));
-      }
-      if (f.observation_key) parts.push('observation=' + f.observation_key);
-      if (f.secondary_anchor_paths.length) parts.push('also=' + f.secondary_anchor_paths.join(','));
-      parts.push('owner=' + (f.owner_candidates.length ? f.owner_candidates.join('|') : 'unowned'));
-      push('fix_role', f.fix_role);
-      push('source', f.source_node);
-      push('evidence', f.reviewer_evidence);
-      lines.push(parts.join(' '));
-      if (f.trigger || f.proof_digest || f.producer_evidence_digest) {
-        const proof = ['repair_finding_proof: uid=' + f.uid];
-        if (f.trigger) {
-          proof.push('precondition=' + f.trigger.precondition_digest);
-          proof.push('input=' + f.trigger.input_digest);
-          proof.push('expected=' + f.trigger.expected_digest);
-          proof.push('observed=' + f.trigger.observed_digest);
-        }
-        if (f.trigger_digest) proof.push('trigger=' + f.trigger_digest);
-        if (f.proof_digest) proof.push('proof=' + f.proof_digest);
-        if (f.producer_evidence_digest) proof.push('producer_evidence=' + f.producer_evidence_digest);
-        lines.push(proof.join(' '));
-      }
-      if (f.statement) lines.push('repair_finding_statement: uid=' + f.uid + ' ' + f.statement);
-    }
+    lines.push('<!-- repair brief: fix EVERY assigned uid below (the repair_finding: lines). The closure'
+      + ' re-review carries these forward and refuses to pass without a per-uid resolution. -->');
+    for (const f of brief.findings) renderFinding('repair_finding', f);
+  } else if (brief.scope === 'no_blocking_findings') {
+    // Findings exist, but NONE of them block the gate (all deferred / out-of-scope / non-fix). Assigning
+    // them would order a fix the contract does not require, and emitting an EMPTY assigned-uid line would
+    // read as "fix nothing" — so the scope names the state and the context section carries the rows.
+    lines.push('<!-- repair brief: this review settled FAIL with NO blocking finding. Nothing is'
+      + ' assigned. Re-read the reviewer evidence named below; the context findings are informational. -->');
   } else {
     // No structured finding to assign. Say so explicitly and point at the reviewer's full evidence —
     // emitting an EMPTY assigned-uid line here would read as "fix nothing", which is exactly the
     // silent omission this brief exists to prevent.
     lines.push('<!-- repair brief: this review settled FAIL with no structured findings. Re-read the'
       + ' reviewer evidence named below in full; nothing is pre-assigned. -->');
+  }
+  if (brief.context_findings && brief.context_findings.length) {
+    lines.push('repair_brief_context_uids: ' + brief.context_uids.join(','));
+    lines.push('<!-- repair brief CONTEXT ONLY — the repair_context_finding: lines below are NOT'
+      + ' assigned and NOT required to be fixed. They are open but non-blocking (deferred, out of'
+      + ' scope, or not an action=fix). Listed for judgement; changing them is optional. -->');
+    for (const f of brief.context_findings) renderFinding('repair_context_finding', f);
   }
   for (const p of brief.reviewer_evidence) lines.push('repair_brief_reviewer_evidence: ' + p);
   for (const o of brief.validation_obligations) lines.push('repair_validation_obligation: ' + o);
@@ -8100,27 +8163,33 @@ function runRepairNodeCore(opts) {
           operator_hint: getOperatorHint('repair_writer_ownership_mismatch',
             { nodeId, owners: own.ownersUnionSorted }) };
       }
-      // #730 — PARTIAL / MIXED ownership. Owning at least ONE open finding is not authority to consume
-      // the attempt: the reopened writer's brief carries the WHOLE still-open frontier, so a writer that
-      // cannot fix all of it would either be handed findings it does not own or — the defect this
-      // replaces — be handed a SILENTLY NARROWED brief while `consumed_by` burned the whole attempt.
-      // Refuse to replan instead, which is the safe multi-writer outcome (a replacement plan can give
-      // each finding its own writer). Tighten-only: the ownership-ABSENT case above is untouched (it
-      // never reaches here), and a sole unambiguous owner of every open finding still repairs in place.
-      // This matches the NON-maximal (replay) branch's admission test above — `uniqueOwner === nodeId`
-      // plus no unowned finding is exactly `ownsWholeFrontier`, so both branches consume an attempt only
-      // for a writer that can fix the entire open set.
-      if (own.anyOwned && !own.ownsWholeFrontier) {
+      // #730 — PARTIAL / MIXED ownership of the BLOCKING frontier. Owning at least ONE blocking finding
+      // is not authority to consume the attempt: the reopened writer's brief ASSIGNS the whole blocking
+      // set, so a writer that cannot fix all of it would either be handed findings it does not own or —
+      // the defect this replaces — be handed a SILENTLY NARROWED brief while `consumed_by` burned the
+      // whole attempt. Refuse to replan instead, which is the safe multi-writer outcome (a replacement
+      // plan can give each blocking finding its own writer).
+      //
+      // The predicate is BLOCKING-scoped (`unresolvedInScopeFixes`), not "every still-open row": a
+      // deferred / out-of-scope / follow_up finding owned by another writer does not block this gate,
+      // so it must not force a replan. An EMPTY blocking set leaves `spansForeignWriters` false and the
+      // repair proceeds — there is nothing that spans anyone.
+      //
+      // Tighten-only: the ownership-ABSENT case above is untouched (it never reaches here), and a sole
+      // unambiguous owner of every blocking finding still repairs in place. This mirrors the NON-maximal
+      // (replay) branch's admission test above, so both branches consume an attempt only for a writer
+      // that can fix the entire must-fix set.
+      if (own.anyOwned && own.spansForeignWriters) {
         return { result: 'repair_requires_replan', reason: 'repair_scope_spans_writers',
           attempt_id: attemptId, producer_slice: proof.producer_slice,
           ownership_candidates: own.ownersUnionSorted,
-          unowned_findings: own.unownedFindingIds,
-          ambiguous_findings: own.ambiguousFindingIds,
-          foreign_owned_findings: own.foreignOwnedFindingIds,
+          unowned_findings: own.unownedBlockingFindingIds,
+          ambiguous_findings: own.ambiguousBlockingFindingIds,
+          foreign_owned_findings: own.foreignOwnedBlockingFindingIds,
           operator_hint: getOperatorHint('repair_scope_spans_writers',
             { nodeId, owners: own.ownersUnionSorted,
-              unowned: own.unownedFindingIds, ambiguous: own.ambiguousFindingIds,
-              foreign: own.foreignOwnedFindingIds }) };
+              unowned: own.unownedBlockingFindingIds, ambiguous: own.ambiguousBlockingFindingIds,
+              foreign: own.foreignOwnedBlockingFindingIds }) };
       }
     }
     // #739 — on a repair RESUME (repair already selected, so the proof block above was skipped) re-derive
