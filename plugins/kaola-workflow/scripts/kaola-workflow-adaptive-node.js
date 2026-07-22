@@ -1145,14 +1145,19 @@ function reviewLogicalGate(planNodes, node) {
 // logical gate key. scope_lineage_id excludes the node id and is preserved across a claim-root base held
 // stable at claim time, so a gate rename or a synthesis HEAD advance does not reset an in-flight scope
 // back to discovery. Issue 699's cross-epoch activation consumes this scope-keyed reader.
-function readReviewLineageV2(opts, planHash, logicalGate, scopeLineageId, epochLineageId) {
-  const journalPath = path.join(path.dirname(opts.planPath), '.cache', REVIEW_JOURNAL_NAME);
-  let journal = null;
-  try { journal = JSON.parse(opts.readFile(journalPath)); } catch (_) { journal = null; }
-  if (!journal) return { attempts: [], last: null, prior_findings: [], validation_obligations: [],
-    seen_idempotency_keys: [], previous_consecutive_nonprogress: 0, consumed_repairs: 0 };
-  const checked = validateReviewJournal(journal, planHash, reviewSchema.REVIEW_JOURNAL_SCHEMA_VERSION);
-  if (!checked.ok) return { error: checked };
+//
+// #722: this reader is PURE over an ALREADY-RESOLVED journal. It deliberately no longer re-reads the raw
+// `.cache/review-attempts.json` bytes: after a committed repair->replan the ACTIVE journal on disk is still
+// the PARENT epoch's (activation preserves it, since cross-epoch history is indexed by scope lineage), so
+// the raw bytes are bound to the PARENT plan_hash and validating them against the CHILD plan wedged the
+// child epoch's first gate on `review_journal_plan_hash_mismatch`. The caller resolves the journal through
+// the ONE blessed cross-epoch transformation (readReviewJournal -> loadCommittedLegacyImport ->
+// attachLegacyImport), which validates the plan_hash binding strictly MORE than this function did.
+function readReviewLineageV2(journal, scopeLineageId, epochLineageId) {
+  if (!journal || !Array.isArray(journal.attempts)) {
+    return { attempts: [], last: null, prior_findings: [], validation_obligations: [],
+      seen_idempotency_keys: [], previous_consecutive_nonprogress: 0, consumed_repairs: 0 };
+  }
   const scope = String(scopeLineageId || '').toLowerCase();
   const epoch = String(epochLineageId || '').toLowerCase();
   const attempts = journal.attempts.filter(attempt => attempt
@@ -1285,6 +1290,26 @@ function prepareReviewOpen(opts, planContent, nodeLike) {
   if (!node || !reviewSchema.REVIEW_GATE_ROLES.includes(node.role)) {
     return { ok: true, legacy: false, contract, review_gate: false };
   }
+  // #722: resolve the review journal through the SAME blessed reader the close path uses, and in the SAME
+  // order, so the open and the close agree on which lane this gate runs. Before this, the open read the raw
+  // journal bytes directly and validated them against the current plan_hash — which a cross-epoch child
+  // journal (still the parent's bytes on disk until the first child attempt lands) can never satisfy.
+  const journalState = readReviewJournal(opts, planContent);
+  if (!journalState.ok) {
+    return { ok: false, reason: journalState.reason, detail: journalState.detail || null };
+  }
+  const journal = journalState.journal;
+  // A schema-1 cross-epoch child journal continues the IMPORTED schema-1 attempt chain, so
+  // validateSchema2ReviewEvidence routes its gate closes onto the schema-1 lane. Mirror that routing here:
+  // an open that minted a V2 context for a gate whose close will never be V2 is a guaranteed wedge. The
+  // predicate is the close path's verbatim one — a VALIDATED import (`__legacy_attempts` is the
+  // non-enumerable witness attachLegacyImport sets only after loadCommittedLegacyImport proves the
+  // committed transaction + snapshot chain), never bare `legacy_import` key presence.
+  if (journal && journal.schema_version === 1
+      && Object.prototype.hasOwnProperty.call(journal, 'legacy_import')
+      && Object.prototype.hasOwnProperty.call(journal, '__legacy_attempts')) {
+    return { ok: true, legacy: true, contract, review_gate: false };
+  }
   // #699/#698 seam: a code/security FANOUT review member is owned by the schema-1 provisional-fanout
   // machinery (validateSchema2ReviewEvidence routes its close there). Its open is the ordinary read-node
   // open against the journal-reserved generation — no V2 review context is materialized for it, so mirror
@@ -1292,6 +1317,13 @@ function prepareReviewOpen(opts, planContent, nodeLike) {
   if (['code-reviewer', 'security-reviewer'].includes(node.role)
       && logicalGateForNode(nodes, node).kind === 'fanout') {
     return { ok: true, legacy: false, contract, review_gate: false };
+  }
+  // Anything else reaching the V2 path must be a genuine schema-2 journal. Keep the pre-#722 refusal for a
+  // schema-1 journal with no cross-epoch provenance (e.g. a sequence gate in a plan whose OTHER review gate
+  // is a schema-1 fanout): the lane check moved, its strictness did not.
+  if (!journal || journal.schema_version !== reviewSchema.REVIEW_JOURNAL_SCHEMA_VERSION) {
+    return { ok: false, reason: 'review_journal_version_mismatch',
+      detail: 'journal schema does not match verified plan contract' };
   }
   const planView = validator.buildPlanView(planContent);
   const planNode = planView.nodes.find(candidate => candidate.id === node.id);
@@ -1336,8 +1368,7 @@ function prepareReviewOpen(opts, planContent, nodeLike) {
     claim_root_base: claimRootBase,
     reviewed_frontier_identity: logicalGate.surface_digests,
   }));
-  const lineage = readReviewLineageV2(opts, planHash, logicalGate, scopeLineage, epochLineageId);
-  if (lineage.error) return { ok: false, reason: lineage.error.reason, detail: lineage.error.detail || null };
+  const lineage = readReviewLineageV2(journal, scopeLineage, epochLineageId);
   let repairDelta = null;
   if (lineage.last) {
     const derived = reviewSchema.deriveRepairDelta({
@@ -4256,6 +4287,26 @@ function planReviewUsesSchema1Fanout(planContent) {
     && logicalGateForNode(nodes, node).kind === 'fanout');
 }
 
+// The cross-epoch child journal minted by a committed replan activation. #722: it inherits the PARENT
+// journal's schema. A schema-1 parent keeps a schema-1 child — the child epoch's review lifecycle
+// continues the imported schema-1 attempt chain, which is what routes its gate closes onto the schema-1
+// lane. A schema-2 parent MUST mint a schema-2 child: minting schema-1 there silently downgraded every
+// gate of the child epoch to the schema-1 lane, discarding the V2 review-context / candidate-partition
+// binding the child plan's own contract requires. `attempts` is empty either way — imported parent history
+// stays digest-bound behind the `legacy_import` pointer and is never copied into the child's own rows.
+function buildCrossEpochChildJournal(planHash, imported) {
+  const parentIsV2 = !!imported.parentJournal
+    && imported.parentJournal.schema_version === reviewSchema.REVIEW_JOURNAL_SCHEMA_VERSION;
+  return attachLegacyImport({
+    schema_version: parentIsV2 ? reviewSchema.REVIEW_JOURNAL_SCHEMA_VERSION : 1,
+    ...(parentIsV2 ? { contract_version: 2 } : {}),
+    plan_hash: planHash, attempts: [],
+    epoch_lineage_id: imported.transaction.epoch_lineage_id,
+    claim_identity_digest: imported.transaction.parent.claim_identity_digest,
+    plan_epoch: imported.transaction.parent.plan_epoch + 1,
+  }, imported.parentJournal, imported.pointer);
+}
+
 function readReviewJournal(opts, planContent) {
   const planHash = planHashFromContent(planContent);
   if (!planHash) return { ok: true, legacy: true, plan_hash: null, journal: null };
@@ -4274,12 +4325,7 @@ function readReviewJournal(opts, planContent) {
     const imported = loadCommittedLegacyImport(opts, planHash, undefined);
     if (imported.applicable) {
       if (!imported.ok) return { ok: false, reason: imported.reason, journalPath };
-      const journal = attachLegacyImport({
-        schema_version: 1, plan_hash: planHash, attempts: [],
-        epoch_lineage_id: imported.transaction.epoch_lineage_id,
-        claim_identity_digest: imported.transaction.parent.claim_identity_digest,
-        plan_epoch: imported.transaction.parent.plan_epoch + 1,
-      }, imported.parentJournal, imported.pointer);
+      const journal = buildCrossEpochChildJournal(planHash, imported);
       return { ok: true, plan_hash: planHash, journalPath, journal };
     }
     const nodes = parseNodesFromContent(planContent);
@@ -4326,12 +4372,7 @@ function readReviewJournal(opts, planContent) {
     const imported = loadCommittedLegacyImport(opts, planHash, undefined);
     if (imported.applicable) {
       if (!imported.ok) return { ok: false, reason: imported.reason, journalPath };
-      const childJournal = attachLegacyImport({
-        schema_version: 1, plan_hash: planHash, attempts: [],
-        epoch_lineage_id: imported.transaction.epoch_lineage_id,
-        claim_identity_digest: imported.transaction.parent.claim_identity_digest,
-        plan_epoch: imported.transaction.parent.plan_epoch + 1,
-      }, imported.parentJournal, imported.pointer);
+      const childJournal = buildCrossEpochChildJournal(planHash, imported);
       return { ok: true, plan_hash: planHash, journalPath, journal: childJournal };
     }
   }
@@ -4370,6 +4411,21 @@ function readReviewJournal(opts, planContent) {
     if (!valid.ok) return { ok: false, reason: valid.reason, detail: valid.detail, journalPath };
     const identity = reviewJournalV2MatchesPlan(journal, planContent);
     if (!identity.ok) return { ok: false, reason: identity.reason, journalPath };
+    // #722: a schema-2 journal can now be a cross-epoch CHILD too, so it carries the same immutable
+    // `legacy_import` pointer the schema-1 lane does once the child's first attempt persists it. Re-resolve
+    // it here with the identical fail-closed rules: the pointer must match the committed transaction's
+    // canonical pointer byte-for-byte, and a journal that DECLARES an import with no committed transaction
+    // backing it is a forgery. Bare key presence is never provenance, and without this the reread would
+    // silently drop the digest-verified parent history the audit trail depends on.
+    const declaresLegacyImport = Object.prototype.hasOwnProperty.call(journal, 'legacy_import');
+    const importedV2 = loadCommittedLegacyImport(opts, planHash,
+      declaresLegacyImport ? journal.legacy_import : null);
+    if (importedV2.applicable) {
+      if (!importedV2.ok) return { ok: false, reason: importedV2.reason, journalPath };
+      attachLegacyImport(journal, importedV2.parentJournal, importedV2.pointer);
+    } else if (declaresLegacyImport) {
+      return { ok: false, reason: 'review_journal_legacy_import_transaction_invalid', journalPath };
+    }
     return { ok: true, plan_hash: planHash, journalPath, journal, contract_version: 2 };
   }
   // Schema-1 (issue-699): plan-owned schema-2 fanout reduction where gate metadata is present, the historical

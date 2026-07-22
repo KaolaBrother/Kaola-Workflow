@@ -3587,4 +3587,190 @@ for (const variant of ['forged_bytes', 'unbound_digest']) {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// ---------------------------------------------------------------------------
+// #722 — cross-epoch schema-2 journal rotation. Activation deliberately PRESERVES
+// `.cache/review-attempts.json` (it is absent from cleanupAllowed, because cross-epoch
+// review history is indexed by scope lineage), so after a committed repair->replan the
+// ACTIVE journal is still bound to the PARENT plan_hash until the child epoch's first
+// attempt lands. The child epoch's first review gate must still OPEN, run, and CLOSE.
+//
+// Driven through the REAL transaction path (prepareReplan/resumeReplan to `committed`)
+// and the REAL node lifecycle (runOpenNext -> runRecordEvidence -> runCloseNode), so
+// every seal — snapshot manifest, legacy-import pointer, review context, receipt — is
+// genuine rather than hand-built.
+//
+// Both parent-journal schemas are covered, because they must route to DIFFERENT lanes:
+//   * schema-1 parent -> schema-1 child journal -> the child's gate closes continue the
+//     imported schema-1 attempt chain (the pre-existing #699 contract).
+//   * schema-2 parent -> schema-2 child journal -> the child's gates stay on the V2
+//     candidate/context-bound lane their own plan contract requires.
+// ---------------------------------------------------------------------------
+{
+  const io = {
+    readFile: p => fs.readFileSync(p, 'utf8'),
+    writeFile: (p, value) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, value); },
+    mkdirp: p => fs.mkdirSync(p, { recursive: true }),
+    cacheExists: p => fs.existsSync(p),
+    unlink: p => fs.unlinkSync(p),
+  };
+
+  // Runs the child epoch forward to the frontier a live gate sees: writer complete with
+  // evidence on disk, gate pending with its open-time baseline recorded.
+  const stageChildFrontier = (fx, nonce) => {
+    const planPath = path.join(fx.projectDir, 'workflow-plan.md');
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const nodes = validator.parseNodes(plan);
+    const writer = nodes[0];
+    const gate = nodes.find(node => node.role === 'code-reviewer');
+    plan = plan
+      .replace(new RegExp('^\\| ' + writer.id + ' \\| pending \\|$', 'm'), `| ${writer.id} | complete |`)
+      .replace(new RegExp('^\\| ' + writer.role + ' \\(' + writer.id + '\\) \\| pending \\| \\| \\|$', 'm'),
+        `| ${writer.role} (${writer.id}) | invoked | .cache/${writer.id}.md | |`);
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(fx.cacheDir, writer.id + '.md'),
+      `evidence-binding: ${writer.id} progress-proof\nGREEN: legal runtime progress\n`);
+    fs.writeFileSync(path.join(fx.cacheDir, 'barrier-base-' + gate.id), nonce + 'trailing\n');
+    const shell = (script, args) => {
+      const base = path.basename(script);
+      if (base === 'kaola-workflow-next-action.js') {
+        return { exitCode: 0, result: 'ok', readySet: [{ id: gate.id, role: gate.role }],
+          readyPending: [{ id: gate.id, role: gate.role }], nextNode: { id: gate.id, role: gate.role } };
+      }
+      if (base === 'kaola-workflow-commit-node.js') {
+        return { exitCode: 0, result: 'ok', overallOk: true, recordBase: { base: nonce + 'trailing' },
+          selectorCheck: { isSelector: false, ok: true } };
+      }
+      return { exitCode: 0, ok: true };
+    };
+    return { planPath, writer, gate, shell };
+  };
+
+  for (const parentJournalSchema of [2, 1]) {
+    const label = '#722 (schema-' + parentJournalSchema + ' parent journal)';
+    const fx = initFixture();
+    try {
+      if (parentJournalSchema === 2) {
+        const v2 = installReviewJournalV2Source(fx);
+        fx.sourceAttemptId = v2.attempt.attempt_id;
+      }
+      equal(driveReplanToCommit(fx).result, 'committed', label + ' commits the repair->replan transaction');
+
+      const parentBoundJournal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+      const childPlanHash = validator.readStoredHash(
+        fs.readFileSync(path.join(fx.projectDir, 'workflow-plan.md'), 'utf8'));
+      equal(parentBoundJournal.schema_version, parentJournalSchema,
+        label + ' the activated epoch preserves the parent journal at its own schema');
+      ok(parentBoundJournal.plan_hash !== childPlanHash,
+        label + ' the preserved journal is still bound to the PARENT plan_hash — the exact state that '
+        + 'wedged the child epoch on review_journal_plan_hash_mismatch');
+
+      const nonce = 'a'.repeat(12);
+      const { planPath, gate, shell } = stageChildFrontier(fx, nonce);
+
+      const opened = adaptiveNode.runOpenNext({
+        planPath, statePath: path.join(fx.projectDir, 'workflow-state.md'), project: fx.project,
+        nodeId: gate.id, repoRoot: fx.root, shell, ...io,
+      });
+      notEqualReason(opened, 'review_journal_plan_hash_mismatch',
+        label + ' the child epoch first gate OPEN does not refuse on the parent-bound journal');
+      notEqualReason(opened, 'review_journal_version_mismatch',
+        label + ' the child epoch first gate OPEN does not refuse on the parent journal schema');
+      equal(opened.result, 'ok', label + ' the child epoch first gate OPENS: ' + JSON.stringify(opened));
+
+      // The open routes the gate onto the lane its journal schema dictates, and the required-token
+      // set is the observable witness of that routing.
+      const tokens = opened.opened.required_tokens;
+      if (parentJournalSchema === 2) {
+        ok(tokens.includes('review_context_hash') && tokens.includes('domain_outcome')
+          && !tokens.includes('verdict'),
+        label + ' a schema-2 parent keeps the child gate on the V2 lane: ' + JSON.stringify(tokens));
+      } else {
+        ok(tokens.includes('verdict') && !tokens.includes('review_context_hash'),
+          label + ' a schema-1 parent keeps the child gate on the imported schema-1 lane: '
+          + JSON.stringify(tokens));
+      }
+
+      const dispatch = opened.opened.dispatch;
+      const body = parentJournalSchema === 2 ? [
+        'evidence-binding: ' + gate.id + ' ' + nonce,
+        'contract_version: 2',
+        'review_context_hash: ' + dispatch.review_context_hash,
+        'behavior_contract_hash: ' + dispatch.behavior_contract_hash,
+        'resolved_profile_hash: ' + dispatch.resolved_profile_hash,
+        'candidate_digest: ' + dispatch.candidate_digest,
+        'domain_outcome: approved',
+        'gate_claim: ' + dispatch.gate_claim,
+        'gate_surface: ' + dispatch.gate_surface,
+        'gate_aggregation: ' + dispatch.gate_aggregation,
+        'findings_none: true', '',
+      ].join('\n') : [
+        'evidence-binding: ' + gate.id + ' ' + nonce,
+        'verdict: pass', 'findings_blocking: 0', '',
+      ].join('\n');
+      equal(adaptiveNode.runRecordEvidence({ planPath, project: fx.project, nodeId: gate.id,
+        stdinContent: body, ...io }).result, 'ok',
+      label + ' the child epoch gate records its reviewer evidence');
+
+      const closed = adaptiveNode.runCloseNode({
+        planPath, project: fx.project, nodeId: gate.id, repoRoot: fx.root, shell, ...io,
+        captureWriterBarrierIdentity: id => ({ baseline: fx.commit, anchored_ref: fx.commit,
+          open_token: 'open-' + id, generation: fx.commit.slice(0, 12),
+          ref: 'refs/kaola-workflow/barrier/' + fx.project + '/' + id }),
+      });
+      notEqualReason(closed, 'review_journal_plan_hash_mismatch',
+        label + ' the child epoch first gate CLOSE does not refuse on the parent-bound journal');
+      equal(closed.result, 'ok', label + ' the child epoch first gate CLOSES: ' + JSON.stringify(closed));
+
+      // The child journal is now persisted. It must be bound to the CHILD plan hash, carry the
+      // child's own attempt at its own schema, and still resolve the immutable parent history.
+      const persisted = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+      equal(persisted.plan_hash, childPlanHash, label + ' the persisted child journal binds the CHILD plan hash');
+      equal(persisted.schema_version, parentJournalSchema,
+        label + ' the persisted child journal inherits the parent journal schema');
+      equal(persisted.attempts.length, 1, label + ' the child epoch attempt persists locally');
+      ok(!!persisted.legacy_import && persisted.legacy_import.parent_plan_hash === parentBoundJournal.plan_hash,
+        label + ' the persisted child journal keeps the immutable parent import pointer');
+
+      const reread = adaptiveNode.readReviewJournal({ planPath, ...io }, fs.readFileSync(planPath, 'utf8'));
+      ok(reread.ok, label + ' the persisted child journal rereads: ' + JSON.stringify(reread));
+      const allAttempts = adaptiveNode.reviewJournalAttempts(reread.journal);
+      equal(allAttempts.length, 2,
+        label + ' the reread claim-scoped view still resolves the parent attempt PLUS the child attempt — '
+        + 'the rotation preserves audit history rather than dropping it');
+      equal(adaptiveNode.reviewJournalBlocker(reread.journal), null,
+        label + ' the consumed parent attempt does not re-block the child epoch');
+
+      // ANTI-LOOSENING: the plan_hash binding that makes the mismatch detectable is intact. A journal
+      // that DECLARES a cross-epoch import with no committed transaction backing it still fails closed,
+      // and so does a pointer tampered away from the sealed transaction's canonical one.
+      const stable = fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8');
+      const tampered = JSON.parse(stable);
+      tampered.legacy_import.snapshot_path = '../attacker/review-attempts.json';
+      fs.writeFileSync(path.join(fx.cacheDir, 'review-attempts.json'), JSON.stringify(tampered, null, 2) + '\n');
+      equal(adaptiveNode.readReviewJournal({ planPath, ...io },
+        fs.readFileSync(planPath, 'utf8')).reason, 'review_journal_legacy_import_mismatch',
+      label + ' a tampered import pointer on the rotated child journal still fails closed');
+
+      const orphaned = JSON.parse(stable);
+      delete orphaned.legacy_import;
+      fs.writeFileSync(path.join(fx.cacheDir, 'review-attempts.json'), JSON.stringify(orphaned, null, 2) + '\n');
+      // Both lanes fail closed; they just refuse at different walls. A schema-2 child loses its proven
+      // pointer and refuses on the import comparison; a schema-1 child ALSO loses the cross-epoch
+      // exemption that let a schema-1 journal live under a schema-2 plan at all, so it refuses one wall
+      // earlier on the version mismatch.
+      equal(adaptiveNode.readReviewJournal({ planPath, ...io },
+        fs.readFileSync(planPath, 'utf8')).reason,
+      parentJournalSchema === 2 ? 'review_journal_legacy_import_mismatch' : 'review_journal_version_mismatch',
+      label + ' a child journal that DROPS the import pointer under a committed transaction fails closed');
+
+      fs.writeFileSync(path.join(fx.cacheDir, 'review-attempts.json'), stable);
+      fs.unlinkSync(path.join(fx.cacheDir, schema.REPLAN_TRANSACTION_NAME));
+      equal(adaptiveNode.readReviewJournal({ planPath, ...io },
+        fs.readFileSync(planPath, 'utf8')).reason, 'review_journal_legacy_import_transaction_invalid',
+      label + ' a declared import with NO committed transaction behind it still fails closed — the '
+        + 'rotation is gated on proven provenance, never on bare key presence');
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+  }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);
