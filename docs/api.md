@@ -1765,6 +1765,21 @@ barrier. Zero or multiple eligible owners, candidate drift, identity drift, or a
 barrier return `repair_requires_replan` without mutation. A different writer after selection returns
 `repair_writer_mismatch`.
 
+**Semantic-owner scope (#730).** A graph-maximal writer that owns *some* but not *all* of the attempt's
+BLOCKING findings returns `repair_requires_replan` with `reason:"repair_scope_spans_writers"` and zero
+mutation (the attempt stays unconsumed and `repair.selected_writer` unbound). Owning at least one is not
+authority to consume the attempt — the reopened writer is assigned the whole blocking set, so a partial
+owner would otherwise be handed a silently narrowed brief while `consumed_by` burned the whole attempt.
+The envelope carries three disjoint uid lists — `foreign_owned_findings`, `ambiguous_findings`,
+`unowned_findings` — plus the `ownership_candidates` union and an `operator_hint`. Recovery: re-run
+`repair-node --node-id <the writer that owns them all>` when `ownership_candidates` names one, otherwise
+`/kaola-workflow-adapt` for a replacement plan that gives each blocking finding a writer.
+
+The partition population is `unresolvedInScopeFixes` (`scope: in_scope` + `action: fix` + status neither
+`resolved` nor `deferred`) — the same predicate the verdict gate uses. A `deferred`, out-of-scope,
+`pre_existing`, or `follow_up`/`document`/`none` finding is open but non-blocking: it never triggers
+`repair_scope_spans_writers` and is never assigned to a fixer.
+
 The durable repair order is: persist `repair.selected_writer` with `settled:false`; fold downstream
 gates and reopen the writer using its original baseline; delete stale downstream baselines and stale
 completed gate receipts; seed the writer repair brief; persist `repair.settled:true`; then persist
@@ -1774,6 +1789,33 @@ greatest validated `ordinal` independently for each gate member; array order can
 pass to delete a newer unresolved failure. Exactly five settled-and-consumed failed attempts are
 allowed per canonical logical-gate key; the next returns `result:"repair_limit_reached"` with
 `limit:5` and no repair mutation.
+
+**The repair brief (`repair_brief`, #730).** An admitted repair seeds the reopened writer's
+`.cache/{node-id}.md` with a canonical, digest-bound finding brief and returns the same payload as
+`repair_brief` in the JSON envelope. It is a pure function of `(attempt, nodeId)` — no fs, no mutation,
+no dependence on the ownership decision — so the repair transaction, the consumption-resume
+short-circuit, and the idempotent re-repair all return the byte-identical payload, and a caller outside
+repair-dispatch can build one for any attempt.
+
+| Field | Meaning |
+|---|---|
+| `attempt_id`, `writer`, `gate_members` | Identity. `writer` labels the brief; it never filters the finding sets. |
+| `scope` | `assigned_findings` \| `no_blocking_findings` \| `unstructured_reviewer_evidence`. |
+| `assigned_uids` / `findings` | The MUST-FIX set — the still-open BLOCKING rows only. Each entry joins the route row (severity, scope, action, status, `fix_role`, `owner_candidates`, `source_node`, reviewer evidence path) to its canonical finding record (`failure_class`, primary/secondary anchors incl. range or `observation_key`, the four `trigger` digests, `trigger_digest`, `proof_digest`, `producer_evidence_digest`). |
+| `context_uids` / `context_findings` | Open but NON-blocking rows — informational, never assigned, never required to be fixed. |
+| `validation_obligations`, `reviewer_evidence` | Commands to re-run and reviewer `.cache/*.md` paths to re-read. |
+| `digest` | SHA-256 over the canonical payload (excluding the digest field). |
+
+Rendered evidence keys mirror those fields (`repair_brief_digest:`, `repair_brief_scope:`,
+`repair_brief_assigned_uids:`, `repair_finding:` / `repair_finding_proof:` /
+`repair_finding_statement:`, `repair_brief_context_uids:` / `repair_context_finding:`,
+`repair_brief_reviewer_evidence:`, `repair_validation_obligation:`) alongside the unchanged
+`failed_review_attempt:` / `failed_review_gate:` lines. Every added key is `repair_`-prefixed because
+the finding parser is fence-blind: a column-0 `finding:` line would give the reopened writer an
+unresolved in-scope fix of its own. The "fix EVERY assigned uid" directive names the `repair_finding:`
+lines alone; the context section carries an explicit *not required* label. `assigned_uids` is never
+rendered as an empty list — `no_blocking_findings` (findings present, none blocking) and
+`unstructured_reviewer_evidence` (no structured finding at all) name the state instead.
 
 `route_candidates` is validated against the receipts' canonical findings. `ownership_candidates`
 is sorted and unique, and `owning_node` is populated only when exactly one candidate exists.

@@ -1437,6 +1437,36 @@ function unresolvedInScopeFixes(findings) {
     f.status !== 'resolved' && f.status !== 'deferred');
 }
 
+// PURE (no fs): the REPAIR-RESPONSIBILITY population. Deliberately NOT the same set as
+// `unresolvedInScopeFixes` above, because the two answer opposite questions and therefore fail in
+// opposite directions:
+//
+//   - the GATE asks "does this finding block closing?" and must answer NO unless the reviewer
+//     EXPLICITLY wrote scope=in_scope action=fix, so that omission cannot manufacture a blocker;
+//   - REPAIR asks "is this writer responsible for this finding?" and must answer YES unless the
+//     finding is PROVABLY non-blocking, so that omission cannot make a finding silently vanish
+//     from a fixer's brief or from the cross-writer ownership partition.
+//
+// Using the gate predicate here is a FAIL-OPEN bug: a schema-1 flat row such as
+// `finding: id=F-A status=open severity=high file=scripts/a.js` carries neither scope nor action,
+// so the gate set excludes it, and a brief built from that set silently truncates to a
+// single-writer assignment — exactly the "fixer told to fix nothing / mixed ownership silently
+// narrowed" defect this predicate exists to prevent.
+//
+// Exclusion is therefore by POSITIVE PROOF of non-blocking only: an explicitly resolved/deferred
+// status, an explicitly non-`in_scope` scope, or an explicitly non-`fix` action. A row missing
+// those fields is INCLUDED. `deferred` stays excluded — it is the reviewer's explicit statement
+// that the finding is not to be fixed now, and treating it as must-fix is an over-refusal.
+function repairResponsibleFindings(findings) {
+  return (Array.isArray(findings) ? findings : []).filter(f => {
+    if (!f) return false;
+    if (f.status === 'resolved' || f.status === 'deferred') return false;
+    if (f.scope != null && f.scope !== '' && f.scope !== 'in_scope') return false;
+    if (f.action != null && f.action !== '' && f.action !== 'fix') return false;
+    return true;
+  });
+}
+
 // One source of truth for every review settlement path. An absent blocking count is the
 // historical zero value used by the final verifier; malformed/unknown verdicts fail closed.
 function evaluateEffectiveVerdict(cacheText) {
@@ -3850,6 +3880,7 @@ module.exports = {
   FINDING_STATUS_VOCABULARY,
   parseNodeFindings,
   unresolvedInScopeFixes,
+  repairResponsibleFindings,
   evaluateEffectiveVerdict,
   REVIEW_PLAN_SCHEMA_VERSION,
   REVIEW_CONTRACT_VERSION,
