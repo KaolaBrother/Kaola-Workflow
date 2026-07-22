@@ -247,7 +247,8 @@ function findingOwnersLine(tx, ownerId) {
   const rows = replan.buildFindingIndex(tx.source)
     .filter(row => row.status !== 'resolved' && row.status !== 'deferred'
       && (row.action == null || row.action === '' || row.action === 'fix'));
-  return rows.length ? rows.map(row => row.uid + '=' + ownerId).join(',') : 'none';
+  return rows.length ? rows.map(row => row.uid + '=' + ownerId
+    + (row.anchor_paths.length ? '' : '@anchorless')).join(',') : 'none';
 }
 
 // The epoch-binding `## Meta` block every child of `tx` must carry. Extracted so a
@@ -4663,9 +4664,9 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
 
 {
   // AC5 — the anchorless lane. A schema-2 `evidence_observation` finding legally carries NO
-  // path, so anchor containment is not applicable; the TYPED policy is that such a finding
-  // still requires a named, write-capable, certified owner. A review-only child therefore
-  // still cannot absorb it, and a real writer still can.
+  // path, so anchor containment cannot be computed at all. The TYPED policy is that such a
+  // finding must be declared with an EXPLICIT `@anchorless` marker: it may never be absorbed
+  // by default classification, which is exactly how the live repro's child swallowed one.
   const fx = initFixture({ sameGateChild: true });
   try {
     const v2 = installReviewJournalV2Source(fx);
@@ -4675,13 +4676,13 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     writeChildPlan(fx, tx, { finding_owners: uid + '=child-docs' }, REVIEW_ONLY_CHILD_NODES);
     const refused = replan.resumeReplan({ repoRoot: fx.root, project: fx.project });
     equal(refused.reason, 'replan_child_finding_uncovered',
-      '#729 AC5: an anchorless finding is not silently covered by a review-only child: '
+      '#729 AC5: an anchorless finding is never covered by DEFAULT classification: '
       + JSON.stringify(refused));
     ok(/anchorless/.test((refused.errors || []).join(' ')),
       '#729 AC5: the anchorless policy is named in the report: ' + JSON.stringify(refused.errors));
-    writeChildPlan(fx, tx, { finding_owners: uid + '=child-impl' }, COVERED_CHILD_NODES);
+    writeChildPlan(fx, tx, { finding_owners: uid + '=child-impl@anchorless' }, COVERED_CHILD_NODES);
     equal(replan.resumeReplan({ repoRoot: fx.root, project: fx.project }).result, 'committed',
-      '#729 AC5: an anchorless finding mapped to a real writer activates');
+      '#729 AC5: an anchorless finding explicitly mapped to a real writer activates');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
@@ -4783,6 +4784,32 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     '#729: an explicitly relocated repair site is admitted');
   equal(check('F1=g@relocated', [open]).reason, 'replan_child_finding_uncovered',
     '#729: relocation waives only anchor containment, never write-capability or certification');
+  // The anchorless policy is symmetric: it is REQUIRED where no anchor exists and REFUSED
+  // where one does, so it can never be used as a free bypass of containment.
+  const anchorless = { id: 'F1', status: 'open', action: 'fix' };
+  equal(check('F1=w', [anchorless]).reason, 'replan_child_finding_uncovered',
+    '#729: an anchorless finding without the explicit policy refuses');
+  ok(check('F1=w@anchorless', [anchorless]).ok,
+    '#729: an anchorless finding with the explicit policy and a real owner passes');
+  equal(check('F1=w@anchorless', [open]).reason, 'replan_child_finding_uncovered',
+    '#729: the anchorless policy on an ANCHORED finding refuses — it is not a containment bypass');
+  equal(check('F1=w@guessed', [open]).reason, 'replan_child_finding_owners_invalid',
+    '#729: an unknown policy suffix refuses rather than being parsed away as part of the node id');
+  // Anchor containment is EXACT-path, matching the per-node barrier. Neither a
+  // directory-shaped nor a glob token proves coverage — and neither can reach this wall in the
+  // first place, because the validator's freeze wall refuses both shapes outright.
+  for (const token of ['src/', 'src/*.js']) {
+    equal(replan.childFindingCoverage(frozenPlan('p', {
+      plan_schema_version: 2, contract_version: 2, epoch_schema_version: 2,
+      code_certifier: 'g', security_certifier: 'none', finding_owners: 'F1=w' },
+    [{ id: 'w', role: 'tdd-guide', write_set: token }, nodes[1], nodes[2]], {}).text, tx([open])).reason,
+    'replan_child_finding_uncovered',
+    '#729: a non-exact write-set token "' + token + '" never proves anchor coverage');
+    ok(validator.validatePlan(frozenPlan('p', { plan_schema_version: 2 },
+      [{ id: 'w', role: 'tdd-guide', write_set: token }], {}).text, { root: __dirname }).result === 'refuse',
+    '#729: ...and the freeze wall refuses "' + token + '" outright, so the strict reading is '
+      + 'the only reading a real child can ever be judged under');
+  }
 }
 
 console.log(`test-replan: PASSED (${passed} assertions)`);
