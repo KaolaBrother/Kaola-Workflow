@@ -864,6 +864,225 @@ function expansionHeaderCounts(content) {
   }
   return counts;
 }
+
+// ===========================================================================
+// #759 (progressive elaboration, child 2): the EXPANSION RECORD channel.
+//
+// An expansion point declares a milestone at freeze; its FRONTIER is composed at open time by the
+// executor and recorded here. The channel is a plain markdown section, `## Expansion Records`, that
+// lives OUTSIDE the plan_hash body (the hash covers `## Meta` + `## Nodes` + `## Node Briefs` only —
+// see computePlanHash), so appending records can never perturb the frozen spine identity.
+//
+// APPEND-AT-TAIL is the whole durability story. Every mutation of this section appends ONE new block
+// at the END of the section; no already-written line is ever rewritten, re-ordered, or removed. The
+// three block kinds are:
+//
+//   record(<point>#<n>):        the composed frontier (units + the recorded derivation lines)
+//     point: <spine node id>
+//     plan_hash: <64 hex>       the SPINE hash this composition was made against
+//     grain|path|join|probe|serializer: <one line each — the recorded derivation>
+//     unit: <name> | <role> | <model|—> | <write set|—> | serial|co_open | <dep names|—>
+//
+//   open(<point>#<n>):          the POSITIVE proof the frontier was opened (see expansionRecordOpened)
+//     at: <timestamp>
+//
+//   discharge(<point>):         the point's milestone is finished (every unit of every record terminal)
+//     at: <timestamp>
+//
+// A unit's plan node id is `<point>-r<n>-<name>` — derived, never authored, so the id space of a
+// record cannot collide with another record on the same point.
+// ===========================================================================
+const EXPANSION_RECORDS_HEADING = 'Expansion Records';
+const EXPANSION_UNIT_MODES = Object.freeze(['serial', 'co_open']);
+const EXPANSION_DERIVATION_KEYS = Object.freeze(['grain', 'path', 'join', 'probe', 'serializer']);
+
+// The derived plan-node id of one unit. Pure + total: the ONE place the id is built, so the writer
+// (expand-open), the reader (next-action) and the reconciler can never disagree about which ledger
+// row belongs to which unit.
+function expansionUnitId(point, ordinal, name) {
+  return String(point) + '-r' + String(ordinal) + '-' + String(name);
+}
+
+// Parse `## Expansion Records` into an ordered list of blocks. Total and non-throwing: a malformed
+// block is REPORTED (`malformed`), never silently dropped, because a dropped record would make its
+// already-opened units invisible to the ready-set derivation.
+//
+// Returns { records: [...], opens: Set<recordId>, discharges: Set<pointId>, blocks: [...] }.
+function parseExpansionRecords(content) {
+  const body = classifier.sectionBody(content, EXPANSION_RECORDS_HEADING);
+  const headerRe = /^(record|open|discharge)\(([^)]*)\)[ \t]*:[ \t]*$/;   // column 0
+  const fieldRe = /^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)[ \t]*$/;         // indented key: value
+  const blocks = [];
+  let cur = null;
+  const flush = () => { if (cur) blocks.push(cur); cur = null; };
+  for (const raw of String(body || '').split('\n')) {
+    const h = raw.match(headerRe);
+    if (h) { flush(); cur = { kind: h[1], key: h[2].trim(), fields: {}, units: [] }; continue; }
+    if (cur) {
+      const fm = raw.match(fieldRe);
+      if (fm) {
+        if (fm[1] === 'unit') cur.units.push(fm[2]);
+        else cur.fields[fm[1]] = fm[2];
+        continue;
+      }
+      if (raw.trim() !== '' && !/^[ \t]/.test(raw)) flush();
+    }
+  }
+  flush();
+
+  const records = [];
+  const opens = new Set();
+  const discharges = new Set();
+  for (const b of blocks) {
+    if (b.kind === 'open') { opens.add(b.key); continue; }
+    if (b.kind === 'discharge') { discharges.add(b.key); continue; }
+    const malformed = [];
+    const m = b.key.match(/^(.+)#([1-9][0-9]*)$/);
+    const point = m ? m[1] : (String(b.fields.point || '').trim() || '');
+    const ordinal = m ? Number(m[2]) : NaN;
+    if (!m) malformed.push('record id "' + b.key + '" is not <point>#<ordinal>');
+    const declaredPoint = String(b.fields.point || '').trim();
+    if (m && declaredPoint && declaredPoint !== point) {
+      malformed.push('record ' + b.key + ' declares point "' + declaredPoint + '" which disagrees with its id');
+    }
+    const units = [];
+    const seenNames = new Set();
+    for (const line of b.units) {
+      const cells = String(line).split('|').map(c => c.trim());
+      const name = cells[0] || '';
+      if (!/^[A-Za-z0-9_-]+$/.test(name)) { malformed.push('record ' + b.key + ' unit name "' + name + '" is not [A-Za-z0-9_-]+'); continue; }
+      if (seenNames.has(name)) { malformed.push('record ' + b.key + ' repeats unit name "' + name + '"'); continue; }
+      seenNames.add(name);
+      const dash = v => (v && v !== '—' && v !== '-') ? v : '';
+      units.push({
+        name,
+        id: expansionUnitId(point, ordinal, name),
+        role: cells[1] || '',
+        model: dash(cells[2] || '').toLowerCase(),
+        writeSetRaw: cells[3] || '—',
+        mode: (cells[4] || '').toLowerCase(),
+        dependsOnNames: dash(cells[5] || '').split(',').map(s => s.trim()).filter(Boolean),
+      });
+    }
+    if (!units.length) malformed.push('record ' + b.key + ' declares no unit lines');
+    records.push({
+      id: b.key,
+      point,
+      ordinal,
+      plan_hash: String(b.fields.plan_hash || '').trim().toLowerCase(),
+      derivation: EXPANSION_DERIVATION_KEYS.reduce((acc, k) => {
+        acc[k] = String(b.fields[k] == null ? '' : b.fields[k]).trim();
+        return acc;
+      }, {}),
+      units,
+      malformed,
+    });
+  }
+  records.sort((a, b2) => (a.point < b2.point ? -1 : a.point > b2.point ? 1 : (a.ordinal - b2.ordinal)));
+  return { records, opens, discharges, blocks };
+}
+
+// expansionRecordOpened — QUESTION: "has this record's frontier been POSITIVELY PROVEN opened?"
+// FAILS CLOSED to NOT-OPENED. The proof is the presence of an `open(<record id>)` block, which is
+// appended as the LAST step of the expansion transaction. A record with no such block — including a
+// record that omits every optional field entirely — answers FALSE, so `reconcile-running-set` rolls
+// it FORWARD (re-opens it; the roll-forward is idempotent).
+//
+// Direction rationale: the cost of a false NO is one idempotent re-open (the scheduler skips units
+// that are already live or non-pending). The cost of a false YES is that a whole composed frontier
+// silently never runs and the milestone wedges with no operator signal. Never invert this predicate
+// into "assume opened unless proven otherwise".
+function expansionRecordOpened(parsed, recordId) {
+  if (!parsed || !(parsed.opens instanceof Set)) return false;
+  return parsed.opens.has(String(recordId));
+}
+
+// expansionRecordSettled — QUESTION: "is every unit of this record POSITIVELY PROVEN finished?"
+// FAILS CLOSED to NOT-SETTLED. This is the GATE predicate: it authorizes appending a NEW record to
+// the same expansion point (a re-expansion) and discharging the point. A unit whose ledger row is
+// ABSENT, unparseable, or non-terminal answers FALSE and therefore BLOCKS. It is the mirror of
+// expansionRecordOpened: both demand positive proof, of opposite propositions, and both refuse to
+// treat a missing field as evidence.
+//
+// Direction rationale: a false NO costs an operator one visible typed refusal naming the unsettled
+// units. A false YES would co-open a second frontier over a still-live one — exactly the state the
+// running-set mutual exclusion exists to prevent.
+function expansionRecordSettled(record, ledgerStatuses) {
+  const st = ledgerStatuses || {};
+  const terminal = new Set(['complete', 'n/a']);
+  if (!record || !Array.isArray(record.units) || record.units.length === 0) return false;
+  for (const u of record.units) {
+    if (!Object.prototype.hasOwnProperty.call(st, u.id)) return false;
+    if (!terminal.has(String(st[u.id] || '').toLowerCase())) return false;
+  }
+  return true;
+}
+
+// expansionUnitNodes — project the recorded frontiers onto VALIDATOR-SHAPED nodes so every existing
+// graph consumer (readiness, longest-path, allDone, the reasoning-tier floor) sees the composed
+// interior with no second node model.
+//
+// Wiring:
+//   - a unit with explicit intra-record `depends_on` names depends on those units (the NAMED
+//     serializer edge — the only mechanically enforceable form of `mode: serial`);
+//   - a unit with none depends on the PREVIOUS record's units on the same point, or — for the first
+//     record — on the expansion point's own frozen `depends_on`;
+//   - the expansion point itself gains a dependency on EVERY unit of EVERY record on it, so the
+//     spine cannot advance past a milestone whose composed interior is still running.
+//
+// MODEL-TIER SEAM (single owner): a unit carries its tier in the record's `model` column, and the
+// synthesized node exposes it on the SAME `model` field a frozen spine node uses. Tier resolution
+// therefore keeps exactly ONE owner — next-action's node descriptor (`node.model || resolveModel(role)`)
+// — before and after expansion. No second resolver is introduced anywhere.
+function expansionUnitNodes(content, spineNodes) {
+  const parsed = parseExpansionRecords(content);
+  const byId = new Map((spineNodes || []).map(n => [n.id, n]));
+  const units = [];
+  const pointDeps = new Map();
+  const byPoint = new Map();
+  for (const r of parsed.records) {
+    if (!byPoint.has(r.point)) byPoint.set(r.point, []);
+    byPoint.get(r.point).push(r);
+  }
+  for (const [point, recs] of byPoint) {
+    const pointNode = byId.get(point);
+    if (!pointNode) continue;   // a record keying an unknown node is refused at expand-open, ignored here
+    let previousUnitIds = pointNode.dependsOn.slice();
+    const all = [];
+    for (const r of recs) {
+      const names = new Set(r.units.map(u => u.name));
+      const thisRecordIds = [];
+      for (const u of r.units) {
+        const explicit = u.dependsOnNames.filter(n => names.has(n)).map(n => expansionUnitId(point, r.ordinal, n));
+        units.push({
+          id: u.id,
+          role: u.role,
+          dependsOn: explicit.length ? explicit : previousUnitIds.slice(),
+          writeSetRaw: u.writeSetRaw,
+          writeSet: classifier.parseWriteSetCell(u.writeSetRaw),
+          cardinality: '1',
+          shape: parseShape('sequence'),
+          selectorSource: '',
+          model: u.model,
+          waitBudgetRaw: '',
+          wait_budget_minutes: null,
+          observes: '',
+          gateClaim: '', gateSurface: '', gateAggregation: '', certifiesRaw: '', certifies: [],
+          // Additive provenance — the ONLY fields a legacy consumer would not recognize.
+          expansion_point: point,
+          expansion_record: r.id,
+          expansion_mode: u.mode,
+        });
+        thisRecordIds.push(u.id);
+        all.push(u.id);
+      }
+      if (thisRecordIds.length) previousUnitIds = thisRecordIds;
+    }
+    if (all.length) pointDeps.set(point, all);
+  }
+  return { parsed, units, pointDeps };
+}
+
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
 // write-set parsing to classifier.parseWriteSetCell, so the validator, the plan_hash, and
@@ -3249,7 +3468,21 @@ function validatePlan(content, opts) {
         errors: [validationPolicy.reason + (validationPolicy.field ? ': ' + validationPolicy.field : '')],
         planHash: computePlanHash(content), plan_schema_version: 2, contract_version: 2 };
     }
-    const hasCodeProducer = nodes.some(producesCode);
+    // #759 (carry-forward from the spine-grammar verifier): a PURE-SPINE schema-2 plan escaped this
+    // rule. `producesCode` reads the frozen role + declared write set, and an expansion point has
+    // neither — so a spine whose code producers all live inside not-yet-composed expansions froze
+    // `auto-run` with NO validation_command, where the byte-equivalent legacy DAG plan correctly
+    // refuses. That is a fail-OPEN asymmetry in a fail-closed rule: the validation policy is the
+    // run's own verdict-of-done, and deferring the SHAPE of the interior must not defer the
+    // OBLIGATION to have one.
+    //
+    // The fix is fail-CLOSED over the unknown interior: an expansion point is treated as a code
+    // producer because its open-time frontier MAY compose any writer role — we cannot prove at freeze
+    // that it will not. This deliberately does NOT read `expected_surfaces`: that contract is declared
+    // advisory, and letting a coarse hint decide a gate would re-import the freeze-time commitment the
+    // spine exists to defer (and would let an author dodge the rule by omitting a hint).
+    const hasCodeProducer = nodes.some(producesCode)
+      || (isSpine && nodes.some(n => n.role === SPINE_EXPANSION_ROLE));
     if (hasCodeProducer && (!validationPolicy.command || !validationPolicy.timeout_minutes)) {
       return { result: 'refuse', reason: 'validation_policy_required', operator_hint: getOperatorHint('plan_invalid'),
         errors: ['schema-2 code-producing plans require validation_command and validation_timeout_minutes'],
@@ -5805,6 +6038,17 @@ module.exports = {
   expansionHeaderCounts,
   SPINE_EXPANSION_ROLE,
   PLAN_FORM_LEGAL,
+  // #759 expansion transaction: the append-at-tail record channel + the two directed predicates.
+  // Exported so the executor (expand-open / reconcile) and the ready-set derivation read ONE parser
+  // and ONE id derivation — a second copy of either would silently strand composed units.
+  EXPANSION_RECORDS_HEADING,
+  EXPANSION_UNIT_MODES,
+  EXPANSION_DERIVATION_KEYS,
+  expansionUnitId,
+  parseExpansionRecords,
+  expansionRecordOpened,
+  expansionRecordSettled,
+  expansionUnitNodes,
   parseValidationCommand,
   parseValidationPolicy,
   parseValidationTestConsumes,
