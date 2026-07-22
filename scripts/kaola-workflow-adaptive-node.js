@@ -11965,8 +11965,10 @@ function validateComposition(composition, ctx) {
     if (names.has(name)) return bad('expansion_unit_name_duplicate', 'unit name "' + name + '" appears twice');
     names.add(name);
     const role = String((raw && raw.role) || '').trim();
-    if (!ctx.installedRoles.has(role)) return bad('expansion_unit_role_unknown', 'unit ' + name + ' role "' + role + '" is not in the installed role library');
+    // Reserved BEFORE the library lookup: the three built-ins have no agents/*.md profile, so the
+    // library check would answer them with the vaguer unknown-role reason and hide the real rule.
     if (RESERVED_EXPANSION_UNIT_ROLES.has(role)) return bad('expansion_unit_role_reserved', 'unit ' + name + ' may not take the built-in role "' + role + '"');
+    if (!ctx.installedRoles.has(role)) return bad('expansion_unit_role_unknown', 'unit ' + name + ' role "' + role + '" is not in the installed role library');
     const mode = String((raw && raw.mode) || '').trim().toLowerCase();
     if (!grammar.MODES.includes(mode)) {
       return bad('expansion_unit_mode_unsupported', 'unit ' + name + ' mode "' + mode + '" is not one of ' + grammar.MODES.join('|'));
@@ -13062,6 +13064,15 @@ module.exports = {
   readRunningSet,
   isReadOnlyNode,
   nodeWriteSetNonempty,
+  // #759 (expansion transaction): the two subcommand bodies, the append primitives, the pure
+  // composition validator, and the reconcile roll-forward arm — exported for direct unit coverage.
+  runExpandOpen,
+  runExpandClose,
+  rollForwardExpansions,
+  validateComposition,
+  renderExpansionRecord,
+  appendExpansionBlock,
+  appendLedgerRows,
   runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
