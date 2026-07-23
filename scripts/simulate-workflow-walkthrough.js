@@ -17792,6 +17792,52 @@ function testContextPacketEfficiencyRollup763() {
       '#763 (c) CONTROL: parseNodes (freeze view) must NOT see the composed unit');
   }
 
+  // ---- (d) expansionRecordEfficiency / renderExpansionEfficiencyLine — direct pure-function pins.
+  // The #759-based scenario above only ever exercises co_open units; this pins the OTHER branch of
+  // `mode` (ANY serial unit flips the whole point to serial) and the serializer tag extraction, plus
+  // the never-throws fallback shape on empty/absent input. ----
+  {
+    const validator = require('./kaola-workflow-plan-validator');
+
+    // ANY serial unit anywhere on the point flips mode to 'serial', even among mostly co_open units.
+    const serialRecs = [
+      { units: [{ mode: 'co_open' }, { mode: 'serial' }], derivation: { serializer: 'S1 — shared file lib/x.js' } },
+    ];
+    const effSerial = validator.expansionRecordEfficiency(serialRecs);
+    assert(effSerial.mode === 'serial' && effSerial.serializer === 'S1' && effSerial.width === 2 && effSerial.rework === 0,
+      '#763 (d): a record with ANY serial unit must report mode=serial and extract the named serializer tag, got '
+      + JSON.stringify(effSerial));
+
+    // All-co_open records report mode co_open, and a derivation line naming no S-tag reports 'none'.
+    const coOpenRecs = [{ units: [{ mode: 'co_open' }, { mode: 'co_open' }], derivation: { serializer: 'none present' } }];
+    const effCoOpen = validator.expansionRecordEfficiency(coOpenRecs);
+    assert(effCoOpen.mode === 'co_open' && effCoOpen.serializer === 'none' && effCoOpen.width === 2,
+      '#763 (d): an all-co_open record must report mode=co_open and serializer=none, got ' + JSON.stringify(effCoOpen));
+
+    // rework counts re-expansions BEYOND the first — three records on one point is TWO reworks — and
+    // the first S-tag found across ALL records (in order) wins.
+    const rr = validator.expansionRecordEfficiency([
+      { units: [{ mode: 'co_open' }], derivation: { serializer: 'S2 present' } },
+      { units: [{ mode: 'co_open' }], derivation: { serializer: 'none' } },
+      { units: [{ mode: 'co_open' }], derivation: { serializer: 'none' } },
+    ]);
+    assert(rr.rework === 2 && rr.width === 3 && rr.serializer === 'S2',
+      '#763 (d): rework counts re-expansions beyond the first; the first S-tag across all records wins, got ' + JSON.stringify(rr));
+
+    // Never-throws fallback: an empty or absent recs input answers the all-zero/'none' shape.
+    const zero = { width: 0, mode: 'co_open', serializer: 'none', rework: 0 };
+    assert(JSON.stringify(validator.expansionRecordEfficiency([])) === JSON.stringify(zero),
+      '#763 (d): an empty recs array must answer the all-zero/none shape, got '
+      + JSON.stringify(validator.expansionRecordEfficiency([])));
+    assert(JSON.stringify(validator.expansionRecordEfficiency(null)) === JSON.stringify(zero),
+      '#763 (d): a null recs input must never throw and must answer the same zero shape, got '
+      + JSON.stringify(validator.expansionRecordEfficiency(null)));
+
+    assert(validator.renderExpansionEfficiencyLine('m9', effSerial) === 'expansion m9: width=2 mode=serial serializer=S1 rework=0',
+      '#763 (d): renderExpansionEfficiencyLine must format the canonical shape exactly, got '
+      + validator.renderExpansionEfficiencyLine('m9', effSerial));
+  }
+
   console.log('testContextPacketEfficiencyRollup763: PASSED');
 }
 
