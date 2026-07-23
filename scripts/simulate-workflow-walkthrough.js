@@ -16714,6 +16714,28 @@ function testReviewerContractV2Conformance() {
     'review-v2 discovery plus strict-progress closure persist two settled schema-v2 attempts');
     assert(schema.validateReviewJournal(journal, freezeOut.planHash, 2).ok === true,
       'review-v2 persisted journal revalidates against the exact frozen plan hash');
+    // OPTIONAL, VALIDATED expansion_id review-journal field — INTEGRATION pin (not the isolated field
+    // predicate). This journal is a REAL produced schema-2 journal that OMITS expansion_id, so the
+    // assert above already exercised the absence-PASSES arm inside validateReviewJournalV2. The
+    // PRESENT-but-malformed FAIL-CLOSED arm is what no produced fixture reached, which left the guard
+    // deletable with zero test signal. Pin BOTH remaining directions on the byte-exact produced journal.
+    assert(!Object.prototype.hasOwnProperty.call(journal.attempts[1], 'expansion_id'),
+      'expansion_id integration: the produced attempt genuinely OMITS the field — only absence-passes ran before');
+    {
+      const malformedExpId = JSON.parse(JSON.stringify(journal));
+      malformedExpId.attempts[1].expansion_id = 'm1'; // present, no #ordinal ⇒ malformed
+      const mr = schema.validateReviewJournal(malformedExpId, freezeOut.planHash, 2);
+      assert(mr.ok === false && mr.reason === 'review_journal_malformed',
+        'expansion_id integration: a PRESENT-but-malformed expansion_id must refuse review_journal_malformed '
+        + 'through validateReviewJournalV2 — a binding that cannot be trusted must never pass as if it bound '
+        + 'nothing, got ' + JSON.stringify(mr));
+      const wellFormedExpId = JSON.parse(JSON.stringify(journal));
+      wellFormedExpId.attempts[1].expansion_id = 'm1#2'; // present, well-formed <point>#<ordinal>
+      const wr = schema.validateReviewJournal(wellFormedExpId, freezeOut.planHash, 2);
+      assert(wr.ok === true,
+        'expansion_id integration: a PRESENT well-formed <point>#<ordinal> binds and validates OK — the '
+        + 'guard rejects malformation, never mere presence, got ' + JSON.stringify(wr));
+    }
     const forgedProfileJournal = JSON.parse(JSON.stringify(journal));
     forgedProfileJournal.attempts[1].profile_hashes = ['f'.repeat(64)];
     assert(schema.validateReviewJournal(forgedProfileJournal, freezeOut.planHash, 2).reason
@@ -17564,6 +17586,184 @@ function testExpansionTransaction759() {
   console.log('testExpansionTransaction759: PASSED');
 }
 
+// ── #761 DISCHARGED-POINT RE-OPEN CASCADE ────────────────────────────────────────────────────
+// Every real re-expansion scenario surfaces its finding AFTER the owning milestone is DISCHARGED.
+// Driven END TO END through the production CLIs (never string replacement on the ledger):
+//   (a) expand-open → close → discharge a milestone, then expand-open on the DISCHARGED point
+//       REPRODUCES the expansion_point_discharged dead end; reexpand-open re-opens it with a NEW
+//       monotonic record, returns the owner to its un-discharged state, and stays append-only +
+//       resume-check green (the #756 / #745 remedy: a finding at a settled point no longer dead-ends);
+//   (b) DERIVED sink-progress admissibility: after the branch is PUSHED (the sink's first irreversible
+//       step, derived — no marker file), reexpand-open REFUSES reexpansion_after_sink_started;
+//   (c) AC3 SELECTIVITY: a mid-spine re-expansion re-verifies ONLY the downstream milestone whose
+//       surface intersects the fix; a disjoint one is LEFT UNTOUCHED.
+function testReExpandCascade761() {
+  const validator = require('./kaola-workflow-plan-validator');
+  const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
+  const fixerComp = (writeSet) => ({ derivation: DERIV,
+    units: [{ name: 'fx', role: 'code-explorer', model: 'standard', write_set: writeSet || '', mode: 'co_open' }] });
+
+  const mkRepo = (slug, plan, branch) => {
+    const repo = adaptiveTmp(slug);
+    initGitRepoWithBareRemote(repo);
+    spawnSync('git', ['-C', repo, 'checkout', '-b', branch], { encoding: 'utf8' });
+    const proj = path.join(repo, 'kaola-workflow', slug);
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, plan);
+    // A branch pointer whose origin ref does NOT exist ⇒ derived sink-progress reads PRISTINE.
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: ' + slug + '\nbranch: ' + branch + '\n');
+    const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+    assert(fz.status === 0, '#761 ' + slug + ': spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+    return { repo, proj, planPath, project: slug };
+  };
+  const ledgerOf = (planPath) => {
+    const out = {};
+    for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+      const c = l.split('|'); out[c[1].trim()] = c[2].trim();
+    }
+    return out;
+  };
+  const expandSub = (sub, ctx, nodeId, comp) => runNode(adaptiveNodeScript,
+    [sub, '--project', ctx.project, '--node-id', nodeId, '--json', '--stdin'], ctx.repo, null, { input: JSON.stringify(comp) });
+  const driveMilestone = (ctx, id) => {
+    const e = expandSub('expand-open', ctx, id, fixerComp(''));
+    assert(e.status === 0, '#761 expand-open ' + id + ': ' + e.stdout + e.stderr);
+    for (const u of (JSON.parse(e.stdout).opened || []).map(n => n.id)) {
+      fs.appendFileSync(path.join(ctx.proj, '.cache', u + '.md'), '\nfindings: none\n');
+      const c = runNode(adaptiveNodeScript, ['close-node', '--project', ctx.project, '--node-id', u, '--json'], ctx.repo);
+      assert(c.status === 0, '#761 close-node ' + u + ': ' + c.stderr);
+    }
+    const d = runNode(adaptiveNodeScript, ['expand-close', '--project', ctx.project, '--node-id', id, '--json'], ctx.repo);
+    assert(d.status === 0, '#761 expand-close ' + id + ': ' + d.stderr);
+  };
+  const driveWall = (ctx, id) => {
+    const o = runNode(adaptiveNodeScript, ['open-next', '--project', ctx.project, '--json'], ctx.repo);
+    const op = JSON.parse(o.stdout);
+    assert(op.opened && op.opened.id === id, '#761 open wall ' + id + ': ' + o.stdout + o.stderr);
+    const wd = op.opened.dispatch;
+    const ev = ['evidence-binding: ' + id + ' ' + op.nonce, 'contract_version: 2',
+      'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
+      'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
+      'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
+      'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', ''].join('\n');
+    const r = runNode(adaptiveNodeScript, ['record-evidence', '--project', ctx.project, '--node-id', id, '--stdin', '--json'], ctx.repo, null, { input: ev });
+    assert(r.status === 0, '#761 record wall ' + id + ': ' + r.stderr);
+    const c = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', ctx.project, '--node-id', id, '--json'], ctx.repo);
+    assert(c.status === 0, '#761 close wall ' + id + ': ' + c.stdout + c.stderr);
+  };
+
+  const META = ['## Meta', '', 'plan_schema_version: 2', 'plan_form: spine',
+    'validation_command: node scripts/simulate-workflow-walkthrough.js', 'validation_timeout_minutes: 20',
+    'code_certifier: wall', 'security_certifier: none', 'inherited_frontier_digest: none', 'inherited_frontier_classes: none', ''];
+
+  // ---- (a) reproduction + re-open, driven through the production CLIs. ----
+  {
+    const PLAN = ['# Plan — #761a', '', ...META,
+      'expansion(m1):', '  milestone_goal: land the seam', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
+      '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
+    const ctx = mkRepo('issue-761a', PLAN, 'workflow/issue-761a');
+    try {
+      driveMilestone(ctx, 'm1');
+      assert(ledgerOf(ctx.planPath).m1 === 'complete', '#761 (a): m1 discharged, got ' + ledgerOf(ctx.planPath).m1);
+      // REPRODUCE the dead end.
+      const repro = expandSub('expand-open', ctx, 'm1', fixerComp(''));
+      assert(repro.status !== 0 && JSON.parse(repro.stdout).reason === 'expansion_point_discharged',
+        '#761 (a): expand-open on a DISCHARGED point must reproduce expansion_point_discharged, got ' + repro.stdout);
+      // RE-OPEN.
+      const before = fs.readFileSync(ctx.planPath, 'utf8');
+      const reo = expandSub('reexpand-open', ctx, 'm1', fixerComp('scripts/fix.js'));
+      assert(reo.status === 0, '#761 (a): reexpand-open must exit 0, got ' + reo.status + '\n' + reo.stdout + reo.stderr);
+      const p = JSON.parse(reo.stdout);
+      assert(p.reopened === true && p.expansion_id === 'm1#2' && p.sink_progress === 'pristine',
+        '#761 (a): re-open appends monotonic m1#2 at a pristine sink, got ' + JSON.stringify({ r: p.reopened, id: p.expansion_id, s: p.sink_progress }));
+      assert(ledgerOf(ctx.planPath).m1 === 'pending',
+        '#761 (a): the re-opened owner returns to its un-discharged (pending) state, got ' + ledgerOf(ctx.planPath).m1);
+      // APPEND-ONLY on the records channel + the spine hash is invariant + resume-check green.
+      const recSec = (t) => t.slice(t.indexOf('## Expansion Records'));
+      const now = fs.readFileSync(ctx.planPath, 'utf8');
+      assert(recSec(now).indexOf(recSec(before).replace(/\s+$/, '')) === 0, '#761 (a): the re-open must be APPEND-ONLY on the records channel');
+      assert(validator.computePlanHash(before) === validator.computePlanHash(now),
+        '#761 (a): re-opening must NOT perturb the frozen spine identity (ledger splices are not hash-covered)');
+      const rc = runNode(planValidatorScript, [ctx.planPath, '--resume-check', '--json'], ctx.repo);
+      assert(rc.status === 0 && JSON.parse(rc.stdout).ok === true, '#761 (a): resume-check green after re-open, got ' + rc.stdout + rc.stderr);
+    } finally { fs.rmSync(ctx.repo, { recursive: true, force: true }); try { fs.rmSync(ctx.repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // ---- (b) derived sink-progress: a PUSHED branch (started) refuses the re-expansion. ----
+  {
+    const PLAN = ['# Plan — #761b', '', ...META,
+      'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
+      '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
+    const ctx = mkRepo('issue-761b', PLAN, 'workflow/issue-761b');
+    try {
+      driveMilestone(ctx, 'm1');
+      const push = spawnSync('git', ['-C', ctx.repo, 'push', '-u', 'origin', 'workflow/issue-761b'], { encoding: 'utf8' });
+      assert(push.status === 0, '#761 (b): push the workflow branch, got ' + push.stderr);
+      const reo = expandSub('reexpand-open', ctx, 'm1', fixerComp('scripts/fix.js'));
+      const p = JSON.parse(reo.stdout);
+      assert(reo.status !== 0 && p.reason === 'reexpansion_after_sink_started' && p.sink_progress === 'started',
+        '#761 (b): a re-expansion after the sink PUSHED must refuse reexpansion_after_sink_started (derived started), got ' + reo.stdout);
+    } finally { fs.rmSync(ctx.repo, { recursive: true, force: true }); try { fs.rmSync(ctx.repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // ---- (c) AC3: parallel milestones under one terminal wall — selective downstream re-verify. ----
+  {
+    const PLAN = ['# Plan — #761c', '', ...META,
+      'expansion(m1):', '  milestone_goal: g1', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+      'expansion(m2):', '  milestone_goal: g2', '  expected_surfaces: docs/', '  join_constraints: none', '  review_class: code-reviewer', '',
+      'expansion(m3):', '  milestone_goal: g3', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+      '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+      '| m2 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+      '| m3 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+      '| wall | code-reviewer | m1, m2, m3 | — | 1 | sequence | every milestone lands its goal with no unreviewed surface | the accumulated candidate across all expansions | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| probe | complete |', '| m1 | pending |', '| m2 | pending |', '| m3 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
+    const ctx = mkRepo('issue-761c', PLAN, 'workflow/issue-761c');
+    try {
+      driveMilestone(ctx, 'm1'); driveMilestone(ctx, 'm2'); driveMilestone(ctx, 'm3');
+      driveWall(ctx, 'wall');
+      const before = ledgerOf(ctx.planPath);
+      assert(before.m1 === 'complete' && before.m2 === 'complete' && before.m3 === 'complete' && before.wall === 'complete',
+        '#761 (c): the whole spine must be discharged + reviewed before the re-open, got ' + JSON.stringify(before));
+      // A fix under scripts/ intersects m3 (scripts/), is disjoint from m2 (docs/).
+      const reo = expandSub('reexpand-open', ctx, 'm1', fixerComp('scripts/fix.js'));
+      assert(reo.status === 0, '#761 (c): reexpand-open must exit 0, got ' + reo.stdout + reo.stderr);
+      const p = JSON.parse(reo.stdout);
+      const after = ledgerOf(ctx.planPath);
+      assert(after.m1 === 'pending', '#761 (c): owner m1 re-opened, got ' + after.m1);
+      assert(after.wall === 'pending', '#761 (c): the terminal wall re-activated (reviewed-before-sink), got ' + after.wall);
+      assert(after.m3 === 'pending', '#761 (c): INTERSECTING m3 re-verified (reset to pending), got ' + after.m3);
+      assert(after.m2 === 'complete', '#761 (c): DISJOINT m2 LEFT UNTOUCHED — the efficiency point (do not re-verify the world), got ' + after.m2);
+      assert(JSON.stringify(p.downstream_reverified) === '["m3"]' && JSON.stringify(p.downstream_untouched) === '["m2"]',
+        '#761 (c): the re-open must report re-verified=[m3] untouched=[m2], got ' + JSON.stringify({ r: p.downstream_reverified, u: p.downstream_untouched }));
+      const rc = runNode(planValidatorScript, [ctx.planPath, '--resume-check', '--json'], ctx.repo);
+      assert(rc.status === 0 && JSON.parse(rc.stdout).ok === true, '#761 (c): resume-check green after selective re-open, got ' + rc.stdout + rc.stderr);
+    } finally { fs.rmSync(ctx.repo, { recursive: true, force: true }); try { fs.rmSync(ctx.repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  console.log('testReExpandCascade761: PASSED');
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -17846,6 +18046,7 @@ function buildRegistry() {
   add('testReviewerContractV2Conformance',                testReviewerContractV2Conformance);
   add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
   add('testExpansionTransaction759',                      testExpansionTransaction759);
+  add('testReExpandCascade761',                           testReExpandCascade761);
   return reg;
 }
 

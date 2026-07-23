@@ -1514,6 +1514,25 @@ const FINDING_FAILURE_CLASSES = Object.freeze([
 const SHA1_RE = /^[0-9a-f]{40}$/i;
 const TREE_MODE_RE = /^[0-7]{6}$/;
 
+// #761 (carry-forward from #759) — the OPTIONAL expansion_id binding on a review-journal attempt.
+// An expansion record's id is `<point>#<ordinal>` (see the plan-validator's expansionUnitId /
+// parseExpansionRecords): the point contains no `#`, `|`, whitespace, or newline (those are the record
+// grammar's own delimiters), and the ordinal is a positive integer. A re-expansion produces a SECOND
+// record on the same point, so a re-review's journal attempt must name WHICH record it reviewed — that
+// is exactly this field. It is OPTIONAL AND IGNORED WHEN ABSENT (an in-flight journal minted before
+// this field existed stays valid), and VALIDATED WHEN PRESENT (a malformed value is a typed refusal —
+// a binding that cannot be trusted must never pass as if it bound nothing).
+const EXPANSION_ID_RE = /^[^\s#|]+#[1-9][0-9]*$/;
+// expansionIdFieldOk — QUESTION: "is this attempt's expansion_id field acceptable?" FAILS CLOSED on a
+// present-but-malformed value; PASSES on absence (the in-flight-tolerance direction) and on a
+// well-formed record id. Returns true/false; the caller emits the typed refusal.
+function expansionIdFieldOk(attempt) {
+  if (!attempt || !Object.prototype.hasOwnProperty.call(attempt, 'expansion_id')) return true;
+  const v = attempt.expansion_id;
+  if (v === null) return true;                       // explicit "reviewed no re-expansion record"
+  return typeof v === 'string' && v.length <= 256 && EXPANSION_ID_RE.test(v);
+}
+
 function planNodeId(node) { return node && node.id != null ? String(node.id) : ''; }
 function planNodeRole(node) { return node && node.role != null ? String(node.role) : ''; }
 function planNodeDepends(node) {
@@ -2458,6 +2477,11 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       || !['close-node', 'close-and-open-next'].includes(attempt.settlement_command)
       || typeof attempt.lifecycle_settled !== 'boolean') {
       return refuseJournal('review_journal_malformed', 'attempt scalar fields invalid');
+    }
+    // #761: OPTIONAL expansion_id binding — a re-review's attempt names WHICH expansion record it
+    // reviewed. Absent => valid (in-flight tolerance). Present-and-malformed => typed refusal.
+    if (!expansionIdFieldOk(attempt)) {
+      return refuseJournal('review_journal_malformed', 'expansion_id must be a <point>#<ordinal> record id or null');
     }
     const gate = attempt.logical_gate;
     if (!isPlainObject(gate) || !HEX64_RE.test(String(gate.key || ''))
@@ -3887,6 +3911,10 @@ module.exports = {
   REVIEW_CONTEXT_SCHEMA_VERSION,
   REVIEW_JOURNAL_SCHEMA_VERSION,
   REVIEW_GATE_ROLES,
+  // #761: the OPTIONAL expansion_id binding on a review-journal attempt (a re-review names WHICH
+  // expansion record it reviewed) + its fail-closed field validator — exported for direct pins.
+  EXPANSION_ID_RE,
+  expansionIdFieldOk,
   REVIEW_AGGREGATIONS,
   ADVERSARIAL_OUTCOMES,
   APPROVAL_OUTCOMES,
