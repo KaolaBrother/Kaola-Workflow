@@ -152,6 +152,52 @@ refusals teach the walls at freeze — author to them, never clamp around them.
 - **Record `validation_command` once** in `## Meta` (nodes + Finalization reuse it); list
   runtime-read prose in `validation_test_consumes`.
 
+## Progressive elaboration — dag vs spine plan form
+
+`## Meta` carries `plan_form`, the discriminator between the two shapes you may author:
+
+- **`plan_form: dag`** (the default — a legacy plan with no `plan_form` field IS a dag):
+  the WHOLE task-shaped DAG is known at freeze. Author it exactly as above.
+- **`plan_form: spine`**: author this when one or more milestones' INTERIOR frontier
+  cannot be proven at freeze — the writers/reviewers a milestone needs depend on findings
+  not yet available, so its shape must be composed later, at open time, with current
+  information (progressive elaboration). Place an `expansion-point` node at each such
+  milestone. A spine MUST carry at least one real `expansion-point`; a `spine` label over
+  a plan with no expansion point refuses — when the whole shape is knowable, author `dag`.
+
+A frozen spine plan:
+
+- **`## Meta`** — add `plan_form: spine`; keep every other schema-2 Meta field as above. An
+  `expansion-point` counts as a code producer (its composed frontier writes), so
+  `validation_command` and `validation_timeout_minutes` are REQUIRED — a spine with no
+  validation policy refuses `validation_policy_required`, exactly as a code-producing dag
+  does. A fresh epoch-1 spine does NOT declare `finding_owners` or an epoch schema field —
+  those belong to a re-plan child only.
+- **One `expansion(<point-id>):` block per expansion-point node** — a column-0 header keyed
+  by the node id, with indented fields:
+  - `milestone_goal:` — non-empty prose naming what the milestone must achieve.
+  - `expected_surfaces:` — ADVISORY ONLY. Directory tokens are legal here; it is a hint for
+    the run-time composer, NEVER a write grant and NEVER a barrier input. It cannot move any
+    verdict (not the validation policy, not a write-set check).
+  - `join_constraints:` — required; the literal `none` is legal.
+  - `review_class:` — required; a CLOSED vocabulary over the gate roles (`code-reviewer` |
+    `security-reviewer` | `adversarial-verifier` | `main-session-gate`). It names the KIND
+    of wall that reviews the composed frontier; it is not itself the wall.
+- **`## Nodes`** — an expansion-point row is role `expansion-point`, shape `sequence` only,
+  with NO `declared_write_set` and NO `model` (per-unit tiers are chosen at compose time,
+  not freeze). Every other node is a normal role row with unchanged legacy semantics.
+- **A CONCRETE review wall** — for each expansion point author a concrete node whose role is
+  the point's `review_class` and that POST-DOMINATES that expansion point on the path to the
+  sink. The expansion NEVER composes its own gate: a composed gate unit is refused, and the
+  milestone's review obligation is always this concrete wall, which opens and closes through
+  the normal gate lifecycle once the milestone discharges.
+- **A single unique `finalize` sink**, as always. An `expansion-point` can never BE the sink
+  — nothing post-dominates the sink, so its review obligation would be undischargeable.
+
+Do not compose a milestone's frontier here — the executor composes and opens it at run time.
+Author only the spine: the ordered points, their `expansion(<point-id>)` contracts, the
+concrete walls, and the sink.
+
 ## Efficient, forge-neutral authoring
 
 - **Author EFFICIENT DAGs, not merely valid ones.** Minimize the safe critical path; expose

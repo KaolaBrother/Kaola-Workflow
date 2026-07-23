@@ -78,6 +78,25 @@ const REQUIRED_BLOCKS = [
     content_tokens: ['<!-- PIN: leg-isolation-recipe -->', '--write-overlap-consent'],
   },
   {
+    // #767: the spine expansion-lifecycle driving prose — the keystone that makes progressive
+    // elaboration user-reachable. Raw skeleton text (REGION-neutral, no SLOT/SPLICE divergence),
+    // so it obligates all six plan-run surfaces identically. The interior tokens are distinctive
+    // command/directive strings, never substrings of the marker itself.
+    block_id: 'pr-expansion-lifecycle',
+    topic: 'plan-run',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: expansion-lifecycle -->',
+      'expansionPending',
+      'readyToExpand',
+      'readyToDischarge',
+      'expand-open',
+      'expand-close',
+      'expansion_unit_role_gate_unsupported',
+    ],
+  },
+  {
     block_id: 'pr-speculative-open',
     topic: 'plan-run',
     runtime_tag: 'both',

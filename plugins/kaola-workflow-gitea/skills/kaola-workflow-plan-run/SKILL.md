@@ -344,6 +344,63 @@ plan-run orchestrator: driving {project} — {N} nodes; each role subagent will 
 
 Substitute `{project}` for the project name and `{N}` for the total row count of `## Nodes`.
 
+<!-- PIN: expansion-lifecycle -->
+### 1a. Drive spine expansion points
+
+On a spine plan (`plan_form: spine` in `## Meta`) `orient` and `next-action` surface
+`expansionPending[]` — one entry per ready expansion-point milestone, each carrying
+`readyToExpand` / `readyToDischarge` / `openIncomplete` directives. An expansion point holds NO
+work of its own and NEVER appears on `readyPending`; you DRIVE its lifecycle with the three
+expansion subcommands. A spine whose ready expansion points are never driven opens nothing,
+returns `frontier_blocked`, and stalls at stop+ask — so treat a `readyToExpand` entry as an open
+obligation, not an option. (A `plan_form: dag` plan carries no `expansionPending` and this whole
+step is a no-op — run the normal loop.)
+
+- **`readyToExpand: true`** — COMPOSE this milestone's real frontier NOW, with current
+  information. Read the milestone's `expansion(<point-id>)` contract (`milestone_goal`, the
+  advisory `expected_surfaces`, `join_constraints`, `review_class`) and decompose the goal into
+  the writers/reviewers it genuinely needs — by the SAME faithful-decomposition and
+  evidence-backed-serialization rules as any frontier: co-open (`mode: co_open`) by DEFAULT,
+  serial (`mode: serial`) ONLY on a NAMED S1/S2/S3 serializer (name the artifact / the shared
+  resource / a failed worktree probe), never on a guess. Then record + open the frontier in one
+  transaction:
+
+  ```bash
+  node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" expand-open \
+    --project {project} --node-id {point-id} --stdin --json
+  ```
+
+  passing the composition on stdin as `{derivation:{grain,path,join,probe,serializer},
+  units:[{name,role,model,write_set,mode}]}`. `expand-open` appends the record and OPENS the
+  composed units through the running-set scheduler (a read fan-out, or co-open isolated legs for a
+  disjoint write frontier) — dispatch each unit's role agent and `close-node` it exactly like any
+  frontier member. A re-expansion (a second record on the SAME point) is the SAME command once
+  every prior unit is settled.
+- **Never compose a gate role inside an expansion** (`code-reviewer`, `security-reviewer`,
+  `adversarial-verifier`, `main-session-gate`): a composed gate unit is refused
+  `expansion_unit_role_gate_unsupported` with ZERO mutation. The milestone is reviewed by the
+  spine's OWN concrete review wall (the node carrying the contract's `review_class`), which opens
+  and closes through the normal gate lifecycle after the milestone discharges — route the review
+  there, never into the composition.
+- **`readyToDischarge: true`** — every record on the point is settled; discharge the milestone:
+
+  ```bash
+  node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" expand-close \
+    --project {project} --node-id {point-id} --json
+  ```
+
+  The spine then advances to its next node — ultimately through the concrete review wall to the
+  `finalize` sink, the same `open-next` / `close-and-open-next` cycle every dag node uses.
+- **`openIncomplete` non-empty** — a record was appended but its frontier open never proved (a
+  crash in the expand-open window); run `reconcile-running-set` to roll it forward BEFORE any
+  further `expand-open` / `expand-close`.
+
+<!-- CARD: expansion -->
+On the spine expansion lifecycle: `docs/plan-run-cards/expansion.md`
+(covers the composition stdin shape, the append-only records channel, re-expansion, the three
+crash-window reconcile arms, and the per-expansion efficiency evidence line)
+<!-- /PIN -->
+
 ### 2. Open next node
 
 ```bash
