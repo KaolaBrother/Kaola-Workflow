@@ -1347,6 +1347,64 @@ function persistReviewContext(opts, built) {
   }
 }
 
+// wallOwningExpansionPoints — the expansion-point ancestors a review wall reviews. Walks depends_on
+// backward from the wall; every SPINE_EXPANSION_ROLE node reachable that way is a milestone whose
+// discharged surface this wall gates. PURE + total (empty set on any shape it cannot read). Used ONLY
+// to tie the #756 re-expansion escalation to the wall's OWN milestone, never a foreign point.
+function wallOwningExpansionPoints(wallNode, nodes, expansionRole) {
+  const out = new Set();
+  if (!wallNode) return out;
+  const list = Array.isArray(nodes) ? nodes : [];
+  const byId = new Map(list.map(n => [n && n.id, n]));
+  const seen = new Set();
+  const stack = Array.isArray(wallNode.dependsOn) ? wallNode.dependsOn.slice() : [];
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const n = byId.get(id);
+    if (!n) continue;
+    if (n.role === expansionRole) out.add(id);
+    if (Array.isArray(n.dependsOn)) for (const d of n.dependsOn) stack.push(d);
+  }
+  return out;
+}
+
+// reexpansionBlocksInPlanReReview (#756) — the delta-boundary escalation predicate. QUESTION: "is this
+// wall's blocked in-plan re-review the sanctioned-epoch-transition case, or a genuine dead end?"
+//
+// A passed change gate carries no fold boundary, so deriveRepairDelta cannot synthesize an in-plan
+// repair delta for its re-review; and the journal identity scheme (attempt_id = <gate-node>:<ordinal>,
+// unique per journal + per-gate ordinal contiguity, all bound to ONE plan_hash) makes a fresh
+// in-journal discovery for the same gate node impossible. So a settled-PASS wall genuinely cannot be
+// re-reviewed in-plan. When a DURABLE re-expansion of the wall's OWNING milestone widened its reviewed
+// frontier — a surface amendment block, or a re-expansion record whose ordinal is ≥ 2 — the recovered
+// surface must still end REVIEWED, and the ONLY sanctioned exit is an epoch transition (replan Case B,
+// diagnosis_to_build — which needs no prior failed review). This predicate is TRUE exactly for that
+// case, so the caller routes to the epoch transition instead of the bare dead end; a settled pass with
+// NO durable re-expansion evidence stays FALSE and keeps its existing refusal untouched.
+//
+// SOUNDNESS — the signal is derived ONLY from the durable plan bytes (parseExpansionRecords /
+// parseSurfaceAmendments), NEVER a caller/agent-supplied path list, and NEVER fabricates a synthetic
+// scope id (the phantom the cross-epoch legacy-import rotation would choke on). Total + never-throwing.
+function reexpansionBlocksInPlanReReview(previousAttempt, planContent, wallNode) {
+  if (!previousAttempt || typeof previousAttempt !== 'object'
+    || previousAttempt.outcome !== 'pass' || previousAttempt.lifecycle_settled !== true) return false;
+  let validator; try { validator = require('./kaola-gitea-workflow-plan-validator'); } catch (_) { return false; }
+  let nodes; try { nodes = validator.parseNodes(planContent); } catch (_) { return false; }
+  let records; try { records = (validator.parseExpansionRecords(planContent) || {}).records || []; } catch (_) { records = []; }
+  let amendments; try { amendments = validator.parseSurfaceAmendments(planContent); } catch (_) { amendments = new Map(); }
+  const owning = wallOwningExpansionPoints(wallNode, nodes, validator.SPINE_EXPANSION_ROLE);
+  if (!owning.size) return false;
+  for (const point of owning) {
+    const reExpanded = records.some(r => r && r.point === point && Number(r.ordinal) >= 2);
+    const amended = amendments instanceof Map ? amendments.has(point)
+      : !!(amendments && typeof amendments === 'object' && amendments[point]);
+    if (reExpanded || amended) return true;
+  }
+  return false;
+}
+
 function prepareReviewOpen(opts, planContent, nodeLike) {
   const validator = require('./kaola-gitea-workflow-plan-validator');
   // Field-absent plans are the byte-preserved legacy lane. The opener's
@@ -1450,7 +1508,23 @@ function prepareReviewOpen(opts, planContent, nodeLike) {
       previous_attempt: lineage.last,
       current_candidate: candidatePartition.candidate,
     });
-    if (!derived.ok) return derived;
+    if (!derived.ok) {
+      // #756: a settled-PASS wall re-review re-opened by a durable milestone re-expansion cannot derive
+      // an in-plan repair delta — a passed change gate carries no fold boundary, and the journal identity
+      // scheme forbids a fresh in-journal discovery for the same gate node. This is NOT a dead end: route
+      // to the sanctioned exit (an epoch transition — replan Case B, diagnosis_to_build — which needs no
+      // prior failed attempt) so the recovered file still ends REVIEWED rather than merely attributed. A
+      // settled pass with NO durable re-expansion evidence keeps its existing bare refusal untouched.
+      if (reexpansionBlocksInPlanReReview(lineage.last, planContent, node)) {
+        return { ok: false, reason: 'review_reexpansion_requires_epoch_transition',
+          detail: 'the re-opened review wall\'s previous attempt is a settled pass and a durable milestone '
+            + 're-expansion widened its reviewed frontier; a passed change gate cannot be re-reviewed '
+            + 'in-plan, so the recovered surface must be carried through a sanctioned epoch transition '
+            + '(replan prepare --transition-reason diagnosis_to_build — no prior failed review required) '
+            + 'whose fresh epoch re-reviews it to a real verdict' };
+      }
+      return derived;
+    }
     repairDelta = derived.repair_delta;
   }
   const inheritedDigest = reviewMetaValue(planContent, 'inherited_frontier_digest') || 'none';
@@ -14188,6 +14262,10 @@ module.exports = {
   // consults FIRST, and the attempt→finding-files extractor it uses. DAG-inert; exported for pins.
   spineReExpansionFirst,
   findingFilesFromAttempt,
+  // #756: the settled-PASS re-review escalation predicate + its owning-point walker. Exported so the
+  // acceptance harness pins the delta-boundary decision directly (in-plan dead end vs. epoch transition).
+  reexpansionBlocksInPlanReReview,
+  wallOwningExpansionPoints,
   runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
