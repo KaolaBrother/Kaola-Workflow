@@ -482,7 +482,9 @@ function makeModelPlan(nodesRows, ledgerRows) {
   // (a) SAFETY DEMONSTRATION 1 — an out-of-vocabulary cell (`haiku`, a real harness alias)
   //     never reaches a frozen plan: validatePlan refuses it at FREEZE with model_invalid.
   const { validatePlan } = require('./kaola-workflow-plan-validator');
-  const haikuBody = ['# Plan', '', '## Meta', 'labels: area:scripts', '', makeModelPlan(
+  // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall, so this
+  // freeze-wall fixture must declare the spine discriminator to reach the model_invalid refusal.
+  const haikuBody = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', makeModelPlan(
     ['| a | implementer | — | scripts/foo.js | 1 | sequence | haiku |',
      '| review | code-reviewer | a | — | 1 | sequence | |',
      '| finalize | finalize | review | — | 1 | sequence | |'],

@@ -1158,6 +1158,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '# Workflow Plan — ' + project,
       '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'labels: enhancement',
       '',
       '## Nodes',

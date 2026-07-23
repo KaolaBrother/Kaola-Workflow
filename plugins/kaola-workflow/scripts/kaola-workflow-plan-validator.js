@@ -186,12 +186,16 @@ const MAIN_SESSION_GATE = schema.MAIN_SESSION_GATE_ROLE;
 // typed EXPANSION POINT whose frontier is composed at OPEN time.
 //
 // `plan_form` is the EXPLICIT shape discriminator (D-note: discriminate, never loosen a shared
-// check). Absent => `dag` => the legacy full-DAG grammar, byte-identical. This is deliberately
-// dual-accept: the legacy grammar is NOT retired here.
+// check). `spine` is the ONLY authorable shape at freeze: the legacy full-DAG grammar is RETIRED
+// (#765 Wave E2) — an explicit `plan_form: dag` and the absent-⇒-dag default both refuse with the
+// typed `plan_form_dag_retired` at the freeze wall. A fully-known-at-freeze DAG is now authored as
+// an all-concrete spine (zero expansion points), which is semantically equal to the old dag.
 //
 // SPINE_EXPANSION_ROLE is a BUILT-IN role token like TERMINAL_ROLE / MAIN_SESSION_GATE — it has
 // no agents/*.md profile, so the closed-library check exempts it, but ONLY inside a spine plan.
-// In a `dag` plan it stays an unknown role and refuses through the EXISTING unknown-role error.
+// The retired `dag` never reaches the closed-library check (it refuses first at the freeze wall);
+// on the resume path — which stays tolerant of pre-cutover frozen dag plans — the token has no
+// spine exemption and refuses through the EXISTING unknown-role error, as it always has.
 //
 // Why no shared check needed loosening: an expansion point is read-only (not in WRITE_ROLES ⇒ a
 // declared write set is already refused), shape `sequence` only, and not a gate role. It is
@@ -3550,6 +3554,20 @@ function validatePlan(content, opts) {
       errors: ['plan_form: "' + planFormInfo.form + '" is not a legal plan shape (legal: ' + PLAN_FORM_LEGAL.join('|') + ')'],
       planHash: computePlanHash(content) };
   }
+  // #765 (Wave E2 cutover): the legacy full-DAG grammar is RETIRED at the freeze wall. `spine` is the
+  // only authorable shape. This catches BOTH an explicit `plan_form: dag` AND the absent-⇒-dag default
+  // (parsePlanForm returns 'dag' when the field is missing), so every newly authored plan must declare
+  // `plan_form: spine`. An all-concrete spine (zero expansion points) is semantically equal to the old
+  // DAG — the whole-plan proofs (gates, disjointness, unique sink, caps, governance) range over the
+  // node table identically — so migrating a DAG to an all-concrete spine drops NO proof coverage.
+  // Typed reason folds into the plan_invalid / typed-reason envelope exactly like the two plan_form
+  // refusals above. FREEZE-ONLY: revalidateForResume deliberately does NOT refuse dag (a plan frozen
+  // before this cutover is a dag and must still resume — the established no-brick policy).
+  if (planFormInfo.form === 'dag') {
+    return { result: 'refuse', reason: 'plan_form_dag_retired', operator_hint: getOperatorHint('plan_invalid'),
+      errors: ['plan_form: dag is retired — author plan_form: spine (an all-concrete spine when the whole DAG is known at freeze; add typed expansion points where the interior is composed at open time)'],
+      planHash: computePlanHash(content) };
+  }
   const isSpine = planFormInfo.form === 'spine';
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
@@ -4398,12 +4416,11 @@ function validatePlan(content, opts) {
     const expansionHeaders = expansionHeaderCounts(content);
     const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-    // SPINE-1: the discriminator must mean something. A `plan_form: spine` plan with no expansion
-    // point is a full DAG wearing the spine label — accept it and the discriminator decays into
-    // noise that future readers cannot trust.
-    if (!expansionNodes.length) {
-      errors.push(`SPINE-1: plan_form: spine declares no ${SPINE_EXPANSION_ROLE} node — a spine plan must carry at least one typed expansion point (author plan_form: dag when the whole DAG is known at freeze)`);
-    }
+    // SPINE-1 (RELAXED at #765 Wave E2): a zero-expansion (all-concrete) spine is LEGAL. With the
+    // legacy `dag` grammar retired, an all-concrete spine IS how a fully-known-at-freeze DAG is now
+    // authored — it is semantically equal to the old dag (every whole-plan proof ranges over the
+    // concrete node table identically), so refusing it would leave no way to author a known DAG.
+    // SPINE-2..5 below loop over expansionNodes/expansionIds and are empty no-ops when there are none.
 
     // SPINE-2: exactly one expansion(<id>) contract per expansion point, and every contract keys
     // one. Mirrors OPT-1 including the duplicate-header wall (a second block last-wins-clobbers).
@@ -4479,7 +4496,8 @@ function validatePlan(content, opts) {
   const planHash = computePlanHash(content);
   if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink,
     plan_schema_version: planSchemaVersion, contract_version: contractVersion,
-    // #758: emitted ONLY for a spine plan, so every legacy emission stays byte-identical.
+    // #765: only `spine` reaches the freeze wall now (dag refuses earlier), so isSpine is always true
+    // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}) };
 
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
@@ -4501,7 +4519,8 @@ function validatePlan(content, opts) {
     plan_schema_version: planSchemaVersion,
     contract_version: contractVersion,
     diagnostics: { wideFanout: wideFanouts },
-    // #758: emitted ONLY for a spine plan, so every legacy emission stays byte-identical.
+    // #765: only `spine` reaches the freeze wall now (dag refuses earlier), so isSpine is always true
+    // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}),
   };
 }
@@ -4538,6 +4557,12 @@ function revalidateForResume(content, opts) {
   // exemption is bound here too — under the SAME `plan_form: spine` discriminator, read from the
   // hash-verified Meta above. Structural only: the SPINE-1..5 rules stay freeze-only, matching the
   // established policy that a tightened rubric must never brick an in-flight plan.
+  //
+  // #765 (Wave E2) FREEZE-ONLY: the freeze wall retires the legacy `dag` grammar, but resume does
+  // NOT — a plan frozen BEFORE this cutover is a dag (parsePlanForm returns 'dag' when the field is
+  // absent) and must still resume. Refusing dag here would brick every in-flight legacy plan, the
+  // exact no-brick landmine the freeze-only convention exists to avoid. So the dag_retired refusal
+  // is deliberately absent from this path: resume stays tolerant of both dag and spine.
   const resumeIsSpine = parsePlanForm(content).form === 'spine';
   for (const n of nodes) {
     // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.
