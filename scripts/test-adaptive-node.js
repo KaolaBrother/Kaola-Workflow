@@ -4916,10 +4916,11 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// T9: runOrient — read-only; assert writeFile is never called
+// T9: runOrient — read-only w.r.t. plan/ledger/state; #763 the ONE legal write is the
+// regenerable .cache/context-packet.md side artifact.
 // ---------------------------------------------------------------------------
 {
-  let writeFileCalled = false;
+  const writeFilePaths = [];
 
   const plan = makePlan([
     '| impl-core | in_progress | |',
@@ -4959,11 +4960,12 @@ function makeState(opts) {
       if (fpath.includes('.cache/')) return cacheContent;
       throw new Error('ENOENT: ' + fpath);
     },
-    writeFile: (fpath, content) => { writeFileCalled = true; },
+    writeFile: (fpath, content) => { writeFilePaths.push(fpath); },
     cacheExists: (fpath) => fpath.includes('impl-core'),
   });
 
-  assert(writeFileCalled === false, 'T9: orient never calls writeFile (read-only)');
+  assert(writeFilePaths.every(p => p.endsWith(path.join('.cache', 'context-packet.md'))),
+    'T9: orient never calls writeFile on plan/ledger/state — only .cache/context-packet.md, got ' + JSON.stringify(writeFilePaths));
   assert(result.result === 'ok', 'T9: orient returns result ok');
   assert(result.inProgressNode === 'impl-core', 'T9: inProgressNode detected');
   assert(result.consentHalt === false, 'T9: consentHalt===false when no consent_halt marker');
@@ -5967,7 +5969,7 @@ function makeState(opts) {
 //       (back-compat proof: inProgressNode set, inProgressNodes.length===1, batch:null)
 // ---------------------------------------------------------------------------
 {
-  let writeFileCalled = false;
+  const writeFilePaths = [];
 
   const plan = makePlan([
     '| impl-core | in_progress | |',
@@ -6007,11 +6009,12 @@ function makeState(opts) {
       if (fpath.includes('.cache/')) return cacheContent;
       throw new Error('ENOENT: ' + fpath);
     },
-    writeFile: (fpath, content) => { writeFileCalled = true; },
+    writeFile: (fpath, content) => { writeFilePaths.push(fpath); },
     cacheExists: (fpath) => fpath.includes('impl-core'),
   });
 
-  assert(writeFileCalled === false, 'T20a: orient never calls writeFile (read-only)');
+  assert(writeFilePaths.every(p => p.endsWith(path.join('.cache', 'context-packet.md'))),
+    'T20a: orient never calls writeFile on plan/ledger/state — only .cache/context-packet.md, got ' + JSON.stringify(writeFilePaths));
   assert(result.result === 'ok', 'T20a: legacy single-node path → result ok (no refusal)');
   assert(result.inProgressNode === 'impl-core', 'T20a: inProgressNode set as before (back-compat)');
   assert(result.cacheState === 'present', 'T20a: cacheState preserved (back-compat)');
@@ -21977,11 +21980,28 @@ function rtHarness(initialFiles, opts) {
       'expansion_unit_id_collision', 'id collision');
 
     // --- expand-close: the same fail-closed settled gate, plus the never-composed case. ---
-    const mkCloseOpts = (content) => ({
-      planPath: '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md', project: 'issue-759', nodeId: 'm1',
-      shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
-      readFile: () => content, writeFile: (_p, c) => { written = c; }, cacheExists: () => false, now: () => 'T',
-    });
+    // #763: readFile/writeFile are now PATH-AWARE (not just content-blind) — expand-close also
+    // reads/writes the point's OWN evidence file (.cache/m1.md, the efficiency-line target), a
+    // SECOND file distinct from the plan. `written` stays scoped to the plan-path write ONLY, so
+    // every existing assertion below (which examines the PLAN mutation) is unaffected by that
+    // second write; `files` additionally captures the evidence-file write for the new #763 pin.
+    const evidencePath759 = '/tmp/i759/kaola-workflow/issue-759/.cache/m1.md';
+    const mkCloseOpts = (content) => {
+      const planPath = '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md';
+      const files = {};
+      return {
+        planPath, project: 'issue-759', nodeId: 'm1',
+        shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
+        readFile: (p) => {
+          if (p === planPath) return content;
+          if (Object.prototype.hasOwnProperty.call(files, p)) return files[p];
+          throw new Error('ENOENT: ' + p);
+        },
+        writeFile: (p, c) => { files[p] = c; if (p === planPath) written = c; },
+        cacheExists: () => false, now: () => 'T',
+        files,
+      };
+    };
     written = null;
     let rc = runExpandClose(mkCloseOpts(SPINE759(READY)));
     assert(rc.result === 'refuse' && rc.reason === 'expansion_never_composed' && written === null,
@@ -21995,10 +22015,15 @@ function rtHarness(initialFiles, opts) {
     assert(rc.result === 'refuse' && rc.reason === 'expansion_open_incomplete' && written === null,
       '#759-E expand-close over an unproven open must route to reconcile, got ' + JSON.stringify(rc));
     written = null;
-    rc = runExpandClose(mkCloseOpts(SPINE759(READY.concat(['| m1-r1-a | complete |']), PROVEN)));
+    const closeOpts759 = mkCloseOpts(SPINE759(READY.concat(['| m1-r1-a | complete |']), PROVEN));
+    rc = runExpandClose(closeOpts759);
     assert(rc.result === 'ok' && written !== null && /discharge\(m1\)/.test(written),
       '#759-E a fully-settled point discharges and appends a discharge block, got ' + JSON.stringify(rc));
     assert(/\| m1 \| complete \|/.test(written), '#759-E the milestone row must flip to complete');
+    // #763: the efficiency evidence line lands in the point's OWN evidence file (a DIFFERENT file
+    // from the plan `written` above) — one record (m1#1), one co_open unit, no re-expansion.
+    assert(/expansion m1: width=1 mode=co_open serializer=none rework=0/.test(closeOpts759.files[evidencePath759] || ''),
+      '#763: expand-close must append the efficiency evidence line to .cache/m1.md, got ' + JSON.stringify(closeOpts759.files[evidencePath759]));
 
     // --- (E2) THE FULL LAYERED GUARD PROLOGUE, pinned LAYER BY LAYER on BOTH subcommands. ---------
     //
@@ -22025,13 +22050,22 @@ function rtHarness(initialFiles, opts) {
       let writes = [];
       const LIVE_SET = JSON.stringify({ state: 'open', nodes: [{ id: 'probe', role: 'code-explorer', kind: 'read' }] });
       // A path-aware seam pair so the running-set surface can be made live independently of the plan.
+      // #763: readFile/writeFile distinguish planPath from EVERY other path (including the point's own
+      // evidence file, .cache/m1.md, which expand-close now also reads/writes) — `written`/`writes`
+      // stay scoped to the plan mutation the assertions below actually examine; an unmodeled path
+      // (the evidence file, absent here) reads as ENOENT, matching a fresh evidence file in production.
       const seams = (content, opts) => {
         const o = opts || {};
+        const planPath = '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md';
         return {
-          planPath: '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md', project: 'issue-759',
+          planPath, project: 'issue-759',
           shell: () => (o.integrityFails ? { exitCode: 1, ok: false, reason: 'plan_hash_mismatch' } : { exitCode: 0, ok: true, result: 'ok' }),
-          readFile: (fp) => (fp === RS_PATH ? (o.runningSet || '') : content),
-          writeFile: (_p, c) => { written = c; writes.push(c); },
+          readFile: (fp) => {
+            if (fp === RS_PATH) return (o.runningSet || '');
+            if (fp === planPath) return content;
+            throw new Error('ENOENT: ' + fp);
+          },
+          writeFile: (p, c) => { if (p === planPath) { written = c; writes.push(c); } },
           cacheExists: (fp) => (fp === RS_PATH ? !!o.runningSet : false),
           now: () => 'T',
         };
