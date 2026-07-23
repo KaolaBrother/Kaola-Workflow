@@ -30,8 +30,7 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 - `local-fallback-explicit` — only valid when the user explicitly set `delegation_policy: local-authorized`.
 
 All four dispatch-capable Codex skills (`adapt`, `finalize`, `next`, and `plan-run` — the sibling
-`init` skill does not dispatch subagents; the `execute`/`fast`/`ideation`/`plan`/`research`/`review`
-skills were retired alongside the `fast`/`full` paths, #725) carry one byte-identical
+`init` skill does not dispatch subagents) carry one byte-identical
 `<!-- PIN: codex-profile-preflight -->` entry/resume gate. The gate runs normal preflight with
 `--no-autofix --json` before any probe, retry, re-plan, or spawn and accepts only exit 0 plus parsed
 `status:"ok"`; a frozen plan is supplied through `KAOLA_CODEX_PREFLIGHT_PLAN`. The gate parses
@@ -54,20 +53,6 @@ cannot see ephemeral Codex `--profile` or `-c` launch overrides, so its persiste
 must not be described as proof of those per-process settings.
 
 See `docs/api.md` § Codex Harness Scripts for the preflight CLI and typed-refusal shapes.
-
-## Full-Path Review/Fix/Re-Review Contract — retired (#725)
-
-The bounded Phase 5 review/fix/re-review contract described in earlier revisions of this document
-belonged to the numbered `full` path's `kaola-workflow-full-advance.js phase5-finalize`/
-`phase5-verify` point-of-use boundary. That script, the `phase4-progress.md` ledger it gated on,
-and the Claude/Codex/opencode surfaces that shelled it are all retired along with the `full` path
-(#725; see `docs/decisions/D-725-01.md`). The **adaptive** path's own reviewer contract — the
-schema-2 `code-reviewer`/`security-reviewer` post-dominance gates, the review-attempt journal, and
-the bounded repair loop — is the one live review mechanism and is documented in `docs/api.md`
-(reviewer contract v2, decisions D-693-01 through D-698-01) and in this file's Reviewer Contract
-sections below. The legacy compatibility literal `review_attestation: full_review_completed` that
-`code-reviewer`/`security-reviewer` still emit for a schema-1 legacy block is unrelated vocabulary
-(a fixed token name, not a reference to the retired `full` path) and remains live.
 
 ## Codex Join Protocol — wait budgets, escalation, and writer kill-safety (issue #611)
 
@@ -252,45 +237,34 @@ candidate-bound local transaction tests, all relevant edition validators/walkthr
 reviews, or frozen falsification nodes. The workflow owns its verdict locally even when a hosted
 pipeline also exists.
 
-## Adaptive Is the Only Workflow Path (issue #227; `fast`/`full` retired #725)
+## Adaptive Workflow Path (issue #227)
 
-Adaptive is the **only** workflow path — there is no on/off switch, no path-selection step, and no
-install-time opt-in axis. `fast` and `full` (formerly install-time opt-ins under #538/#543) are
-retired: their commands, skills, and transaction scripts are deleted.
+Adaptive is the workflow path. `KAOLA_PATH=adaptive` is the only legal value; there is no
+path-selection step.
 
 **Path legality.** `claimProject` validates the requested `workflow_path` against `WORKFLOW_PATHS`
-(`kaola-workflow-adaptive-schema.js`, now `['adaptive']`) via `isLegalWorkflowPath(requestedPath,
-installedPaths)`. Only `adaptive` can ever pass. A `KAOLA_PATH` naming any other value — including a
-stale `fast`/`full` request from before the retirement — returns a typed `path_not_installed`
-refusal (`result: refuse`) — never a silent substitution and never a crash (#44).
+(`kaola-workflow-adaptive-schema.js`, `['adaptive']`) via `isLegalWorkflowPath(requestedPath,
+installedPaths)`. Only `adaptive` passes. A `KAOLA_PATH` naming any other value returns a typed
+`path_not_installed` refusal (`result: refuse`) — never a silent substitution and never a crash (#44).
 
-**Router is unconditional.** The router (`workflow-next.md` Step 0a-1) unconditionally exports
-`KAOLA_PATH=adaptive` and proceeds — there is no path-name keyword escape (`"fast path"` / `"full
-review"`) left to honor. If a non-adaptive `KAOLA_PATH` is already exported from residual
-environment state, the router hands it through verbatim and lets the claim's `path_not_installed`
-refusal be the authority — never a silent router-side fallback to adaptive.
+**Router.** The router (`workflow-next.md` Step 0a-1) exports `KAOLA_PATH=adaptive` and proceeds.
+If a non-adaptive `KAOLA_PATH` is already exported from residual environment state, the router hands
+it through verbatim and lets the claim's `path_not_installed` refusal be the authority — never a
+silent router-side substitution.
 
 **`authoring-allowed` always allows.** `cmdAuthoringAllowed` (the #235 guard called by
 `/kaola-workflow-adapt` before authoring a plan) unconditionally returns
-`{ "status": "authoring_allowed", "allowed": true }`. Adaptive authoring is never refused — there
-is no switch to be OFF and no other path to prefer.
+`{ "status": "authoring_allowed", "allowed": true }`. Adaptive authoring is never refused.
 
-**No automatic fallback — adaptive has nowhere left to fall back to.** Before the first freeze,
-invalid authoring uses the existing bounded planner-only repair loop. After freeze, a settled
-`repair_requires_replan` routes through the claim-preserving planner-owned epoch transaction: the
-parent stays immutable, the claim/branch/worktree/candidate survive, and only `workflow-planner`
-authors a child. Automatic review-driven replacements are claim-budgeted; budget exhaustion
-consent-halts. There is no hidden discard/restart fallback and no main-authored DAG repair.
+**Repair, not restart.** Before the first freeze, invalid authoring uses the bounded planner-only
+repair loop. After freeze, a settled `repair_requires_replan` routes through the claim-preserving
+planner-owned epoch transaction: the parent stays immutable, the claim/branch/worktree/candidate
+survive, and only `workflow-planner` authors a child. Automatic review-driven replacements are
+claim-budgeted; budget exhaustion consent-halts. There is no hidden discard/restart and no
+main-authored DAG repair.
 
-**Bundle lane.** The bundle lane is adaptive-only; a bundle claim on any other path returns
-`bundle_requires_adaptive` (`result: refuse`) — trivially true now that adaptive is the only legal
-path, but the refusal path itself is unchanged.
-
-See `docs/decisions/D-725-01.md` for the retirement decision record. It supersedes
-`docs/decisions/D-538-01.md` (the original switch-axis flip that made `fast`/`full` install-time
-opt-ins) and `docs/decisions/D-543-01.md` (the Codex/opencode port of that opt-in partition); both
-superseded records remain in place as historical context (`docs/decisions/0007-adaptive-default-
-under-switch-on.md`, superseded in turn by `D-538-01`, is unaffected by this second supersession).
+**Bundle lane.** The bundle lane runs on the adaptive path; a bundle claim on any other path returns
+`bundle_requires_adaptive` (`result: refuse`).
 
 ## Bundle Lane — Cross-Edition Requirement (issue #328)
 
@@ -502,7 +476,7 @@ no flag or policy able to bypass it. `write_overlap_policy` / `--write-overlap-c
 parsed for frozen-plan back-compat but are VESTIGIAL at this seam.
 
 **Consequence for planner surface maps: exact-path is the only granularity that matters.**
-Because a shared top-level area no longer forces serialization on its own, a planner's
+Because a shared top-level area does not force serialization on its own, a planner's
 disjointness proof is only as good as its declared write sets — an area comparison can no
 longer paper over an undeclared overlap the way consent-gating implicitly did. A surface map
 that omits a **hidden shared surface** two "disjoint" legs both actually touch turns a would-be
@@ -566,7 +540,7 @@ refuse/pass decision (`redChains.length` check) is unchanged.
 
 The gate enforces this: `chains_unverified` (no receipt), `chains_stale` (receipt headSha mismatch), and `chains_red` (any non-zero exit) are all typed blocking refusals. A known-red chain may be waived with `--accept-known-red name:open-issue-N`; the waiver must reference a real open tracking issue.
 
-**Consumer (non-npm) repos (#475).** A product repo whose validation is not npm-based does NOT run `run-chains.js` (it refuses `chains_config_missing` — self-host-only). The agent **owns verification** (#44) and records `.cache/final-validation.md` with a column-0 `verdict: pass`; `--finalize-check` (consumer mode) gates on it — `final_validation_unverified` (absent) / `final_validation_failed` (no `verdict: pass`). **The verdict must also be bound to the candidate it validated (issue #653 / D-653-01).** Record a column-0 `validated_candidate_hash:` line — produced via `node scripts/kaola-workflow-plan-validator.js <plan> --candidate-hash --json` (read-only, no tests executed), computed LAST after every file the validation covered has landed — or the gate refuses `final_validation_unbound` (no well-formed hash line) / `final_validation_stale` (the recorded hash no longer equals a fresh recompute over the current tree; payload carries `recorded_candidate_hash` + `current_candidate_hash`). The gate compares two hashes only; it never re-runs the validation command, so the agent-owns-verification boundary above is unchanged. A citation of a prior terminal validation run still requires a FRESH hash computed at citation time. The v6.2.0 `kaola-workflow/chains.json` opt-in is retired (Pure option A — no middle-ground). The attribution sweep runs for both modes (an un-attributed code change is still caught).
+**Consumer (non-npm) repos (#475).** A product repo whose validation is not npm-based does NOT run `run-chains.js` (it refuses `chains_config_missing` — self-host-only). The agent **owns verification** (#44) and records `.cache/final-validation.md` with a column-0 `verdict: pass`; `--finalize-check` (consumer mode) gates on it — `final_validation_unverified` (absent) / `final_validation_failed` (no `verdict: pass`). **The verdict must also be bound to the candidate it validated (issue #653 / D-653-01).** Record a column-0 `validated_candidate_hash:` line — produced via `node scripts/kaola-workflow-plan-validator.js <plan> --candidate-hash --json` (read-only, no tests executed), computed LAST after every file the validation covered has landed — or the gate refuses `final_validation_unbound` (no well-formed hash line) / `final_validation_stale` (the recorded hash differs from a fresh recompute over the current tree; payload carries `recorded_candidate_hash` + `current_candidate_hash`). The gate compares two hashes only; it never re-runs the validation command, so the agent-owns-verification boundary above is unchanged. A citation of a prior terminal validation run still requires a FRESH hash computed at citation time. The attribution sweep runs for both modes (an un-attributed code change is still caught).
 
 ## Run-gap capture is gated at finalize (#435)
 
@@ -659,7 +633,7 @@ Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
   release-version lines — never unrelated behavior-changing code. Bundling more (as happened at
   `kaola-workflow--v6.21.3`, tagged with a red Claude chain and zero receipt because a breaking
   change rode along under an unrelated commit subject) invalidates whatever receipt was checked:
-  the receipt's `headSha` no longer names the tree the tag actually covers. Anything beyond
+  the receipt's `headSha` then names a different tree than the tag covers. Anything beyond
   version bump + release docs re-runs the whole sequence above — regenerate the receipt at the
   new candidate, re-pass `--release-check`, re-tag.
 

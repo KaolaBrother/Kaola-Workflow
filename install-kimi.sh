@@ -12,18 +12,10 @@
 #   ./install-kimi.sh --global                # deploy skills to ${KIMI_CODE_HOME:-~/.kimi-code}/skills
 #   ./install-kimi.sh --regenerate            # refresh .kimi/ from canonical here
 #
-# PATH SELECTION mirrors install-opencode.sh (issues #538/#543): the install-time
-# COMMAND-skill partition is identical —
-#   - DEFAULT install deploys the ADAPTIVE-CORE command skills only (5: kaola-workflow-adapt,
-#     kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next).
-#     No fast, no phase1-5.
-#   - --with-fast  adds kaola-workflow-fast.
-#   - --with-full  adds kaola-workflow-phase1..5.
-#   - all 16 kaola-role-* skills are ALWAYS installed.
-# The opt-in is recorded in the SHARED ~/.config/kaola-workflow/config.json installed_paths
-# (the same file install.sh / install-opencode.sh read). Re-install is a UNION (never removes
-# a prior opt-in): a bare re-install into the same dest/HOME preserves a previously-installed
-# fast/full. --enable-adaptive is retired (#538) and accepted-but-ignored.
+# COMMAND SKILLS: the install deploys the workflow command skills (kaola-workflow-adapt,
+# kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next) plus all 16
+# kaola-role-* skills into the skills/ dir. The generated .kimi/ tree is produced by
+# sync-kimi-edition.js from the canonical sources.
 #
 # DEPLOY LAYOUT (scope-dependent):
 #   - PROJECT (--target/$PWD): skills land under <project>/.kimi-code/skills/<name>/SKILL.md.
@@ -39,9 +31,8 @@
 #     pre-merge config and aborts non-zero. The hooks config is global regardless of install
 #     scope — it is merged on every install unless --no-scripts.
 #
-# REINSTALL IS SELF-HEALING (#538 adaptive-only goal): copy_skills PRUNES kaola-owned skill
-# dirs not in the EFFECTIVE opt-in set before re-copying, so a narrowed reinstall converges
-# to adaptive-only on disk (it is no longer additive-only). --uninstall removes the full
+# REINSTALL IS SELF-HEALING: copy_skills PRUNES kaola-owned skill dirs before re-copying, so a
+# reinstall converges to exactly the workflow skill set on disk. --uninstall removes the full
 # deployed surface; see uninstall_edition.
 
 set -euo pipefail
@@ -53,15 +44,11 @@ REGENERATE=0
 UNINSTALL=0
 YES=0
 NO_SCRIPTS=0
-# #538/#543 install-time opt-ins (mirror install.sh / install-opencode.sh). 0 = not requested
-# this run; EFFECTIVE_* (computed below) unions these with any prior installed_paths.
-WITH_FAST=0
-WITH_FULL=0
 
 usage() {
   cat <<'EOF'
 Usage: ./install-kimi.sh [--target DIR] [--global] [--regenerate] [--uninstall]
-                         [--no-scripts] [--yes] [--with-fast] [--with-full]
+                         [--no-scripts] [--yes]
   --target DIR     deploy skills into DIR/.kimi-code/skills (default: current directory)
   --global         deploy skills into ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
   --regenerate     refresh the in-repo .kimi/ tree from canonical, then exit
@@ -69,16 +56,6 @@ Usage: ./install-kimi.sh [--target DIR] [--global] [--regenerate] [--uninstall]
                    (honors --target/--global), then exit (see UNINSTALL below)
   --no-scripts     skip support scripts, hook scripts, and the config.toml hooks merge
   --yes            non-interactive (skip the confirmation prompt)
-  --with-fast      also deploy the kaola-workflow-fast skill (recorded in installed_paths)
-  --with-full      also deploy the kaola-workflow-phase1..5 skills (recorded in installed_paths)
-
-PATH SELECTION: the default install deploys the ADAPTIVE-CORE command skills only (adapt,
-finalize, plan-run, workflow-init, workflow-next). --with-fast / --with-full add the fast /
-full-phase command skills. All 16 kaola-role-* skills always install. Re-install is a UNION:
-a prior opt-in is never removed (--with-fast once, then bare re-install, preserves the fast
-skill + installed_paths). The opt-in is recorded in the SHARED
-~/.config/kaola-workflow/config.json (the same file install.sh reads). --enable-adaptive is
-retired (#538) and accepted-but-ignored.
 
 SUPPORT SCRIPTS + HOOKS: workflow skills resolve support scripts via
 ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts (the list comes from
@@ -90,11 +67,10 @@ validated with `kimi doctor config` when a kimi binary is on PATH).
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved scope
 (project DEST_ROOT via --target/$PWD, or --global ${KIMI_CODE_HOME:-$HOME/.kimi-code}):
 the deployed skills (by source-tree directory name — never a blind rm of a dir), the
-support scripts + hook scripts under the kimi home, the managed hooks block in config.toml
-(the rest of the file is preserved), and a surgical reset of installed_paths:[] in the
-SHARED ~/.config/kaola-workflow/config.json (parallel_mode + the file are kept for any
-co-installed Claude/Codex/opencode edition). A subsequent bare install then deploys the
-adaptive-only default.
+support scripts + hook scripts under the kimi home, and the managed hooks block in config.toml
+(the rest of the file is preserved). The SHARED ~/.config/kaola-workflow/config.json
+(parallel_mode + the file) is kept for any co-installed Claude/Codex/opencode edition. A
+subsequent bare install then deploys the workflow edition.
 EOF
 }
 
@@ -105,11 +81,6 @@ while [[ "$#" -gt 0 ]]; do
     --regenerate) REGENERATE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --no-scripts) NO_SCRIPTS=1; shift ;;
-    --with-fast) WITH_FAST=1; shift ;;
-    --with-full) WITH_FULL=1; shift ;;
-    --enable-adaptive|--enable-adaptive=*)
-      echo "warning: --enable-adaptive is retired (#538); adaptive is the unconditional default and is always installed. Ignoring." >&2
-      shift ;;
     -y|--yes) YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -132,20 +103,10 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# #538 R1 (mirror install-opencode.sh): compute the EFFECTIVE opt-in set ONCE, up front.
-# EFFECTIVE_* = path already in installed_paths OR explicitly requested this run. This makes a
-# bare re-install preserve + refresh a previously-installed path's files (UNION never removes).
-# Reads the SHARED ~/.config/kaola-workflow/config.json (the same file install.sh writes), so a
-# kimi install and a Claude/Codex/opencode install reach identical opt-in parity on that machine.
-EXISTING_PATHS="$(node -e 'try{const c=require(process.env.HOME+"/.config/kaola-workflow/config.json");const p=Array.isArray(c.installed_paths)?c.installed_paths:[];process.stdout.write(p.join(" "))}catch(e){}' 2>/dev/null || true)"
-case " $EXISTING_PATHS " in *" fast "*) EFFECTIVE_FAST=1 ;; *) EFFECTIVE_FAST=$WITH_FAST ;; esac
-case " $EXISTING_PATHS " in *" full "*) EFFECTIVE_FULL=1 ;; *) EFFECTIVE_FULL=$WITH_FULL ;; esac
-
-# Adaptive-core command-skill set (#538): ALWAYS deployed. fast/full are EFFECTIVE-gated
-# opt-ins; all kaola-role-* skills always deploy; any OTHER skill fails CLOSED (skipped +
-# warned) so a future canonical command cannot silently widen the default install. Single
-# source of truth for the partition (used by copy_skills).
-ADAPTIVE_CORE_COMMANDS=(
+# Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
+# CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
+# Single source of truth for the deploy set (used by copy_skills).
+WORKFLOW_COMMANDS=(
   kaola-workflow-adapt kaola-workflow-finalize
   kaola-workflow-plan-run workflow-init workflow-next
 )
@@ -160,11 +121,10 @@ copy_skills() {
     echo "Self-dev deploy (source .kimi/skills is already the live tree) → copy skipped."
     return
   fi
-  # #538/#543 D2 (mirror install-opencode.sh): the COMMAND-skill deploy is PARTITIONED +
-  # SELF-HEALING. First PRUNE every kaola-owned skill dir from the dest (blanket-then-recopy)
-  # so a narrowed opt-in set converges to adaptive-only on a bare reinstall. Then re-copy the
-  # EFFECTIVE set via a fail-CLOSED ALLOWLIST: adaptive-core ALWAYS, kaola-role-* ALWAYS,
-  # kaola-workflow-fast iff EFFECTIVE_FAST, phase1..5 iff EFFECTIVE_FULL, anything else skipped.
+  # The COMMAND-skill deploy is SELF-HEALING. First PRUNE every kaola-owned skill dir from the
+  # dest (blanket-then-recopy) so a reinstall converges to exactly the workflow skill set. Then
+  # re-copy via a fail-CLOSED ALLOWLIST: the workflow command skills + all kaola-role-* skills,
+  # anything else skipped.
   local stale
   for stale in "$skills_dest/"kaola-workflow-* "$skills_dest/"kaola-role-* \
                "$skills_dest/workflow-init" "$skills_dest/workflow-next"; do
@@ -175,14 +135,10 @@ copy_skills() {
   for src_dir in "$SCRIPT_DIR/.kimi/skills/"*/; do
     [[ -d "$src_dir" ]] || continue
     base="$(basename "$src_dir")"
-    if in_array "$base" "${ADAPTIVE_CORE_COMMANDS[@]}"; then
-      :   # adaptive-core: always
-    else
+    if ! in_array "$base" "${WORKFLOW_COMMANDS[@]}"; then
       case "$base" in
-        kaola-role-*)             : ;;   # role skills: always
-        kaola-workflow-fast)      [[ "$EFFECTIVE_FAST" -eq 1 ]] || continue ;;
-        kaola-workflow-phase[1-5]) [[ "$EFFECTIVE_FULL" -eq 1 ]] || continue ;;
-        *) echo "warning: skipping unrecognized skill not in the adaptive-core/fast/full/role partition: $base" >&2; continue ;;
+        kaola-role-*) : ;;   # role skills: always
+        *) echo "warning: skipping unrecognized skill not in the workflow command / role set: $base" >&2; continue ;;
       esac
     fi
     cp -R "${src_dir%/}" "$skills_dest/$base"
@@ -319,8 +275,8 @@ strip_hooks_config() {
 
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree directory name
 # (never a blind rm of a dir the user may share). Strips the managed hooks block from
-# config.toml (preserving the rest) and surgically resets the SHARED installed_paths to []
-# (keeps parallel_mode + the file for any co-installed Claude/Codex/opencode edition).
+# config.toml (preserving the rest). The SHARED ~/.config/kaola-workflow/config.json
+# (parallel_mode + the file) is kept for any co-installed Claude/Codex/opencode edition.
 uninstall_edition() {
   local home skills_dest
   home="$(kimi_home)"
@@ -366,32 +322,21 @@ uninstall_edition() {
   rmdir "$home/kaola-workflow" 2>/dev/null || true
   echo "Removed deployed support scripts + hook scripts."
   strip_hooks_config
-  # Surgical reset of the SHARED config (node — already a hard dependency): installed_paths:[] only.
-  local shared="$HOME/.config/kaola-workflow/config.json"
-  if [[ -f "$shared" ]]; then
-    node -e 'const fs=require("fs"),p=process.argv[1];try{const c=JSON.parse(fs.readFileSync(p,"utf8"));if(c&&typeof c==="object"&&!Array.isArray(c)){c.installed_paths=[];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");}}catch(e){}' "$shared" 2>/dev/null || true
-    echo "Reset installed_paths:[] in $shared (adaptive-only; other editions unaffected)."
-  fi
-  echo "Uninstall complete. A fresh ./install-kimi.sh now deploys the adaptive-only default."
+  echo "Uninstall complete. A fresh ./install-kimi.sh now deploys the workflow edition."
 }
 
-# #2 / #538 / #543 D4 (mirror install-opencode.sh): seed ~/.config/kaola-workflow/config.json
-# via UNION read-modify-write so a kimi install reaches install-time parity
-# (parallel_mode:'auto' default-ON + installed_paths) with what install.sh writes.
-# installed_paths records the EFFECTIVE opt-in set (R1 UNION with any prior opt-ins — never
-# removes). This config is the SHARED global file the classifiers + claim read
-# (edition-agnostic, never clobbered); it is SEPARATE from the kimi config.toml.
-# Implemented in NODE (already a hard dependency above). Fail-closed on a corrupt/non-object
-# config: leave it untouched and warn, naming the deployed opt-in so any divergence is visible.
+# Seed ~/.config/kaola-workflow/config.json so a kimi install reaches install-time parity
+# (parallel_mode:'auto' default-ON) with what install.sh writes. This config is the SHARED
+# global file the classifiers + claim read (edition-agnostic, never clobbered); it is SEPARATE
+# from the kimi config.toml. Implemented in NODE (already a hard dependency above). Fail-closed
+# on a corrupt/non-object config: leave it untouched and warn.
 seed_kaola_config() {
   local kaola_config_dir="$HOME/.config/kaola-workflow"
   local kaola_config_file="$kaola_config_dir/config.json"
   mkdir -p "$kaola_config_dir"
-  if ! KAOLA_SEED_FILE="$kaola_config_file" KAOLA_SEED_FAST="$EFFECTIVE_FAST" KAOLA_SEED_FULL="$EFFECTIVE_FULL" node -e '
+  if ! KAOLA_SEED_FILE="$kaola_config_file" node -e '
     const fs = require("fs");
     const file = process.env.KAOLA_SEED_FILE;
-    const withFast = process.env.KAOLA_SEED_FAST === "1";
-    const withFull = process.env.KAOLA_SEED_FULL === "1";
     let config = {};
     if (fs.existsSync(file)) {
       let raw;
@@ -404,19 +349,10 @@ seed_kaola_config() {
       }
     }
     if (config.parallel_mode === undefined) config.parallel_mode = "auto";
-    const existing = Array.isArray(config.installed_paths) ? config.installed_paths : [];
-    const set = new Set(existing);
-    if (withFast) set.add("fast");
-    if (withFull) set.add("full");
-    config.installed_paths = ["fast", "full"].filter(p => set.has(p));   // canonical order, {fast,full} only
-    delete config.enable_adaptive;                                       // migrate away the retired field
     fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-    console.log("Installed paths (adaptive always; opt-ins: " + JSON.stringify(config.installed_paths) + ") in: " + file);
+    console.log("Seeded parallel_mode in: " + file);
   '; then
-    echo "warning: failed to record installed_paths in $kaola_config_file." >&2
-    if [[ "$EFFECTIVE_FAST" -eq 1 || "$EFFECTIVE_FULL" -eq 1 ]]; then
-      echo "warning: opt-in skill dirs WERE deployed but the opt-in could not be recorded; set installed_paths by hand (include \"fast\" and/or \"full\" as deployed)." >&2
-    fi
+    echo "warning: failed to seed $kaola_config_file." >&2
   fi
 }
 

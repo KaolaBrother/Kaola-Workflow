@@ -5,13 +5,11 @@ Read it as the anatomy of an engineered agent loop: the harness frame, the
 verification loops, the exit conditions, and the durable state that make a run
 safe to leave running.
 
-## Workflow Path (adaptive — the only path)
+## Workflow Path
 
-Kaola-Workflow runs every issue through **adaptive** (issue #227). The earlier `fast`
-single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
-`docs/decisions/D-725-01.md`) — there is no macro-shape selection step left in
-`workflow-next.md` Step 0a-1, and a non-adaptive `KAOLA_PATH` is refused with a typed
-`path_not_installed` (scripts validate, never auto-pick — #44). The agent
+Kaola-Workflow runs every issue through **adaptive** planning. There is no macro-shape
+selection step in `workflow-next.md` Step 0a-1, and a non-adaptive `KAOLA_PATH` is refused
+with a typed `path_not_installed` (scripts validate, never auto-pick — #44). The agent
 **freely composes a task-shaped DAG** of role nodes inside a fixed lifecycle frame:
 
   ```text
@@ -209,25 +207,19 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   (`.cache → ledger → state-pointer`), a runtime risk re-scan that revokes a
   provisional auto-run (halt for consent) when a write turns out sensitive, and a
   quorum/decision step over read-only fan-out (e.g. `adversarial-verifier`
-  skeptics). `repair-state.js` `routeAdaptive` resumes by traversing the frozen plan — the
-  numbered phaseN ladder it used to compete with was retired (#725; see
-  `docs/decisions/D-725-01.md`), so `routeAdaptive` is the only reconstruction route left. The
-  Finalization sink, claim/branch/worktree lifecycle, and
+  skeptics). `repair-state.js` `routeAdaptive` resumes by traversing the frozen plan, and is the
+  reconstruction route. The Finalization sink, claim/branch/worktree lifecycle, and
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
-  touches are added. There is no switch left to gate selection; resume is toggle-agnostic.
+  touches are added. A frozen plan resumes regardless of any config change.
   **Note (issue #260):** when `KAOLA_WORKTREE_NATIVE=0` (explicit worktree opt-out), claim/startup now creates and checks out the feature branch in-place rather than leaving work on the default branch; the pre-checkout branch is recorded as `base_branch` in the Sink block and restored (with feature branch deleted) on `discard`/`release`.
 
-  **Lean-orchestrator boundary (issue #242 Part B; realigned to the original intent in v5.0.0).** The lean-orchestrator keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all **judgment**: which role runs next, whether work is correct, risk assessment, gating/consent decisions, the **sink** (merge/PR + `gh issue close` recheck), the **branch cut**, and the adaptive freeze + risk-governance decision (#44: the agent owns reasoning; the `workflow-planner` front-end subagent authors the `## Nodes` DAG, but Opus governs and decides the freeze). A separate mechanical **contractor** agent (Sonnet) owns the **Finalization** mechanical block only (the Step 8a artifact mirror, the `cmdFinalize` archive, the roadmap-mirror regen, and the `chore: finalize` staging commit) — the SOLE remaining contractor seam (ADR 0004 keeps Finalization contractor-owned pending a dedicated finalization transaction script). Every other mechanical transition is script-owned and run directly by the main session: the adaptive freeze/handoff (`kaola-workflow-adaptive-handoff.js`, #255) and the adaptive per-node lifecycle (open, record evidence, close, advance, halt — `kaola-workflow-adaptive-node.js`) run directly by the main session in `/kaola-workflow-plan-run`, with no contractor subagent needed for those mechanical transitions. The `fast`-path and numbered `full`-path per-phase mechanical transition scripts (`kaola-workflow-fast-advance.js` #456, `kaola-workflow-full-advance.js` / `kaola-workflow-phase4-advance.js` #457/#458) that used to occupy this same script-owned tier are retired along with those paths (#725; see `docs/decisions/D-725-01.md`). The router/startup bootstrap also stays a deterministic main-session bash block: the router routes to `/kaola-workflow-adapt`, where the `workflow-planner` front end performs the claim; an existing frozen `workflow-plan.md` routes to `/kaola-workflow-plan-run` and is never re-authored. The main session always keeps the **dispatch** of role agents *and* the contractor (a subagent cannot dispatch a subagent, so the dispatch loop stays with Opus), and **hands its verdict into the transaction script** for any judgment-bearing evidence — the script (or, at Finalization, the contractor) transcribes it verbatim and never judges, dispatches, sinks, closes, or asks. For the adaptive plan, the **`workflow-planner`** front-end subagent (a locally-authored Opus agent, distinct from the vendored read-only in-plan `planner` node) owns the claim + authors the `## Nodes` table; Opus then governs the risk decision and `kaola-workflow-adaptive-handoff.js` stamps the `plan_hash` freeze (#255). The contractor is Sonnet and stays Sonnet even under `--profile=higher` (mechanical transcription cannot be judgment-upgraded; there is deliberately no `profiles/higher/contractor.md`). **Shell-var lifetime:** a subagent runs in its own shell, so the orchestrator captures sink/worktree metadata BEFORE a contractor dispatch and re-derives its own paths after; durable git/file state (worktree creation, the created `workflow-state.md`, commits, archives) persists across the boundary and is reused at the sink. The boundary in one line: **Opus decides *what* + dispatches *subagents* + owns synthesis + the sink/close + the branch cut; the contractor runs the Finalization mechanical block only; `kaola-workflow-adaptive-node.js` owns the adaptive per-node lifecycle transactions, main-session-direct; the aggregator scripts own the per-node barrier choreography.** The contractor's bookkeeping role (Finalization only) is a deliberate design to keep the main Opus context free of transcription work; the adaptive per-node loop is direct script calls, not contractor round-trips. See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
+  **Lean-orchestrator boundary (issue #242 Part B; realigned to the original intent in v5.0.0).** The lean-orchestrator keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all **judgment**: which role runs next, whether work is correct, risk assessment, gating/consent decisions, the **sink** (merge/PR + `gh issue close` recheck), the **branch cut**, and the adaptive freeze + risk-governance decision (#44: the agent owns reasoning; the `workflow-planner` front-end subagent authors the `## Nodes` DAG, but Opus governs and decides the freeze). A separate mechanical **contractor** agent (Sonnet) owns the **Finalization** mechanical block only (the Step 8a artifact mirror, the `cmdFinalize` archive, the roadmap-mirror regen, and the `chore: finalize` staging commit) — the SOLE remaining contractor seam (ADR 0004 keeps Finalization contractor-owned pending a dedicated finalization transaction script). Every other mechanical transition is script-owned and run directly by the main session: the adaptive freeze/handoff (`kaola-workflow-adaptive-handoff.js`, #255) and the adaptive per-node lifecycle (open, record evidence, close, advance, halt — `kaola-workflow-adaptive-node.js`) run directly by the main session in `/kaola-workflow-plan-run`, with no contractor subagent needed for those mechanical transitions. The router/startup bootstrap also stays a deterministic main-session bash block: the router routes to `/kaola-workflow-adapt`, where the `workflow-planner` front end performs the claim; an existing frozen `workflow-plan.md` routes to `/kaola-workflow-plan-run` and is never re-authored. The main session always keeps the **dispatch** of role agents *and* the contractor (a subagent cannot dispatch a subagent, so the dispatch loop stays with Opus), and **hands its verdict into the transaction script** for any judgment-bearing evidence — the script (or, at Finalization, the contractor) transcribes it verbatim and never judges, dispatches, sinks, closes, or asks. For the adaptive plan, the **`workflow-planner`** front-end subagent (a locally-authored Opus agent, distinct from the vendored read-only in-plan `planner` node) owns the claim + authors the `## Nodes` table; Opus then governs the risk decision and `kaola-workflow-adaptive-handoff.js` stamps the `plan_hash` freeze (#255). The contractor is Sonnet and stays Sonnet even under `--profile=higher` (mechanical transcription cannot be judgment-upgraded; there is deliberately no `profiles/higher/contractor.md`). **Shell-var lifetime:** a subagent runs in its own shell, so the orchestrator captures sink/worktree metadata BEFORE a contractor dispatch and re-derives its own paths after; durable git/file state (worktree creation, the created `workflow-state.md`, commits, archives) persists across the boundary and is reused at the sink. The boundary in one line: **Opus decides *what* + dispatches *subagents* + owns synthesis + the sink/close + the branch cut; the contractor runs the Finalization mechanical block only; `kaola-workflow-adaptive-node.js` owns the adaptive per-node lifecycle transactions, main-session-direct; the aggregator scripts own the per-node barrier choreography.** The contractor's bookkeeping role (Finalization only) is a deliberate design to keep the main Opus context free of transcription work; the adaptive per-node loop is direct script calls, not contractor round-trips. See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
 
-  **Retired: the full-path Phase 5 review boundary.** The numbered `full` path's own review → fix →
-  narrow-validation → re-review loop, gated by `kaola-workflow-full-advance.js`'s mechanical proof
-  over a `phase4-progress.md` task ledger, is retired along with the `full` path (#725; see
-  `docs/decisions/D-725-01.md`). The live review mechanism on Claude Code, Codex, and opencode is the
-  **adaptive** path's reviewer contract 2 (`code-reviewer`/`security-reviewer` post-dominance gates,
-  the review-attempt journal) documented below and in `docs/api.md` (decisions D-693-01 through
-  D-698-01). The legacy compatibility literal `review_attestation: full_review_completed` that
-  `code-reviewer`/`security-reviewer` still emit for a schema-1 legacy block is unrelated vocabulary
-  (a fixed token name, not a reference to the retired `full` path) and remains live.
+  **Review boundary.** The review mechanism on Claude Code, Codex, and opencode is the
+  **adaptive** reviewer contract 2 (`code-reviewer`/`security-reviewer` post-dominance gates,
+  the review-attempt journal) documented below and in `docs/api.md`. The compatibility literal
+  `review_attestation: full_review_completed` that `code-reviewer`/`security-reviewer` emit for a
+  schema-1 block is a fixed token name (unrelated to the schema-2 gate vocabulary) and remains live.
 
   **Strict lean-orchestrator boundary (issue #277 — script-enforced seams).** #277 hardens the lean-orchestrator boundary from prose guidance to script enforcement via three complementary mechanisms:
 
@@ -262,10 +254,9 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   at node END it runs the fused `--node-end` (`--barrier-check` plus `--selector-check`,
   both blocking); at
   a whole-plan invocation (no `--node-id`) `--barrier-check`, `--gate-verify` and `--verdict-check` are all blocking (a test-only mode — see the executor note below).
-  The per-node end used to *also* compute `--gate-verify` and `--verdict-check`, but only
-  informationally — the downstream reviewer is still pending when the writer commits, so
-  excluding them from the verdict was the deadlock fix, and nothing ever read the payloads.
-  They are no longer computed there at all; the fused envelope pins both keys at `null`. The split between next-action
+  The per-node end does not compute `--gate-verify` or `--verdict-check` — the downstream
+  reviewer is still pending when the writer commits, so they are excluded from the verdict to
+  avoid a deadlock, and the fused envelope pins both keys at `null`. The split between next-action
   and commit-node mirrors the executor's own dispatch/commit cycle: next-action resolves
   *what* to run next; commit-node proves *what was written* was in bounds.
   `kaola-workflow-adaptive-node.js` (#272) is the third aggregator and owns the complete
@@ -323,35 +314,16 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   registered in `validate-script-sync.js` COMMON_SCRIPTS and the three `install.sh`
   SUPPORT_SCRIPT_NAMES blocks.
 
-  **Parallel ready-set execution (issue #281) — retired, superseded by the running-set
-  scheduler.** The executor advances **one FRONTIER UNIT at a time** (a single node or a fan-out
-  of eligible siblings) instead of strictly one node at a time — that frontier-unit model is
-  still current; see the running-set scheduler below. The original #281 design added a fourth
-  aggregator, `kaola-workflow-parallel-batch.js`, that owned a whole-frontier
-  `active-batch.json` manifest (`opening → open → sealed → joined`) via `open-batch` / `top-up` /
-  `seal-member` / `seal` / `join` / `reconcile` subcommands, gated on `next-action.js`'s additive
-  `readyPending` (members of `readySet` whose own ledger status is `pending`, i.e. the openable
-  frontier) and `active` (all currently `in_progress` nodes) fields.
+  **Frontier-unit execution (issue #281).** The executor advances **one FRONTIER UNIT at a time**
+  (a single node or a fan-out of eligible siblings) instead of strictly one node at a time. Fan-out
+  is owned by the per-node running-set scheduler (below): the plan-run skeleton routes
+  `readyPending.length >= 2` to `open-ready` instead of the single-node `open-next` path.
+  `next-action.js` carries `readyPending` (members of `readySet` whose own ledger status is
+  `pending`, i.e. the openable frontier) and `active` (all currently `in_progress` nodes) fields.
+  History at `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
-  The aggregator was retired (D-586-01): nothing on the live executor path ever shelled it — the
-  plan-run skeleton's own dispatch instructions already routed `enterBatch: true` to the per-node
-  running-set scheduler's `open-ready` (documented next), which had fully absorbed the
-  whole-frontier batch's responsibilities, including default-on disjoint write co-open
-  (D-542-01), well before the retirement. `next-action.js` still carries `readyPending`/`active`;
-  `readyPending.length >= 2` is the signal the plan-run skeleton uses to route to `open-ready`
-  instead of the single-node `open-next` path. D-586-01 deliberately kept a `batch_active`
-  backward-compat crash detection over a residual `active-batch.json` on disk (a leftover from a
-  pre-retirement checkout), flagging its removal as a future call once the diagnostic's value no
-  longer outweighed its maintenance cost. `kaola-workflow-adaptive-node.js`'s guard prologue no
-  longer carries that detection: it was removed in full (D-594-01), along with the sibling
-  `active_batch_exists` plan-repair-reopen arm — nothing writes `active-batch.json` anymore, so a
-  stray pre-retirement file is now silently inert rather than refused. History at
-  `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
-
-  **Per-node running-set scheduler — parallelism v2 (issue #377).** The now-retired #281 batch
-  machine advanced **one whole frontier at a time** (`top-up` opened only same-frontier
-  siblings). The running-set scheduler is the post-#364 **per-node** successor — and, since the
-  #281 aggregator's retirement, the sole fan-out mechanism: `adaptive-node.js` carries
+  **Per-node running-set scheduler — parallelism v2 (issue #377).** The running-set scheduler is
+  the per-node fan-out mechanism: `adaptive-node.js` carries
   `open-ready [--max N]`, `close-node --node-id`, and `reconcile-running-set` subcommands that
   open and close **individual** nodes against a `kaola-workflow/{project}/.cache/running-set.json`
   manifest (`{state:'opening'|'open', nodes:[{id,role,kind,baseline,opening?,openedAt?}]}`), so a
@@ -365,9 +337,8 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   `close-and-open-next` stay the `max_concurrent = 1` aliases, unchanged). Read-only nodes fan out
   (they share the parent tree and never write); write nodes the planner proves **disjoint**
   co-open as isolated parallel legs **by default** (D-542-01), while genuinely-overlapping writes
-  open **alone** (the serial fallback). Forcing every write frontier serial — the byte-identical
-  pre-parallel-write behavior — is now the explicit opt-out path (`KAOLA_PARALLEL_WRITES=0`), not
-  the default. A leg-contained **write** also co-opens *behind live reads* — the mirror of the #622
+  open **alone** (the serial fallback). Forcing every write frontier serial (`KAOLA_PARALLEL_WRITES=0`)
+  is the explicit opt-out. A leg-contained **write** also co-opens *behind live reads* — the mirror of the #622
   read-direction relaxation — instead of waiting on `write_awaits_drain`, when four preconditions
   hold (`legCoupled`, clean parent, `--parallel-safe` ok, no live lane group); any miss returns the
   byte-identical hold with a typed `serialDegradeReason`. The `merge_awaits_read_drain` fence (§ the
@@ -376,10 +347,9 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   A consent-tier `observes: scratch` annotation additionally permits a *legless* docs writer to
   co-open behind a scratch-only `adversarial-verifier` over a dirty parent (D-641-01).
   The **AC#5 / #293 legality re-keys to the running set**: `orient` accepts `in_progress` rows
-  matching the running-set node set (`valid_running_set`) — the residual `active-batch.json` read
-  is `orient`'s own read-only legality reconstruction (deliberately KEPT at #594 as a scope
-  boundary distinct from the removed `batch_active` guard above; always `null` now that nothing
-  produces the file), not a live alternate coordination path — and route a crashed `opening`
+  matching the running-set node set (`valid_running_set`) — the `active-batch.json` read
+  is `orient`'s own read-only legality reconstruction (always `null` since nothing produces the
+  file), not a live alternate coordination path — and route a crashed `opening`
   running set to `reconcile-running-set`
   (`running_set_opening_incomplete`, never an orphan); `orient` reconstructs the live set from the
   manifest on every resume. Wall-clock overlap is claimed only via `node-timings.jsonl` (#373) on
@@ -494,17 +464,15 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   contract (#406) requires callers to classify failures structurally by stable `reason` code.
   `serial_node_live` and `scheduler_active` carry different repair pointers and MUST NOT be
   merged into one arm, even though the kernel model unifies serial and scheduler conceptually.
-  (A third arm, `batch_active`, existed for the retired parallel-batch mutual-exclusion surface;
-  #594 removed it in full once nothing could produce the `active-batch.json` it guarded.)
 
   **Canonical spec: `docs/decisions/D-419-01.md`** (Part 1).
 
-  **Lane-group co-open and group-scoped close barrier — D-419 Part 2 implementation (issue #437),
-  default-on since D-542-01.** Lane-attributed disjoint write co-open is now **on by default**
-  (`parallelWritesDefaultOn(process.env)` true unless `KAOLA_PARALLEL_WRITES=0`); the legacy
-  `KAOLA_LANE_CONTAINMENT` toggle is demoted to advanced/defense-in-depth (its `PreToolUse` hook
-  is fail-open only). When co-open is active, `runOpenReady` (`adaptive-node.js` L2550) no longer
-  unconditionally enforces `write_node_exclusive`; instead it calls `tryFormLaneGroup`
+  **Lane-group co-open and group-scoped close barrier — D-419 Part 2 implementation (issue #437).**
+  Lane-attributed disjoint write co-open is **on by default**
+  (`parallelWritesDefaultOn(process.env)` true unless `KAOLA_PARALLEL_WRITES=0`); the
+  `KAOLA_LANE_CONTAINMENT` toggle is advanced/defense-in-depth (its `PreToolUse` hook
+  is fail-open only). When co-open is active, `runOpenReady` (`adaptive-node.js` L2550) does not
+  unconditionally enforce `write_node_exclusive`; instead it calls `tryFormLaneGroup`
   (`adaptive-node.js` L2522) to attempt a co-open of the entire ≥2 disjoint write frontier as a
   **lane group**. The formation is gated on a `--parallel-safe` disjointness check
   (plan-validator.js L1627) over the frontier node ids; a raw overlap result is not necessarily
@@ -595,14 +563,13 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
 
   **Serial opt-out invariant (INV-6, re-anchored by D-542-01).** The co-open gate is now keyed on
   `legCoupled = parallelWritesDefaultOn(process.env)` (true by default; `false` only under
-  `KAOLA_PARALLEL_WRITES=0`). The flag-OFF (serial) configuration is now the **opt-out** path, not
-  the default: under `KAOLA_PARALLEL_WRITES=0`, `legCoupled` is `false`, the
+  `KAOLA_PARALLEL_WRITES=0`). The flag-OFF (serial) configuration is the **opt-out**:
+  under `KAOLA_PARALLEL_WRITES=0`, `legCoupled` is `false`, the
   `if (legCoupled && writeNodes.length >= 2)` co-open guard in `runOpenReady` and the close-side
   group-member guard in `runCloseNode` are both dead, the existing
   `else { toOpen=[writeNodes[0]]; openKind='write'; }` serial path and the existing
-  `commit-node --node-id` per-node barrier run verbatim, and the result is byte-identical to
-  pre-parallel-write behavior. (`KAOLA_LANE_CONTAINMENT` is no longer the gating predicate — it
-  survives only as the advanced/defense-in-depth `PreToolUse` hook, fail-open.) The #498 invariant
+  `commit-node --node-id` per-node barrier run verbatim. (`KAOLA_LANE_CONTAINMENT` is not the gating
+  predicate — it serves as the advanced/defense-in-depth `PreToolUse` hook, fail-open.) The #498 invariant
   is preserved: co-open ALWAYS provisions legs (`groupForm ⟺ legCoupled ⟺ legs provisioned`) —
   never the legless attribution-blind union barrier. Canonical specs:
   `docs/decisions/D-437-01.md` and `docs/decisions/D-542-01.md`.
@@ -627,7 +594,7 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   a lone speculative writer forms a size-1 lane group) rather than the parent worktree. On a
   gate `verdict: fail` a speculative write member is DISCARD-ONLY (leg torn down + evidence
   purged, no KEEP option — an asymmetry with the read half's KEEP-or-discard operator review).
-  Since D-597-01 the D-419-02 consent CEREMONY is superseded as the default posture: the
+  The default posture is speculative auto-activation, not a consent ceremony: the
   freeze-legal set is `off`/`consent`/`auto`, and `auto` — fully-automatic speculative
   activation with no per-run consent, under the identical structural safety net — is the
   freeze-time DEFAULT materialized when the field is absent (`consent` remains authorable;
@@ -664,12 +631,12 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   recorded node-start snapshot (`--record-base`, idempotent for resume-safety) against the node's
   **own** declared set — attributing exactly that node's writes (new/modified/deleted, tracked or
   untracked) without over-attributing prior nodes' still-uncommitted source or pre-existing strays,
-  and needing no committed baseline. Both checks are PURE + toggle-agnostic (they never read the install switch). Only the
+  and needing no committed baseline. Both checks are PURE (they never read the install switch). Only the
   quorum tally and the `validateNodeOutput` schema checkpoints remain agent-discipline
   prose. The 2026-06-03 audit (`docs/investigations/adaptive-path-audit-2026-06-03.md`)
   hardened the *static* floor — write-set extraction (root-level + dot-leading paths),
   `finalize`-sink writes, `## Meta`-scoped label reading, and fence-aware hashing — so the
-  `auto-run` verdict is no longer computed over a write set that under-counts sensitive files.
+  `auto-run` verdict is computed over a write set that fully counts sensitive files.
   Freeze (#274) now also cross-checks the repo's byte-identity/sync-group obligations
   (COMMON_SCRIPTS + BYTE_IDENTICAL_GROUPS from `validate-script-sync.js`), catching a synced
   file edited without its mirror lane at freeze instead of post-merge at `npm test`. Freeze (#340)
@@ -684,15 +651,14 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
   **No mid-run kill-switch once a plan is frozen (accepted, #236).** There is no
   per-session toggle that halts an already-frozen, in-flight plan: both resume surfaces —
   `routeAdaptive` and `resumeFallbackCommand` — and the resume re-validation
-  (`revalidateForResume`, library + structure + `plan_hash` only) are deliberately
-  **toggle-agnostic** (a frozen plan finishes regardless of any config change). This is
+  (`revalidateForResume`, library + structure + `plan_hash` only) let a frozen plan finish
+  regardless of any config change. This is
   correct-by-design: a mid-run path-yank would brick an in-flight plan and break the
-  `plan_hash` author-immutability contract. An explicit opt-in operator halt
-  (`KAOLA_ADAPTIVE_HALT`) was considered and **deferred** — the principled containment for
+  `plan_hash` author-immutability contract. The principled containment for
   a bad frozen plan is the per-tier runtime `--barrier-check` (#231), not a binary
   kill-switch.
 
-  **`.md` allowband — narrow, not blanket (#424).** `.md` files are no longer blanket-exempt from the `--barrier-check`. The declared allowband is: `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**`. `.md` files outside this band — including `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml` — are treated as production surfaces and must appear in a node's `declared_write_set`. Plans frozen before #424 that relied on the blanket exemption will classify non-allowband `.md` writes as `write_set_overflow` at barrier time.
+  **`.md` allowband — narrow, not blanket (#424).** `.md` files are not blanket-exempt from the `--barrier-check`. The declared allowband is: `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**`. `.md` files outside this band — including `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml` — are treated as production surfaces and must appear in a node's `declared_write_set`. Plans frozen before #424 that relied on the blanket exemption will classify non-allowband `.md` writes as `write_set_overflow` at barrier time.
 
   **Barrier attribution sweep and new finalize-check refusals (#424).** At Finalization `--finalize-check`, an attribution sweep verifies that every file in the diff vs `origin/main` is attributed to a `complete` node's write set. Files declared only by a non-complete (`n/a` or `pending`) node yield the typed refusal `unattributed_change`. Two further finalize-check refusals: `drop_base_window_open` (`--drop-base` is forbidden while any node is `in_progress`) and `root_mismatch` (the plan-path root does not match the expected project root).
 
@@ -702,13 +668,13 @@ single-pass shape and the `full` fixed 6-phase ladder are retired (#725; see
 
   **Provenance log (`.cache/provenance-log.jsonl`).** Each `open-next` / `open-ready` append a provenance entry (node-id, opened-at, nonce, evidence-file path) to `.cache/provenance-log.jsonl` — an append-only audit artifact that survives plan-repair and reopen cycles. Not hashed by `plan_hash`; barrier-exempt.
 
-  **Chain receipt (`.cache/chain-receipt.json`, #432) — self-host (npm) only.** `kaola-workflow-run-chains.js` runs all four edition test chains via `spawnSync` (real exit codes) and writes `.cache/chain-receipt.json` (`{headSha, workTreeHash, codeTreeHash, validationTestConsumes, startedAt, chains:[{name, exit}]}`). In a **self-host** repo (its `package.json` declares the `test:kaola-workflow:*` scripts) the Finalization `--finalize-check` gate reads this artifact and refuses with `chains_unverified` (no receipt), `chains_stale`, or `chains_red` (any chain exited non-zero). **#547 (D-547-01) freshness re-key:** `chains_stale` now compares the receipt's `codeTreeHash` (a content address of the code-relevant landable tree — `computeCodeTreeHash`, the #424 allowband + the whole `kaola-workflow/` state tree excluded, MINUS the test-consumed prose that stays code) against a recompute over the current tree. A commit touching only inert docs (narrative/ADRs, NOT the chain-asserted set) or workflow-state since the chains ran leaves the hash unchanged → the receipt stays fresh and the chains are NOT needlessly re-run (the #551 ~30-min repeat). A change to code, or to a chain-asserted doc (`SELF_HOST_TEST_CONSUMED` / the plan's `validation_test_consumes`), flips the hash → `chains_stale` (early regression detection retained). A legacy receipt lacking `codeTreeHash` falls back to the original headSha pin (fail-closed). The producer records the hash via the same exported helper the gate recomputes, so they never disagree. The contractor runs this script at Step 8c and cites the receipt path as evidence, replacing prose attestation. A `--accept-known-red name:issue` waiver acknowledges a known-red chain with an issue reference. **Consumer (non-npm) repos (#475)** do NOT run this producer — `--finalize-check` auto-detects them (no npm scripts) and gates instead on the agent-recorded `.cache/final-validation.md` (presence + a column-0 `verdict: pass`; `final_validation_unverified` / `final_validation_failed`), because the agent owns verification (#44). The v6.2.0 `kaola-workflow/chains.json` opt-in is retired; the attribution sweep runs for both modes.
+  **Chain receipt (`.cache/chain-receipt.json`, #432) — self-host (npm) only.** `kaola-workflow-run-chains.js` runs all four edition test chains via `spawnSync` (real exit codes) and writes `.cache/chain-receipt.json` (`{headSha, workTreeHash, codeTreeHash, validationTestConsumes, startedAt, chains:[{name, exit}]}`). In a **self-host** repo (its `package.json` declares the `test:kaola-workflow:*` scripts) the Finalization `--finalize-check` gate reads this artifact and refuses with `chains_unverified` (no receipt), `chains_stale`, or `chains_red` (any chain exited non-zero). **#547 (D-547-01) freshness re-key:** `chains_stale` now compares the receipt's `codeTreeHash` (a content address of the code-relevant landable tree — `computeCodeTreeHash`, the #424 allowband + the whole `kaola-workflow/` state tree excluded, MINUS the test-consumed prose that stays code) against a recompute over the current tree. A commit touching only inert docs (narrative/ADRs, NOT the chain-asserted set) or workflow-state since the chains ran leaves the hash unchanged → the receipt stays fresh and the chains are NOT needlessly re-run (the #551 ~30-min repeat). A change to code, or to a chain-asserted doc (`SELF_HOST_TEST_CONSUMED` / the plan's `validation_test_consumes`), flips the hash → `chains_stale` (early regression detection retained). A legacy receipt lacking `codeTreeHash` falls back to the original headSha pin (fail-closed). The producer records the hash via the same exported helper the gate recomputes, so they never disagree. The contractor runs this script at Step 8c and cites the receipt path as evidence, replacing prose attestation. A `--accept-known-red name:issue` waiver acknowledges a known-red chain with an issue reference. **Consumer (non-npm) repos (#475)** do NOT run this producer — `--finalize-check` auto-detects them (no npm scripts) and gates instead on the agent-recorded `.cache/final-validation.md` (presence + a column-0 `verdict: pass`; `final_validation_unverified` / `final_validation_failed`), because the agent owns verification (#44). The attribution sweep runs for both modes.
 
   **Run-gap sweep gate (`.cache/run-gaps.json`, #435).** `kaola-workflow-gap-sweep.js` is a self-contained SUPPORT-script CLI run by the contractor at Step 8c.2 (after the chain-receipt step). The scanner reads only the project's `.cache/` (scope guard) for three machine-reliable defect signals: provenance reopens (`nodeId` with more than one `open` event = `in_run_repair`), chain-receipt `accepted_red:true` entries (`deferred_red_chain`), and operator-seeded `.cache/run-gaps-manual.md` lines (`manual:<slug>`). It deduplicates items by `(reasonClass, sample)` and writes `.cache/run-gaps.json` (result is always `swept`; exit 0). The `--check` gate then reads the artifact and the `## Run gaps` section of `finalization-summary.md`; each swept tuple must be mapped as `filed: #N` or `noise: <reason>`. An unmapped tuple causes a typed `gaps_unswept` refusal (exit 1), blocking finalization. **Reverse containment (issue #653, D-653-01).** `--check` now also parses the `## Run gaps` section FIRST, unconditionally, even when `sweptClasses` is empty: every strict-grammar entry must exist in the swept set as an exact `(reasonClass, sample)` tuple, or the gate refuses `observed_gap_unseeded` (`unseeded: [{reasonClass, sample}]` + a remedy naming `.cache/run-gaps-manual.md`) — closing the vacuous-pass hole where a hand-typed `## Run gaps` row for a gap the scanner never observed passed silently whenever nothing was swept. A vacuous pass now requires BOTH sides empty (no swept classes AND no strict-grammar entries); free-text lines that don't match the strict entry regex (e.g. `- none`) are ignored by design, preserving back-compat. **Sample delimitation (issue #726).** The entry regex's sample group is LAZY, so `<sample>` ends at the FIRST `): ` followed by a valid `filed:`/`noise:` tail. That single quantifier resolves two opposite mis-parses: a negated class (`[^)]+`) rejected any sample containing `)` (e.g. `retryAfter(from:)`), refusing `gaps_unswept` for a gap the operator had correctly mapped; a greedy group (`(.+)`) backtracked to the LAST `): `, mis-carving a legal free-text `noise:` justification that contains `): filed: #N` and refusing `observed_gap_unseeded` against a sample the operator never wrote. Accepting paren-bearing samples also TIGHTENS reverse containment: such a hand-typed row previously never parsed and so slipped through the both-sides-empty vacuous pass entirely. A line that looks like a mapping row but fails the grammar is still skipped, and now emits an advisory stderr diagnostic naming it (never touching stdout, the parse result, or the exit code); free-text bullets stay silently ignored. The pre-existing forward `gaps_unswept` check is byte-unchanged below this point. There is NO coupling to `cmdFinalize` (`kaola-workflow-claim.js`); the gate is purely contractor-owned, mirroring the chain-receipt pattern from D-432-01. Cross-edition: canonical + Codex byte-twin + two forge-named ports, registered in `COMMON_SCRIPTS` and all three `install.sh` `SUPPORT_SCRIPT_NAMES` blocks. See `docs/conventions.md` § Run-gap capture is gated at finalize (#435) and `docs/decisions/D-435-01.md`.
 
 **Sink journal disposal at terminal success (`.cache/sink-receipt.json` / `.cache/sink-fallback.json`, issue #653, D-653-01).** `sink-merge.js`'s `--sink` transaction journals previously survived indefinitely after a successful sink — crash-resume artifacts with no terminal cleanup. `disposeSinkJournals(mainRoot, project)` unlinks all four candidate paths (live + archive `.cache/`, both filenames) immediately after `finalReceipt` is captured into memory, strictly AFTER every `SINK_STEPS` entry, the #484 ancestry freshness guard, and worktree/branch teardown have completed — so any earlier crash or refusal path returns before ever reaching the dispose call and the journal survives for resume, unchanged. `ENOENT` is treated as already-disposed (not a failure); any other unlink error is a non-fatal stderr warning that never fails an otherwise-successful sink. The success emit gains `journal_disposed: true|false`. The gitlab/gitea sink-merge forks (DIVERGENT hand-ports, not byte-identical mirrors) carry the identical disposal logic. See `docs/api.md` § Sink journal disposal at terminal success and `docs/workflow-state-contract.md`.
 
-**Consumer final-validation candidate-hash binding (issue #653, D-653-01).** The consumer (non-npm) `--finalize-check` gate previously accepted a bare `verdict: pass` with no binding to the tree it validated: a stale `final-validation.md` from an earlier candidate would silently pass. `kaola-workflow-plan-validator.js --candidate-hash --json` (a new producer mode, read-only, no tests executed) emits the deterministic `computeCodeTreeHash` snapshot of the current candidate over the SAME `validation_test_consumes` band the chain-receipt producer uses (the frozen plan is the shared band source), for the agent to record as a column-0 `validated_candidate_hash:` line in `.cache/final-validation.md`, computed LAST after every file the validation covered has landed. The consumer arm of `--finalize-check` now additionally refuses `final_validation_unbound` (no well-formed hash line — fail-closed) and `final_validation_stale` (the recorded hash no longer equals a fresh recompute — payload carries `recorded_candidate_hash` + `current_candidate_hash`), precedence-ordered `final_validation_unverified > final_validation_failed > final_validation_unbound > final_validation_stale`. The gate compares two hashes and never re-executes the validation command — #475's "the agent owns verification" boundary is unchanged. #648's citation fields (`source: cited:<node-id>`, `validated_command`, `validated_at_head`, `reuse_boundary`) are untouched; a citation additionally requires a FRESH `validated_candidate_hash` computed at citation time. See `docs/api.md` § Candidate-hash binding for consumer final-validation.
+**Consumer final-validation candidate-hash binding (issue #653, D-653-01).** The consumer (non-npm) `--finalize-check` gate previously accepted a bare `verdict: pass` with no binding to the tree it validated: a stale `final-validation.md` from an earlier candidate would silently pass. `kaola-workflow-plan-validator.js --candidate-hash --json` (a new producer mode, read-only, no tests executed) emits the deterministic `computeCodeTreeHash` snapshot of the current candidate over the SAME `validation_test_consumes` band the chain-receipt producer uses (the frozen plan is the shared band source), for the agent to record as a column-0 `validated_candidate_hash:` line in `.cache/final-validation.md`, computed LAST after every file the validation covered has landed. The consumer arm of `--finalize-check` now additionally refuses `final_validation_unbound` (no well-formed hash line — fail-closed) and `final_validation_stale` (the recorded hash differs from a fresh recompute — payload carries `recorded_candidate_hash` + `current_candidate_hash`), precedence-ordered `final_validation_unverified > final_validation_failed > final_validation_unbound > final_validation_stale`. The gate compares two hashes and never re-executes the validation command — #475's "the agent owns verification" boundary is unchanged. #648's citation fields (`source: cited:<node-id>`, `validated_command`, `validated_at_head`, `reuse_boundary`) are untouched; a citation additionally requires a FRESH `validated_candidate_hash` computed at citation time. See `docs/api.md` § Candidate-hash binding for consumer final-validation.
 
 **Selection evidence docking (issue #653, D-653-01).** On the no-issue-named auto-bundle branch, `workflow-next.md`'s router persists the `issue-scout`'s entire JSON recommendation verbatim (fenced, one-line `selection_mode: auto-bundle|single-issue` header) to `kaola-workflow/{project}/.cache/selection-evidence.md` before dispatching the executor — durable evidence of why a bundle was selected, previously visible only in the scout's dispatch reply. `cmdFinalize` probes for the file (`probeSelectionEvidence`, mirroring the attestation probe's archive-then-live candidate order) and attaches `selection_evidence: present|absent` to the closure receipt — advisory only, no invariant, no warning on absence (a user-named claim legitimately has none, since the scout never runs on that branch). See `docs/api.md` § Closure Contract and `docs/workflow-state-contract.md`.
 
@@ -886,10 +852,9 @@ for the Claude edition) and a `.toml` triple across the three plugin editions:
 `plugins/kaola-workflow/agents/<name>.toml` (codex),
 `plugins/kaola-workflow-gitlab/agents/<name>.toml`, and
 `plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 16 base-role
-profiles (16 files, 16 triples) — 15 plus `metric-optimizer` (#634); the 6 `-max` xhigh effort-variant profiles were retired
-in #451. Every current Codex profile omits top-level `model` and `model_reasoning_effort`, which is
-the named-role inheritance form: each child receives the effective parent-session pair. Legacy
-plan-tier tokens `opus`/`sonnet` still normalize to declarative `reasoning`/`standard` metadata (#610).
+profiles (16 files, 16 triples) — 15 plus `metric-optimizer` (#634). Every Codex profile omits top-level `model` and `model_reasoning_effort`, which is
+the named-role inheritance form: each child receives the effective parent-session pair. Plan-tier
+tokens `opus`/`sonnet` normalize to declarative `reasoning`/`standard` metadata (#610).
 All three `.toml` twins for a given profile are byte-identical
 (forge-neutral by the §341 contract — no CLI binaries, no forge brands) and carry the same
 `description` / `nickname_candidates` metadata as the managed `config/agents.toml` block.

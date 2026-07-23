@@ -14,15 +14,10 @@ here for the full contract.
   records status, phase, step, pending gates, next command or skill, issue
   number, sink mode, branch, worktree path when known, and delegation policy.
   See the Workflow State Fields section below for the complete field inventory.
-- Adaptive is the only workflow path (issue #227; `fast`/`full` were retired — see
-  `docs/decisions/D-725-01.md`). Every active project uses `workflow-plan.md` as its durable
+- Adaptive is the workflow path (issue #227). Every active project uses `workflow-plan.md` as its durable
   evidence spine — the frozen DAG — plus `finalization-summary.md` as the terminal artifact.
   Contract resolution is explicit and hash-bound.
-- A project created before the retirement may still carry the legacy numbered phase artifacts
-  (`phase1-research.md` … `phase5-review.md`) or a fast-path `fast-summary.md` on disk. These are
-  never newly authored; they are read only by tolerant, defensive parses — the classifier's
-  in-flight write-set overlap detection and `repair-state`'s terminal-complete check — that simply
-  never fire for a newly claimed project. A verified already-frozen plan whose
+- A verified already-frozen plan whose
   `## Meta` predates `plan_schema_version` is contract 1 and remains byte-preserving; a newly
   authored plan must carry `plan_schema_version: 2`, which maps to dispatch/journal contract 2.
   Missing, explicit-new-v1, duplicate, unknown, or plan/dispatch-mismatched versions refuse before
@@ -299,14 +294,10 @@ here for the full contract.
       `legMirrorPath`. A declared leg whose artifact is missing refuses `evidence_absent`; it never
       falls back to the parent's tracked seed or a parent decoy. Every non-lane-group case (a legless
       write or a read node) continues to use the parent copy. See `docs/decisions/D-622-01.md`.
-  - `active-batch.json` — retired parallel-batch manifest (`state: 'opening'|'open'|'sealed'|'joined'`).
-    No live component writes this file anymore — its sole writer, `kaola-workflow-parallel-batch.js`,
-    was retired (D-586-01) once the per-node running-set scheduler fully absorbed its
-    responsibilities. The `batch_active` backward-compat detection that
-    `kaola-workflow-adaptive-node.js`'s guard prologue kept after that retirement was itself
-    removed (D-594-01), along with the sibling `active_batch_exists` plan-repair-reopen refusals —
-    a residual file on disk is now silently inert to every mutation guard. Only `orient`'s
-    read-only manifest legality reconstruction still reads it (always `null` in producible state).
+  - `active-batch.json` — a manifest with no live writer (`state: 'opening'|'open'|'sealed'|'joined'`).
+    No component writes this file; the per-node running-set scheduler owns the frontier path. A
+    residual file on disk is inert to every mutation guard. Only `orient`'s read-only manifest
+    legality reconstruction reads it (always `null` in producible state).
   - `scheduler.lock` (issue #585) — a **transient coordination artifact**, not durable workflow
     state. A project-scoped O_EXCL lockfile (`fs.openSync(path, 'wx')`) that `adaptive-node.js`
     `main()` acquires before every mutating scheduler subcommand body and releases in a `finally`;
@@ -344,7 +335,7 @@ here for the full contract.
     `kaola-workflow-plan-validator.js --candidate-hash --json` (read-only, no tests executed),
     computed LAST — after every file the validation covered has landed. `--finalize-check`
     (consumer mode) refuses `final_validation_unbound` (no well-formed hash line) or
-    `final_validation_stale` (the recorded hash no longer equals a fresh recompute over the
+    `final_validation_stale` (the recorded hash differs from a fresh recompute over the
     current tree, once workflow-state and inert non-test-consumed docs are excluded) before
     accepting the verdict. A citation of a prior terminal validation run (`source: cited:<node-id>`
     / `validated_command` / `validated_at_head` / `reuse_boundary`, #648) still requires a FRESH
@@ -441,7 +432,7 @@ here for the full contract.
     close) leaves the field unset — the invariant is a pure no-op there, unchanged from before
     #617. Wires the `remote-closed-after-publish` closure invariant, declared since #164 but never
     evaluated until this fix. `kaola-workflow-sink-merge.js`'s `SINK_STEPS` also reorders `closure`
-    to run **last** (after `push_main`, not three steps before it) — a merge sink can no longer
+    to run **last** (after `push_main`, not three steps before it) — a merge sink cannot
     close an issue before its implementation has actually reached the pushed default branch. See
     `docs/decisions/D-617-01.md`.
 
@@ -516,7 +507,7 @@ here for the full contract.
 The `workflow-state.md` file contains several key blocks:
 
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
-  - **workflow_path** — Workflow execution path. `adaptive` is the only legal value; persisted from the `KAOLA_PATH` environment variable or the `--workflow-path` startup flag when supplied, defaulting to `adaptive` when absent. `claimProject` validates the persisted value against `WORKFLOW_PATHS` (`['adaptive']`): a non-adaptive request (`fast`, `full`, or any other value — including a stale `installed_paths`-gated request from before the `fast`/`full` retirement) is a **typed `path_not_installed` refusal**, never a silent downgrade. See `docs/decisions/D-725-01.md`.
+  - **workflow_path** — Workflow execution path. `adaptive` is the only legal value; persisted from the `KAOLA_PATH` environment variable or the `--workflow-path` startup flag when supplied, defaulting to `adaptive` when absent. `claimProject` validates the persisted value against `WORKFLOW_PATHS` (`['adaptive']`): any non-adaptive request is a **typed `path_not_installed` refusal**, never a silent downgrade.
   - **runtime** — The runtime that claimed the folder (`claude`, `codex`, or `opencode`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value. An optional `issue_action: close | comment_keep_open` line (default `close` when absent, issue #336) marks a keep-open partial-close terminal: the main session writes `comment_keep_open` at the Closure Decision Gate to keep the issue OPEN — `finalize`/`sink-merge` then preserve the roadmap source, comment instead of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
   Three **claim-time session fields** are written by `writeState` (in `kaola-workflow-claim.js`)
@@ -533,7 +524,7 @@ The `workflow-state.md` file contains several key blocks:
     `resolveSessionMarker(env)` (from `kaola-workflow-classifier.js`): `KAOLA_SESSION_MARKER`
     from the environment when set (allowing an orchestrator to mint one stable identity for the
     session), otherwise `s-<pid>-<timestamp-base36>`. Stamped once at claim time; never refreshed.
-    Must not reuse any of the retired `## Lease` field names (`session_id`, `last_heartbeat`,
+    Must not reuse any of the legacy `## Lease` field names (`session_id`, `last_heartbeat`,
     `expires`, `owner_session_id`, `claim_comment_id`) — those are erased by `removeLegacyStateBlocks`.
   - **`claim_ts`** — The ISO-8601 claim timestamp (`new Date().toISOString()`), the liveness
     anchor. Together with `LANE_STALENESS_MS = 86400000` (24 hours, exported from
@@ -814,35 +805,21 @@ This invariant is enforced at three independent points:
 
 The numbers in the bundle identifier are always in ascending sorted order, matching the order in `issue_numbers`.
 
-## Adaptive Path — the only workflow path (#227, #725)
+## Adaptive Workflow Path (#227)
 
-The adaptive path (issue #227) is the **only** workflow path — no switch to flip, no install-time
-opt-in axis, nothing to configure for a standard install. `fast` and `full` (formerly install-time
-opt-ins under `#538`/`#543`) are retired; see `docs/decisions/D-725-01.md`, which supersedes
-`D-538-01`/`D-543-01`.
+The adaptive path (issue #227) is the workflow path — nothing to configure for a standard install.
 
-- **`installed_paths` config field — retired, tolerated on read only.** The list-valued
-  `installed_paths` field that used to live in `~/.config/kaola-workflow/config.json` (the same
-  file as `parallel_mode`) is no longer written by any installer. `resolveInstalledPaths()` and
-  `INSTALLED_PATHS_FIELD` are removed from `kaola-workflow-adaptive-schema.js`. A stale
-  `installed_paths` value left over from a pre-retirement install is never read for legality and
-  is stripped (not preserved) the next time `install.sh`/`install-codex-agent-profiles.js` touch
-  that config file — mirroring how the earlier `enable_adaptive` field was migrated away.
-- **Selection semantics.** `isLegalWorkflowPath(value, installedPaths)` (from the schema, kept as
-  a two-arg function for callers) is the single legality gate: with `WORKFLOW_PATHS` now
-  `['adaptive']`, only `value === 'adaptive'` can ever pass, regardless of what `installedPaths`
-  argument a caller supplies. It is **not** read by `repair-state.js`/`routeAdaptive`, by
-  `kaola-workflow-plan-validator.js`, or by the two `claim.js` resume surfaces.
-- **`--with-fast`/`--with-full` install flags — removed.** `install.sh` no longer parses either
-  flag; both now fall through to the generic unknown-argument error (exit 2). `install-codex-agent-
-  profiles.js` (×3, byte-identical) drops the matching argv parsing and its `installed_paths` UNION
-  writer.
+- **Selection semantics.** `isLegalWorkflowPath(value, installedPaths)` (from the schema, a two-arg
+  function for callers) is the single legality gate: with `WORKFLOW_PATHS` `['adaptive']`, only
+  `value === 'adaptive'` passes, regardless of the `installedPaths` argument a caller supplies. It is
+  **not** read by `repair-state.js`/`routeAdaptive`, by `kaola-workflow-plan-validator.js`, or by the
+  two `claim.js` resume surfaces.
 - **Finish-in-flight.** An already-frozen adaptive project (a `workflow-plan.md` exists) resumes
   to completion regardless of any config change. Both `claim.js` resume surfaces (`writeState`
   next_command default and `resumeFallbackCommand`) and `routeAdaptive` recognize
-  `workflow_path: adaptive` and emit `/kaola-workflow-plan-run {project}` toggle-agnostically. A
-  project still carrying a stale `workflow_path: fast`/`full` from before the retirement is refused
-  at claim time with `path_not_installed`, not silently resumed or downgraded.
+  `workflow_path: adaptive` and emit `/kaola-workflow-plan-run {project}`. A project carrying a
+  non-adaptive `workflow_path` is refused at claim time with `path_not_installed`, not silently
+  resumed or downgraded.
 
 ## Codex Task Mirror (issue #266, AC-C + AC-D)
 
@@ -906,7 +883,7 @@ Field rules:
 
 See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `ledger_status → status` mapping table.
 
-## Script-Owned Mechanical Transitions (issue #272; fast/full transaction scripts retired #725)
+## Script-Owned Mechanical Transitions (issue #272)
 
 Every mechanical transition that mutates `workflow-state.md` is owned by a typed
 transaction script the main session runs directly (ADR 0004) — the `contractor` subagent
@@ -919,11 +896,8 @@ block byte-for-byte.
 | Adaptive per-node | `kaola-workflow-adaptive-node.js` (#272) | the `## Node Ledger` per-node lifecycle |
 | Finalization | `contractor` subagent | the archive, roadmap-mirror regen, `chore: finalize` staging commit (SOLE remaining contractor-owned transition) |
 
-The `kaola-workflow-fast-advance.js` / `kaola-workflow-full-advance.js` /
-`kaola-workflow-phase4-advance.js` transaction scripts that used to own the fast path and
-the numbered Phase 1-5 checkpoints are retired (#725; see `docs/decisions/D-725-01.md`) —
-adaptive per-node evidence lives in `.cache/{node-id}.md`, not in a phase file. The
-`#459` contract validators still forbid a contractor dispatch from returning to any
+Adaptive per-node evidence lives in `.cache/{node-id}.md`. The
+`#459` contract validators forbid a contractor dispatch from returning to any
 migrated surface.
 
 ### Recovering a project ALREADY wedged by a stranded settled row
