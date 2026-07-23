@@ -12293,6 +12293,332 @@ function runExpandClose(opts) {
   return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id), taskTransitions: [] };
 }
 
+// ===========================================================================
+// #761 (progressive elaboration, child 4): LOCAL RE-EXPANSION ROUTING.
+//
+// A FINDING — from any admitted source (a failed review verdict, a PASSED review whose candidate
+// went stale after seal, a finalize done-gate failure, or an out-of-surface attribution) — routes
+// to a LOCAL re-expansion of the owning expansion point, NOT to a global epoch replan, unless the
+// SPINE itself must change. This module owns the predicates that decision turns on. Each states the
+// QUESTION it answers and the DIRECTION it fails; each is PURE and pinned in both directions.
+//
+//   1. THE ROUTER (routeFindingReExpansion): "does this finding re-expand LOCALLY, or must it
+//      escalate to a spine replan?" Escalation is the expensive, rare path — a spine replan re-
+//      authors the whole plan — so the router DEFAULTS to local and escalates ONLY on POSITIVE
+//      PROOF that every one of the finding's files lies OUTSIDE every milestone's declared+amended
+//      surface. Absence of a file (an anchorless finding) is NOT such proof, so a finding with no
+//      files can never escalate on its own.
+//
+//   2. THE RE-REVIEW WALL (assertReExpansionReviewed): "may re-expanding this point reach the
+//      sink?" FAILS CLOSED. A point that is not reviewed-before-sink — declares no review_class, or
+//      is no longer walled by a downstream spine gate — may NOT be re-expanded; refuse rather than
+//      compose a frontier that could sink unreviewed. The reviewed-before-sink invariant is the one
+//      wall re-expansion may never weaken.
+//
+// The re-review is realized by the SPINE review wall, NOT by a composed gate unit inside the record:
+// #759 refuses composed gate roles (expansion_unit_role_gate_unsupported) because the review-context
+// seam is not yet widened to resolve composed gates at OPEN time. So the "{fixer unit, re-review
+// unit}" pair is a fixer unit in the record PLUS the point's post-dominating spine gate, which the
+// re-review wall proves present fail-closed. A re-expanded point cannot reach the sink without that
+// spine gate re-firing against the new candidate — reviewed-before-sink is preserved by construction.
+// ===========================================================================
+
+// normalizeSurfacePath — a single-owner path normalizer for surface/finding comparison: trim and
+// strip a leading `./`. Kept trivial and total so ownership matching is a pure string relation.
+function normalizeSurfacePath(p) {
+  let s = String(p == null ? '' : p).trim();
+  while (s.startsWith('./')) s = s.slice(2);
+  return s;
+}
+
+// surfaceCoversFile — QUESTION: "is `file` inside the coarse advisory surface token `surface`?"
+// A surface token is a directory prefix (`scripts/`) or a concrete path (`scripts/a.js`); a token
+// with no trailing slash matches EITHER an exact file or a directory prefix of the same name.
+//
+// FAIL DIRECTION: a match is a POSITIVE containment only. An empty surface covers nothing and an
+// empty file is covered by nothing (both return false) — a blank cell can never silently claim
+// ownership of a finding. `scripts` never matches `scriptsfoo/x` (the prefix is `scripts/`).
+function surfaceCoversFile(surface, file) {
+  const s = normalizeSurfacePath(surface);
+  const f = normalizeSurfacePath(file);
+  if (!s || !f) return false;
+  if (s === f) return true;
+  const prefix = s.endsWith('/') ? s : s + '/';
+  return f.startsWith(prefix);
+}
+
+// amendedSurfacesFor — the SINGLE seam the ownership predicate reads for a point's APPENDED
+// surfaces. The declared-not-walled child (#762) makes an expansion's write surface amendable
+// append-only; until it lands there is no amend channel, so a point's amended surface is whatever
+// the caller supplies in the `amendedSurfaces` map (default: nothing). #762 wires this one lookup,
+// never the router.
+function amendedSurfacesFor(point, amendedSurfaces) {
+  const amend = amendedSurfaces && typeof amendedSurfaces === 'object' ? amendedSurfaces : {};
+  return Array.isArray(amend[point]) ? amend[point].map(normalizeSurfacePath).filter(Boolean) : [];
+}
+
+// resolveExpansionOwnership — QUESTION: "which expansion point(s) own this finding's files?"
+// A point OWNS a file when its declared+amended surface COVERS that file (surfaceCoversFile).
+// Ownership is a SET: a finding whose files fall under two points' surfaces is owned by BOTH — each
+// re-expands with its own record (the spanning-finding case). PURE.
+//
+// FAIL DIRECTION: a file joins the covered set only on a POSITIVE surface cover; an unmatched file
+// lands in `uncoveredFiles`, never silently attributed to a point. A finding with no files yields
+// empty owners AND empty uncoveredFiles — the router, not this predicate, decides what an anchorless
+// finding means. Returns { owners:[pointId sorted], coveredFiles, uncoveredFiles }.
+function resolveExpansionOwnership(findingFiles, contracts, amendedSurfaces) {
+  const files = Array.from(new Set((Array.isArray(findingFiles) ? findingFiles : [])
+    .map(normalizeSurfacePath).filter(Boolean)));
+  const points = contracts instanceof Map ? Array.from(contracts.values())
+    : (Array.isArray(contracts) ? contracts : []);
+  const owners = new Set();
+  const coveredFiles = new Set();
+  for (const file of files) {
+    for (const c of points) {
+      const declared = Array.isArray(c.expected_surfaces) ? c.expected_surfaces : [];
+      const surfaces = declared.concat(amendedSurfacesFor(c.nodeId, amendedSurfaces));
+      if (surfaces.some(s => surfaceCoversFile(s, file))) {
+        owners.add(c.nodeId);
+        coveredFiles.add(file);
+      }
+    }
+  }
+  return {
+    owners: Array.from(owners).sort(),
+    coveredFiles: Array.from(coveredFiles).sort(),
+    uncoveredFiles: files.filter(f => !coveredFiles.has(f)).sort(),
+  };
+}
+
+// routeFindingReExpansion — THE ROUTER. QUESTION: "local re-expansion, or spine replan?"
+//
+// Inputs: `findingFiles` (the finding's anchor paths — the #729 finding-frontier shape), an optional
+// `contextPoint` (the expansion point the finding SURFACED at — e.g. the point named by a review
+// binding's expansion_id, or the milestone whose done-gate failed), the parsed expansion `contracts`
+// (parseExpansionContracts), and the (#762) `amendedSurfaces` map.
+//
+// FAIL DIRECTION — the whole point of this issue, and where prior siblings were rejected. LOCAL is
+// the default; a spine replan is the expensive, rare escape. So the router escalates to
+// `spine_replan` ONLY on POSITIVE PROOF that the finding lies outside every milestone's scope: there
+// is ≥1 file, NONE is covered by any declared+amended surface, and no `contextPoint` claims it. Every
+// other shape stays local. An anchorless finding (no files) can NEVER furnish that proof, so it never
+// escalates on files alone — it routes to its `contextPoint` if one is named, else refuses
+// `reexpansion_owner_unresolved` (fail-closed: neither a silent local guess nor a silent escalate —
+// the caller must name the surfacing point or attribute the finding).
+//
+//   decision: 'local'        → owners is the non-empty set of points to re-expand (one record each).
+//   decision: 'spine_replan' → escalate: files present, none owned, spine shape must change (the ONLY
+//                              remaining epoch-replan trigger).
+//   result: 'refuse'         → an anchorless finding with no contextPoint (cannot be placed).
+function routeFindingReExpansion(input) {
+  const findingFiles = (input && Array.isArray(input.findingFiles)) ? input.findingFiles : [];
+  const contextPoint = input && input.contextPoint ? String(input.contextPoint) : null;
+  const contracts = input && input.contracts;
+  const amendedSurfaces = (input && input.amendedSurfaces) || {};
+  const own = resolveExpansionOwnership(findingFiles, contracts, amendedSurfaces);
+  const contextIsPoint = !!contextPoint && (contracts instanceof Map ? contracts.has(contextPoint)
+    : Array.isArray(contracts) && contracts.some(c => c.nodeId === contextPoint));
+  const hasFiles = findingFiles.some(f => normalizeSurfacePath(f));
+
+  // DEFAULT-LOCAL: any file lands inside some milestone's surface → re-expand exactly those
+  // milestones. Ownership is by SURFACE (the spanning-finding case is the multi-element owner set).
+  if (own.owners.length) {
+    return { result: 'ok', decision: 'local', owners: own.owners,
+      covered_files: own.coveredFiles, uncovered_files: own.uncoveredFiles };
+  }
+
+  // No surface owns any file. Split on whether a real surfacing point claims the finding.
+  if (contextIsPoint) {
+    // The finding surfaced at a REAL expansion point but its files fall outside every DECLARED
+    // surface. This is the out-of-surface attribution the declared-not-walled child (#762) owns: the
+    // point's surface must be AMENDED to cover the file, then this point owns it. Until #762 lands,
+    // route LOCAL to the surfacing point and FLAG the out-of-surface files. This is still local —
+    // never a spine replan — because a named point claims the finding.
+    return { result: 'ok', decision: 'local', owners: [contextPoint],
+      covered_files: [], uncovered_files: own.uncoveredFiles,
+      out_of_surface: hasFiles ? own.uncoveredFiles : [] };
+  }
+  if (hasFiles) {
+    // POSITIVE PROOF: ≥1 file, none covered by any milestone's declared+amended surface, and no
+    // point claims it. The spine shape itself must change — the ONLY remaining epoch-replan trigger.
+    return { result: 'ok', decision: 'spine_replan', owners: [],
+      uncovered_files: own.uncoveredFiles,
+      detail: 'no expansion point\'s declared+amended surface covers ' + own.uncoveredFiles.join(', ')
+        + ' — the finding is outside every spine milestone, which is a spine-shape change' };
+  }
+  // Anchorless finding, no surfacing point. Cannot be placed, and MUST NOT be guessed in EITHER
+  // direction: a silent local pick could re-expand the wrong point; a silent escalate would spend an
+  // epoch on a finding that might be fully local. Refuse and name the missing input.
+  return refuse('reexpansion_owner_unresolved', {
+    detail: 'the finding declares no files and names no surfacing expansion point — supply the '
+      + 'surfacing point (contextPoint) or attribute the finding before routing',
+  });
+}
+
+// assertReExpansionReviewed — THE RE-REVIEW WALL. QUESTION: "may re-expanding `point` reach the
+// sink?" The reviewed-before-sink invariant is the one wall re-expansion may NEVER weaken, so this
+// FAILS CLOSED: a point is re-expandable only if it is REVIEWED-BEFORE-SINK — it declares a
+// review_class AND a spine gate of that class is reachable downstream toward the sink (SPINE-5 owns
+// the strict post-dominance at freeze; this re-checks reachability at re-expansion time so a
+// re-expansion never trusts a stale guarantee against a mis-routed target).
+//
+// Direction rationale: a false NO costs one typed refusal an operator can read and fix (declare the
+// review_class / route to the real point). A false YES lets a fixer's output reach the irreversible
+// sink with no reviewer between them — exactly the wall this issue is forbidden from weakening.
+function assertReExpansionReviewed(point, contracts, spineNodes) {
+  const contract = contracts instanceof Map ? contracts.get(point)
+    : (Array.isArray(contracts) ? contracts.find(c => c && c.nodeId === point) : null);
+  if (!contract) {
+    return refuse('reexpansion_point_unknown', { node_id: point,
+      detail: 'no expansion contract declares "' + point + '" — a re-expansion may only target a declared expansion point' });
+  }
+  const reviewClass = Array.isArray(contract.review_class) ? contract.review_class.filter(Boolean) : [];
+  if (!reviewClass.length) {
+    return refuse('reexpansion_review_wall_missing', { node_id: point,
+      detail: 'expansion point "' + point + '" declares no review_class — re-expanding it would let its '
+        + 'frontier reach the sink unreviewed (reviewed-before-sink may never be weakened)' });
+  }
+  // Forward reachability over the spine: which nodes transitively DEPEND on `point`?
+  const nodes = Array.isArray(spineNodes) ? spineNodes : [];
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const dependents = new Map();
+  for (const n of nodes) for (const d of (n.dependsOn || [])) {
+    if (!dependents.has(d)) dependents.set(d, []);
+    dependents.get(d).push(n.id);
+  }
+  const descendants = new Set();
+  const stack = [point];
+  while (stack.length) {
+    for (const child of (dependents.get(stack.pop()) || [])) {
+      if (!descendants.has(child)) { descendants.add(child); stack.push(child); }
+    }
+  }
+  const walledBy = Array.from(descendants).filter(id => {
+    const node = byId.get(id);
+    return node && reviewClass.includes(node.role);
+  }).sort();
+  if (!walledBy.length) {
+    return refuse('reexpansion_review_wall_missing', { node_id: point,
+      detail: 'no spine gate of class [' + reviewClass.join(', ') + '] is reachable downstream of "'
+        + point + '" toward the sink — re-expanding it would reach the sink unreviewed' });
+  }
+  return { result: 'ok', review_class: reviewClass, walled_by: walledBy };
+}
+
+// buildReExpansionComposition — turn a finding into the composition the SAME expand-open transaction
+// (#759) consumes: a re-expansion record on `point` whose FIXER unit repairs the finding. PURE, and
+// deliberately a total function of its inputs so a caller can compose the byte-identical frontier
+// without a live transaction.
+//
+// The fixer's brief substrate is the digest-bound canonical brief (#730 buildRepairBrief) built from
+// the finding frontier (#729 finding_index) — the caller passes `briefDigest`, recorded on the
+// record's derivation so the composed frontier is traceable to the brief it repairs. The fixer's
+// write_set is the finding's OWNED files (the point-covered subset); its role is the finding's
+// `fixRole` (default `implementer`). The re-review is NOT a unit here — it is the point's spine wall
+// (assertReExpansionReviewed), so this composition carries the fixer only and stays inside #759's
+// composed-gate refusal.
+//
+// The five derivation lines are recorded verbatim (audit-only, presence-checked by validateComposition):
+//   grain: one coarse fixer unit — well above setup cost.  path: on the critical path (repairs a
+//   sink-blocking finding).  join: mechanical (single unit).  probe: no (the finding names the fix).
+//   serializer: none (single unit, co_open).
+function buildReExpansionComposition(point, opts) {
+  const o = opts || {};
+  const fixRole = String(o.fixRole || 'implementer').trim() || 'implementer';
+  const files = Array.from(new Set((Array.isArray(o.writeSet) ? o.writeSet : [])
+    .map(normalizeSurfacePath).filter(Boolean))).sort();
+  const briefDigest = o.briefDigest ? String(o.briefDigest) : 'none';
+  const fixerName = String(o.fixerName || 'fixer').trim() || 'fixer';
+  return {
+    derivation: {
+      grain: 'one fixer unit repairing the routed finding — above setup cost',
+      path: 'critical-path: the finding blocks the sink until repaired',
+      join: 'mechanical: single fixer unit, no synthesizer',
+      probe: 'no: the finding frontier already names the fix',
+      serializer: 'none: single co_open unit',
+    },
+    units: [{
+      name: fixerName,
+      role: fixRole,
+      model: o.model ? String(o.model) : '',
+      write_set: files.join(' '),
+      mode: 'co_open',
+      depends_on: [],
+    }],
+    // Additive provenance — NOT read by validateComposition (which whitelists unit fields); carried so
+    // a driver can record the brief binding on the record's evidence at open time.
+    repair_brief_digest: briefDigest,
+  };
+}
+
+// findingFilesFromIndexRow — extract a finding's files from ONE #729 finding_index row (or a schema-2
+// route/finding bag). Total: prefers `anchor_paths`, falls back to `primary_anchor.path` / `file`,
+// returns [] when the finding is anchorless. This is the SAME index shape the fixer brief is fed.
+function findingFilesFromIndexRow(row) {
+  if (!row || typeof row !== 'object') return [];
+  if (Array.isArray(row.anchor_paths) && row.anchor_paths.length) {
+    return row.anchor_paths.map(normalizeSurfacePath).filter(Boolean);
+  }
+  const out = [];
+  if (row.primary_anchor && typeof row.primary_anchor === 'object' && row.primary_anchor.path) {
+    out.push(normalizeSurfacePath(row.primary_anchor.path));
+  }
+  if (row.file) out.push(normalizeSurfacePath(row.file));
+  if (Array.isArray(row.secondary_anchor_paths)) {
+    for (const p of row.secondary_anchor_paths) out.push(normalizeSurfacePath(p));
+  }
+  return Array.from(new Set(out.filter(Boolean)));
+}
+
+// deriveReExpansion — the read-only DRIVER: route ONE finding, and when it routes LOCAL, prove the
+// owning point(s) reviewed-before-sink (fail-closed) and compose the fixer frontier(s). PURE over
+// (finding, spine content). Emits the routing verdict plus, for a local route, a per-owner plan the
+// SAME expand-open transaction can consume. Never mutates — the discharged-point re-open cascade that
+// actually drives expand-open is a separate lifecycle step (see the issue's descoped notes).
+function deriveReExpansion(finding, content, opts) {
+  const validator = require('./kaola-workflow-plan-validator');
+  const o = opts || {};
+  const contracts = validator.parseExpansionContracts(content);
+  const spineNodes = validator.parseNodes(content);
+  const findingFiles = Array.isArray(o.findingFiles) ? o.findingFiles : findingFilesFromIndexRow(finding);
+  const route = routeFindingReExpansion({
+    findingFiles,
+    contextPoint: o.contextPoint || (finding && finding.context_point) || null,
+    contracts,
+    amendedSurfaces: o.amendedSurfaces || {},
+  });
+  if (route.result === 'refuse') return route;
+  if (route.decision !== 'local') return route;
+
+  // LOCAL: each owning point must be reviewed-before-sink, then gets its own fixer composition. A
+  // wall refusal on ANY owner fails the whole route closed — no partial re-expansion may sink an
+  // owner unreviewed.
+  const plans = [];
+  for (const point of route.owners) {
+    const wall = assertReExpansionReviewed(point, contracts, spineNodes);
+    if (wall.result === 'refuse') return wall;
+    const contract = contracts.get(point);
+    const declared = (contract && Array.isArray(contract.expected_surfaces)) ? contract.expected_surfaces : [];
+    const amended = amendedSurfacesFor(point, o.amendedSurfaces);
+    const ownedFiles = findingFiles.map(normalizeSurfacePath).filter(f =>
+      declared.concat(amended).some(s => surfaceCoversFile(s, f)));
+    plans.push({
+      point,
+      review_class: wall.review_class,
+      walled_by: wall.walled_by,
+      composition: buildReExpansionComposition(point, {
+        fixRole: (finding && finding.fix_role) || o.fixRole,
+        writeSet: ownedFiles.length ? ownedFiles : findingFiles,
+        briefDigest: o.briefDigest || (finding && finding.repair_brief_digest),
+        model: o.model,
+      }),
+    });
+  }
+  return { result: 'ok', decision: 'local', owners: route.owners,
+    covered_files: route.covered_files, uncovered_files: route.uncovered_files,
+    out_of_surface: route.out_of_surface || [], plans };
+}
+
 // ---------------------------------------------------------------------------
 // runSelfTest (#433 / D-433-01) — inline self-test for evidence seeding + provenance log.
 // Triggered by `--self-test`. Tests:
@@ -12643,6 +12969,9 @@ function main() {
   const attemptIdIdx  = args.indexOf('--attempt-id');
   const hasStdin      = args.includes('--stdin');
   const triageJsonIdx = args.indexOf('--triage-json');
+  // #761: --finding-json <path|-> reads ONE finding (a #729 finding_index row shape) for the
+  // read-only route-reexpansion driver.
+  const findingJsonIdx = args.indexOf('--finding-json');
   // #446 (D-446-01 Decisions 4-5): --summary collapses the routine FULL-JSON envelope to ONE line
   // and caches the full envelope at .cache/<op>-envelope.json for drill-in on result: refuse.
   // PURELY ADDITIVE: default (no --summary) output is byte-unchanged FULL JSON, so every
@@ -13040,6 +13369,32 @@ function main() {
     } else {
       result = runRouteFindings({ nodeId, planPath, repoRoot, readFile, writeFile }, project);
     }
+  } else if (subcommand === 'route-reexpansion') {
+    // #761: READ-ONLY. Route ONE finding to a local re-expansion (or a spine replan / an unresolved
+    // refusal), and — on a local route — emit the per-owner fixer composition. No mutation: this is
+    // the routing VERDICT; the mutating expand-open transaction is driven separately. --node-id, when
+    // given, is the surfacing point (contextPoint) the finding came from.
+    let finding = null;
+    if (findingJsonIdx >= 0 && findingJsonIdx + 1 < args.length) {
+      const fjArg = args[findingJsonIdx + 1];
+      try {
+        const raw = fjArg === '-' ? fs.readFileSync(0, 'utf8') : readFile(fjArg);
+        finding = JSON.parse(raw);
+      } catch (_) { finding = undefined; }
+    }
+    if (finding === undefined) {
+      result = { result: 'refuse', reason: 'finding_json_unreadable',
+        errors: ['--finding-json <path|-> must name a readable JSON finding row'] };
+    } else {
+      let content;
+      try { content = readFile(planPath); }
+      catch (_) { content = null; }
+      if (content === null) {
+        result = { result: 'refuse', reason: 'plan_missing', detail: planPath };
+      } else {
+        result = deriveReExpansion(finding || {}, content, { contextPoint: nodeId });
+      }
+    }
   } else {
     result = { result: 'refuse', errors: ['unknown subcommand: ' + subcommand] };
   }
@@ -13137,6 +13492,15 @@ module.exports = {
   renderExpansionRecord,
   appendExpansionBlock,
   appendLedgerRows,
+  // #761 (local re-expansion): the router + the fail-closed re-review wall + the ownership predicate
+  // + the fixer composition builder + the read-only driver — exported for direct both-direction pins.
+  surfaceCoversFile,
+  resolveExpansionOwnership,
+  routeFindingReExpansion,
+  assertReExpansionReviewed,
+  buildReExpansionComposition,
+  findingFilesFromIndexRow,
+  deriveReExpansion,
   runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
