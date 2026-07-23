@@ -17249,6 +17249,15 @@ function testExpansionTransaction759() {
     assert(JSON.stringify(dcp.discharged) === JSON.stringify(['m1#1', 'm1#2']),
       '#759 (a): the discharge must name every record on the point, got ' + JSON.stringify(dcp.discharged));
     assertAppendOnly('after discharge');
+
+    // #763 (efficiency evidence line): expand-close appends ONE line to the point's OWN evidence
+    // file. This point settled over TWO records (m1#1: 3 co_open units, m1#2: 1 co_open unit — a
+    // re-expansion), so width sums BOTH records' units (4), no unit anywhere declared mode serial
+    // (co_open), neither record's recorded serializer line names S1/S2/S3 (none), and rework counts
+    // the one re-expansion beyond the first record (2 records - 1 = 1).
+    const m1Evidence = fs.readFileSync(path.join(proj, '.cache', 'm1.md'), 'utf8');
+    assert(m1Evidence.includes('expansion m1: width=4 mode=co_open serializer=none rework=1'),
+      '#763: expand-close must append the efficiency evidence line to .cache/m1.md, got:\n' + m1Evidence);
     {
       const na = nextAction();
       assert(JSON.stringify((na.readyPending || []).map(n => n.id)) === JSON.stringify(['wall']),
@@ -17584,6 +17593,446 @@ function testExpansionTransaction759() {
   }
 
   console.log('testExpansionTransaction759: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #763 — SHARED CONTEXT PACKET + PER-EXPANSION EFFICIENCY LINE. The per-expansion evidence-line AC
+// is pinned inline inside testExpansionTransaction759 above (right after its real expand-close call,
+// against REAL composed records — width=4/mode=co_open/serializer=none/rework=1). The remaining
+// three ACs, each independent of the others:
+//   (a) orient regenerates .cache/context-packet.md (goal / key_files / conventions /
+//       join_expectations), and the packet is carried VERBATIM onto the ACTUAL dispatch card a role
+//       agent is dispatched from — the open-next SERIAL card and every open-ready CO-OPEN card
+//       (expand-open reuses that opener); orient's non-dispatched `frontier` preview is NOT the pin;
+//   (b) the per-run archive rollup line (persistExpansionRollupToSummary) aggregates every
+//       expansion point a run discharged, reduced through the SAME shared derivation the
+//       per-expansion evidence line uses — pinned directly against the exported writer, with a
+//       presence-guard re-run and a no-expansions negative control;
+//   (c) the #759 carry-forward: workflow-tasks.json (task-mirror.js) lists composed expansion
+//       units via planNodesWithExpansions, with a direct CONTROL proving parseNodes (the old freeze
+//       view it replaced) does NOT see them.
+// ---------------------------------------------------------------------------
+function testContextPacketEfficiencyRollup763() {
+  // ---- (a1) buildContextPacket content assembly — a direct PURE-FUNCTION check (no freeze, no
+  // CLI): goal / key_files (union of declared_write_set + expansion-contract expected_surfaces) /
+  // join_expectations (expansion-contract join_constraints) / conventions (the project's own
+  // CLAUDE.md non-negotiable section, truncated at the NEXT ## heading). ----
+  {
+    const adaptiveNode = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js'));
+    const planContent = [
+      '# Workflow Plan — issue #763 packet fixture', '',
+      '## Meta', '',
+      'labels: enhancement',
+      'goal: land the shared context packet', '',
+      'expansion(m1):',
+      '  milestone_goal: land the reader seam',
+      '  expected_surfaces: scripts/packet-fixture',
+      '  join_constraints: mechanical merge only',
+      '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| a | tdd-guide | — | lib/a.js | 1 | sequence |',
+      '| b | tdd-guide | — | lib/b.js | 1 | sequence |', '',
+    ].join('\n');
+    const claudeMd = [
+      '# Fixture Project', '',
+      '## Non-Negotiable Rules', '',
+      '- Read before writing.',
+      '- Make surgical changes.', '',
+      '## Some Other Section', '', 'irrelevant prose that must NOT leak into the packet', ''
+    ].join('\n');
+    const packet = adaptiveNode.buildContextPacket({
+      planContent, stateContent: 'issue_number: 76301\n', project: 'issue-763-packet', claudeMd,
+    });
+    assert(packet.includes('goal: land the shared context packet'),
+      '#763 (a1): the packet must carry the plan\'s ## Meta goal, got:\n' + packet);
+    assert(packet.includes('lib/a.js') && packet.includes('lib/b.js') && packet.includes('scripts/packet-fixture'),
+      '#763 (a1): key_files must union declared_write_set with expected_surfaces, got:\n' + packet);
+    assert(packet.includes('m1: mechanical merge only'),
+      '#763 (a1): join_expectations must carry the expansion contract\'s join_constraints, got:\n' + packet);
+    assert(packet.includes('Read before writing.') && packet.includes('Make surgical changes.'),
+      '#763 (a1): conventions must carry the project CLAUDE.md non-negotiable section verbatim, got:\n' + packet);
+    assert(!packet.includes('irrelevant prose'),
+      '#763 (a1): conventions must stop at the NEXT ## heading, not spill the whole CLAUDE.md');
+
+    // Fallback legs: no goal / no expansion contracts / no CLAUDE.md all degrade to a stated
+    // fallback line rather than an absent section or a thrown error.
+    const bare = adaptiveNode.buildContextPacket({
+      planContent: '# Plan\n\n## Meta\n\nlabels: enhancement\n\n## Nodes\n\n',
+      stateContent: '', project: 'issue-763-bare', claudeMd: null,
+    });
+    assert(bare.includes('(no goal declared in ## Meta or workflow-state.md)'),
+      '#763 (a1) fallback: an absent goal must degrade to the stated fallback line, got:\n' + bare);
+    assert(bare.includes('(none declared yet — no write surface has been composed)'),
+      '#763 (a1) fallback: no write surfaces must degrade to the stated fallback line, got:\n' + bare);
+    assert(bare.includes('(no expansion point declares a join constraint yet)'),
+      '#763 (a1) fallback: no expansion contracts must degrade to the stated fallback line, got:\n' + bare);
+    assert(bare.includes("(no CLAUDE.md non-negotiable/conventions section found"),
+      '#763 (a1) fallback: an absent CLAUDE.md must degrade to the stated fallback line, got:\n' + bare);
+  }
+
+  // ---- (a2) the WIRING: orient writes .cache/context-packet.md AND the packet is carried VERBATIM
+  // onto the ACTUAL dispatch card the orchestrator dispatches a role agent from — the open-next SERIAL
+  // card and every open-ready CO-OPEN card (expand-open reuses open-ready's opener). The orient batch
+  // PREVIEW (`frontier`) is NOT a dispatched brief and is deliberately not asserted as one: the packet
+  // has to reach a REAL dispatched unit, which only the openers produce. ----
+  {
+    // (a2-i) SERIAL dispatch: a single-head plan → open-next opens the head and its dispatch card
+    // carries the packet the preceding orient wrote.
+    const tmp = adaptiveTmp('763-packet-serial');
+    const project = 'issue-763-packet-serial';
+    try {
+      initGitRepo(tmp);
+      const dir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(dir, { recursive: true });
+      const planPath = path.join(dir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — issue #763 packet serial-dispatch fixture', '',
+        '## Meta', '',
+        'labels: enhancement',
+        'goal: land the shared context packet', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| impl | tdd-guide | — | lib/impl.js | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| impl | pending |', '| review | pending |', '| done | pending |', ''
+      ].join('\n'));
+      const fz = runLegacyFreeze(planValidatorScript, planPath, tmp);
+      assert(fz.status === 0, '#763 (a2-i): the serial fixture plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 76301\n');
+
+      const oriented = json(runNode(adaptiveNodeScript, ['orient', '--project', project, '--json'], tmp));
+      const packetPath = path.join(dir, '.cache', 'context-packet.md');
+      assert(fs.existsSync(packetPath), '#763 (a2-i): orient must write .cache/context-packet.md');
+      const packetOnDisk = fs.readFileSync(packetPath, 'utf8');
+      assert(typeof oriented.context_packet === 'string' && oriented.context_packet === packetOnDisk,
+        '#763 (a2-i): orient result.context_packet must equal the file it just wrote, byte for byte');
+      assert(packetOnDisk.includes('goal: land the shared context packet'),
+        '#763 (a2-i): the packet must carry the plan\'s ## Meta goal, got:\n' + packetOnDisk);
+
+      // The REAL dispatched unit's brief: open-next's serial dispatch card must carry the packet VERBATIM.
+      const opened = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+      assert(opened.result === 'ok' && opened.opened && opened.opened.dispatch,
+        '#763 (a2-i): open-next must open the serial head with a dispatch card, got ' + JSON.stringify(opened));
+      assert(opened.opened.dispatch.context_packet === packetOnDisk,
+        '#763 (a2-i): the open-next dispatch card must carry the context packet VERBATIM — the packet must '
+        + 'reach a REAL dispatched unit, not merely orient\'s non-dispatched preview, got: '
+        + JSON.stringify(opened.opened.dispatch.context_packet));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+
+    // (a2-ii) CO-OPEN dispatch: a two-wide READ frontier → open-ready co-opens both members and EACH
+    // member's dispatch card carries the packet VERBATIM (expand-open dispatches through this same opener).
+    const tmp2 = adaptiveTmp('763-packet-batch');
+    const project2 = 'issue-763-packet-batch';
+    try {
+      initGitRepo(tmp2);
+      const dir = path.join(tmp2, 'kaola-workflow', project2);
+      fs.mkdirSync(dir, { recursive: true });
+      const planPath = path.join(dir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — issue #763 packet batch-dispatch fixture', '',
+        '## Meta', '',
+        'labels: enhancement',
+        'goal: land the shared context packet', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| a | code-explorer | — | — | 1 | sequence |',
+        '| b | code-explorer | — | — | 1 | sequence |',
+        '| review | code-reviewer | a,b | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| a | pending |', '| b | pending |', '| review | pending |', '| done | pending |', ''
+      ].join('\n'));
+      const fz = runLegacyFreeze(planValidatorScript, planPath, tmp2);
+      assert(fz.status === 0, '#763 (a2-ii): the batch fixture plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 76302\n');
+
+      json(runNode(adaptiveNodeScript, ['orient', '--project', project2, '--json'], tmp2));
+      const packetOnDisk = fs.readFileSync(path.join(dir, '.cache', 'context-packet.md'), 'utf8');
+
+      const opened = json(runNode(adaptiveNodeScript, ['open-ready', '--project', project2, '--json'], tmp2));
+      assert(opened.result === 'ok' && Array.isArray(opened.opened) && opened.opened.length === 2,
+        '#763 (a2-ii): open-ready must co-open the 2-wide read frontier, got ' + JSON.stringify(opened));
+      for (const member of opened.opened) {
+        assert(member.dispatch && member.dispatch.context_packet === packetOnDisk,
+          '#763 (a2-ii): the open-ready dispatch card for ' + member.id + ' must carry the context packet '
+          + 'VERBATIM (the packet must reach every REAL co-opened unit), got: '
+          + JSON.stringify(member.dispatch && member.dispatch.context_packet));
+      }
+    } finally {
+      fs.rmSync(tmp2, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (b) the per-run archive rollup line, reduced from a REAL discharged-records shape. ----
+  {
+    const claim = require(claimScript);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-'));
+    const tmpNone = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-none-'));
+    try {
+      const stamp = '2026-01-01T00:00:00.000Z';
+      const planContent = [
+        '# Workflow Plan — rollup fixture', '',
+        '## Meta', '', 'plan_form: spine', '',
+        '## Expansion Records', '',
+        'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+        '  serializer: none present — co-open',
+        '  unit: u1 | code-explorer | standard | — | co_open | —',
+        '  unit: u2 | code-explorer | standard | — | co_open | —',
+        '  unit: u3 | code-explorer | standard | — | co_open | —', '',
+        'open(m1#1):', '  at: ' + stamp, '',
+        'record(m1#2):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+        '  serializer: none present — co-open',
+        '  unit: v1 | code-explorer | standard | — | co_open | —', '',
+        'open(m1#2):', '  at: ' + stamp, '',
+        'discharge(m1):', '  at: ' + stamp, '  records: m1#1, m1#2', '',
+        'record(m2#1):', '  point: m2', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+        '  serializer: S2 — a shared config file',
+        '  unit: w1 | code-explorer | standard | — | co_open | —',
+        '  unit: w2 | code-explorer | standard | — | co_open | —', '',
+        'open(m2#1):', '  at: ' + stamp, '',
+        'discharge(m2):', '  at: ' + stamp, '  records: m2#1', '',
+      ].join('\n');
+      fs.writeFileSync(path.join(tmp, 'workflow-plan.md'), planContent);
+      const wrote = claim.persistExpansionRollupToSummary(tmp);
+      assert(wrote === true, '#763 (b): persistExpansionRollupToSummary must report a write, got ' + wrote);
+      const summary = fs.readFileSync(path.join(tmp, 'finalization-summary.md'), 'utf8');
+      // points=2 (m1, m2); width = (3+1 units on m1) + (2 units on m2) = 6;
+      // rework = (2 records - 1 on m1) + (1 record - 1 on m2) = 1.
+      assert(summary.includes('## Expansion Rollup') && summary.includes('expansion rollup: points=2 width=6 rework=1'),
+        '#763 (b): the archive rollup line must aggregate every discharged point, got:\n' + summary);
+      // Idempotent: a second call over an already-stamped summary is a no-op (presence-guarded).
+      const secondCall = claim.persistExpansionRollupToSummary(tmp);
+      assert(secondCall === false, '#763 (b): a second call must be a no-op (presence-guarded), got ' + secondCall);
+      assert(fs.readFileSync(path.join(tmp, 'finalization-summary.md'), 'utf8') === summary,
+        '#763 (b): a presence-guarded re-run must not perturb the already-written summary');
+
+      // Negative control: a plan with NO discharged expansion point writes nothing at all.
+      fs.writeFileSync(path.join(tmpNone, 'workflow-plan.md'), '# Workflow Plan — no expansions\n\n## Meta\n\nlabels: enhancement\n');
+      const wroteNone = claim.persistExpansionRollupToSummary(tmpNone);
+      assert(wroteNone === false, '#763 (b) CONTROL: a plan with no discharged expansion point must write nothing, got ' + wroteNone);
+      assert(!fs.existsSync(path.join(tmpNone, 'finalization-summary.md')),
+        '#763 (b) CONTROL: no finalization-summary.md should be created when there is nothing to roll up');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(tmpNone, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (c) workflow-tasks.json lists composed units (the #759 carry-forward). ----
+  {
+    const taskMirror = require(path.join(repoRoot, 'scripts', 'kaola-workflow-task-mirror.js'));
+    const validator = require('./kaola-workflow-plan-validator');
+    const planContent = [
+      '# Workflow Plan — mirror fixture', '',
+      '## Meta', '', 'plan_form: spine', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| probe | code-explorer | — | — | 1 | sequence |',
+      '| m1 | expansion-point | probe | — | 1 | sequence |',
+      '| done | finalize | m1 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| probe | complete |', '| m1 | pending |', '| m1-r1-u1 | in_progress |', '| done | pending |', '',
+      '## Expansion Records', '',
+      'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+      '  serializer: none present — co-open',
+      '  unit: u1 | code-explorer | standard | — | co_open | —', '',
+      'open(m1#1):', '  at: 2026-01-01T00:00:00.000Z', '',
+    ].join('\n');
+    const hash = validator.computePlanHash(planContent);
+    const stamped = '<!-- plan_hash: ' + hash + ' -->\n\n' + planContent;
+    const mirror = taskMirror.generateMirror({ planContent: stamped, now: '2026-01-01T00:00:01.000Z' });
+    assert(mirror.source_plan_hash === hash, '#763 (c): the mirror must read the stamped plan_hash');
+    const unitTask = mirror.tasks.find(t => t.id === 'm1-r1-u1');
+    assert(unitTask, '#763 (c): workflow-tasks.json must list the COMPOSED unit after an expansion, got '
+      + JSON.stringify(mirror.tasks.map(t => t.id)));
+    assert(unitTask.role === 'code-explorer' && unitTask.status === 'in_progress' && unitTask.ledger_status === 'in_progress',
+      '#763 (c): the composed unit task must carry its real role + ledger-derived status, got ' + JSON.stringify(unitTask));
+    // Control: parseNodes (the OLD freeze view) must NOT see it — the exact gap planNodesWithExpansions closes.
+    assert(!validator.parseNodes(stamped).some(n => n.id === 'm1-r1-u1'),
+      '#763 (c) CONTROL: parseNodes (freeze view) must NOT see the composed unit');
+  }
+
+  // ---- (d) expansionRecordEfficiency / renderExpansionEfficiencyLine — direct pure-function pins.
+  // The #759-based scenario above only ever exercises co_open units; this pins the OTHER branch of
+  // `mode` (ANY serial unit flips the whole point to serial) and the serializer tag extraction, plus
+  // the never-throws fallback shape on empty/absent input. ----
+  {
+    const validator = require('./kaola-workflow-plan-validator');
+
+    // ANY serial unit anywhere on the point flips mode to 'serial', even among mostly co_open units.
+    const serialRecs = [
+      { units: [{ mode: 'co_open' }, { mode: 'serial' }], derivation: { serializer: 'S1 — shared file lib/x.js' } },
+    ];
+    const effSerial = validator.expansionRecordEfficiency(serialRecs);
+    assert(effSerial.mode === 'serial' && effSerial.serializer === 'S1' && effSerial.width === 2 && effSerial.rework === 0,
+      '#763 (d): a record with ANY serial unit must report mode=serial and extract the named serializer tag, got '
+      + JSON.stringify(effSerial));
+
+    // All-co_open records report mode co_open, and a derivation line naming no S-tag reports 'none'.
+    const coOpenRecs = [{ units: [{ mode: 'co_open' }, { mode: 'co_open' }], derivation: { serializer: 'none present' } }];
+    const effCoOpen = validator.expansionRecordEfficiency(coOpenRecs);
+    assert(effCoOpen.mode === 'co_open' && effCoOpen.serializer === 'none' && effCoOpen.width === 2,
+      '#763 (d): an all-co_open record must report mode=co_open and serializer=none, got ' + JSON.stringify(effCoOpen));
+
+    // rework counts re-expansions BEYOND the first — three records on one point is TWO reworks — and
+    // the first S-tag found across ALL records (in order) wins.
+    const rr = validator.expansionRecordEfficiency([
+      { units: [{ mode: 'co_open' }], derivation: { serializer: 'S2 present' } },
+      { units: [{ mode: 'co_open' }], derivation: { serializer: 'none' } },
+      { units: [{ mode: 'co_open' }], derivation: { serializer: 'none' } },
+    ]);
+    assert(rr.rework === 2 && rr.width === 3 && rr.serializer === 'S2',
+      '#763 (d): rework counts re-expansions beyond the first; the first S-tag across all records wins, got ' + JSON.stringify(rr));
+
+    // Never-throws fallback: an empty or absent recs input answers the all-zero/'none' shape.
+    const zero = { width: 0, mode: 'co_open', serializer: 'none', rework: 0 };
+    assert(JSON.stringify(validator.expansionRecordEfficiency([])) === JSON.stringify(zero),
+      '#763 (d): an empty recs array must answer the all-zero/none shape, got '
+      + JSON.stringify(validator.expansionRecordEfficiency([])));
+    assert(JSON.stringify(validator.expansionRecordEfficiency(null)) === JSON.stringify(zero),
+      '#763 (d): a null recs input must never throw and must answer the same zero shape, got '
+      + JSON.stringify(validator.expansionRecordEfficiency(null)));
+
+    assert(validator.renderExpansionEfficiencyLine('m9', effSerial) === 'expansion m9: width=2 mode=serial serializer=S1 rework=0',
+      '#763 (d): renderExpansionEfficiencyLine must format the canonical shape exactly, got '
+      + validator.renderExpansionEfficiencyLine('m9', effSerial));
+  }
+
+  console.log('testContextPacketEfficiencyRollup763: PASSED');
+}
+
+// ── #763 ARCHIVE ROLLUP PIN ──────────────────────────────────────────────────────────────────
+// The per-run expansion-efficiency rollup line reaches the ARCHIVE summary through TWO call sites:
+// cmdFinalize (the standard archiver) and sink-merge's sole-archiver metadata step (a run that
+// finalizes through --sink alone). testContextPacketEfficiencyRollup763 (b) pins the WRITER in
+// isolation, but a direct-writer test leaves BOTH call sites unprotected — deleting either the
+// cmdFinalize call or the sink-merge call survives it. This drives a REAL cmdFinalize and a REAL
+// sole-archiver --sink and asserts the rollup line lands in the archived finalization-summary.md,
+// so removing either call goes RED.
+function testArchiveRollupPin763() {
+  // The discharged-expansion journal is NOT hash-covered (it is appended post-freeze as a runtime
+  // channel), so a frozen plan can carry it without perturbing its identity; both archivers read it
+  // from the ARCHIVED workflow-plan.md. Same shape as testContextPacketEfficiencyRollup763 (b):
+  // points=2 (m1, m2); width = (3 units on m1#1 + 1 on m1#2) + (2 on m2#1) = 6;
+  // rework = (2 records - 1 on m1) + (1 record - 1 on m2) = 1.
+  const stamp = '2026-01-01T00:00:00.000Z';
+  const expansionRecords = [
+    '', '## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: none present — co-open',
+    '  unit: u1 | code-explorer | standard | — | co_open | —',
+    '  unit: u2 | code-explorer | standard | — | co_open | —',
+    '  unit: u3 | code-explorer | standard | — | co_open | —', '',
+    'open(m1#1):', '  at: ' + stamp, '',
+    'record(m1#2):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: none present — co-open',
+    '  unit: v1 | code-explorer | standard | — | co_open | —', '',
+    'open(m1#2):', '  at: ' + stamp, '',
+    'discharge(m1):', '  at: ' + stamp, '  records: m1#1, m1#2', '',
+    'record(m2#1):', '  point: m2', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: S2 — a shared config file',
+    '  unit: w1 | code-explorer | standard | — | co_open | —',
+    '  unit: w2 | code-explorer | standard | — | co_open | —', '',
+    'open(m2#1):', '  at: ' + stamp, '',
+    'discharge(m2):', '  at: ' + stamp, '  records: m2#1', '',
+  ].join('\n');
+  const ROLLUP_LINE = 'expansion rollup: points=2 width=6 rework=1';
+
+  // ---- M18: a REAL cmdFinalize archives the run and MUST write the rollup into the archived
+  // finalization-summary.md. Removing the persistExpansionRollupToSummary call in cmdFinalize reds here.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-finalize-')));
+    try {
+      initGitRepo(tmp);
+      plantRoadmapIssue(tmp, 76318, '');
+      json(runNode(claimScript, ['startup', '--target-issue', '76318', '--runtime', 'claude'], tmp));
+      seedAdaptiveFinalizeFixture(tmp, 'issue-76318');
+      // Append the discharged-expansion journal to the LIVE plan (post-freeze, un-hashed).
+      fs.appendFileSync(path.join(tmp, 'kaola-workflow', 'issue-76318', 'workflow-plan.md'), expansionRecords);
+      const result = json(runNode(claimScript, ['finalize', '--project', 'issue-76318'], tmp));
+      assert(result.status === 'closed', '#763 M18: finalize must report closed, got ' + JSON.stringify(result));
+      const archived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-76318'));
+      assert(archived.length === 1, '#763 M18: finalize must archive exactly one folder, got ' + JSON.stringify(archived));
+      const summary = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'finalization-summary.md'));
+      assert(summary.includes('## Expansion Rollup') && summary.includes(ROLLUP_LINE),
+        '#763 M18: cmdFinalize must write the per-run expansion rollup into the archived '
+        + 'finalization-summary.md — removing the persistExpansionRollupToSummary call in cmdFinalize '
+        + 'must red HERE. got:\n' + summary);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // ---- M19: a REAL --sink that is the SOLE archiver (the live project folder is still in main; no
+  // prior cmdFinalize --keep-worktree already archived it) MUST write the rollup into the archived
+  // finalization-summary.md too. Removing the persistExpansionRollupToSummary call in sink-merge's
+  // sole-archiver metadata step (persistSinkClosureMetadata) reds here.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-sink-')));
+    const env = { ...process.env, ...GIT_ISOLATION_ENV,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+    const project = 'issue-76319';
+    const branch = 'workflow/issue-76319';
+    try {
+      initGitRepo(tmp);
+      // Feature branch worktree: commit the deliverable AND the live project folder (its plan carries
+      // the discharged-expansion journal, its state is closed). The sink FF-merges these onto main,
+      // then — no prior cmdFinalize --keep-worktree having archived it — is the SOLE archiver: its own
+      // archiveProjectDir renames kaola-workflow/<project>/ → the archive dest persistSinkClosureMetadata
+      // writes the rollup into.
+      const wtPath = path.join(tmp, '.kw', 'worktrees', project);
+      fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+      spawnSync('git', ['-C', tmp, 'worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
+      fs.writeFileSync(path.join(wtPath, 'impl-76319.txt'), 'impl\n');
+      const wtLive = path.join(wtPath, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(wtLive, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(wtLive, 'workflow-state.md'), [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: closed', '',
+        '## Sink', 'branch: ' + branch, 'issue_number: 76319', 'sink: merge', ''
+      ].join('\n'));
+      fs.writeFileSync(path.join(wtLive, 'workflow-plan.md'),
+        '# Workflow Plan — sink rollup fixture\n\n## Meta\n\nplan_form: spine\n' + expansionRecords + '\n');
+      spawnSync('git', ['-C', wtPath, 'add', '-A'], { env, encoding: 'utf8' });
+      spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: impl 76319'], { env, encoding: 'utf8' });
+
+      const result = spawnSync(process.execPath, [
+        sinkMergeScript, '--sink', '--branch', branch, '--issue', '76319', '--project', project, '--json',
+      ], { cwd: tmp, encoding: 'utf8', env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+      const parsed = (() => { try { return JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) { return {}; } })();
+      assert(result.status === 0 && parsed.status === 'sinked',
+        '#763 M19: the sole-archiver --sink must succeed, got status=' + result.status
+        + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      // archiveProjectDir suffixes the dest with .archived-<ts> when archive/<project>/ already
+      // exists (a prior receipt write), so search EVERY archive dir for this project and assert the
+      // rollup lands in the summary of the one the sole-archiver actually populated.
+      const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+      const archived = fs.readdirSync(archiveRoot).filter(n => n === project || n.startsWith(project + '.archived-'));
+      assert(archived.length >= 1, '#763 M19: the sink must archive the project folder, got ' + JSON.stringify(archived));
+      const summaries = archived
+        .map(n => path.join(archiveRoot, n, 'finalization-summary.md'))
+        .filter(p => fs.existsSync(p))
+        .map(p => read(p));
+      assert(summaries.some(s => s.includes('## Expansion Rollup') && s.includes(ROLLUP_LINE)),
+        '#763 M19: the sole-archiver --sink must write the per-run expansion rollup into the archived '
+        + 'finalization-summary.md — removing the persistExpansionRollupToSummary call in '
+        + 'persistSinkClosureMetadata must red HERE. archived dirs=' + JSON.stringify(archived)
+        + '; summaries=\n' + summaries.join('\n---\n'));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testArchiveRollupPin763: PASSED');
 }
 
 // ── #761 DISCHARGED-POINT RE-OPEN CASCADE ────────────────────────────────────────────────────
@@ -18242,6 +18691,8 @@ function buildRegistry() {
   add('testReviewerContractV2Conformance',                testReviewerContractV2Conformance);
   add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
   add('testExpansionTransaction759',                      testExpansionTransaction759);
+  add('testContextPacketEfficiencyRollup763',             testContextPacketEfficiencyRollup763);
+  add('testArchiveRollupPin763',                          testArchiveRollupPin763);
   add('testReExpandCascade761',                           testReExpandCascade761);
   add('testSerializationInversion760',                    testSerializationInversion760);
   return reg;

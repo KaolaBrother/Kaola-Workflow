@@ -2714,6 +2714,20 @@ function resolveCodexDispatchMode(context, env) {
 // uncommitted bytes sit). Single source of truth so the card text can never drift from the R2b contract.
 const SCRATCH_OBSERVATION_CONTRACT = 'verdict from .cache evidence of closed nodes + scratch only; do not read the worktree tree or diff';
 
+// #763: read the SHARED CONTEXT PACKET orient wrote to .cache/context-packet.md and thread it onto the
+// ACTUAL dispatch card (the open-ready / open-next / fused-advance opened=… card the orchestrator
+// dispatches from), so every dispatched unit receives it verbatim. Reuses orient's file — never
+// regenerates or diverges it. Best-effort: an absent/unreadable/empty packet returns null so the packet
+// key is omitted below and the dispatch card stays byte-identical (the same conditional-attach discipline
+// as goal_line / leg_path).
+function readContextPacket(planPath, readFile) {
+  if (typeof readFile !== 'function' || !planPath) return null;
+  try {
+    const txt = readFile(path.join(path.dirname(planPath), '.cache', 'context-packet.md'));
+    return (typeof txt === 'string' && txt.trim() !== '') ? txt : null;
+  } catch (_) { return null; }
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
   const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
@@ -2777,6 +2791,12 @@ function buildDispatch(nodeInfo, context) {
   if (nodeModelDisplay) d.model_display = nodeModelDisplay;
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
+  }
+  // #763: the SHARED CONTEXT PACKET, verbatim, on the dispatch card the orchestrator relays into the
+  // role's Task-tool brief — cutting the per-agent setup cost each unit would otherwise re-derive.
+  // Conditionally attached (like goal_line): absent packet ⇒ no key ⇒ byte-identical dispatch card.
+  if (ctx.context_packet != null && String(ctx.context_packet).trim() !== '') {
+    d.context_packet = String(ctx.context_packet);
   }
   // #591: per-member leg routing. On a co-open write frontier each member runs in its own provisioned
   // `.kw` leg worktree; thread the member's leg_path + leg_branch DIRECTLY into its dispatch card so the
@@ -5555,8 +5575,89 @@ function prepareReviewClose(opts, ctx) {
   return failedResult(folded.map(id => buildTransition(id, 'pending', 'review-failed')));
 }
 
+// buildContextPacket (#763) — the SHARED CONTEXT PACKET: a compact, deterministic brief (goal / key
+// files / conventions / join expectations) assembled ENTIRELY from data orient already reads (the
+// frozen plan + workflow-state.md) plus, best-effort, the project repo's own CLAUDE.md. Pure: no I/O
+// of its own — the caller reads CLAUDE.md and writes the result to `.cache/context-packet.md`.
+//
+// Purpose (#757 child 6): cut the per-agent setup cost every dispatched unit would otherwise
+// re-derive from scratch — lowering setup cost is what raises the profitable fan-out width under
+// the grain rule (unit work >= ~3x setup cost). NOT a subsystem: no token metering, no timing, one
+// file, regenerated (idempotent — writeFileAtomicReplace no-ops when content is unchanged) on every
+// orient so it never goes stale as the plan composes expansion frontiers.
+//
+// Never throws: every input is independently best-effort; an absent/malformed plan or CLAUDE.md
+// degrades individual sections to a stated fallback line, never a missing packet.
+function buildContextPacket(opts) {
+  const { planContent, stateContent, project, claudeMd } = opts || {};
+  const validator = require('./kaola-gitea-workflow-plan-validator');
+
+  // goal — the operator's `## Meta` goal: line; falls back to the claimed issue number.
+  let goal = null;
+  try { goal = validator.parseGoal(planContent).goal; } catch (_) { goal = null; }
+  if (!goal) {
+    const m = String(stateContent || '').match(/^issue_number:\s*(\d+)$/m);
+    goal = m ? ('issue #' + m[1]) : null;
+  }
+
+  // key_files — the union of every node's declared_write_set (the DAG/legacy view) with every
+  // expansion contract's advisory expected_surfaces (the spine view, where interior write sets are
+  // not yet known at freeze time). Both are ALREADY-PARSED, plan-hash-covered fields; no new parser.
+  const keyFiles = new Set();
+  try {
+    for (const n of validator.planNodesWithExpansions(planContent)) {
+      for (const f of String(n.writeSetRaw || '').split(',').map(s => s.trim())) {
+        if (f && f !== '—' && f !== '-') keyFiles.add(f);
+      }
+    }
+  } catch (_) { /* unparseable plan — key_files degrades to whatever expansion contracts add below */ }
+
+  // join_expectations — each expansion point's recorded join_constraints (required field; the
+  // literal "none" is legal and still surfaces, honestly, as a stated expectation).
+  const joinLines = [];
+  try {
+    const contracts = validator.parseExpansionContracts(planContent);
+    for (const [pointId, c] of contracts) {
+      for (const s of (c.expected_surfaces || [])) if (s && s !== '—' && s !== '-') keyFiles.add(s);
+      if (c.join_constraints) joinLines.push(pointId + ': ' + c.join_constraints);
+    }
+  } catch (_) { /* no expansion contracts (a plain DAG plan, or none declared yet) */ }
+
+  // conventions — the project's own CLAUDE.md non-negotiable/conventions section, verbatim, capped
+  // so the packet stays compact; a fixed fallback line when no such section is found.
+  let conventions = null;
+  if (claudeMd) {
+    const m = /^##[ \t]+.*(non-negotiable|convention|rules).*$/im.exec(claudeMd);
+    if (m) {
+      const rest = claudeMd.slice(m.index + m[0].length);
+      const next = rest.search(/^##[ \t]+/m);
+      const body = (next >= 0 ? rest.slice(0, next) : rest).trim();
+      conventions = (m[0].trim() + '\n' + body).slice(0, 2000);
+    }
+  }
+
+  const lines = ['# Context Packet — ' + (project || '(unknown project)'), ''];
+  lines.push('goal: ' + (goal || '(no goal declared in ## Meta or workflow-state.md)'));
+  lines.push('');
+  lines.push('key_files:');
+  if (keyFiles.size) for (const f of Array.from(keyFiles).sort()) lines.push('- ' + f);
+  else lines.push('- (none declared yet — no write surface has been composed)');
+  lines.push('');
+  lines.push('conventions:');
+  lines.push(conventions || "(no CLAUDE.md non-negotiable/conventions section found — follow the project's own README/CLAUDE.md if present)");
+  lines.push('');
+  lines.push('join_expectations:');
+  if (joinLines.length) for (const l of joinLines) lines.push('- ' + l);
+  else lines.push('- (no expansion point declares a join constraint yet)');
+  lines.push('');
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------------
-// runOrient — READ-ONLY orient (no plan/ledger/state mutation; never calls writeFile).
+// runOrient — READ-ONLY w.r.t. the plan / ledger / workflow-state.md (never mutates any of the
+// three durable-state files). #763 adds ONE additional, narrowly-scoped write: `.cache/context-
+// packet.md`, a regenerable project-derived brief — the SAME carve-out the task-mirror regen below
+// already establishes for a cache artifact that is neither the plan nor the ledger nor the state.
 //
 // Shells VALIDATOR --resume-check + NEXT_ACTION; scans markers in state+plan.
 // #282 (AC-2): also reconciles the durable task mirror (workflow-tasks.json) on every resume
@@ -5564,7 +5665,7 @@ function prepareReviewClose(opts, ctx) {
 // ledger-derived projection), so orient's read-only-w.r.t.-workflow-state contract is preserved.
 // ---------------------------------------------------------------------------
 function runOrient(opts) {
-  const { planPath, statePath, project, shell, readFile, cacheExists } = opts;
+  const { planPath, statePath, project, shell, readFile, writeFile, cacheExists } = opts;
 
   // CLI callers are already fenced before lock acquisition. Pure-core callers
   // opt in with an injected fence (the established unit-test seam); this avoids
@@ -5939,6 +6040,21 @@ function runOrient(opts) {
     dispatchFidelity = deriveMaxSimultaneousOpen(readFile(path.join(path.dirname(planPath), '.cache', 'node-timings.jsonl')));
   } catch (_) { /* absent/unreadable telemetry → zeroed trace, never a refuse */ }
 
+  // #763: the SHARED CONTEXT PACKET. Regenerated (best-effort, idempotent) on every orient — see
+  // buildContextPacket above for the read-only-w.r.t.-durable-state rationale. `contextPacket` stays
+  // null (key omitted below) on any failure, so a packet-build error can never turn a successful
+  // orient into a refusal or perturb any existing field.
+  let contextPacket = null;
+  try {
+    const claudeMdPath = path.join(path.dirname(path.dirname(path.dirname(planPath))), 'CLAUDE.md');
+    let claudeMd = null;
+    try { claudeMd = readFile(claudeMdPath); } catch (_) { claudeMd = null; }
+    contextPacket = buildContextPacket({ planContent, stateContent, project, claudeMd });
+    if (typeof writeFile === 'function') {
+      writeFile(path.join(path.dirname(planPath), '.cache', 'context-packet.md'), contextPacket);
+    }
+  } catch (_) { contextPacket = null; }
+
   return {
     result: 'ok',
     resumeCheck,
@@ -5965,8 +6081,13 @@ function runOrient(opts) {
     } } : {}),
     // #434: present only when an in_progress node needs re-dispatch (absent or incomplete evidence).
     ...(requires_redispatch ? { requires_redispatch: true } : {}),
+    // #763: present whenever the packet built successfully — every dispatch this round (the
+    // frontier entries below, and any single-node open the orchestrator drives next) has it
+    // available to carry VERBATIM into the role dispatch, the same way `dispatch.goal_line` is
+    // carried verbatim today.
+    ...(contextPacket != null ? { context_packet: contextPacket } : {}),
     frontier: enterBatch
-      ? delegable.map(frontierNode)
+      ? delegable.map(n => ({ ...frontierNode(n), ...(contextPacket != null ? { context_packet: contextPacket } : {}) }))
       : [],
   };
 }
@@ -6310,6 +6431,8 @@ function runOpenNext(opts) {
     // The durable node channel: the node's brief (goal_line) + upstream_evidence pointers. Empty channel
     // ({}) for a briefless/root node ⇒ byte-identical dispatch card.
     ...deriveDispatchChannel(planContent, targetNode, project),
+    // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
+    context_packet: readContextPacket(planPath, readFile),
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -6970,6 +7093,8 @@ function runCloseAndOpenNext(opts) {
     ...optimizeDispatchCtx(planForAdvance, nextNode.role, nextNode.id),
     // The durable node channel for the fused-advance node ({} for a briefless/root node ⇒ byte-identical).
     ...deriveDispatchChannel(planForAdvance, nextNode, project),
+    // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
+    context_packet: readContextPacket(planPath, readFile),
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -10757,6 +10882,8 @@ function runOpenReady(opts) {
           // parent-sourced upstream_evidence to the parent worktree (the leg carries no sibling .cache);
           // a legless read/serial member keeps the project-relative hint (byte-identical to pre-#692).
           ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet, openIntoLeg: !!legInfo }),
+          // #763: the shared context packet orient wrote — carried VERBATIM onto each co-opened member's card.
+          context_packet: readContextPacket(planPath, readFile),
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).
@@ -12294,7 +12421,8 @@ function rollForwardExpansions(opts) {
   return { rolledForward, refusals };
 }
 
-// runExpandClose — MUTATES the ledger (the expansion point row) + appends the `discharge()` block.
+// runExpandClose — MUTATES the ledger (the expansion point row) + appends the `discharge()` block
+// + (#763) the point's own efficiency evidence line.
 //
 // The milestone's completion is a SEPARATE, typed step rather than a hidden side effect of the last
 // unit's `close-node`, because close-node must stay unchanged: it closes ONE running-set member and
@@ -12346,6 +12474,23 @@ function runExpandClose(opts) {
   const withDischarge = appendExpansionBlock(spliced.content,
     'discharge(' + nodeId + '):\n  at: ' + stamp + '\n  records: ' + recs.map(r => r.id).join(', ') + '\n');
   writeFile(planPath, withDischarge);
+
+  // #763: EFFICIENCY EVIDENCE LINE — ONE line appended to the point's OWN evidence file, created
+  // here if absent (an expansion point is never opened/seeded through the normal node lifecycle —
+  // next-action withholds SPINE_EXPANSION_ROLE from the openable ready set — so this is the first
+  // and only writer of .cache/<point>.md). Derived entirely from `recs` (every record composed on
+  // this point, already proven settled above) via the ONE shared derivation both this line and the
+  // archive rollup line use, so the two can never drift. Best-effort: a failure here must never
+  // turn a real, already-committed discharge into a refusal.
+  try {
+    const eff = validator.expansionRecordEfficiency(recs);
+    const line = validator.renderExpansionEfficiencyLine(nodeId, eff);
+    const evidencePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+    let evidence = '';
+    try { evidence = readFile(evidencePath); } catch (_) { evidence = ''; }
+    writeFile(evidencePath, evidence.replace(/\s*$/, '\n') + line + '\n');
+  } catch (_) { /* advisory-only — the discharge above already committed */ }
+
   return { result: 'ok', expansion_point: nodeId, discharged: recs.map(r => r.id), taskTransitions: [] };
 }
 
@@ -13844,6 +13989,8 @@ module.exports = {
   allowedDomainOutcomes,
   // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.
   deriveMaxSimultaneousOpen,
+  // #763: the pure context-packet text builder — exported for direct unit coverage.
+  buildContextPacket,
   runOrient,
   runMirrorProject,
   runOpenNext,

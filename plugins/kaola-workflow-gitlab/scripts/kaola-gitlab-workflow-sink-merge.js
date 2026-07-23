@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary } = require('./kaola-gitlab-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary, persistExpansionRollupToSummary } = require('./kaola-gitlab-workflow-claim');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitlab-workflow-run-chains');
@@ -1266,6 +1266,8 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
       path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
     ], closureReceipt);
     persistAttestationToSummary(dest, closureReceipt);
+    // #763: the per-run expansion-efficiency rollup line — same SOLE-archiver reasoning as above.
+    persistExpansionRollupToSummary(dest);
     appendClosureBlock(dest, {
       issueDisposition: keepOpen ? 'kept-open' : 'close-pending',
       claimLabelRemoved: 'close-pending',

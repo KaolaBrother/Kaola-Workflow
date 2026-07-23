@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch, appendClosureBlock, persistAttestationToSummary, persistExpansionRollupToSummary } = require('./kaola-workflow-claim.js');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
@@ -1275,14 +1275,15 @@ function deriveSinkKeepOpen(mainRoot, args, receipt) {
 }
 
 // #700: persist the SAME terminal metadata cmdFinalize writes — the ## Closure state block
-// (appendClosureBlock) + the ## Attestation summary block (persistAttestationToSummary) — into the
-// archive dest, for a --sink that is the SOLE archiver (no prior cmdFinalize --keep-worktree already
-// wrote them). Without this, the sink's own archiveProjectDir archives a folder with NO terminal
-// metadata (a latent gap that bites exactly when the sink is the only archiver). Attestation reflects
+// (appendClosureBlock), the ## Attestation summary block (persistAttestationToSummary), and (#763)
+// the ## Expansion Rollup line (persistExpansionRollupToSummary) — into the archive dest, for a
+// --sink that is the SOLE archiver (no prior cmdFinalize --keep-worktree already wrote them).
+// Without this, the sink's own archiveProjectDir archives a folder with NO terminal metadata (a
+// latent gap that bites exactly when the sink is the only archiver). Attestation reflects
 // the REAL dispatch-log probe (checkDispatchAttestations) — never a fabricated contractor attestation
-// for inline execution. Both writers are presence-guarded / idempotent (a dest already carrying the
-// blocks is a no-op), and the disposition/label/invariant fields are honestly PENDING here: the sink's
-// own closure + verify steps (later) perform the real close and record the authoritative verdict.
+// for inline execution. All three writers are presence-guarded / idempotent (a dest already carrying
+// the blocks is a no-op), and the disposition/label/invariant fields are honestly PENDING here: the
+// sink's own closure + verify steps (later) perform the real close and record the authoritative verdict.
 // Fail-soft — metadata persistence must never abort an otherwise-successful sink; only a programmer
 // error (a missing/renamed claim.js export, the #550 cross-edition drift class) rethrows.
 function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) {
@@ -1303,6 +1304,9 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
       path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
     ], closureReceipt);
     persistAttestationToSummary(dest, closureReceipt);
+    // #763: the per-run expansion-efficiency rollup line — the SOLE-archiver path needs the same
+    // writer cmdFinalize calls, or a run that finalizes through --sink alone never gets one.
+    persistExpansionRollupToSummary(dest);
     appendClosureBlock(dest, {
       issueDisposition: keepOpen ? 'kept-open' : 'close-pending',
       claimLabelRemoved: 'close-pending',
