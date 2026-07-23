@@ -1018,6 +1018,42 @@ function expansionRecordSettled(record, ledgerStatuses) {
   return true;
 }
 
+// expansionRecordEfficiency (#763) — pure aggregate over EVERY record composed for ONE expansion
+// point (including superseded re-expansions), used by BOTH the per-expansion evidence line
+// (adaptive-node's expand-close) and the per-run archive rollup line (claim.js), so the two
+// surfaces can never drift in shape or derivation. Answers, from data already in hand at close/
+// archive time — no new durable file, no metering, no timing:
+//   width      total units across every record on the point (the actual fan-out spent to finish it)
+//   mode       'serial' when ANY unit anywhere on the point declared mode serial, else 'co_open'
+//   serializer the first S1/S2/S3 token named in any record's recorded `serializer` derivation
+//              line, else 'none' — AUDIT-ONLY: this reads the free-text derivation line for a
+//              token, it never re-validates or re-derives the serial/co_open GATE itself
+//   rework     re-expansions beyond the first (records.length - 1) — a direct, cheap proxy for
+//              whether the width this point settled on caused thrashing, so successive runs can
+//              correlate width against rework instead of guessing the fan-out turning point
+// Never throws: an empty/malformed `recs` answers the all-zero/'none' shape.
+function expansionRecordEfficiency(recs) {
+  const list = Array.isArray(recs) ? recs : [];
+  const width = list.reduce((sum, r) => sum + ((r && Array.isArray(r.units)) ? r.units.length : 0), 0);
+  const anySerial = list.some(r => (r && Array.isArray(r.units) ? r.units : []).some(u => u.mode === 'serial'));
+  const serializerText = list.map(r => (r && r.derivation && r.derivation.serializer) || '').join(' ');
+  const tagMatch = /\bS[123]\b/.exec(serializerText);
+  return {
+    width,
+    mode: anySerial ? 'serial' : 'co_open',
+    serializer: tagMatch ? tagMatch[0].toUpperCase() : 'none',
+    rework: Math.max(0, list.length - 1),
+  };
+}
+
+// renderExpansionEfficiencyLine (#763) — the ONE canonical formatter for the efficiency evidence
+// line, so the per-expansion (.cache/<point>.md) and per-run rollup (archive finalization-summary)
+// writers render byte-identical shape: `expansion <id>: width=<N> mode=<m> serializer=<s> rework=<K>`.
+function renderExpansionEfficiencyLine(pointId, eff) {
+  return 'expansion ' + pointId + ': width=' + eff.width + ' mode=' + eff.mode
+    + ' serializer=' + eff.serializer + ' rework=' + eff.rework;
+}
+
 // expansionUnitNodes — project the recorded frontiers onto VALIDATOR-SHAPED nodes so every existing
 // graph consumer (readiness, longest-path, allDone, the reasoning-tier floor) sees the composed
 // interior with no second node model.
@@ -6076,6 +6112,10 @@ module.exports = {
   parseExpansionRecords,
   expansionRecordOpened,
   expansionRecordSettled,
+  // #763: the shared efficiency-line derivation + formatter (expand-close's per-expansion line,
+  // claim.js's per-run archive rollup line) — ONE owner so the two surfaces cannot drift.
+  expansionRecordEfficiency,
+  renderExpansionEfficiencyLine,
   expansionUnitNodes,
   planNodesWithExpansions,
   parseValidationCommand,

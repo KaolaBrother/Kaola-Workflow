@@ -23,7 +23,8 @@ const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, i
 // #579: lane classifier (resolveSessionMarker + classifyLane) — imported in-process (no subprocess).
 const { resolveSessionMarker, classifyLane } = require('./kaola-workflow-classifier');
 // #441: parseGoal — reads the `goal:` line from ## Meta in workflow-plan.md.
-const { parseGoal, parseLedger } = require('./kaola-workflow-plan-validator');
+// #763: the shared expansion-efficiency derivation (the archive rollup line below).
+const { parseGoal, parseLedger, parseExpansionRecords, expansionRecordEfficiency } = require('./kaola-workflow-plan-validator');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 // #356: bound every gh round-trip so a hung remote can never wedge a claim indefinitely (the
@@ -1926,6 +1927,51 @@ function persistAttestationToSummary(destDir, receipt) {
   } catch (_) { return false; }
 }
 
+// #763: EFFICIENCY EVIDENCE — one ROLLUP line per run, appended to the archived
+// finalization-summary.md, aggregating every expansion point THIS run discharged. Reads the
+// ARCHIVED workflow-plan.md's `## Expansion Records` (already-parsed data — no new parser) and
+// reduces it with the SAME expansionRecordEfficiency the per-expansion evidence line uses (adaptive-
+// node's expand-close), so a run's per-point lines and its one rollup line can never disagree in
+// shape or derivation. A plan with no discharged expansion point (a plain DAG plan, or a spine plan
+// that composed none) writes nothing — presence-guarded like the writers above, never a hollow
+// zero-width line. Idempotent across crash-resume (checks for the heading first) / swallow-on-error.
+function persistExpansionRollupToSummary(destDir) {
+  try {
+    let planContent = '';
+    try { planContent = fs.readFileSync(path.join(destDir, 'workflow-plan.md'), 'utf8'); } catch (_) { return false; }
+    const parsed = parseExpansionRecords(planContent);
+    if (!parsed.discharges || !parsed.discharges.size) return false;
+    const byPoint = new Map();
+    for (const r of parsed.records) {
+      if (!parsed.discharges.has(r.point)) continue;
+      if (!byPoint.has(r.point)) byPoint.set(r.point, []);
+      byPoint.get(r.point).push(r);
+    }
+    if (!byPoint.size) return false;
+    let points = 0;
+    let width = 0;
+    let rework = 0;
+    for (const [, recs] of byPoint) {
+      const eff = expansionRecordEfficiency(recs);
+      points += 1;
+      width += eff.width;
+      rework += eff.rework;
+    }
+    const p = path.join(destDir, 'finalization-summary.md');
+    let s = '';
+    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
+    if (/^## Expansion Rollup$/m.test(s)) return false;
+    // Deliberately a DIFFERENT shape from renderExpansionEfficiencyLine (points/width/rework, no
+    // mode/serializer — those are per-point attributes that do not reduce meaningfully across many
+    // points in one summary line); the per-point lines already live in each point's own evidence
+    // file (.cache/<point>.md) for anyone who needs the mode/serializer breakdown.
+    const block = '## Expansion Rollup\n'
+      + 'expansion rollup: points=' + points + ' width=' + width + ' rework=' + rework + '\n';
+    fs.writeFileSync(p, s ? (s.trimEnd() + '\n\n' + block) : block);
+    return true;
+  } catch (_) { return false; }
+}
+
 // n5 (#653 finding D3): advisory selection-evidence probe. A file matching selection-evidence.*
 // in either cache dir means the router docked the issue-scout's recommendation (see
 // workflow-next.md § Selection Evidence Docking) before dispatching the executor. Advisory
@@ -3329,6 +3375,9 @@ function cmdFinalize() {
   // n2 (#653 finding A): a non-empty ATTESTATION WARNING must not live only in stdout JSON —
   // transcribe it (and the two status fields) into the archived finalization-summary.md.
   if (result.dest) persistAttestationToSummary(result.dest, closureReceipt);
+  // #763: the per-run expansion-efficiency rollup line (absent on a plan with no discharged
+  // expansion point — presence-guarded inside the writer).
+  if (result.dest) persistExpansionRollupToSummary(result.dest);
   // n5 (#653 finding D3): advisory selection-evidence probe, computed beside the attestation
   // probe using the same archive-then-live candidate order (archiveProjectDir already ran).
   closureReceipt.selection_evidence = probeSelectionEvidence([archiveCacheDir, liveCacheDir]);
@@ -4826,6 +4875,9 @@ module.exports = {
   // #700: terminal archive-metadata writers reused by sink-merge's SOLE-archiver finalize path.
   appendClosureBlock,
   persistAttestationToSummary,
+  // #763: the per-run expansion-efficiency archive rollup writer — exported for direct unit
+  // coverage AND reuse by sink-merge's SOLE-archiver finalize path (same reason the two above are).
+  persistExpansionRollupToSummary,
   // #715 F1: exported for direct unit coverage (restore-gate dest exemption + base-branch guard).
   treeDirty,
   commitDiscardArchive

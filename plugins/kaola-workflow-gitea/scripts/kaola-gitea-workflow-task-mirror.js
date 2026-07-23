@@ -7,7 +7,8 @@
 // Generates the durable kaola-workflow/{project}/workflow-tasks.json from the
 // frozen ## Nodes + ## Node Ledger sections of workflow-plan.md.
 //
-// Reuses parseNodes, parseLedger, readStoredHash from the plan-validator.
+// Reuses planNodesWithExpansions, parseLedger, readStoredHash from the plan-validator (#763: the
+// EXECUTION view, so a composed expansion's units are listed too — not just the frozen spine).
 // Does NOT re-implement table parsing.
 //
 // CLI:
@@ -22,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { parseNodes, parseLedger, readStoredHash } = require('./kaola-gitea-workflow-plan-validator');
+const { planNodesWithExpansions, parseLedger, readStoredHash } = require('./kaola-gitea-workflow-plan-validator');
 // #355: the shared emit/refuse protocol. Refusals go to STDOUT (one compact JSON line)
 // so a caller that parses stdout still recovers the `reason` — the old stderr refusals
 // were invisible to adaptive-node's shellNode (which reads err.stdout). adaptive-schema is
@@ -76,7 +77,7 @@ function generateMirror({ planContent, now }) {
     return { status: 'plan_not_frozen' };
   }
 
-  const nodes = parseNodes(planContent);
+  const nodes = planNodesWithExpansions(planContent);
   const ledger = parseLedger(planContent);
 
   const tasks = nodes.map(node => {
