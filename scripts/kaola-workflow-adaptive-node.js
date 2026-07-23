@@ -2713,6 +2713,20 @@ function resolveCodexDispatchMode(context, env) {
 // uncommitted bytes sit). Single source of truth so the card text can never drift from the R2b contract.
 const SCRATCH_OBSERVATION_CONTRACT = 'verdict from .cache evidence of closed nodes + scratch only; do not read the worktree tree or diff';
 
+// #763: read the SHARED CONTEXT PACKET orient wrote to .cache/context-packet.md and thread it onto the
+// ACTUAL dispatch card (the open-ready / open-next / fused-advance opened=… card the orchestrator
+// dispatches from), so every dispatched unit receives it verbatim. Reuses orient's file — never
+// regenerates or diverges it. Best-effort: an absent/unreadable/empty packet returns null so the packet
+// key is omitted below and the dispatch card stays byte-identical (the same conditional-attach discipline
+// as goal_line / leg_path).
+function readContextPacket(planPath, readFile) {
+  if (typeof readFile !== 'function' || !planPath) return null;
+  try {
+    const txt = readFile(path.join(path.dirname(planPath), '.cache', 'context-packet.md'));
+    return (typeof txt === 'string' && txt.trim() !== '') ? txt : null;
+  } catch (_) { return null; }
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
   const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
@@ -2776,6 +2790,12 @@ function buildDispatch(nodeInfo, context) {
   if (nodeModelDisplay) d.model_display = nodeModelDisplay;
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
+  }
+  // #763: the SHARED CONTEXT PACKET, verbatim, on the dispatch card the orchestrator relays into the
+  // role's Task-tool brief — cutting the per-agent setup cost each unit would otherwise re-derive.
+  // Conditionally attached (like goal_line): absent packet ⇒ no key ⇒ byte-identical dispatch card.
+  if (ctx.context_packet != null && String(ctx.context_packet).trim() !== '') {
+    d.context_packet = String(ctx.context_packet);
   }
   // #591: per-member leg routing. On a co-open write frontier each member runs in its own provisioned
   // `.kw` leg worktree; thread the member's leg_path + leg_branch DIRECTLY into its dispatch card so the
@@ -6410,6 +6430,8 @@ function runOpenNext(opts) {
     // The durable node channel: the node's brief (goal_line) + upstream_evidence pointers. Empty channel
     // ({}) for a briefless/root node ⇒ byte-identical dispatch card.
     ...deriveDispatchChannel(planContent, targetNode, project),
+    // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
+    context_packet: readContextPacket(planPath, readFile),
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -7070,6 +7092,8 @@ function runCloseAndOpenNext(opts) {
     ...optimizeDispatchCtx(planForAdvance, nextNode.role, nextNode.id),
     // The durable node channel for the fused-advance node ({} for a briefless/root node ⇒ byte-identical).
     ...deriveDispatchChannel(planForAdvance, nextNode, project),
+    // #763: the shared context packet orient wrote — carried VERBATIM onto this dispatch card.
+    context_packet: readContextPacket(planPath, readFile),
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -10857,6 +10881,8 @@ function runOpenReady(opts) {
           // parent-sourced upstream_evidence to the parent worktree (the leg carries no sibling .cache);
           // a legless read/serial member keeps the project-relative hint (byte-identical to pre-#692).
           ...deriveDispatchChannel(planContent, n, project, { planPath, runningSet: finalSet, openIntoLeg: !!legInfo }),
+          // #763: the shared context packet orient wrote — carried VERBATIM onto each co-opened member's card.
+          context_packet: readContextPacket(planPath, readFile),
         }
       );
       // #609/#610: runtime-native display alongside the raw tier echo (conditional ⇒ untiered byte-identical).

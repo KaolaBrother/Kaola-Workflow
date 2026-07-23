@@ -17601,8 +17601,9 @@ function testExpansionTransaction759() {
 // against REAL composed records — width=4/mode=co_open/serializer=none/rework=1). The remaining
 // three ACs, each independent of the others:
 //   (a) orient regenerates .cache/context-packet.md (goal / key_files / conventions /
-//       join_expectations) and carries it VERBATIM on both the orient result and every entry of a
-//       dispatched batch preview (`frontier`);
+//       join_expectations), and the packet is carried VERBATIM onto the ACTUAL dispatch card a role
+//       agent is dispatched from — the open-next SERIAL card and every open-ready CO-OPEN card
+//       (expand-open reuses that opener); orient's non-dispatched `frontier` preview is NOT the pin;
 //   (b) the per-run archive rollup line (persistExpansionRollupToSummary) aggregates every
 //       expansion point a run discharged, reduced through the SAME shared derivation the
 //       per-expansion evidence line uses — pinned directly against the exported writer, with a
@@ -17671,56 +17672,102 @@ function testContextPacketEfficiencyRollup763() {
       '#763 (a1) fallback: an absent CLAUDE.md must degrade to the stated fallback line, got:\n' + bare);
   }
 
-  // ---- (a2) the WIRING: a real orient call writes .cache/context-packet.md and carries it
-  // VERBATIM on both the orient result and every entry of a dispatched batch preview (`frontier`). ----
+  // ---- (a2) the WIRING: orient writes .cache/context-packet.md AND the packet is carried VERBATIM
+  // onto the ACTUAL dispatch card the orchestrator dispatches a role agent from — the open-next SERIAL
+  // card and every open-ready CO-OPEN card (expand-open reuses open-ready's opener). The orient batch
+  // PREVIEW (`frontier`) is NOT a dispatched brief and is deliberately not asserted as one: the packet
+  // has to reach a REAL dispatched unit, which only the openers produce. ----
   {
-    const tmp = adaptiveTmp('763-packet');
-    const project = 'issue-763-packet';
+    // (a2-i) SERIAL dispatch: a single-head plan → open-next opens the head and its dispatch card
+    // carries the packet the preceding orient wrote.
+    const tmp = adaptiveTmp('763-packet-serial');
+    const project = 'issue-763-packet-serial';
     try {
       initGitRepo(tmp);
       const dir = path.join(tmp, 'kaola-workflow', project);
       fs.mkdirSync(dir, { recursive: true });
       const planPath = path.join(dir, 'workflow-plan.md');
       fs.writeFileSync(planPath, [
-        '# Workflow Plan — issue #763 packet wiring fixture', '',
+        '# Workflow Plan — issue #763 packet serial-dispatch fixture', '',
         '## Meta', '',
         'labels: enhancement',
         'goal: land the shared context packet', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
-        '| a | tdd-guide | — | lib/a.js | 1 | sequence |',
-        '| b | tdd-guide | — | lib/b.js | 1 | sequence |',
+        '| impl | tdd-guide | — | lib/impl.js | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| impl | pending |', '| review | pending |', '| done | pending |', ''
+      ].join('\n'));
+      const fz = runLegacyFreeze(planValidatorScript, planPath, tmp);
+      assert(fz.status === 0, '#763 (a2-i): the serial fixture plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 76301\n');
+
+      const oriented = json(runNode(adaptiveNodeScript, ['orient', '--project', project, '--json'], tmp));
+      const packetPath = path.join(dir, '.cache', 'context-packet.md');
+      assert(fs.existsSync(packetPath), '#763 (a2-i): orient must write .cache/context-packet.md');
+      const packetOnDisk = fs.readFileSync(packetPath, 'utf8');
+      assert(typeof oriented.context_packet === 'string' && oriented.context_packet === packetOnDisk,
+        '#763 (a2-i): orient result.context_packet must equal the file it just wrote, byte for byte');
+      assert(packetOnDisk.includes('goal: land the shared context packet'),
+        '#763 (a2-i): the packet must carry the plan\'s ## Meta goal, got:\n' + packetOnDisk);
+
+      // The REAL dispatched unit's brief: open-next's serial dispatch card must carry the packet VERBATIM.
+      const opened = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
+      assert(opened.result === 'ok' && opened.opened && opened.opened.dispatch,
+        '#763 (a2-i): open-next must open the serial head with a dispatch card, got ' + JSON.stringify(opened));
+      assert(opened.opened.dispatch.context_packet === packetOnDisk,
+        '#763 (a2-i): the open-next dispatch card must carry the context packet VERBATIM — the packet must '
+        + 'reach a REAL dispatched unit, not merely orient\'s non-dispatched preview, got: '
+        + JSON.stringify(opened.opened.dispatch.context_packet));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+
+    // (a2-ii) CO-OPEN dispatch: a two-wide READ frontier → open-ready co-opens both members and EACH
+    // member's dispatch card carries the packet VERBATIM (expand-open dispatches through this same opener).
+    const tmp2 = adaptiveTmp('763-packet-batch');
+    const project2 = 'issue-763-packet-batch';
+    try {
+      initGitRepo(tmp2);
+      const dir = path.join(tmp2, 'kaola-workflow', project2);
+      fs.mkdirSync(dir, { recursive: true });
+      const planPath = path.join(dir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — issue #763 packet batch-dispatch fixture', '',
+        '## Meta', '',
+        'labels: enhancement',
+        'goal: land the shared context packet', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| a | code-explorer | — | — | 1 | sequence |',
+        '| b | code-explorer | — | — | 1 | sequence |',
         '| review | code-reviewer | a,b | — | 1 | sequence |',
         '| done | finalize | review | — | 1 | sequence |', '',
         '## Node Ledger', '', '| id | status |', '|---|---|',
         '| a | pending |', '| b | pending |', '| review | pending |', '| done | pending |', ''
       ].join('\n'));
-      const fz = runLegacyFreeze(planValidatorScript, planPath, tmp);
-      assert(fz.status === 0, '#763 (a2): the fixture plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
-      fs.writeFileSync(path.join(dir, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 76301\n');
+      const fz = runLegacyFreeze(planValidatorScript, planPath, tmp2);
+      assert(fz.status === 0, '#763 (a2-ii): the batch fixture plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 76302\n');
 
-      const oriented = json(runNode(adaptiveNodeScript, ['orient', '--project', project, '--json'], tmp));
-      const packetPath = path.join(dir, '.cache', 'context-packet.md');
-      assert(fs.existsSync(packetPath), '#763 (a2): orient must write .cache/context-packet.md');
-      const packetOnDisk = fs.readFileSync(packetPath, 'utf8');
-      assert(typeof oriented.context_packet === 'string' && oriented.context_packet === packetOnDisk,
-        '#763 (a2): orient result.context_packet must equal the file it just wrote, byte for byte');
-      assert(packetOnDisk.includes('goal: land the shared context packet'),
-        '#763 (a2): the packet must carry the plan\'s ## Meta goal, got:\n' + packetOnDisk);
+      json(runNode(adaptiveNodeScript, ['orient', '--project', project2, '--json'], tmp2));
+      const packetOnDisk = fs.readFileSync(path.join(dir, '.cache', 'context-packet.md'), 'utf8');
 
-      // Every entry of the DISPATCHED batch preview (both `a` and `b` are ready with no in_progress
-      // node — enterBatch) must carry the packet VERBATIM — byte-identical to the file on disk.
-      assert(oriented.enterBatch === true && Array.isArray(oriented.frontier) && oriented.frontier.length === 2,
-        '#763 (a2): the fixture must produce a 2-wide dispatched batch preview, got '
-        + JSON.stringify({ enterBatch: oriented.enterBatch, frontier: oriented.frontier }));
-      for (const entry of oriented.frontier) {
-        assert(entry.context_packet === packetOnDisk,
-          '#763 (a2): frontier entry ' + entry.id + ' must carry the context packet VERBATIM, got: '
-          + JSON.stringify(entry.context_packet));
+      const opened = json(runNode(adaptiveNodeScript, ['open-ready', '--project', project2, '--json'], tmp2));
+      assert(opened.result === 'ok' && Array.isArray(opened.opened) && opened.opened.length === 2,
+        '#763 (a2-ii): open-ready must co-open the 2-wide read frontier, got ' + JSON.stringify(opened));
+      for (const member of opened.opened) {
+        assert(member.dispatch && member.dispatch.context_packet === packetOnDisk,
+          '#763 (a2-ii): the open-ready dispatch card for ' + member.id + ' must carry the context packet '
+          + 'VERBATIM (the packet must reach every REAL co-opened unit), got: '
+          + JSON.stringify(member.dispatch && member.dispatch.context_packet));
       }
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(tmp2, { recursive: true, force: true });
     }
   }
 
