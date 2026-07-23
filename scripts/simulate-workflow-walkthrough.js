@@ -18696,6 +18696,7 @@ function buildRegistry() {
   add('testReExpandCascade761',                           testReExpandCascade761);
   add('testSerializationInversion760',                    testSerializationInversion760);
   add('testDeclaredNotWalled762',                         testDeclaredNotWalled762);
+  add('testReExpansionEpochTransition756',                testReExpansionEpochTransition756);
   return reg;
 }
 
@@ -21386,6 +21387,286 @@ function testDeclaredNotWalled762() {
   }
 
   console.log('testDeclaredNotWalled762: PASSED');
+}
+
+// #756 — RE-EXPANSION → EPOCH-TRANSITION RE-REVIEW. The remaining gap #762 handed forward: after
+// amend-surface (#762 barrier attribution, dead-ends 1/2/5) + reexpand-open (#761 re-open, dead-ends
+// 3/4/6) re-open the review WALL, completing the wall's in-plan re-review is IMPOSSIBLE — a passed
+// change gate carries no fold boundary, and the journal identity scheme (attempt_id = <gate-node>:
+// <ordinal>, unique per journal + per-gate ordinal contiguity, all bound to one plan_hash) forbids a
+// fresh in-journal discovery for the same gate node. So deriveRepairDelta refuses
+// review_repair_delta_unavailable and the recovered file is ATTRIBUTED but not REVIEWED. The sanctioned
+// exit is an EPOCH TRANSITION (replan Case B, diagnosis_to_build — no failed review needed); its fresh
+// epoch re-reviews the recovered surface to a REAL verdict. This test proves:
+//   (0) the #722-class trap: a PASS-only journal routed through the escalation mints NO phantom scope id.
+//   (a) dead-ends 1/2/5 cleared at the barrier (#762) AND 3/4/6 cleared at the re-open (#761).
+//   (b) the re-opened wall's re-review no longer bare-wedges — it emits the TYPED epoch-transition
+//       escalation, distinct from the pre-fold-marker settled-pass dead end.
+//   (c) THE CRUX — once carried through the epoch transition, the wall produces a REAL verdict and the
+//       recovered file ends REVIEWED (it is enumerated in the reviewed candidate, the attempt is a
+//       settled PASS, and validateReviewJournal accepts the produced journal), not merely attributed.
+//   + the MPfused rider: the fused-advance (close-and-open-next) dispatch card attaches context_packet.
+function testReExpansionEpochTransition756() {
+  const validator = require('./kaola-workflow-plan-validator');
+  const adaptiveNode = require('./kaola-workflow-adaptive-node');
+  const schema = require('./kaola-workflow-adaptive-schema');
+
+  // ---- (0) #722-class fixture, written BEFORE the new arm — a PASS-only journal must route through the
+  //          escalation WITHOUT any synthetic scope:<digest> phantom, and its predicate must be derived
+  //          purely from the DURABLE plan bytes (never from an in-memory attempt with no plan evidence). ----
+  {
+    const settledPass = { outcome: 'pass', lifecycle_settled: true };
+    const settledFail = { outcome: 'fail', lifecycle_settled: true };
+    const META0 = ['## Meta', '', 'plan_schema_version: 2', 'plan_form: spine',
+      'validation_command: node x', 'validation_timeout_minutes: 20', 'code_certifier: wall',
+      'security_certifier: none', 'inherited_frontier_digest: none', 'inherited_frontier_classes: none', ''];
+    const mk = (extra) => ['# P', '', ...META0,
+      'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
+      '| wall | code-reviewer | m1 | — | 1 | sequence | c | s | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | complete |', '| wall | pending |', '| done | pending |', '',
+      '## Expansion Records', '', ...(extra || [])].join('\n');
+    const wall = { id: 'wall', role: 'code-reviewer', dependsOn: ['m1'] };
+    const amendPlan = mk(['amend(m1):', '  files: lib/companion.js', '']);
+    const rec2Plan = mk(['record(m1#2):', '  point: m1', '  unit: fx | code-explorer | standard | lib/companion.js | co_open | —', '']);
+    const plainPlan = mk([]);
+
+    // The predicate is TRUE only when a settled PASS meets DURABLE re-expansion evidence on the wall's
+    // OWN owning point (a surface amendment OR a record ordinal >= 2).
+    assert(adaptiveNode.reexpansionBlocksInPlanReReview(settledPass, amendPlan, wall) === true,
+      '#756 (0): a settled PASS + a durable surface amendment on the owning point escalates');
+    assert(adaptiveNode.reexpansionBlocksInPlanReReview(settledPass, rec2Plan, wall) === true,
+      '#756 (0): a settled PASS + a re-expansion record (ordinal >= 2) on the owning point escalates');
+    assert(adaptiveNode.reexpansionBlocksInPlanReReview(settledPass, plainPlan, wall) === false,
+      '#756 (0): a settled PASS with NO durable re-expansion evidence keeps its existing refusal (no escalation)');
+    assert(adaptiveNode.reexpansionBlocksInPlanReReview(settledFail, amendPlan, wall) === false,
+      '#756 (0): a settled FAIL is the ordinary in-plan repair-delta boundary — never escalates');
+    // Owning-point discipline: an amendment on m1 must NOT escalate a wall that does not review m1.
+    assert(adaptiveNode.reexpansionBlocksInPlanReReview(settledPass, amendPlan, { id: 'w2', role: 'code-reviewer', dependsOn: [] }) === false,
+      '#756 (0): re-expansion of a NON-owned point never escalates a foreign wall (owning-point tie)');
+    // #722 phantom-scope trap: the predicate is a pure boolean and mints NO scope id; the wall owner
+    // walker likewise returns only real point ids. A PASS-only journal validates unchanged.
+    const owners = adaptiveNode.wallOwningExpansionPoints(wall, validator.parseNodes(amendPlan), validator.SPINE_EXPANSION_ROLE);
+    assert(Array.from(owners).join() === 'm1' && !Array.from(owners).some(id => /scope:/.test(String(id))),
+      '#756 (0): the owning-point walker returns the REAL point id (m1) and mints no synthetic scope:<digest> phantom');
+    const journalHash = 'a'.repeat(64);
+    assert(schema.validateReviewJournal({ schema_version: 2, contract_version: 2, plan_hash: journalHash, attempts: [] }, journalHash).ok === true,
+      '#756 (0): an empty schema-2 journal (the PASS-only cross-epoch parent seed) validates unchanged');
+  }
+
+  const META = ['## Meta', '', 'plan_schema_version: 2', 'plan_form: spine',
+    'validation_command: node scripts/simulate-workflow-walkthrough.js', 'validation_timeout_minutes: 20',
+    'code_certifier: wall', 'security_certifier: none', 'inherited_frontier_digest: none', 'inherited_frontier_classes: none', ''];
+  const mkRunPlan = () => ['# Plan — #756 run', '', ...META,
+    'expansion(m1):', '  milestone_goal: land the seam', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+    '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
+  const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
+  const fixerComp = (writeSet) => ({ derivation: DERIV,
+    units: [{ name: 'fx', role: 'code-explorer', model: 'standard', write_set: writeSet || '', mode: 'co_open' }] });
+
+  // ---- (a)+(b) reproduce the #756 dead-ends through the production CLIs, then prove the escalation. ----
+  {
+    const repo = adaptiveTmp('issue-756a');
+    initGitRepoWithBareRemote(repo);
+    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-756a'], { encoding: 'utf8' });
+    const proj = path.join(repo, 'kaola-workflow', 'issue-756a');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-756a\nbranch: workflow/issue-756a\n');
+    const ledgerOf = () => {
+      const out = {};
+      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+        const c = l.split('|'); out[c[1].trim()] = c[2].trim();
+      }
+      return out;
+    };
+    const nodeSub = (sub, id, comp, extra) => runNode(adaptiveNodeScript,
+      [sub, '--project', 'issue-756a', ...(id ? ['--node-id', id] : []), '--json', ...(comp ? ['--stdin'] : []), ...(extra || [])],
+      repo, null, comp ? { input: JSON.stringify(comp) } : undefined);
+    const driveMilestone = (id) => {
+      const e = nodeSub('expand-open', id, fixerComp(''));
+      assert(e.status === 0, '#756 (a) expand-open ' + id + ': ' + e.stdout + e.stderr);
+      for (const u of (JSON.parse(e.stdout).opened || []).map(n => n.id)) {
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-756a', '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#756 (a) close-node ' + u + ': ' + c.stderr);
+      }
+      const d = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-756a', '--node-id', id, '--json'], repo);
+      assert(d.status === 0, '#756 (a) expand-close ' + id + ': ' + d.stderr);
+    };
+    const driveWall = (id) => {
+      const o = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-756a', '--json'], repo);
+      const op = JSON.parse(o.stdout);
+      assert(op.opened && op.opened.id === id, '#756 (a) open wall ' + id + ': ' + o.stdout + o.stderr);
+      const wd = op.opened.dispatch;
+      const ev = ['evidence-binding: ' + id + ' ' + op.nonce, 'contract_version: 2',
+        'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
+        'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
+        'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
+        'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', ''].join('\n');
+      const r = runNode(adaptiveNodeScript, ['record-evidence', '--project', 'issue-756a', '--node-id', id, '--stdin', '--json'], repo, null, { input: ev });
+      assert(r.status === 0, '#756 (a) record wall ' + id + ': ' + r.stderr);
+      const c = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-756a', '--node-id', id, '--json'], repo);
+      assert(c.status === 0, '#756 (a) close wall ' + id + ': ' + c.stdout + c.stderr);
+    };
+    try {
+      fs.writeFileSync(planPath, mkRunPlan());
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#756 (a): spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+      driveMilestone('m1');
+      driveWall('wall');
+      assert(ledgerOf().m1 === 'complete' && ledgerOf().wall === 'complete',
+        '#756 (a): the passed-review run discharges m1 + wall, got ' + JSON.stringify(ledgerOf()));
+
+      // NEGATIVE CONTROL — the first (discovery) wall review carried NO escalation: the settled PASS on
+      // disk has no durable re-expansion yet, so the predicate is false against the frozen plan.
+      const content0 = fs.readFileSync(planPath, 'utf8');
+      const j0 = JSON.parse(fs.readFileSync(path.join(proj, '.cache', 'review-attempts.json'), 'utf8'));
+      const wallNode0 = validator.parseNodes(content0).find(n => n.id === 'wall');
+      assert(adaptiveNode.reexpansionBlocksInPlanReReview(j0.attempts[0], content0, wallNode0) === false,
+        '#756 (a): before any re-expansion the settled pass does NOT escalate (negative control)');
+
+      // DEAD-END 1 (barrier) — a required companion file lands OUTSIDE the declared surface.
+      const bWedge = validator.barrierCheck(content0, ['lib/companion.js'], { project: 'issue-756a' });
+      assert(bWedge.result === 'refuse' && bWedge.reason === 'write_set_overflow',
+        '#756 (a): the finalize barrier reproduces the out-of-surface dead-end, got ' + bWedge.result + ' ' + bWedge.reason);
+
+      // #762 (dead-ends 1/2/5) + #761 (dead-ends 3/4/6): amend-surface attributes + re-opens.
+      const am = nodeSub('amend-surface', 'm1', fixerComp('lib/companion.js'), ['--files', 'lib/companion.js']);
+      assert(am.status === 0, '#756 (a): amend-surface must exit 0, got ' + am.status + '\n' + am.stdout + am.stderr);
+      const ap = JSON.parse(am.stdout);
+      assert(ap.amended === true && ap.reopened === true,
+        '#756 (a): amend-surface attributes (#762) + re-opens (#761), got ' + JSON.stringify({ a: ap.amended, r: ap.reopened }));
+      assert(ledgerOf().m1 === 'pending' && ledgerOf().wall === 'pending',
+        '#756 (a): the re-open rolls the owner + its wall back to re-review (3/4/6 cleared, not a would_strand refusal), got ' + JSON.stringify(ledgerOf()));
+
+      // Re-discharge m1 (the fixer units), landing the recovered file on disk. The barrier now CLEARS it
+      // (dead-ends 1/2/5 gone) — the file is ATTRIBUTED.
+      for (const u of (ap.opened || []).map(n => n.id)) {
+        fs.mkdirSync(path.join(repo, 'lib'), { recursive: true });
+        fs.writeFileSync(path.join(repo, 'lib', 'companion.js'), '// recovered companion\n');
+        spawnSync('git', ['-C', repo, 'add', '-A'], { encoding: 'utf8' });
+        spawnSync('git', ['-C', repo, 'commit', '-m', 'fx'], { encoding: 'utf8' });
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-756a', '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#756 (a): close re-opened unit ' + u + ': ' + c.stderr);
+      }
+      const d2 = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-756a', '--node-id', 'm1', '--json'], repo);
+      assert(d2.status === 0, '#756 (a): re-discharge m1, got ' + d2.stdout + d2.stderr);
+      const content1 = fs.readFileSync(planPath, 'utf8');
+      const bClear = validator.barrierCheck(content1, ['lib/companion.js'], { project: 'issue-756a' });
+      assert(bClear.result === 'pass', '#756 (a): after amend + re-open the barrier CLEARS the attributed file (1/2/5), got ' + bClear.result + ' ' + bClear.reason);
+      assert(ledgerOf().m1 === 'complete' && ledgerOf().wall === 'pending',
+        '#756 (a): m1 re-discharges, the re-review WALL stays PENDING (the #756 gap), got ' + JSON.stringify(ledgerOf()));
+
+      // (b) THE #756 GAP — driving the re-opened wall's re-review no longer bare-wedges. open-next now
+      // emits the TYPED epoch-transition escalation (NOT review_repair_delta_unavailable, NOT a silent
+      // pass that would leave the file merely attributed). This is the in-plan-impossible verdict.
+      const wallNode1 = validator.parseNodes(content1).find(n => n.id === 'wall');
+      assert(adaptiveNode.reexpansionBlocksInPlanReReview(j0.attempts[0], content1, wallNode1) === true,
+        '#756 (b): after re-expansion the settled pass escalates (the delta-boundary predicate flips true)');
+      const reReview = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-756a', '--json'], repo);
+      assert(reReview.status !== 0, '#756 (b): re-opening the settled-PASS wall in-plan must fail closed, got status ' + reReview.status + '\n' + reReview.stdout);
+      const rr = JSON.parse(reReview.stdout);
+      assert(rr.result === 'refuse' && rr.reason === 'review_reexpansion_requires_epoch_transition',
+        '#756 (b): the wedge is the TYPED epoch-transition escalation (not the bare review_repair_delta_unavailable dead end), got ' + JSON.stringify({ r: rr.result, why: rr.reason }));
+      // #722 phantom-scope trap — the escalation emits NO synthetic scope:<digest> id anywhere.
+      assert(!/scope:[0-9a-f]/.test(reReview.stdout),
+        '#756 (b): the epoch-transition escalation mints no synthetic scope:<digest> phantom, got ' + reReview.stdout);
+      assert(String(rr.detail || '').indexOf('diagnosis_to_build') !== -1,
+        '#756 (b): the escalation names the sanctioned Case B exit (diagnosis_to_build), got ' + rr.detail);
+    } finally { fs.rmSync(repo, { recursive: true, force: true }); try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // ---- (c) THE CRUX — the sanctioned epoch transition re-reviews the recovered file to a REAL verdict.
+  //          A diagnosis_to_build child is a FRESH epoch: a plain DAG that scopes the recovered file into
+  //          a writer + a review wall. Its fresh journal re-reviews the file as a clean discovery (no
+  //          repair delta needed), producing a settled PASS whose reviewed candidate ENUMERATES the file
+  //          — the recovered file ends REVIEWED, not merely attributed. Also pins the MPfused rider. ----
+  {
+    const repo = adaptiveTmp('issue-756c');
+    initGitRepoWithBareRemote(repo);
+    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-756c'], { encoding: 'utf8' });
+    const proj = path.join(repo, 'kaola-workflow', 'issue-756c');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-756c\nbranch: workflow/issue-756c\n');
+    const childPlan = ['# Plan — #756 epoch child (diagnosis_to_build)', '', '## Meta', '',
+      'plan_schema_version: 2', 'validation_command: node x', 'validation_timeout_minutes: 20',
+      'code_certifier: wall', 'security_certifier: none', 'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| impl | implementer | — | lib/companion.js | 1 | sequence | — | — | — | — |',
+      '| wall | code-reviewer | impl | — | 1 | sequence | the recovered companion file is correct | lib/companion.js | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
+    try {
+      fs.writeFileSync(planPath, childPlan);
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#756 (c): the epoch child must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'frozen child'], { cwd: repo, encoding: 'utf8' });
+      // The MPfused rider: seed the shared context packet orient writes, so the fused-advance dispatch
+      // card carries it verbatim (the #763 conditional-attach discipline).
+      fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(proj, '.cache', 'context-packet.md'), '# Shared context packet\nrecovered-file recovery epoch\n');
+
+      // Drive the writer: it lands the recovered file in-scope in the new epoch.
+      const o = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-756c', '--json'], repo);
+      assert(o.status === 0 && JSON.parse(o.stdout).opened.id === 'impl', '#756 (c): open impl: ' + o.stdout + o.stderr);
+      fs.mkdirSync(path.join(repo, 'lib'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'lib', 'companion.js'), '// recovered companion, now reviewed\n');
+      spawnSync('git', ['-C', repo, 'add', '-A'], { encoding: 'utf8' });
+      spawnSync('git', ['-C', repo, 'commit', '-m', 'impl'], { encoding: 'utf8' });
+      fs.appendFileSync(path.join(proj, '.cache', 'impl.md'), '\nnon_tdd_reason: trivial recovered file\nregression-green: ok\n');
+      const ci = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-756c', '--node-id', 'impl', '--json'], repo);
+      assert(ci.status === 0, '#756 (c): close impl + fused-advance to wall: ' + ci.stdout + ci.stderr);
+      const cip = JSON.parse(ci.stdout);
+      // MPfused rider — the fused-advance opened the wall and attached the shared context packet.
+      assert(cip.opened && cip.opened.id === 'wall' && cip.opened.dispatch
+        && typeof cip.opened.dispatch.context_packet === 'string' && cip.opened.dispatch.context_packet.indexOf('Shared context packet') !== -1,
+        '#756 (c) MPfused rider: the fused-advance (close-and-open-next) dispatch card attaches context_packet, got ' + JSON.stringify(cip.opened && cip.opened.dispatch && Object.keys(cip.opened.dispatch)));
+
+      // Drive the wall: a fresh-epoch discovery review (no prior lineage, no delta), producing a REAL verdict.
+      const wd = cip.opened.dispatch;
+      const ev = ['evidence-binding: wall ' + cip.opened.nonce, 'contract_version: 2',
+        'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
+        'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
+        'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
+        'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', ''].join('\n');
+      const r = runNode(adaptiveNodeScript, ['record-evidence', '--project', 'issue-756c', '--node-id', 'wall', '--stdin', '--json'], repo, null, { input: ev });
+      assert(r.status === 0, '#756 (c): record wall: ' + r.stderr);
+      const cw = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-756c', '--node-id', 'wall', '--json'], repo);
+      assert(cw.status === 0, '#756 (c): close wall (real verdict produced): ' + cw.stdout + cw.stderr);
+
+      // THE ACCEPTANCE — the recovered file ends REVIEWED: the produced journal validates, the wall
+      // attempt is a settled PASS, and its reviewed candidate ENUMERATES lib/companion.js.
+      const j = JSON.parse(fs.readFileSync(path.join(proj, '.cache', 'review-attempts.json'), 'utf8'));
+      const vr = schema.validateReviewJournal(j, j.plan_hash);
+      assert(vr.ok === true, '#756 (c): the epoch-child review journal validates, got ' + JSON.stringify(vr));
+      const wallAttempt = j.attempts.find(a => a.receipts && a.receipts.some(rc => rc.node_id === 'wall'));
+      assert(wallAttempt && wallAttempt.outcome === 'pass',
+        '#756 (c): the wall produced a REAL settled-PASS verdict in the new epoch, got ' + JSON.stringify(wallAttempt && wallAttempt.outcome));
+      assert(wallAttempt.candidate_declared && Object.prototype.hasOwnProperty.call(wallAttempt.candidate_declared, 'lib/companion.js'),
+        '#756 (c): the recovered file is ENUMERATED in the reviewed candidate — REVIEWED, not merely attributed, got ' + JSON.stringify(Object.keys(wallAttempt.candidate_declared || {})));
+    } finally { fs.rmSync(repo, { recursive: true, force: true }); try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  console.log('testReExpansionEpochTransition756: PASSED');
 }
 
 main().catch(err => {
