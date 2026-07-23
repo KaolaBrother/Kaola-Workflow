@@ -22476,6 +22476,55 @@ function rtHarness(initialFiles, opts) {
 }
 
 
+// ===========================================================================
+// CLUSTER #761c — RETIRE-AS-PRIMARY: the spine-plan router precheck each legacy escalation site
+// consults FIRST. Proves BOTH directions: an interior finding routes LOCAL (a route_local_reexpansion
+// directive, NOT dependent_producer_replay_required / would_orphan / would_strand / replan), and a
+// genuine spine-shape-change finding (and a legacy DAG plan) returns null so the retained family runs.
+// ===========================================================================
+{
+  const { spineReExpansionFirst, findingFilesFromAttempt } = require('./kaola-workflow-adaptive-node');
+  const SPINE761c = [
+    '# Plan', '', '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |', '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | complete |', '| wall | complete |', '| done | pending |', '',
+  ].join('\n');
+  const DAG761c = SPINE761c.replace('plan_form: spine', 'plan_form: dag').replace('| m1 | expansion-point |', '| m1 | implementer |');
+
+  // INTERIOR finding routes LOCAL — the retire-as-primary win.
+  const interior = spineReExpansionFirst(SPINE761c, ['scripts/x.js']);
+  assert(interior && interior.result === 'route_local_reexpansion' && JSON.stringify(interior.owners) === '["m1"]',
+    '#761c: an interior finding on a SPINE plan routes to route_local_reexpansion(m1) — NOT the legacy replay/replan escalation, got ' + JSON.stringify(interior));
+  // SPINE-CHANGE finding (outside every milestone surface) returns null ⇒ the retained family escalates.
+  assert(spineReExpansionFirst(SPINE761c, ['README.md']) === null,
+    '#761c: a finding outside every milestone surface returns null so the SPINE-CHANGE (replan) family still fires');
+  // DAG plan is INERT ⇒ the legacy families are byte-identical.
+  assert(spineReExpansionFirst(DAG761c, ['scripts/x.js']) === null,
+    '#761c: a legacy DAG plan returns null (DAG-inert) — dependent_producer_replay_required / would_orphan / would_strand unchanged');
+  // Anchorless finding is not a local route (the router refuses; the precheck passes through).
+  assert(spineReExpansionFirst(SPINE761c, []) === null,
+    '#761c: an anchorless finding is not a local route (precheck passes through to the existing path)');
+  // Malformed content never throws.
+  assert(spineReExpansionFirst('not a plan', ['scripts/x.js']) === null, '#761c: unparseable content returns null (never throws)');
+
+  // findingFilesFromAttempt over the REAL route_candidates attempt shape (primary_anchor / file /
+  // anchor_paths), resolved rows excluded, unreadable shapes ⇒ [].
+  assert(JSON.stringify(findingFilesFromAttempt({ route_candidates: [{ status: 'open', primary_anchor: { path: 'scripts/y.js' } }] })) === '["scripts/y.js"]',
+    '#761c: findingFilesFromAttempt reads route_candidates primary_anchor.path');
+  assert(JSON.stringify(findingFilesFromAttempt({ route_candidates: [{ status: 'resolved', primary_anchor: { path: 'scripts/skip.js' } }] })) === '[]',
+    '#761c: findingFilesFromAttempt excludes RESOLVED rows');
+  assert(JSON.stringify(findingFilesFromAttempt(null)) === '[]', '#761c: findingFilesFromAttempt(null) ⇒ [] (no throw)');
+  // The wired combination: an attempt whose still-open finding lands in a milestone surface routes local.
+  const wiredFiles = findingFilesFromAttempt({ route_candidates: [{ status: 'open', primary_anchor: { path: 'scripts/impl.js' } }] });
+  const wired = spineReExpansionFirst(SPINE761c, wiredFiles);
+  assert(wired && wired.result === 'route_local_reexpansion',
+    '#761c: an attempt finding under a milestone surface routes local through the SAME precheck the escalation sites call, got ' + JSON.stringify(wired));
+}
+
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -7435,6 +7435,19 @@ function runReopenNode(opts) {
   }
   planContent = reset.content;
 
+  // #761 RETIRE-AS-PRIMARY: on a SPINE plan, route the finding to LOCAL re-expansion FIRST — the
+  // would_orphan_in_progress / would_strand_completed_dependent family below becomes the SPINE-CHANGE /
+  // rollback path, reachable only when the reopened node's surface lies outside every milestone (or the
+  // plan is a legacy DAG). N's declared write set is the finding surface. Pure no-op on divert (nothing
+  // has been written to disk yet). DAG-inert: spineReExpansionFirst returns null on a dag plan.
+  {
+    const wnode = nodes.find(n => n.id === nodeId);
+    const wsRaw = wnode ? (wnode.declared_write_set != null ? wnode.declared_write_set : wnode.writeSetRaw) : '';
+    const wsFiles = String(wsRaw || '').split(/[\s,]+/).filter(t => t && !/^(—|-|none|n\/a)$/i.test(t));
+    const localFirst = spineReExpansionFirst(planContent, wsFiles);
+    if (localFirst) return { ...localFirst, reopen_target: nodeId };
+  }
+
   // (3) Post-dominating gate(s): gate-role descendants of N that every path N→sink crosses.
   const fwd = new Map(nodes.map(n => [n.id, []]));
   for (const n of nodes) for (const d of n.dependsOn) if (fwd.has(d)) fwd.get(d).push(n.id);
@@ -8134,6 +8147,16 @@ function runRepairNodeCore(opts) {
     repairAlreadySelected = !!(persistedRepair && persistedRepair.selected_writer != null);
     if (repairAlreadySelected && persistedRepair.selected_writer !== nodeId) {
       return { result: 'refuse', reason: 'repair_writer_mismatch', attempt_id: attemptId };
+    }
+    // #761 RETIRE-AS-PRIMARY: on a SPINE plan, a finding routes to LOCAL re-expansion FIRST. Only a
+    // fresh (not-yet-selected) repair is diverted — a resume already past the short-circuits above keeps
+    // its committed path. When the router routes local, return the reexpand-open directive INSTEAD of the
+    // dependent_producer_replay_required escalation below; when it escalates (finding outside every
+    // milestone) or the plan is a legacy DAG, spineReExpansionFirst returns null and the unchanged
+    // producer-replay / replan path runs as the SPINE-CHANGE / rollback route.
+    if (!repairAlreadySelected) {
+      const localFirst = spineReExpansionFirst(initialPlan, findingFilesFromAttempt(repairAttempt));
+      if (localFirst) return { ...localFirst, attempt_id: attemptId };
     }
     const proofNodes = parseNodesFromContent(initialPlan);
     const proofLedger = readLedgerStatuses(initialPlan);
@@ -12883,6 +12906,52 @@ function runReExpandOpen(opts) {
     downstream_untouched: Array.from(new Set(reactivationLog.downstream_untouched)).sort() };
 }
 
+// ===========================================================================
+// #761 (child 4) — RETIRE-AS-PRIMARY WIRING. A finding on a SPINE plan routes to LOCAL re-expansion
+// FIRST; the legacy escalation families (repair-node's dependent_producer_replay_required, reopen-
+// node's would_orphan_in_progress / would_strand_completed_dependent, replan.js's
+// replan_source_journal_missing) are RETAINED but become the ROLLBACK / SPINE-CHANGE path — reachable
+// only when the router proves the finding lies outside every milestone scope (a true spine-shape
+// change) or the plan is a legacy DAG. spineReExpansionFirst is the single precheck each lifecycle
+// path consults BEFORE escalating; it is a total, never-throwing, DAG-inert function.
+// ===========================================================================
+
+// findingFilesFromAttempt — the finding files a review attempt still blocks on (its still-open route
+// candidates' anchors). Total + never-throwing; [] on any shape it cannot read.
+function findingFilesFromAttempt(attempt) {
+  const files = new Set();
+  let rows = [];
+  try { rows = stillOpenRouteCandidates(attempt); } catch (_) { rows = []; }
+  for (const row of rows) for (const f of findingFilesFromIndexRow(row)) files.add(f);
+  return Array.from(files).sort();
+}
+
+// spineReExpansionFirst — the retire-as-primary precheck. QUESTION each escalation site asks BEFORE
+// firing its legacy family: "on a spine plan, does this finding route to LOCAL re-expansion?" Returns
+// a typed `route_local_reexpansion` directive when YES; null otherwise — a null means the caller's
+// existing family runs UNCHANGED, which is exactly right in the two null cases: a legacy DAG plan
+// (families are the DAG mechanism), and a spine plan where the router escalates to spine_replan or
+// cannot place the finding (the family becomes the spine-change / rollback path). Never throws;
+// DAG-INERT (a non-spine plan returns null before any routing), so every legacy path is byte-identical.
+function spineReExpansionFirst(content, findingFiles, contextPoint) {
+  let validator; try { validator = require('./kaola-gitea-workflow-plan-validator'); } catch (_) { return null; }
+  let form; try { form = validator.parsePlanForm(content).form; } catch (_) { return null; }
+  if (form !== 'spine') return null;
+  let contracts; try { contracts = validator.parseExpansionContracts(content); } catch (_) { return null; }
+  const route = routeFindingReExpansion({
+    findingFiles: Array.isArray(findingFiles) ? findingFiles : [],
+    contextPoint: contextPoint || null, contracts,
+  });
+  if (route && route.result === 'ok' && route.decision === 'local') {
+    return { result: 'route_local_reexpansion', reason: 'reexpansion_available',
+      owners: route.owners, out_of_surface: route.out_of_surface || [],
+      operator_hint: 'SPINE plan: this interior finding re-expands its owning milestone(s) locally — run '
+        + 'reexpand-open --node-id ' + route.owners.join(' + ')
+        + ' (no epoch replan / producer replay). A spine-shape change is the only remaining replan trigger.' };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // runSelfTest (#433 / D-433-01) — inline self-test for evidence seeding + provenance log.
 // Triggered by `--self-test`. Tests:
@@ -13806,6 +13875,10 @@ module.exports = {
   reExpansionFixFiles,
   deriveSinkProgress,
   defaultSinkProgressProbe,
+  // #761 (retire-as-primary wiring): the spine-plan router precheck each legacy escalation site
+  // consults FIRST, and the attempt→finding-files extractor it uses. DAG-inert; exported for pins.
+  spineReExpansionFirst,
+  findingFilesFromAttempt,
   runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
