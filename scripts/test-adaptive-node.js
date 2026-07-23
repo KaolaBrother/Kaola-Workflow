@@ -22353,10 +22353,125 @@ function rtHarness(initialFiles, opts) {
     assert(schema761.expansionIdFieldOk({ expansion_id: 5 }) === false, '#761-G: a non-string fails CLOSED');
     // And through the REAL journal validator: a present-but-malformed expansion_id refuses; absence passes.
     // (Build a minimal V2 journal by cloning a valid attempt shape is heavy; the field predicate above is
-    // the unit of truth, and the validator wiring is a one-line call — pinned by the walkthrough's own
-    // journal fixtures, which OMIT the field and must stay green.)
+    // the unit of truth; its INTEGRATION into validateReviewJournalV2 (the present-malformed FAIL-CLOSED
+    // arm the produced journals never reach on their own) is pinned in the walkthrough on a REAL produced
+    // schema-2 journal, and verified to go RED under the guard-deletion mutant.)
     assert(typeof schema761.EXPANSION_ID_RE.test === 'function' && schema761.EXPANSION_ID_RE.test('a#1'),
       '#761-G: the exported record-id regex accepts a minimal <point>#<ordinal>');
+  }
+}
+
+
+// ===========================================================================
+// CLUSTER #761b — THE DISCHARGED-POINT RE-OPEN CASCADE + DERIVED SINK-PROGRESS.
+//
+// The pure cascade helpers, the three-valued fail-closed sink-progress predicate (pinned in every
+// direction, including an input that OMITS the probe seam), and runReExpandOpen's three fail-closed
+// gates (which return BEFORE the delegated transaction). The happy-path re-open + AC3 selectivity are
+// driven end to end through the production CLI in the walkthrough.
+// ===========================================================================
+{
+  const {
+    wallsOfMilestone, downstreamMilestones, reExpansionFixFiles, deriveSinkProgress,
+    defaultSinkProgressProbe, runReExpandOpen,
+  } = require('./kaola-workflow-adaptive-node');
+  const v761b = require('./kaola-workflow-plan-validator');
+  // Parallel milestones (m1 scripts/, m2 docs/, m3 scripts/) under one terminal wall + sink. m3 declares
+  // an EMPTY review_class (drives the wall-missing gate).
+  const SPINE761b = [
+    '# Plan', '', '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g1', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m2):', '  milestone_goal: g2', '  expected_surfaces: docs/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m3):', '  milestone_goal: g3', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: ', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |',
+    '| m2 | expansion-point | — | — | 1 | sequence |',
+    '| m3 | expansion-point | m1 | — | 1 | sequence |',
+    '| wall | code-reviewer | m1, m2, m3 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| m1 | ST_M1 |', '| m2 | complete |', '| m3 | complete |', '| wall | complete |', '| done | pending |', '',
+  ].join('\n');
+  const contracts761b = v761b.parseExpansionContracts(SPINE761b);
+  const nodes761b = v761b.parseNodes(SPINE761b);
+
+  // --- wallsOfMilestone: a milestone's OWN direct review-class dependents; empty on no review_class. ---
+  assert(JSON.stringify(wallsOfMilestone('m1', contracts761b, nodes761b)) === '["wall"]',
+    '#761b: m1\'s own wall is the review-class node depending directly on it, got ' + JSON.stringify(wallsOfMilestone('m1', contracts761b, nodes761b)));
+  assert(JSON.stringify(wallsOfMilestone('m3', contracts761b, nodes761b)) === '[]',
+    '#761b: a milestone with an EMPTY review_class has no own wall, got ' + JSON.stringify(wallsOfMilestone('m3', contracts761b, nodes761b)));
+
+  // --- downstreamMilestones: transitive expansion-point dependents (m3 depends on m1). ---
+  assert(JSON.stringify(downstreamMilestones('m1', nodes761b, 'expansion-point')) === '["m3"]',
+    '#761b: m3 (depends on m1) is downstream of m1; m2 (parallel) is not, got ' + JSON.stringify(downstreamMilestones('m1', nodes761b, 'expansion-point')));
+  assert(JSON.stringify(downstreamMilestones('m2', nodes761b, 'expansion-point')) === '[]',
+    '#761b: nothing depends on m2, got ' + JSON.stringify(downstreamMilestones('m2', nodes761b, 'expansion-point')));
+
+  // --- reExpansionFixFiles: composition write-set union; fallback to the finding's anchors. ---
+  assert(JSON.stringify(reExpansionFixFiles({ units: [{ write_set: 'scripts/b.js scripts/a.js' }] }, null)) === '["scripts/a.js","scripts/b.js"]',
+    '#761b: fix files are the union of the composition unit write sets, sorted');
+  assert(JSON.stringify(reExpansionFixFiles({ units: [{ write_set: '' }] }, { anchor_paths: ['scripts/x.js'] })) === '["scripts/x.js"]',
+    '#761b: with no composition write set, fall back to the finding anchors');
+  assert(JSON.stringify(reExpansionFixFiles(null, null)) === '[]', '#761b: no composition + no finding ⇒ no fix files (no throw)');
+
+  // --- deriveSinkProgress: three-valued, fail-closed. QUESTION: has the sink taken an irreversible
+  //     step? FAILS to 'unknown' on any doubt; only 'pristine'/'started' are trusted verdicts. ---
+  assert(deriveSinkProgress({ sinkProgressProbe: () => ({ state: 'pristine', evidence: 'e' }) }).state === 'pristine',
+    '#761b: an injected pristine probe reads pristine');
+  assert(deriveSinkProgress({ sinkProgressProbe: () => ({ state: 'started' }) }).state === 'started',
+    '#761b: an injected started probe reads started');
+  assert(deriveSinkProgress({ sinkProgressProbe: () => ({ state: 'nonsense' }) }).state === 'unknown',
+    '#761b: an unclassifiable probe verdict FAILS CLOSED to unknown');
+  assert(deriveSinkProgress({ sinkProgressProbe: () => { throw new Error('boom'); } }).state === 'unknown',
+    '#761b: a THROWING probe FAILS CLOSED to unknown (never pristine)');
+  // OMITTED probe seam + a workflow-state that names NO branch ⇒ the default probe cannot derive ⇒ unknown.
+  assert(deriveSinkProgress({ planPath: '/x/workflow-plan.md', readFile: () => 'project: x\n' }).state === 'unknown',
+    '#761b: the DEFAULT probe with no branch pointer fails closed to unknown (never a false pristine)');
+  assert(defaultSinkProgressProbe({ planPath: '/x/workflow-plan.md', readFile: () => 'branch: wf/none-exists-761b\n', repoRoot: process.cwd() }).state !== undefined,
+    '#761b: the default probe returns a classifiable state over a real repo');
+
+  // --- runReExpandOpen GATES (each returns BEFORE the delegated transaction; every mutation seam is a
+  //     no-op so a refusal proves zero mutation). ---
+  const reOpts = (st, extra) => ({
+    planPath: '/x/workflow-plan.md', nodeId: 'm1', composition: { derivation: {}, units: [] },
+    readFile: (p) => String(p).endsWith('workflow-state.md') ? 'branch: wf/x\n' : SPINE761b.replace('ST_M1', st),
+    writeFile: () => { throw new Error('a refused re-open must not write'); },
+    cacheExists: () => false, shell: () => ({ exitCode: 0, ok: true }),
+    sinkProgressProbe: () => ({ state: 'pristine' }), ...extra,
+  });
+  // GATE 1 — a non-discharged (pending) owner refuses reexpansion_point_not_discharged.
+  {
+    const r = runReExpandOpen(reOpts('pending'));
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_point_not_discharged',
+      '#761b GATE1: a pending (never-discharged) point refuses reexpansion_point_not_discharged, got ' + JSON.stringify(r));
+  }
+  // GATE 3 — a discharged owner + a STARTED sink refuses reexpansion_after_sink_started.
+  {
+    const r = runReExpandOpen(reOpts('complete', { sinkProgressProbe: () => ({ state: 'started', evidence: 'origin/x exists' }) }));
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_after_sink_started' && r.sink_progress === 'started',
+      '#761b GATE3: a re-expansion after the sink started refuses reexpansion_after_sink_started, got ' + JSON.stringify(r));
+  }
+  // GATE 3 fail-closed — an UNKNOWN sink (probe throws) also refuses (never admits on doubt).
+  {
+    const r = runReExpandOpen(reOpts('complete', { sinkProgressProbe: () => { throw new Error('x'); } }));
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_after_sink_started' && r.sink_progress === 'unknown',
+      '#761b GATE3: an UNKNOWN sink state fails closed (refuse), got ' + JSON.stringify(r));
+  }
+  // GATE 2 — a discharged owner whose review_class names no reachable downstream gate refuses the wall.
+  //          (Target m3: it declares an EMPTY review_class, so the re-review wall is missing.)
+  {
+    const spineM3 = SPINE761b.replace('| m3 | complete |', '| m3 | ST_M3 |');
+    const r = runReExpandOpen({
+      planPath: '/x/workflow-plan.md', nodeId: 'm3', composition: { derivation: {}, units: [] },
+      readFile: (p) => String(p).endsWith('workflow-state.md') ? 'branch: wf/x\n' : spineM3.replace('ST_M1', 'complete').replace('ST_M3', 'complete'),
+      writeFile: () => { throw new Error('a refused re-open must not write'); },
+      cacheExists: () => false, shell: () => ({ exitCode: 0, ok: true }),
+      sinkProgressProbe: () => ({ state: 'pristine' }),
+    });
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_review_wall_missing',
+      '#761b GATE2: re-opening a point with no reachable review wall fails CLOSED, got ' + JSON.stringify(r));
   }
 }
 
