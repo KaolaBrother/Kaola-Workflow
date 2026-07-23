@@ -18695,6 +18695,7 @@ function buildRegistry() {
   add('testArchiveRollupPin763',                          testArchiveRollupPin763);
   add('testReExpandCascade761',                           testReExpandCascade761);
   add('testSerializationInversion760',                    testSerializationInversion760);
+  add('testDeclaredNotWalled762',                         testDeclaredNotWalled762);
   return reg;
 }
 
@@ -21160,6 +21161,231 @@ function testRunProgressMirror605() {
   }
 
   console.log('testRunProgressMirror605: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #762 — DECLARED-NOT-WALLED WRITE SURFACES: a frozen write surface is a DECLARATION for attribution
+// + review-scoping, not a hard wall. An ATTRIBUTABLE out-of-surface companion file is handled by
+// ATTRIBUTION + RE-REVIEW (amend the owning expansion record + reexpand-open), never a hard refusal.
+//
+//   (a) PURE barrier attribution + the hard anchors that MUST still refuse — no git, direct barrierCheck.
+//   (b) END-TO-END acceptance: reproduce #756's finalize dead-end (a passed-review run wedging at the
+//       whole-plan barrier on an out-of-surface required file), run amend-surface to attribute it +
+//       re-review, drive the re-opened milestone + wall to re-discharge, and show the barrier now
+//       CLEARS the attributed file while an UNAMENDED tamper write STILL refuses.
+//   (c) exact-file-paths-only granularity — a directory or glob amend token is refused (no write).
+//   (d) #761 M7b integration: a finding on the amended companion file routes LOCAL to its owning
+//       milestone (spineReExpansionFirst reads the DURABLE amend blocks).
+function testDeclaredNotWalled762() {
+  const validator = require('./kaola-workflow-plan-validator');
+  const adaptiveNode = require('./kaola-workflow-adaptive-node');
+
+  const META = ['## Meta', '', 'plan_schema_version: 2', 'plan_form: spine',
+    'validation_command: node scripts/simulate-workflow-walkthrough.js', 'validation_timeout_minutes: 20',
+    'code_certifier: wall', 'security_certifier: none', 'inherited_frontier_digest: none', 'inherited_frontier_classes: none', ''];
+  const mkPlan = (m1status, amendBlock) => ['# Plan — #762', '', ...META,
+    'expansion(m1):', '  milestone_goal: land the seam', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
+    '| n1 | implementer | m1 | scripts/a.js | 1 | sequence | — | — | — | — |',
+    '| wall | code-reviewer | n1 | — | 1 | sequence | c | s | sequence | — |',
+    '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| m1 | ' + m1status + ' |', '| n1 | complete |', '| wall | complete |', '| done | pending |', '',
+    '## Expansion Records', '', ...(amendBlock ? [amendBlock, ''] : [])].join('\n');
+  // The end-to-end run plan: the #761 milestone shape (m1 → wall → done), driven fresh from all-pending.
+  const mkRunPlan = () => ['# Plan — #762 run', '', ...META,
+    'expansion(m1):', '  milestone_goal: land the seam', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+    '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
+
+  // ---- (a) PURE barrier attribution + hard anchors. ----
+  {
+    const AMEND = 'amend(m1):\n  files: scripts/companion.js, glob/*.js, dir/, ../evil.js';
+    // The reader keeps EXACT files only (glob/dir/traversal dropped).
+    const parsed = validator.parseSurfaceAmendments(mkPlan('complete', AMEND));
+    assert(JSON.stringify(parsed.get('m1')) === '["scripts/companion.js"]',
+      '#762 (a): the amend reader keeps EXACT files only (dropped glob/dir/traversal), got ' + JSON.stringify(parsed.get('m1')));
+
+    // Attributed: m1 complete + companion amended => the out-of-surface production write is NOT overflow.
+    const bOk = validator.barrierCheck(mkPlan('complete', AMEND), ['scripts/companion.js', 'scripts/a.js'], { project: 'issue-762' });
+    assert(bOk.result === 'pass', '#762 (a): an amended companion file (point complete) is attributed, got ' + bOk.result + ' ' + bOk.reason + ' ' + JSON.stringify(bOk.outOfAllow));
+
+    // HARD ANCHOR 1 — an UNAMENDED out-of-surface write stays a fail-closed tamper refusal.
+    const bTamper = validator.barrierCheck(mkPlan('complete', AMEND), ['scripts/tamper.js', 'scripts/a.js'], { project: 'issue-762' });
+    assert(bTamper.result === 'refuse' && bTamper.reason === 'write_set_overflow' && bTamper.outOfAllow.join() === 'scripts/tamper.js',
+      '#762 (a): an UNAMENDED out-of-surface write STILL refuses write_set_overflow, got ' + bTamper.result + ' ' + bTamper.reason + ' ' + JSON.stringify(bTamper.outOfAllow));
+
+    // Re-review-in-flight — an amended file whose point is NOT complete does NOT attribute yet.
+    const bPending = validator.barrierCheck(mkPlan('pending', AMEND), ['scripts/companion.js'], { project: 'issue-762' });
+    assert(bPending.result === 'refuse' && bPending.reason === 'write_set_overflow',
+      '#762 (a): an amended file whose point is still re-reviewing (pending) is NOT attributed, got ' + bPending.result + ' ' + bPending.reason);
+
+    // Whole-plan only — the per-node barrier ignores amendments (a per-node overflow is its own overflow).
+    const bPerNode = validator.barrierCheck(mkPlan('complete', AMEND), ['scripts/companion.js'], { project: 'issue-762', nodeId: 'n1' });
+    assert(bPerNode.result === 'refuse' && bPerNode.reason === 'write_set_overflow',
+      '#762 (a): the PER-NODE barrier does not attribute point-level amendments, got ' + bPerNode.result + ' ' + bPerNode.reason);
+
+    // HARD ANCHOR 3 — the foreign_archive / sensitive_write_unreviewed precedence families are intact:
+    // a sensitive write on a no-security-reviewer plan still outranks any amendment.
+    const bSensitive = validator.barrierCheck(mkPlan('complete', 'amend(m1):\n  files: src/auth/session.js'),
+      ['src/auth/session.js'], { project: 'issue-762' });
+    assert(bSensitive.result === 'refuse' && bSensitive.reason === 'sensitive_write_unreviewed',
+      '#762 (a): a sensitive write with no security-reviewer outranks the amendment (precedence intact), got ' + bSensitive.reason);
+  }
+
+  // ---- (b) END-TO-END acceptance through the production CLIs. ----
+  {
+    const repo = adaptiveTmp('issue-762b');
+    initGitRepoWithBareRemote(repo);
+    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-762b'], { encoding: 'utf8' });
+    const proj = path.join(repo, 'kaola-workflow', 'issue-762b');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    // A branch pointer whose origin ref does NOT exist => derived sink-progress reads PRISTINE.
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-762b\nbranch: workflow/issue-762b\n');
+    const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
+    const fixerComp = (writeSet) => ({ derivation: DERIV,
+      units: [{ name: 'fx', role: 'code-explorer', model: 'standard', write_set: writeSet || '', mode: 'co_open' }] });
+    const ledgerOf = () => {
+      const out = {};
+      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+        const c = l.split('|'); out[c[1].trim()] = c[2].trim();
+      }
+      return out;
+    };
+    const nodeSub = (sub, id, comp, extra) => runNode(adaptiveNodeScript,
+      [sub, '--project', 'issue-762b', ...(id ? ['--node-id', id] : []), '--json', ...(comp ? ['--stdin'] : []), ...(extra || [])],
+      repo, null, comp ? { input: JSON.stringify(comp) } : undefined);
+    const driveMilestone = (id) => {
+      const e = nodeSub('expand-open', id, fixerComp(''));
+      assert(e.status === 0, '#762 (b) expand-open ' + id + ': ' + e.stdout + e.stderr);
+      for (const u of (JSON.parse(e.stdout).opened || []).map(n => n.id)) {
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-762b', '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#762 (b) close-node ' + u + ': ' + c.stderr);
+      }
+      const d = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-762b', '--node-id', id, '--json'], repo);
+      assert(d.status === 0, '#762 (b) expand-close ' + id + ': ' + d.stderr);
+    };
+    const driveWall = (id) => {
+      const o = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-762b', '--json'], repo);
+      const op = JSON.parse(o.stdout);
+      assert(op.opened && op.opened.id === id, '#762 (b) open wall ' + id + ': ' + o.stdout + o.stderr);
+      const wd = op.opened.dispatch;
+      const ev = ['evidence-binding: ' + id + ' ' + op.nonce, 'contract_version: 2',
+        'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
+        'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
+        'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
+        'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', ''].join('\n');
+      const r = runNode(adaptiveNodeScript, ['record-evidence', '--project', 'issue-762b', '--node-id', id, '--stdin', '--json'], repo, null, { input: ev });
+      assert(r.status === 0, '#762 (b) record wall ' + id + ': ' + r.stderr);
+      const c = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-762b', '--node-id', id, '--json'], repo);
+      assert(c.status === 0, '#762 (b) close wall ' + id + ': ' + c.stdout + c.stderr);
+    };
+    try {
+      fs.writeFileSync(planPath, mkRunPlan());
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#762 (b): spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+      driveMilestone('m1');
+      driveWall('wall');
+      assert(ledgerOf().m1 === 'complete' && ledgerOf().wall === 'complete',
+        '#762 (b): passed-review run — m1 + wall discharged, got ' + JSON.stringify(ledgerOf()));
+
+      // REPRODUCE #756's dead-end: a required companion file lands OUTSIDE the declared write sets. The
+      // whole-plan (finalize) barrier refuses write_set_overflow — the passed-review run wedges.
+      // The companion file lies OUTSIDE m1's declared expected_surfaces (scripts/) — a genuine
+      // out-of-surface file, so BOTH the barrier (attribution) and the router (ownership) require the
+      // amendment to place it.
+      const content0 = fs.readFileSync(planPath, 'utf8');
+      const bWedge = validator.barrierCheck(content0, ['lib/companion.js'], { project: 'issue-762b' });
+      assert(bWedge.result === 'refuse' && bWedge.reason === 'write_set_overflow',
+        '#762 (b): the finalize barrier reproduces the #756 out-of-surface dead-end, got ' + bWedge.result + ' ' + bWedge.reason);
+
+      // ATTRIBUTE + RE-REVIEW: amend the owning record with the EXACT companion file + reexpand-open.
+      const before = fs.readFileSync(planPath, 'utf8');
+      const am = nodeSub('amend-surface', 'm1', fixerComp('lib/companion.js'), ['--files', 'lib/companion.js']);
+      assert(am.status === 0, '#762 (b): amend-surface must exit 0, got ' + am.status + '\n' + am.stdout + am.stderr);
+      const ap = JSON.parse(am.stdout);
+      assert(ap.amended === true && ap.reopened === true && JSON.stringify(ap.amended_surface) === '["lib/companion.js"]',
+        '#762 (b): amend-surface attributes + re-opens, got ' + JSON.stringify({ a: ap.amended, r: ap.reopened, s: ap.amended_surface }));
+      assert(ledgerOf().m1 === 'pending' && ledgerOf().wall === 'pending',
+        '#762 (b): the amendment routes the owner + its wall to RE-REVIEW (pending), got ' + JSON.stringify(ledgerOf()));
+      // The durable amend block landed; append-only on the records channel; spine hash invariant.
+      const nowC = fs.readFileSync(planPath, 'utf8');
+      assert(validator.parseSurfaceAmendments(nowC).get('m1').join() === 'lib/companion.js',
+        '#762 (b): the durable amend block persists the exact attributed file');
+      const recSec = (t) => t.slice(t.indexOf('## Expansion Records'));
+      assert(recSec(nowC).indexOf(recSec(before).replace(/\s+$/, '')) === 0, '#762 (b): amend + re-open must be APPEND-ONLY on the records channel');
+      assert(validator.computePlanHash(before) === validator.computePlanHash(nowC), '#762 (b): amend must NOT perturb the frozen spine identity');
+      const rc = runNode(planValidatorScript, [planPath, '--resume-check', '--json'], repo);
+      assert(rc.status === 0 && JSON.parse(rc.stdout).ok === true, '#762 (b): resume-check green after amend + re-open, got ' + rc.stdout + rc.stderr);
+
+      // (d) #761 M7b — a finding on the amended companion file now routes LOCAL to m1 (the router reads
+      // the DURABLE amend block, so the widened surface OWNS the file).
+      const route = adaptiveNode.spineReExpansionFirst(nowC, ['lib/companion.js'], null);
+      assert(route && route.result === 'route_local_reexpansion' && route.owners.join() === 'm1',
+        '#762 (d): a finding on the amended companion routes LOCAL to its owning milestone, got ' + JSON.stringify(route));
+
+      // Drive the re-opened milestone back to discharge (the fixer units the re-open opened). The
+      // re-review WALL is now PENDING and stays --gate-verify's obligation (its in-plan re-review is the
+      // #756/#761-owned repair-delta problem, out of #762's scope); the BARRIER attributes on the POINT
+      // re-discharging, so re-driving m1 is exactly what clears the out-of-surface dead-end.
+      for (const u of (ap.opened || []).map(n => n.id)) {
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-762b', '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#762 (b): close re-opened unit ' + u + ': ' + c.stderr);
+      }
+      const d2 = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-762b', '--node-id', 'm1', '--json'], repo);
+      assert(d2.status === 0, '#762 (b): re-discharge m1, got ' + d2.stdout + d2.stderr);
+      assert(ledgerOf().m1 === 'complete' && ledgerOf().wall === 'pending',
+        '#762 (b): the re-attributed milestone re-discharges; its wall stays PENDING (gate-verify obligation), got ' + JSON.stringify(ledgerOf()));
+
+      // The barrier now CLEARS the attributed companion file (the #756 out-of-surface dead-end is resolved) …
+      const content1 = fs.readFileSync(planPath, 'utf8');
+      const bClear = validator.barrierCheck(content1, ['lib/companion.js'], { project: 'issue-762b' });
+      assert(bClear.result === 'pass', '#762 (b): after amend + re-open the barrier CLEARS the attributed file, got ' + bClear.result + ' ' + bClear.reason);
+      // … but an UNAMENDED tamper write STILL refuses (the hard anchor holds after amendment).
+      const bStill = validator.barrierCheck(content1, ['lib/companion.js', 'lib/tamper.js'], { project: 'issue-762b' });
+      assert(bStill.result === 'refuse' && bStill.reason === 'write_set_overflow' && bStill.outOfAllow.join() === 'lib/tamper.js',
+        '#762 (b): an UNAMENDED tamper write STILL refuses after a legitimate amendment, got ' + bStill.reason + ' ' + JSON.stringify(bStill.outOfAllow));
+    } finally { fs.rmSync(repo, { recursive: true, force: true }); try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // ---- (c) exact-file-paths-only granularity — a dir/glob amend token is refused, no write. ----
+  {
+    const repo = adaptiveTmp('issue-762c');
+    initGitRepoWithBareRemote(repo);
+    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-762c'], { encoding: 'utf8' });
+    const proj = path.join(repo, 'kaola-workflow', 'issue-762c');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-762c\nbranch: workflow/issue-762c\n');
+    try {
+      fs.writeFileSync(planPath, mkRunPlan());
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#762 (c): freeze green, got ' + fz.stdout + fz.stderr);
+      const before = fs.readFileSync(planPath, 'utf8');
+      for (const bad of ['scripts/', 'scripts/*.js']) {
+        const r = runNode(adaptiveNodeScript, ['amend-surface', '--project', 'issue-762c', '--node-id', 'm1', '--files', bad, '--json'], repo);
+        assert(r.status !== 0 && JSON.parse(r.stdout).reason === 'amend_surface_not_exact_file',
+          '#762 (c): a non-exact amend token "' + bad + '" must refuse amend_surface_not_exact_file, got ' + r.stdout);
+      }
+      assert(fs.readFileSync(planPath, 'utf8') === before, '#762 (c): a refused amend must NOT write the plan');
+    } finally { fs.rmSync(repo, { recursive: true, force: true }); try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  console.log('testDeclaredNotWalled762: PASSED');
 }
 
 main().catch(err => {
