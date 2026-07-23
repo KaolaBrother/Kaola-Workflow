@@ -44,8 +44,7 @@ MERGE_SETTINGS=1
 # Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
 # Pass --profile=common to install the Sonnet assignments for those three agents.
 PROFILE=higher
-# Adaptive is the unconditional default: no on/off switch and no path opt-ins. The install seeds
-# ~/.config/kaola-workflow/config.json with parallel_mode only — adaptive is the sole workflow path.
+# The install seeds ~/.config/kaola-workflow/config.json with parallel_mode.
 
 usage() {
   echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common]"
@@ -92,9 +91,6 @@ while [[ "$#" -gt 0 ]]; do
       PROFILE="$2"
       shift 2
       ;;
-    --enable-adaptive|--enable-adaptive=*)
-      echo "warning: --enable-adaptive is retired (#538); adaptive is the unconditional default and is always installed. Ignoring." >&2
-      shift ;;
     *)
       echo "Unknown argument: $1" >&2
       usage >&2
@@ -214,7 +210,7 @@ if [[ -d "$COMMANDS_DIR" ]]; then
   done
 fi
 
-# Remove stale support scripts that no longer exist in source.
+# Remove stale support scripts not present in source.
 if [[ -d "$SUPPORT_SCRIPTS_DIR" ]]; then
   for stale_file in "$SUPPORT_SCRIPTS_DIR"/*.js; do
     [[ -f "$stale_file" ]] || continue
@@ -614,12 +610,11 @@ for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
 done
 
 mkdir -p "$SUPPORT_HOOKS_DIR"
-# #372: delete the stale installed phantom-advisor hook on upgrade (it was retired with the advisor
-# gates; it is no longer in SUPPORT_HOOK_NAMES, so a prior install's copy would otherwise linger).
+# Delete a stale installed phantom-advisor hook on upgrade — it is not in SUPPORT_HOOK_NAMES,
+# so a prior install's copy would otherwise linger.
 rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-phantom-advisor.sh"
-# #725: delete the stale installed pre-commit/write-lane advisory hooks on upgrade (retired with
-# this hook pair; neither is in SUPPORT_HOOK_NAMES anymore, so a prior install's copy would
-# otherwise linger).
+# Delete stale installed pre-commit/write-lane advisory hooks on upgrade — neither is in
+# SUPPORT_HOOK_NAMES, so a prior install's copy would otherwise linger.
 rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-pre-commit.sh"
 rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-write-lane.sh"
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
@@ -752,9 +747,9 @@ for event, new_entries in incoming.items():
     cleaned.extend(new_entries)
     hooks[event] = cleaned
 
-# #372: de-register stale managed Kaola hook entries from events the installer NO LONGER ships
-# (e.g. the retired PostToolUse phantom-advisor). The merge loop above only visits events present
-# in `incoming`; without this sweep a dropped event keeps its stale managed entry forever (AC7).
+# De-register stale managed Kaola hook entries from events the installer does not ship. The merge
+# loop above only visits events present in `incoming`; without this sweep a dropped event keeps its
+# stale managed entry forever.
 for event in list(hooks.keys()):
     if event in incoming:
         continue
@@ -771,7 +766,7 @@ for event in list(hooks.keys()):
 
 if is_managed_subagent_statusline(settings.get("subagentStatusLine")):
     settings.pop("subagentStatusLine", None)
-    print("Removed legacy Kaola subagentStatusLine; model badges now use explicit Agent model dispatch.", file=sys.stderr)
+    print("Removed the managed Kaola subagentStatusLine; model badges use explicit Agent model dispatch.", file=sys.stderr)
 
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)
@@ -788,10 +783,9 @@ PY
   fi
 fi
 
-# Seed ~/.config/kaola-workflow/config.json with the default parallel_mode. Adaptive is the
-# unconditional default and the sole workflow path — fast/full are retired, so the install NEVER
-# writes installed_paths. A stale installed_paths (or enable_adaptive) from an older install is
-# tolerated on read and stripped here on any touched config (read-modify-write preserves user fields).
+# Seed ~/.config/kaola-workflow/config.json with the default parallel_mode. The install writes
+# parallel_mode only. Any stale path-selection or adaptive-toggle field left by an older install
+# is stripped here on any touched config (read-modify-write preserves user fields).
 KAOLA_CONFIG_DIR="$HOME/.config/kaola-workflow"
 KAOLA_CONFIG_FILE="$KAOLA_CONFIG_DIR/config.json"
 if command -v python3 >/dev/null 2>&1; then
@@ -808,10 +802,10 @@ if os.path.exists(path):
     if not isinstance(config, dict):
         print(f"warning: {path} is not a JSON object; leaving it untouched.", file=sys.stderr); sys.exit(2)
 config.setdefault("parallel_mode", "auto")
-config.pop("installed_paths", None)   # retired: install never writes it; strip any stale value
-config.pop("enable_adaptive", None)   # migrate away the retired field on any touched config
+config.pop("installed_paths", None)   # install never writes it; strip any stale value
+config.pop("enable_adaptive", None)   # strip this field on any touched config
 with open(path, "w") as f: json.dump(config, f, indent=2); f.write("\n")
-print(f"Seeded {path} (parallel_mode={config['parallel_mode']}; adaptive is the only workflow path)")
+print(f"Seeded {path} (parallel_mode={config['parallel_mode']})")
 PY
     :
   else

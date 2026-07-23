@@ -87,7 +87,7 @@ if rm -f "$AGENT_MODEL_MANIFEST" 2>/dev/null; then
   echo "Removed agent model manifest: $AGENT_MODEL_MANIFEST"
 fi
 
-# #538: uninstall clears the shared config so reset = uninstall -> reinstall (back to adaptive-only).
+# Uninstall clears the shared config so reset = uninstall -> reinstall.
 KAOLA_CONFIG_FILE="$HOME/.config/kaola-workflow/config.json"
 if [[ -f "$KAOLA_CONFIG_FILE" ]]; then
   rm -f "$KAOLA_CONFIG_FILE" && echo "Removed $KAOLA_CONFIG_FILE"
@@ -132,7 +132,7 @@ if [[ "$FORGE" = "gitea" || "$FORGE" = "all" ]]; then
   remove_dir "$HOME/.claude/kaola-workflow-gitea"
 fi
 
-# Strip Kaola-Workflow-managed hook entries and the legacy managed subagent
+# Strip Kaola-Workflow-managed hook entries and the managed subagent
 # status line entry from
 # ~/.claude/settings.json. Uses the same identification rules as install.sh
 # (id prefix "kaola-workflow:" or command path containing "kaola-workflow") so
@@ -265,9 +265,9 @@ PY
   fi
 fi
 
-# issue #409/#447: remove the version-less stable hook home written by
+# Remove the version-less stable hook home written by
 # install-codex-agent-profiles.js (~/.codex/kaola-workflow/{hooks,scripts}).
-# #447: the stable home is now GLOBAL (was $PWD/.codex, now $HOME/.codex).
+# The stable home is GLOBAL at $HOME/.codex.
 # Bounded to the Kaola-owned subtree; never touches anything else under .codex.
 CODEX_STABLE_HOME="$HOME/.codex/kaola-workflow"
 if [[ -d "$CODEX_STABLE_HOME" ]]; then
@@ -275,10 +275,10 @@ if [[ -d "$CODEX_STABLE_HOME" ]]; then
   echo "Removed Kaola-Workflow Codex hook home: $CODEX_STABLE_HOME"
 fi
 
-# issue #332: remove Kaola-Workflow-managed agent profiles + the managed
+# Remove Kaola-Workflow-managed agent profiles + the managed
 # [agents.*] block from the project-local .codex written by
 # install-codex-agent-profiles.js. Same $PWD asymmetry as the hooks cleanup above.
-# Only manifest-listed + known-retired profile files are removed; unknown user TOMLs
+# Only manifest-listed + the named stale profile files are removed; unknown user TOMLs
 # are never touched.
 CODEX_AGENTS_DIR="$PWD/.codex/agents/kaola-workflow"
 CODEX_CONFIG_FILE="$PWD/.codex/config.toml"
@@ -290,7 +290,7 @@ agents_dir = sys.argv[1]
 config_file = sys.argv[2]
 
 MANIFEST_BASENAME = ".kaola-managed-profiles.json"
-RETIRED_PROFILE_FILES = ["docs-lookup.toml"]
+STALE_PROFILE_FILES = ["docs-lookup.toml"]
 BEGIN_MARKER = "# BEGIN kaola-workflow agents"
 END_MARKER = "# END kaola-workflow agents"
 
@@ -308,8 +308,8 @@ if os.path.isdir(agents_dir):
                 managed = list(files.keys())
         except (json.JSONDecodeError, OSError):
             managed = []
-    # Remove manifest-listed + known-retired profile files (never unknown user TOMLs).
-    for name in sorted(set(managed) | set(RETIRED_PROFILE_FILES)):
+    # Remove manifest-listed + named stale profile files (never unknown user TOMLs).
+    for name in sorted(set(managed) | set(STALE_PROFILE_FILES)):
         p = os.path.join(agents_dir, name)
         if os.path.isfile(p):
             os.remove(p)

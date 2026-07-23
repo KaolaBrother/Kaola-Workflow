@@ -19,23 +19,11 @@
 # Override the inherited model via KAOLA_OPENCODE_INHERIT_MODEL, or pin a tier to a
 # different model via KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL.
 #
-# PATH SELECTION (issues #538 / #543): opencode is adaptive-only-default at the ROUTER level
-# — the generated .opencode/command/* flip adaptive to the unconditional default
-# (sync-opencode-edition.js transformCommandBody strips the canonical Path Intent section,
-# keyed to its stable title; post-#538 canonical adapt is itself adaptive-only — "NEVER
-# downgrade to fast/full" — so no adapt-fallback strip is needed; see docs/opencode-edition.md
-# § Path selection). The install-time COMMAND-SET partition mirrors install.sh's #538 target:
-#   - DEFAULT install deploys the ADAPTIVE-CORE command set only (5 files: adapt,
-#     finalize, plan-run, workflow-init, workflow-next). No fast, no phase1-5.
-#   - --with-fast  adds kaola-workflow-fast.md.
-#   - --with-full  adds kaola-workflow-phase1..5.md.
-# The opt-in is recorded in the SHARED ~/.config/kaola-workflow/config.json installed_paths
-# (the same file install.sh reads). Re-install is a UNION (never removes a prior opt-in):
-# a bare re-install into the same dest/HOME preserves a previously-installed fast/full.
-# #538 R1 mirrors install.sh:215-216 (EFFECTIVE_FAST/EFFECTIVE_FULL). --enable-adaptive is
-# retired (#538) and accepted-but-ignored (adaptive is always installed).
+# COMMAND SET: the install deploys the workflow command set (adapt, finalize, plan-run,
+# workflow-init, workflow-next) into .opencode/command/. The generated .opencode/command/*
+# are produced by sync-opencode-edition.js from the canonical sources.
 #
-# #544 (folded into #543): the generated commands + agents resolve support scripts via an
+# The generated commands + agents resolve support scripts via an
 # OPENCODE-NATIVE path (${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts)
 # — there is NO $CLAUDE_PLUGIN_ROOT and NO ~/.claude/kaola-workflow in the deployed tree.
 # install_support_scripts deploys to that opencode-native dir (not ~/.claude/).
@@ -48,9 +36,9 @@
 #     ~/.config/opencode/.opencode/ is never scanned). copy_tree takes a `layout_root` arg for exactly this.
 #   - opencode.json always lands at the config/project root (dest_root), never under the layout subtree.
 #
-# REINSTALL IS SELF-HEALING (#538 adaptive-only goal): copy_tree PRUNES kaola-owned command files not in
-# the EFFECTIVE opt-in set before re-copying, so a narrowed reinstall converges to adaptive-only on disk
-# (it is no longer additive-only). --uninstall removes the full deployed surface; see uninstall_edition.
+# REINSTALL IS SELF-HEALING: copy_tree PRUNES kaola-owned command files before re-copying, so a
+# reinstall converges to exactly the workflow command set on disk. --uninstall removes the full
+# deployed surface; see uninstall_edition.
 
 set -euo pipefail
 
@@ -61,15 +49,11 @@ REGENERATE=0
 UNINSTALL=0
 YES=0
 NO_SCRIPTS=0
-# #538/#543 install-time opt-ins (mirror install.sh). 0 = not requested this run;
-# EFFECTIVE_* (computed below) unions these with any prior installed_paths.
-WITH_FAST=0
-WITH_FULL=0
 
 usage() {
   cat <<'EOF'
 Usage: ./install-opencode.sh [--target DIR] [--global] [--regenerate] [--uninstall]
-                            [--no-scripts] [--yes] [--with-fast] [--with-full]
+                            [--no-scripts] [--yes]
   --target DIR     deploy into DIR (default: current directory)
   --global         deploy agents+commands+plugin+hooks into ~/.config/opencode (all projects)
   --regenerate     refresh the in-repo .opencode/ tree from canonical, then exit
@@ -77,15 +61,6 @@ Usage: ./install-opencode.sh [--target DIR] [--global] [--regenerate] [--uninsta
                    (honors --target/--global), then exit (see UNINSTALL below)
   --no-scripts     skip installing support scripts (see SUPPORT SCRIPTS below)
   --yes            non-interactive (accept the default deploy path)
-  --with-fast      also deploy kaola-workflow-fast.md (recorded in installed_paths)
-  --with-full      also deploy kaola-workflow-phase1..5.md (recorded in installed_paths)
-
-PATH SELECTION: the default install deploys the ADAPTIVE-CORE commands only (adapt,
-finalize, plan-run, workflow-init, workflow-next). --with-fast / --with-full add
-the fast / full-phase commands. Re-install is a UNION: a prior opt-in is never removed
-(--with-fast once, then bare re-install, preserves the fast command + installed_paths).
-The opt-in is recorded in the SHARED ~/.config/kaola-workflow/config.json (the same file
-install.sh reads). --enable-adaptive is retired (#538) and accepted-but-ignored.
 
 SUPPORT SCRIPTS: workflow commands locate scripts via kaola_script(), which searches
 ./scripts/ and ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/
@@ -96,10 +71,10 @@ repo needs none of that (./scripts/ is used directly).
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved scope
 (project DEST_ROOT via --target/$PWD, or --global ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}):
 the deployed agents/commands/plugin/hooks (by source-tree filename — never a blind rm of a
-dir), the opencode-native support scripts, and a surgical reset of installed_paths:[] in the
-SHARED ~/.config/kaola-workflow/config.json (parallel_mode + the file are kept for any
-co-installed Claude/Codex edition). Your own opencode.json (model/permission config) is
-PRESERVED. A subsequent bare install then deploys the adaptive-only default.
+dir) and the opencode-native support scripts (parallel_mode + the SHARED
+~/.config/kaola-workflow/config.json are kept for any co-installed Claude/Codex edition).
+Your own opencode.json (model/permission config) is PRESERVED. A subsequent bare install
+then deploys the workflow edition.
 EOF
 }
 
@@ -110,11 +85,6 @@ while [[ "$#" -gt 0 ]]; do
     --regenerate) REGENERATE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --no-scripts) NO_SCRIPTS=1; shift ;;
-    --with-fast) WITH_FAST=1; shift ;;
-    --with-full) WITH_FULL=1; shift ;;
-    --enable-adaptive|--enable-adaptive=*)
-      echo "warning: --enable-adaptive is retired (#538); adaptive is the unconditional default and is always installed. Ignoring." >&2
-      shift ;;
     -y|--yes) YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -134,19 +104,10 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# #538 R1 (mirror install.sh:214-216): compute the EFFECTIVE opt-in set ONCE, up front.
-# EFFECTIVE_* = path already in installed_paths OR explicitly requested this run. This makes a
-# bare re-install preserve + refresh a previously-installed path's files (UNION never removes).
-# Reads the SHARED ~/.config/kaola-workflow/config.json (the same file install.sh writes), so an
-# opencode install and a Claude/Codex install reach identical opt-in parity on that machine.
-EXISTING_PATHS="$(node -e 'try{const c=require(process.env.HOME+"/.config/kaola-workflow/config.json");const p=Array.isArray(c.installed_paths)?c.installed_paths:[];process.stdout.write(p.join(" "))}catch(e){}' 2>/dev/null || true)"
-case " $EXISTING_PATHS " in *" fast "*) EFFECTIVE_FAST=1 ;; *) EFFECTIVE_FAST=$WITH_FAST ;; esac
-case " $EXISTING_PATHS " in *" full "*) EFFECTIVE_FULL=1 ;; *) EFFECTIVE_FULL=$WITH_FULL ;; esac
-
-# Adaptive-core command set (#538): ALWAYS deployed. fast/full are EFFECTIVE-gated opt-ins; any
-# OTHER command fails CLOSED (skipped + warned) so a future canonical command cannot silently widen
-# the default install. Single source of truth for the partition (used by copy_tree).
-ADAPTIVE_CORE_COMMANDS=(
+# Workflow command set: the commands deployed into .opencode/command/. Any OTHER command fails
+# CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
+# Single source of truth for the deploy set (used by copy_tree).
+WORKFLOW_COMMANDS=(
   kaola-workflow-adapt.md kaola-workflow-finalize.md
   kaola-workflow-plan-run.md workflow-init.md workflow-next.md
 )
@@ -173,12 +134,10 @@ copy_tree() {
     return
   fi
   cp "$SCRIPT_DIR/.opencode/agent/"*.md "$layout_root/agent/"
-  # #538/#543 D2: the COMMAND deploy is PARTITIONED + SELF-HEALING. First PRUNE every kaola-owned
-  # command file from the dest (mirror install.sh:218-229 blanket-then-recopy) so a narrowed opt-in set
-  # converges to adaptive-only on a bare reinstall — copy_tree was additive-only before, leaving stale
-  # fast/phase orphans. Then re-copy the EFFECTIVE set via a fail-CLOSED ALLOWLIST: adaptive-core
-  # ALWAYS, kaola-workflow-fast.md iff EFFECTIVE_FAST, phase1..5 iff EFFECTIVE_FULL, anything else skipped.
-  # Agents/plugins/hooks are NOT partitioned (always fully deployed).
+  # The COMMAND deploy is SELF-HEALING. First PRUNE every kaola-owned command file from the dest,
+  # then re-copy the workflow command set via a fail-CLOSED ALLOWLIST: a command not in
+  # WORKFLOW_COMMANDS is skipped + warned, so a future canonical command cannot silently widen the
+  # install. Agents/plugins/hooks are always fully deployed.
   local stale_pattern stale_file
   for stale_pattern in "kaola-workflow-*.md" "workflow-init.md" "workflow-next.md"; do
     for stale_file in "$layout_root/command/"$stale_pattern; do
@@ -190,14 +149,9 @@ copy_tree() {
   for command_file in "$SCRIPT_DIR/.opencode/command/"*.md; do
     [[ -f "$command_file" ]] || continue
     base="$(basename "$command_file")"
-    if in_array "$base" "${ADAPTIVE_CORE_COMMANDS[@]}"; then
-      :   # adaptive-core: always
-    else
-      case "$base" in
-        kaola-workflow-fast.md)        [[ "$EFFECTIVE_FAST" -eq 1 ]] || continue ;;
-        kaola-workflow-phase[1-5].md)  [[ "$EFFECTIVE_FULL" -eq 1 ]] || continue ;;
-        *) echo "warning: skipping unrecognized command not in the adaptive-core/fast/full partition: $base" >&2; continue ;;
-      esac
+    if ! in_array "$base" "${WORKFLOW_COMMANDS[@]}"; then
+      echo "warning: skipping unrecognized command not in the workflow command set: $base" >&2
+      continue
     fi
     cp "$command_file" "$layout_root/command/$base"
   done
@@ -207,8 +161,8 @@ copy_tree() {
 }
 
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree filename (never a blind
-# rm of a dir the user may share). Preserves the user-owned opencode.json; surgically resets the SHARED
-# installed_paths to [] (keeps parallel_mode + the file for any co-installed Claude/Codex edition).
+# rm of a dir the user may share). Preserves the user-owned opencode.json and the SHARED
+# ~/.config/kaola-workflow/config.json (parallel_mode + the file for any co-installed Claude/Codex edition).
 uninstall_edition() {
   local dest_root layout_root
   if [[ "$GLOBAL" -eq 1 ]]; then
@@ -247,13 +201,7 @@ uninstall_edition() {
   if [[ -f "$dest_root/opencode.json" ]]; then
     echo "Preserved $dest_root/opencode.json (user-owned model/permission config)."
   fi
-  # Surgical reset of the SHARED config (node — already a hard dependency): installed_paths:[] only.
-  local shared="$HOME/.config/kaola-workflow/config.json"
-  if [[ -f "$shared" ]]; then
-    node -e 'const fs=require("fs"),p=process.argv[1];try{const c=JSON.parse(fs.readFileSync(p,"utf8"));if(c&&typeof c==="object"&&!Array.isArray(c)){c.installed_paths=[];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");}}catch(e){}' "$shared" 2>/dev/null || true
-    echo "Reset installed_paths:[] in $shared (adaptive-only; other editions unaffected)."
-  fi
-  echo "Uninstall complete. A fresh ./install-opencode.sh now deploys the adaptive-only default."
+  echo "Uninstall complete. A fresh ./install-opencode.sh now deploys the workflow edition."
 }
 
 # Install the support scripts the workflow commands invoke (kaola_script() search path includes
@@ -305,24 +253,18 @@ seed_config() {
   echo "  KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL env."
 }
 
-# #2 / #538 / #543 D4: seed ~/.config/kaola-workflow/config.json via UNION read-modify-write so an
-# opencode install reaches install-time parity (parallel_mode:'auto' default-ON + installed_paths)
-# with what install.sh writes. installed_paths records the EFFECTIVE opt-in set (R1 UNION with any
-# prior opt-ins — never removes). This config is the SHARED global file the classifiers + claim read
-# (edition-agnostic, never clobbered); it is SEPARATE from opencode.json.
-# #F9: implemented in NODE (already a hard dependency above) rather than python3 — this removes the
-# python3-absent failure mode entirely (which previously left opt-in files on disk while installed_paths
-# went unrecorded → config/disk divergence). Fail-closed on a corrupt/non-object config: leave it
-# untouched and warn, naming the deployed opt-in so any divergence is visible.
+# Seed ~/.config/kaola-workflow/config.json so an opencode install reaches install-time parity
+# (parallel_mode:'auto' default-ON) with what install.sh writes. This config is the SHARED global
+# file the classifiers + claim read (edition-agnostic, never clobbered); it is SEPARATE from
+# opencode.json. Implemented in NODE (already a hard dependency above). Fail-closed on a
+# corrupt/non-object config: leave it untouched and warn.
 seed_kaola_config() {
   local kaola_config_dir="$HOME/.config/kaola-workflow"
   local kaola_config_file="$kaola_config_dir/config.json"
   mkdir -p "$kaola_config_dir"
-  if ! KAOLA_SEED_FILE="$kaola_config_file" KAOLA_SEED_FAST="$EFFECTIVE_FAST" KAOLA_SEED_FULL="$EFFECTIVE_FULL" node -e '
+  if ! KAOLA_SEED_FILE="$kaola_config_file" node -e '
     const fs = require("fs");
     const file = process.env.KAOLA_SEED_FILE;
-    const withFast = process.env.KAOLA_SEED_FAST === "1";
-    const withFull = process.env.KAOLA_SEED_FULL === "1";
     let config = {};
     if (fs.existsSync(file)) {
       let raw;
@@ -335,19 +277,10 @@ seed_kaola_config() {
       }
     }
     if (config.parallel_mode === undefined) config.parallel_mode = "auto";
-    const existing = Array.isArray(config.installed_paths) ? config.installed_paths : [];
-    const set = new Set(existing);
-    if (withFast) set.add("fast");
-    if (withFull) set.add("full");
-    config.installed_paths = ["fast", "full"].filter(p => set.has(p));   // canonical order, {fast,full} only
-    delete config.enable_adaptive;                                       // migrate away the retired field
     fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-    console.log("Installed paths (adaptive always; opt-ins: " + JSON.stringify(config.installed_paths) + ") in: " + file);
+    console.log("Seeded parallel_mode in: " + file);
   '; then
-    echo "warning: failed to record installed_paths in $kaola_config_file." >&2
-    if [[ "$EFFECTIVE_FAST" -eq 1 || "$EFFECTIVE_FULL" -eq 1 ]]; then
-      echo "warning: opt-in command files WERE deployed but the opt-in could not be recorded; set installed_paths by hand (include \"fast\" and/or \"full\" as deployed)." >&2
-    fi
+    echo "warning: failed to seed $kaola_config_file." >&2
   fi
 }
 
