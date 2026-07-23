@@ -99,7 +99,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, `workflow-plan.md` (the `## Node Ledger`), and the compliance ledger before continuing.
 - State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from `workflow-plan.md` and its `## Node Ledger`, run the state repair helper and repair `workflow-state.md` before routing.
-- The adaptive DAG is the only workflow path.
+- The workflow path is adaptive.
 - End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
 - Active issue work runs in a repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` by default; set `KAOLA_WORKTREE_NATIVE=0` to disable. See README for the full contract.
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
@@ -171,20 +171,17 @@ no per-session ask). Classify the result:
 
 The supported role-aware V2 form is `multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true, ... }`, or the equivalent `[features.multi_agent_v2]` table. Codex 0.144.1 reserves `collaboration.spawn_agent` for its hidden-metadata schema: visible `agent_type`/model fields under that name fail the first request with HTTP 400, while the hidden default removes Kaola role selection. Explicit `non_code_mode_only = false` remains unsafe because it exposes collaboration through the nested Code Mode adapter. Warning suppression is independent: never treat `[notice].suppress_unstable_features_warning = true` as evidence that V2 is enabled. Do not silently edit `~/.codex/config.toml`; if a required setting is missing, show the minimal diff and apply it only when the user asked the agent to configure this machine or explicitly consents. After a transport change, require a fresh Codex session. Do not claim effort-safe dispatch from config text alone; a tiered fallback still needs a child-session effort proof — for Codex, that proof is the doctor's `dispatch_posture` field, not the feature flags alone.
 
-Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
-exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
+Trust the hooks once with `/hooks` in Codex. If a project-local `.codex/hooks.json`
+already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 
-### The adaptive path is the only path
+### The adaptive workflow path
 
-Adaptive is installed unconditionally — there is no install-time opt-in and no
-per-session switch. The `fast` and `full` six-phase paths are retired: their
-commands, skills and transaction scripts are deleted, and the installer does not
-parse path opt-in flags.
+Adaptive is the workflow path; every install ships it and there is nothing to
+select or configure.
 
 At runtime, a `KAOLA_PATH` (or `--workflow-path`) naming a non-adaptive path
 returns a typed `path_not_installed` refusal — never a silent adaptive
-substitution. A stale `installed_paths` field left by a pre-retirement install is
-tolerated on read and never re-written.
+substitution.
 
 6. Create only missing scaffold files:
 
@@ -238,7 +235,7 @@ Worked example of a migrated AGENTS.md (two `---` dividers total):
 *All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 
 ---
-> Note: content below was the prior AGENTS.md before init unified the contract.
+> Note: the content below is the AGENTS.md contract.
 [original content here]
 ```
 

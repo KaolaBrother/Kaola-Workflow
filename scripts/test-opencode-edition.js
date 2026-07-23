@@ -694,23 +694,16 @@ for (const target of emittedCommandTargets) {
   assert(!read('commands/workflow-next.md').includes('this placeholder'),
     'A27 (obs1): generated commands/workflow-next.md must NOT carry the dangling "this placeholder" phrasing (no referent post-render)');
 
-  // A22 (#F6): the opencode adapt surface must POSITIVELY carry the #538 adaptive-only guard
-  // ("NEVER downgrade to fast/full"), and must contain NO fast/full fallback wording that is not
-  // immediately NEVER-prefixed. #538 made canonical itself adaptive-only, so this replaces the old
-  // (now vacuous) "no 'downgrade to full path'" strip assertions: it fails loud if a future canonical
-  // edit reintroduces a REAL fallback escape (in any wording) onto the adaptive-only surface.
+  // A22 (#F6, updated #765): the cutover retired the fast/full paths, so the opencode adapt surface
+  // carries NO fast/full downgrade/fallback wording at all — neither the former guarded "NEVER
+  // downgrade to fast/full" nor an unguarded escape. Fail loud if a future canonical edit reintroduces
+  // any path-fallback wording onto the adaptive-only surface.
   const adapt = read('.opencode/command/kaola-workflow-adapt.md');
-  assert(adapt.includes('NEVER downgrade to fast/full'),
-    'A22 (#F6): adapt POSITIVELY carries the "NEVER downgrade to fast/full" adaptive-only guard (#538)');
   {
     const fallback = /(?:downgrade to (?:fast\/full|full path)|fall back to (?:fast\/full|full path|full))/g;
-    let m; const unguarded = [];
-    while ((m = fallback.exec(adapt)) !== null) {
-      const pre = adapt.slice(Math.max(0, m.index - 6), m.index);
-      if (!/NEVER $/.test(pre)) unguarded.push(m[0]);
-    }
-    assert(unguarded.length === 0,
-      'A22 (#F6): adapt has NO un-NEVER\'d fast/full fallback wording (an automatic path fallback would violate #538) — found: ' + unguarded.join(', '));
+    const found = adapt.match(fallback) || [];
+    assert(found.length === 0,
+      'A22 (#F6): adapt carries NO fast/full downgrade/fallback wording (the paths are retired, #765) — found: ' + found.join(', '));
   }
 }
 

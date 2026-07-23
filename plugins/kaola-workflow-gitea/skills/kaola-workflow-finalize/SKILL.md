@@ -146,12 +146,12 @@ verdict/evidence semantics and does not acquire schema-2 receipt requirements. N
 rewrite that plan in place.
 <!-- /PIN -->
 
-Adaptive is the only workflow path. Read `workflow_path: adaptive` from
+The workflow path is adaptive. Read `workflow_path: adaptive` from
 `kaola-workflow/{project}/workflow-state.md` and require a frozen `workflow-plan.md`
 (re-check `plan_hash`) whose `## Node Ledger` rows are all `complete` or `n/a`; on corruption
 or an incomplete ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its
 plan_hash failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the
-Phase 1-5 substitute.
+run's completion record.
 
 The adaptive completion check is **script-enforced**, not prose: run all
 four gates and capture each exit code DIRECTLY (never gate on a piped `| tail`, which
@@ -205,7 +205,7 @@ the script-enforced barrier. Run /kaola-workflow-plan-run first.`
 
 If `workflow-plan.md` is absent, `cmdFinalize` refuses unconditionally — before any
 archive/close side effect — with the typed `finalize_gate_unverified` /
-`adaptive_plan_missing` refusal (there is no retired fast/full verifier to shell and no
+`adaptive_plan_missing` refusal (there is no sibling verifier to shell and no
 N/A pass):
 
 ```text
@@ -289,7 +289,7 @@ choices, or ambiguity that blocks correctness.
 ## Required Steps
 
 1. Final validation: on self-host (npm) run the four-chain receipt gate (test suite, type check, lint, build) after all test-consumed prose/docs and code changes have landed, as the last pre-Finalization action; on a consumer (non-npm) repo run the plan's `## Meta` `validation_command` once against the final candidate state, or cite fresh prior evidence with `source: cited:<node-id>`, `validated_command`, `validated_at_head`, and `reuse_boundary`. Save output to `.cache/final-validation.md`, then bind it: record a column-0 `validated_candidate_hash:` line produced by the plan-validator's `--candidate-hash --json` as the LAST action, after every file the validation covered has landed. Any doubt about the boundary means run the command.
-2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. Adaptive's `--verdict-check` barrier (see the Prerequisite gate above) is the sole compliance gate.
+2. Acceptance check: verify the acceptance criteria, planned nodes, tests, review status, and absence of debug artifacts. Adaptive's `--verdict-check` barrier (see the Prerequisite gate above) is the sole compliance gate.
    ```bash
    ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"

@@ -448,9 +448,9 @@ assertIncludes(gitlabNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISS
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(gitlabNextSkill, 'Startup Step 0a-1');
 assertIncludes(gitlabNextSkill, 'Branch: {branch from Sink block');
-// #725: the status-report `Workflow path:` line reports adaptive as the ONLY workflow path (a
+// the status-report `Workflow path:` line reports the adaptive workflow path (a
 // non-adaptive KAOLA_PATH is refused by the claim's path_not_installed).
-assertIncludes(gitlabNextSkill, 'Workflow path: {adaptive — the only workflow path');
+assertIncludes(gitlabNextSkill, 'Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused');
 assertIncludes(gitlabNextSkill, 'Parallel decision: {green|yellow|red');
 for (const skill of ['kaola-workflow-finalize']) {
   const skillFile = `${gitlabSkillsBase}/${skill}/SKILL.md`;
@@ -623,7 +623,7 @@ assertIncludes(classifier207, "'Scope'");
 // issue #203: Select-Project active-folder definition still lists fast-summary.md (the classifier's
 // tolerant read survives retirement, so the router recognizes a legacy fast-summary.md marker).
 const nextCmd203 = pluginRoot + '/commands/workflow-next.md';
-assertIncludes(nextCmd203, '`fast-summary.md` file, or a `workflow-state.md`');
+assertIncludes(nextCmd203, '`workflow-plan.md` or a `workflow-state.md`');
 
 // issue #227: adaptive-path contract (GitLab fork command prose + renamed scripts).
 assert(exists(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js'), 'GitLab adaptive plan validator missing');

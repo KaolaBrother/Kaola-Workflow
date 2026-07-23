@@ -1,6 +1,6 @@
 ---
 name: kaola-workflow-next
-description: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and phase artifacts.
+description: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and node evidence.
 ---
 
 <!-- PIN: codex-profile-preflight -->
@@ -136,7 +136,7 @@ repairs the child DAG. At the retry bound, stop with the typed evidence; do not 
 plan, restart the claim, or route to another path. A verified legacy-v1 parent follows this same
 transaction into a schema-2 child; legacy normal startup behavior otherwise stays unchanged.
 
-This is the thin router. It owns startup checks, roadmap freshness, active project selection, state repair, and phase routing. It does not perform phase work directly unless it routes into the next skill.
+This is the thin router. It owns startup checks, roadmap freshness, active project selection, state repair, and routing. It does not perform workflow work directly unless it routes into the next skill.
 
 ## Goal Contract
 
@@ -176,7 +176,7 @@ Set `delegation_policy: local-authorized` (recording `local-fallback-explicit` i
 printf '\ndelegation_policy: %s\n' "$KAOLA_DELEGATION_POLICY" >> "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"
 ```
 
-Where `KAOLA_DELEGATION_POLICY` is `delegate` by default and `local-authorized` only on the user's explicit request to disable delegation. `tool-unavailable` remains a valid `delegation_policy:` value for legacy state, but new runs detect tool absence as per-row `local-fallback-tool-unavailable` evidence under `delegate` rather than choosing it at startup.
+Where `KAOLA_DELEGATION_POLICY` is `delegate` by default and `local-authorized` only on the user's explicit request to disable delegation. `tool-unavailable` remains a valid `delegation_policy:` value, but runs detect tool absence as per-row `local-fallback-tool-unavailable` evidence under `delegate`.
 
 Do not re-ask during the session. Re-establish the default only if `workflow-state.md` is absent.
 
@@ -232,8 +232,7 @@ several issues or when auto-bundle mode identifies a high-confidence same-scope 
 
 When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
 and pass `--target-issues 42,47,53 --workflow-path adaptive` (project/branch `bundle-42-47-53`, sorted
-+ deduplicated; the script validates the exact set, never reorders). The bundle lane is adaptive-only
-(`workflow_path: adaptive`; a `fast`/`full` request is refused with `bundle_requires_adaptive`).
++ deduplicated; the script validates the exact set, never reorders). The bundle lane runs on `workflow_path: adaptive`.
 `--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
 
 ### Auto-bundle entry
@@ -280,21 +279,15 @@ shape above and retry the same issue-scout role, task identity, isolated brief, 
 return exactly once. Never select issues inline. Reserve `local-fallback-tool-unavailable` for agent
 tooling that is genuinely unavailable.
 
-**Ordering — resolve the path BEFORE consuming a bundle:** the bundle lane is
-adaptive-only, so resolve the path intent (Startup Step 0a-1) *before*
-acting on the scout's recommendation. Pursue a bundle ONLY when the resolved path is
-`adaptive`; with an explicit `KAOLA_PATH=fast`/`full` take only the scout's
-`primary_issue` (a bundle there is refused at startup with `bundle_requires_adaptive`).
-
 **Output → env wiring:** map the scout's recommendation into the startup env exactly:
-- high-confidence same-scope bundle AND resolved path adaptive → set `KAOLA_TARGET_ISSUES`
+- high-confidence same-scope bundle → set `KAOLA_TARGET_ISSUES`
   from `recommended_bundle.issues` (e.g. `KAOLA_TARGET_ISSUES=42,47,53`);
-- otherwise (single-issue recommendation, `confidence: medium`/`low`, or non-adaptive path)
+- otherwise (single-issue recommendation, `confidence: medium`/`low`)
   → set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`. Never set both (`target_ambiguity`).
 
 **Selection Evidence Docking.** On this no-issue-named branch, once the target project's active
-folder exists — after claim completes (the Startup transaction for `fast`/`full`, or the adaptive
-front end's claim inside `kaola-workflow-adapt`), before dispatching the executor — persist the
+folder exists — after claim completes (the adaptive front end's claim inside
+`kaola-workflow-adapt`), before dispatching the executor — persist the
 issue-scout's ENTIRE JSON reply verbatim, fenced, to
 `kaola-workflow/{project}/.cache/selection-evidence.md`, prefixed with a one-line header
 `selection_mode: auto-bundle` (bundle recommendation adopted) or `selection_mode: single-issue`
@@ -336,14 +329,14 @@ agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Adaptive is the unconditional default and only installable path: `export KAOLA_PATH=adaptive` and
+`export KAOLA_PATH=adaptive` and
 proceed to the Adaptive front-end entry (this makes the Startup transaction skip and the front end
-fire). Honor an already-set non-adaptive `KAOLA_PATH` verbatim and hand it to the claim — its
-`path_not_installed` typed refusal is the single authority (no silent fall to adaptive, no automatic
-fallback). State the chosen path:
+fire). Hand an already-set non-adaptive `KAOLA_PATH` through verbatim to the claim — its
+`path_not_installed` typed refusal is the single authority, never a silent router-side substitution.
+State the path:
 
 ```text
-Path: adaptive (default)
+Path: adaptive
 ```
 
 ## Startup — Adaptive front-end entry (path = adaptive only)
@@ -372,8 +365,6 @@ branch, which claims and writes nothing):
    `--target-issues $KAOLA_TARGET_ISSUES` instead of `--target-issue N`. See
    the Bundle Lane sections (above and in `kaola-workflow-adapt`) for the planner's claim contract.
 
-Non-adaptive paths (`fast` | `full`) fall through to the Startup transaction unchanged.
-
 ## Codex Dispatch Mode Detection
 
 Before the Startup transaction, detect the Codex spawn-tooling shape so the claim can persist
@@ -400,7 +391,8 @@ fabricate a mode; only pass a value the doctor actually reported.
 ## Startup
 
 **Skip this transaction when `KAOLA_PATH=adaptive`** — the adaptive front end (above) claims via the
-`workflow-planner`, not here. It runs for the `fast` and `full` paths only.
+`workflow-planner`, not here. It runs only when a residual non-adaptive `KAOLA_PATH` was handed
+through, so the claim can refuse it.
 
 Run the startup transaction with the agent-selected target. Startup validates
 the explicit issue, refreshes PR-backed folders with `watch-pr`, and atomically
@@ -506,7 +498,7 @@ node "$repair_script" {project-or-empty}
 
 Use the repaired state only when it identifies exactly one safe `next_skill`.
 Treat a `kaola-workflow/{project}/workflow-state.md` with `status: active` as
-active work even before any `phase*.md` file exists. If there is one
+active work. If there is one
 unambiguous open Gitea issue and no active project, select it without asking
 the user to confirm the generated workflow folder name.
 
@@ -514,7 +506,7 @@ Manual reconstruction order:
 
 ```text
 finalization-summary.md exists -> workflow complete
-workflow-plan.md exists -> kaola-workflow-plan-run   (adaptive; toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a silent fallback)
+workflow-plan.md exists -> kaola-workflow-plan-run   (adaptive; a tampered/unparseable plan is a typed refusal, never a silent fallback)
 no workflow-plan.md and no finalization-summary.md -> kaola-workflow-adapt
 ```
 
@@ -528,7 +520,7 @@ Current phase: {phase or unknown}
 Current step: {step}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {adaptive — the only workflow path; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
+Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next skill: {next_skill}
 ```

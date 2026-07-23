@@ -117,9 +117,9 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--projec
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Startup Step 0a-1');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Branch: {branch from Sink block');
-// #725: the status-report `Workflow path:` line reports adaptive as the ONLY workflow path (a
+// the status-report `Workflow path:` line reports the adaptive workflow path (a
 // non-adaptive KAOLA_PATH is refused by the claim's path_not_installed).
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {adaptive — the only workflow path');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Parallel decision: {green|yellow|red');
 // issue #207: fast-overlap parity (Codex) — trap-2 tolerant keep. The fast/full SKILLs are retired,
 // but the Codex classifier port RETAINS its defensive fast-summary.md `## Scope` reader (readers

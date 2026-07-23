@@ -9,8 +9,7 @@ Phase-0 of the adaptive path: a dedicated **`workflow-planner`** subagent (Opus)
 contract (claim + `workflow-state.md` at repo-root — the adaptive claim provisions a hidden worktree
 at `<repo-root>/.kw/worktrees/<project>/`; the planner authors + freezes at repo-root, not in the
 worktree) and **freely authors** a task-shaped DAG into `workflow-plan.md`, which the validator proves
-in-grammar. Adaptive is the unconditional default; `fast`/`full` are explicit path-name escapes, never
-an automatic fallback. The lifecycle frame (claim → branch/worktree → this plan → Finalization sink)
+in-grammar. The lifecycle frame (claim → branch/worktree → this plan → Finalization sink)
 is fixed; the middle is free. The full claim + author + handoff procedure (grammar, caps, example
 plan, shaping, and the `kaola-workflow-claim.js startup` / `Write` /
 `kaola-workflow-adaptive-handoff.js` literals) lives exclusively in `agents/workflow-planner.md`; this
@@ -155,7 +154,7 @@ lifecycle including the first). `decision:ask` is audit metadata only — it fre
   re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite the
   UNFROZEN plan. Retry ~2x (counter in the ORCHESTRATOR). After repeated failure → **discard+restart a
   fresh adaptive run** (`kaola-workflow-claim.js discard --project {project}`) or **STOP + surface a
-  concrete blocker**. Forbidden under `replan_in_progress`. NEVER downgrade to fast/full.
+  concrete blocker**. Forbidden under `replan_in_progress`.
 
 ## Establish the task list, then hand off
 

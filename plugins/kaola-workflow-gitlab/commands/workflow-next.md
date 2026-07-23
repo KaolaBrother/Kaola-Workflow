@@ -1,5 +1,5 @@
 ---
-description: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.
+description: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct command.
 argument-hint: (optional project name or task description)
 ---
 
@@ -56,9 +56,9 @@ repairs the child DAG. At the retry bound, stop with the typed evidence; do not 
 plan, restart the claim, or route to another path. A verified legacy-v1 parent follows this same
 transaction into a schema-2 child; legacy normal startup behavior otherwise stays unchanged.
 
-`/workflow-next` is the thin router for the six phase commands. It owns
-startup, Git/roadmap freshness, project selection, resume detection, and phase
-routing. It does not perform phase work directly.
+`/workflow-next` is the thin router for the workflow commands. It owns
+startup, Git/roadmap freshness, project selection, resume detection, and
+routing. It does not perform workflow work directly.
 
 ## Inputs
 
@@ -74,15 +74,15 @@ Use `$ARGUMENTS` as either:
   read-only backlog survey dispatched in Step 0 when the user did not name an issue. It
   is not a phase agent — it claims nothing, writes nothing, and only recommends the next
   target/bundle — so dispatching it does not break the router's dispatch-free contract.)
-- Do not cross a phase boundary while any `Required Agent Compliance` row is
+- Do not advance the run while any `Required Agent Compliance` row is
   `pending`, missing, or lacks evidence/skip reason.
 - Prefer `workflow-state.md` for exact resume position.
 - If `workflow-state.md` is missing or stale, reconstruct conservatively from
-  phase artifacts, `fast-summary.md`, and cache files.
+  node evidence and cache files.
 - If exact intra-phase position is ambiguous, stop and ask the user instead of
   guessing.
-- When a next phase is identified, either continue by following the matching
-  phase command content if available in this session, or print the exact command
+- When the next command is identified, either continue by following the matching
+  command content if available in this session, or print the exact command
   the user must run.
 
 ## Goal-Driven Autonomy
@@ -151,8 +151,7 @@ set (see below).
 
 When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
 and pass `--target-issues 42,47,53 --workflow-path adaptive` (project/branch `bundle-42-47-53`, sorted
-+ deduplicated; the script validates the exact set, never reorders). The bundle lane is adaptive-only
-(`workflow_path: adaptive`; a `fast`/`full` request is refused with `bundle_requires_adaptive`).
++ deduplicated; the script validates the exact set, never reorders). The bundle lane runs on `workflow_path: adaptive`.
 `--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
 
 ### Auto-bundle entry
@@ -183,22 +182,16 @@ spawn argument-shape refusal as correctable arguments: retry the same issue-scou
 brief exactly once; never perform issue selection inline. Tool-unavailable fallback remains reserved
 for genuinely unavailable agent tooling.
 
-**Ordering — resolve the path BEFORE consuming a bundle:** the bundle lane is
-adaptive-only, so resolve the path intent (Step 0a-1) *before* acting on
-the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;
-with an explicit `KAOLA_PATH=fast`/`full` the router takes only the scout's
-`primary_issue` (a bundle there would be refused at startup with `bundle_requires_adaptive`).
-
 **Output → env wiring:** map the scout's recommendation into the startup env exactly:
-- high-confidence same-scope bundle AND resolved path is adaptive → set
+- high-confidence same-scope bundle → set
   `KAOLA_TARGET_ISSUES` from `recommended_bundle.issues` (e.g. `KAOLA_TARGET_ISSUES=42,47,53`);
-- otherwise (single-issue recommendation, `confidence: medium`/`low`, or non-adaptive path)
+- otherwise (single-issue recommendation, `confidence: medium`/`low`)
   → set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`.
 - Never set both (`target_ambiguity`).
 
 **Selection Evidence Docking.** On this no-issue-named branch, once the target project's active
-folder exists — after claim completes (the Startup Transaction for `fast`/`full`, or the adaptive
-front end's claim inside `/kaola-workflow-adapt`), before dispatching the executor — persist the
+folder exists — after claim completes (the adaptive front end's claim inside
+`/kaola-workflow-adapt`), before dispatching the executor — persist the
 issue-scout's ENTIRE JSON reply verbatim, fenced, to
 `kaola-workflow/{project}/.cache/selection-evidence.md`, prefixed with a one-line header
 `selection_mode: auto-bundle` (bundle recommendation adopted) or `selection_mode: single-issue`
@@ -229,13 +222,13 @@ Keyword matching is agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Adaptive is the unconditional default and only installable path: `export KAOLA_PATH=adaptive` and
-proceed to Step 0a-2 (this makes Step 0b skip and the adaptive front end fire). Honor an already-set
-non-adaptive `KAOLA_PATH` verbatim and hand it to the claim — its `path_not_installed` typed refusal
-is the single authority (no silent fall to adaptive, no automatic fallback). State the chosen path:
+`export KAOLA_PATH=adaptive` and
+proceed to Step 0a-2 (this makes Step 0b skip and the adaptive front end fire). Hand an already-set
+non-adaptive `KAOLA_PATH` through verbatim to the claim — its `path_not_installed` typed refusal
+is the single authority, never a silent router-side substitution. State the path:
 
 ```text
-Path: adaptive (default)
+Path: adaptive
 ```
 
 ## Startup Step 0a-2 — Adaptive front-end entry (path = adaptive only)
@@ -265,14 +258,13 @@ Opus front end owns the claim + the DAG authoring:
    "Startup Step 0c — Bundle Lane" above for selection, and the Bundle Lane section
    of `kaola-workflow-adapt.md` for the planner's claim contract.
 
-Non-adaptive paths (`fast` | `full`) fall through to Step 0b unchanged.
-
 ## Startup Step 0b - Startup Transaction
 
 **Skip this entire step when `KAOLA_PATH=adaptive`** — the adaptive front end (Step 0a-2) claims via
-the `workflow-planner`, not here. Step 0b runs for the `fast` and `full` paths only.
+the `workflow-planner`, not here. Step 0b runs only when a residual non-adaptive `KAOLA_PATH` was
+handed through, so the claim can refuse it.
 
-For `fast`/`full` only, run `node "$CLAIM_JS" startup --runtime claude` with the agent-selected
+Run `node "$CLAIM_JS" startup --runtime claude` with the agent-selected
 `--target-issue` (and `--sink` when set); it atomically creates
 `kaola-workflow/{project}/workflow-state.md`. Verdict `owned`/`acquired` routes the folder,
 `no_target` re-selects per Step 0, `claim: "none"` stops normal routing (do not adopt an unrelated
@@ -294,7 +286,7 @@ If startup returns a typed refusal, read the `reasoning` field and classify by `
 If startup is unavailable or malformed, stop for repair.
 On startup, also run `watch-mr` to archive MR folders for merged or closed MRs
 before selecting new work.
-A non-adaptive `KAOLA_PATH` (e.g. `fast`) is never silently recorded — startup refuses it
+A non-adaptive `KAOLA_PATH` is never silently recorded — the claim refuses it
 with the typed `path_not_installed` refusal.
 
 ## Startup Step 1 - Git Freshness
@@ -344,8 +336,8 @@ Commits stay phase-owned (Finalization Step 7). If `kaola-gitlab-workflow-roadma
 If `$ARGUMENTS` names an existing `kaola-workflow/{project}/` directory, use
 that project.
 
-Otherwise list active workflow folders under `kaola-workflow/` that contain at
-least one `phase*.md` file, a `fast-summary.md` file, or a `workflow-state.md` with `status: active`.
+Otherwise list active workflow folders under `kaola-workflow/` that contain a
+frozen `workflow-plan.md` or a `workflow-state.md` with `status: active`.
 Skip `archive/`.
 
 If no active project is selected and no target was named in Startup Step 0,
@@ -370,13 +362,13 @@ helper (`node "$REPAIR_JS" "$ARGUMENTS"` when available), then reconstruct:
 
 ```text
 finalization-summary.md exists -> workflow complete; show summary and stop
-workflow-plan.md exists -> /kaola-workflow-plan-run {project}   (adaptive; toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a silent fallback)
+workflow-plan.md exists -> /kaola-workflow-plan-run {project}   (adaptive; a tampered/unparseable plan is a typed refusal, never a silent fallback)
 no workflow-plan.md and no finalization-summary.md -> /kaola-workflow-adapt <task description or issue>
 ```
 
 ## State Bootstrap And Repair
 
-When `workflow-state.md` is missing/stale/invalid but phase artifacts identify exactly one safe next
+When `workflow-state.md` is missing/stale/invalid but node evidence identifies exactly one safe next
 command, write a conservative repaired state (`step: router-reconstructed`, `task: N/A` unless proven,
 pending gates mirroring unresolved `Required Agent Compliance` rows,
 `last_result: state_repaired_from_artifacts`) before routing. Do NOT fabricate state for brand-new
@@ -393,7 +385,7 @@ Current phase: {phase or unknown}
 Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {adaptive — the only workflow path; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
+Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```

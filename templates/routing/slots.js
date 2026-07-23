@@ -116,7 +116,7 @@ const SLOTS = {
   },
   'pr-intro': {
     command: "Executes a frozen `workflow-plan.md` for an adaptive project (`workflow_path: adaptive`).\nReads and updates `kaola-workflow/{project}/workflow-state.md` throughout. The plan is\nguarded by `plan_hash`; tampering is a **typed refusal**. Drive every node in the\n`## Node Ledger` to `complete` or `n/a`, honoring the computed gates, then hand off to\nFinalization. Stop and surface on any consent-halt or typed refusal.",
-    skill: "Adaptive executor. Runs a frozen `workflow-plan.md` (`workflow_path: adaptive`) by\ntraversing its DAG + `## Node Ledger` instead of the fixed phaseN ladder. Reads and\nupdates `kaola-workflow/{project}/workflow-state.md` throughout. The plan is guarded by\n`plan_hash`; tampering is a **typed refusal**. Drive every node to `complete` or `n/a`,\nhonoring the computed gates, then route to `kaola-workflow-finalize`.",
+    skill: "Adaptive executor. Runs a frozen `workflow-plan.md` (`workflow_path: adaptive`) by\ntraversing its DAG + `## Node Ledger`. Reads and\nupdates `kaola-workflow/{project}/workflow-state.md` throughout. The plan is guarded by\n`plan_hash`; tampering is a **typed refusal**. Drive every node to `complete` or `n/a`,\nhonoring the computed gates, then route to `kaola-workflow-finalize`.",
   },
   'pr-setup-resolver': {
     command: {
@@ -137,7 +137,7 @@ const SLOTS = {
   },
 
   // ---- next (frontmatter 2-shape + H1; both forge-invariant) -----------
-  "nx-frontmatter": {"command":"---\ndescription: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.\nargument-hint: (optional project name or task description)\n---","skill":"---\nname: kaola-workflow-next\ndescription: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and phase artifacts.\n---"},
+  "nx-frontmatter": {"command":"---\ndescription: Workflow Next. Thin router for Kaola-Workflow. Detects active work, reconstructs resume state, and routes to the correct command.\nargument-hint: (optional project name or task description)\n---","skill":"---\nname: kaola-workflow-next\ndescription: Use when resuming, routing, or starting a Kaola-Workflow for Codex project, also called kaola-workflow, from kaola-workflow state and node evidence.\n---"},
   "nx-h1": {"command":"# Workflow Next - thin router","skill":"# Kaola-Workflow Next"},
   'nx-replan-control-plane': replanSlot('replan-next'),
 };

@@ -87,7 +87,7 @@ profile/config drift as tool unavailability or local fallback. Re-run the gate i
 # Skill: kaola-workflow-plan-run (Gitea)
 
 Adaptive executor. Runs a frozen `workflow-plan.md` (`workflow_path: adaptive`) by
-traversing its DAG + `## Node Ledger` instead of the fixed phaseN ladder. Reads and
+traversing its DAG + `## Node Ledger`. Reads and
 updates `kaola-workflow/{project}/workflow-state.md` throughout. The plan is guarded by
 `plan_hash`; tampering is a **typed refusal**. Drive every node to `complete` or `n/a`,
 honoring the computed gates, then route to `kaola-workflow-finalize`.
