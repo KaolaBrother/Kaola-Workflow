@@ -670,6 +670,48 @@ function sourceEvidenceDigest(source) {
   return schema.sha256Canonical(covered);
 }
 
+// #730 AC-9 — mirror the CANONICAL, digest-bound repair brief (adaptive-node.js's `buildRepairBrief`)
+// into the replan-CHILD feedback path. Direct repair seeds this brief straight into the reopened
+// writer's own evidence file (adaptive-node.js STEP #730); a replan-child reopening of the SAME writer
+// for the SAME attempt had no equivalent — the fixer had to independently trace `.cache/
+// replan-source.json` back through the review journal to reconstruct what a direct repair would have
+// handed it for free. This computes the IDENTICAL brief — same constructor, same attempt, same
+// nodeId — for every writer that owns >=1 repair-responsible (blocking) finding, so both delivery
+// paths produce byte-identical feedback for the same (attempt, nodeId) pair.
+//
+// Owner population: the union of `ownership_candidates` across `findingOwnershipSummary`'s
+// `blockingFindings` — the SAME repair-responsible population `buildRepairBrief` itself assigns
+// (`repairResponsibleFindings`, fail-CLOSED on a row that omits scope/action; never the gate's
+// fail-OPEN `unresolvedInScopeFixes`). A finding with no resolvable owner or an ambiguous owner set
+// contributes no entry here — nothing to mis-seed — and is still visible to any writer that DOES get
+// a brief via that brief's own context/blocking sections.
+//
+// Lazy require: replan.js and adaptive-node.js are mutually reachable (adaptive-node.js drives replan
+// transactions; replan.js only ever consults adaptive-node.js's PURE brief constructors here), so
+// importing at module load would risk a load-time cycle. A missing/broken adaptive-node.js degrades
+// to "no briefs computed" rather than failing a legitimate replan — this is a feedback-delivery
+// convenience, never a correctness gate.
+function replanWriterBriefs(attempt) {
+  let an;
+  try { an = require('./kaola-gitlab-workflow-adaptive-node'); } catch (_) { return null; }
+  if (!an || typeof an.buildRepairBrief !== 'function' || typeof an.renderRepairBrief !== 'function'
+      || typeof an.findingOwnershipSummary !== 'function') return null;
+  let own;
+  try { own = an.findingOwnershipSummary(attempt, ''); } catch (_) { return null; }
+  const owners = new Set();
+  for (const row of (own && Array.isArray(own.blockingFindings) ? own.blockingFindings : [])) {
+    for (const candidate of (Array.isArray(row.ownership_candidates) ? row.ownership_candidates : [])) {
+      if (candidate) owners.add(String(candidate));
+    }
+  }
+  const briefs = {};
+  for (const owner of Array.from(owners).sort()) {
+    const brief = an.buildRepairBrief(attempt, owner);
+    briefs[owner] = { brief, rendered: an.renderRepairBrief(brief) };
+  }
+  return briefs;
+}
+
 function readSource(paths, planHash, sourceAttemptId, options) {
   const journalPath = path.join(paths.cacheDir, 'review-attempts.json');
   const sourcePath = path.join(paths.cacheDir, 'replan-source.json');
@@ -1924,6 +1966,15 @@ function prepareReplanUnlocked(paths, opts) {
     rotatedSource: committedRotation.rotated_source,
   }), parentPlan, parentState, lineage,
     sourceResult.source, sourceResult.attempt, observation, budget);
+  // #730 AC-9 — feedback-delivery parity: carry the SAME canonical, digest-bound brief a direct
+  // repair would hand the reopened writer. Computed once, here, against the FULL settled attempt
+  // (findings + route_candidates + receipts + logical_gate — everything buildRepairBrief reads), then
+  // carried verbatim through `transaction.writer_briefs` into the planner packet (`buildPlannerPacket`)
+  // rather than re-derived from the narrower `transaction.source` projection, which drops `receipts`/
+  // `logical_gate` and would silently stop being byte-identical to a direct repair's brief. No new
+  // durable-write primitive: this rides the transaction's EXISTING `after_tx_prepared` write below.
+  try { transaction.writer_briefs = replanWriterBriefs(sourceResult.attempt) || {}; }
+  catch (_) { transaction.writer_briefs = {}; }
   fs.mkdirSync(paths.cacheDir, { recursive: true });
   durableWriteJson(paths.transactionPath, transaction, opts, 'after_tx_prepared');
   durableWriteFile(paths.statePath, stateWithFence(parentState, lineage, transaction), opts,
@@ -1956,6 +2007,12 @@ function buildPlannerPacket(paths, transaction) {
       // where the planner is already told to READ, not beside the fields it is told not to touch.
       finding_index: buildFindingIndex(transaction.source),
       rebind: transaction.source.rebind,
+      // #730 AC-9 — the SAME canonical, digest-bound brief a direct repair-node reopen would have
+      // appended to a writer's own evidence file, keyed by writer node id (parent-plan ownership).
+      // Carried verbatim from `transaction.writer_briefs` (computed once at prepare against the full
+      // settled attempt) — never re-derived here, so the planner sees byte-identical feedback to what
+      // a direct repair of the same attempt would have handed the same writer.
+      writer_briefs: transaction.writer_briefs || {},
     },
     claim: {
       claim_identity_digest: transaction.parent.claim_identity_digest,
@@ -2217,6 +2274,12 @@ function reauthorCandidate(paths, transaction, opts) {
   next.planner_attempt = transaction.planner_attempt + 1;
   next.planner.dispatch_nonce = plannerDispatchNonce(next.transaction_id, next.planner_attempt);
   next.attempts = (transaction.attempts || []).concat([failedAttemptReceipt(paths, transaction)]);
+  // #730 AC-9 — the source attempt_id is unchanged across a candidate-changed re-author (only the
+  // candidate tree moved), so the brief content is byte-identical to what the prior transaction
+  // already computed. Carry it forward rather than re-deriving: `transaction.source` (unlike
+  // `sourceResult.attempt` at prepare) lacks `receipts`/`logical_gate`, so re-deriving here would
+  // silently stop matching a direct repair's brief for the same attempt.
+  next.writer_briefs = transaction.writer_briefs || {};
   durableWriteJson(paths.transactionPath, next, opts, 'after_tx_reauthored');
   const repaired = repairCandidateReauthorPrefix(paths, next, opts);
   if (!repaired.ok) return schema.refuse(repaired.reason);
@@ -4171,4 +4234,6 @@ module.exports = {
   buildSnapshotAuthorityProjection,
   verifyActivePlanningEvidence,
   verifyCurrentEpochAuthority,
+  // #730 AC-9: the replan-child feedback-delivery brief mirror — exported for direct unit coverage.
+  replanWriterBriefs,
 };

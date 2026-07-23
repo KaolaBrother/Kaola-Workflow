@@ -12558,6 +12558,36 @@ function amendedSurfacesFor(point, amendedSurfaces) {
   return Array.isArray(amend[point]) ? amend[point].map(normalizeSurfacePath).filter(Boolean) : [];
 }
 
+// renderSurfaceAmendment (#762) — the ONE writer of the `amend(<point>):` block grammar
+// (parseSurfaceAmendments in the validator is the ONE reader). Emits a single append-at-tail block
+// carrying the point's newly-attributed EXACT files. Never a directory, never a glob — the caller
+// (runAmendSurface) refuses those before this is reached; this is the render half only.
+function renderSurfaceAmendment(point, files) {
+  return 'amend(' + point + '):\n  files: ' + files.join(', ') + '\n';
+}
+
+// mergedAmendedSurfaces (#762) — build the {point: [exact files]} map every re-expansion driver
+// reads, by unioning the DURABLE amendments persisted in the plan (parseSurfaceAmendments) with any
+// caller-supplied override map. This is the single seam that turns the append-only amend channel into
+// live surface-widening: once an amend block lands, resolveExpansionOwnership sees the file as owned,
+// runReExpandOpen scopes its selective re-verify against declared+amended, and the barrier attributes
+// it — all from ONE reader, so the four surfaces cannot drift. PURE + total.
+function mergedAmendedSurfaces(content, override) {
+  const out = {};
+  let persisted;
+  try { persisted = require('./kaola-gitlab-workflow-plan-validator').parseSurfaceAmendments(content); }
+  catch (_) { persisted = new Map(); }
+  if (persisted instanceof Map) {
+    for (const [point, files] of persisted) out[point] = Array.isArray(files) ? files.slice() : [];
+  }
+  const ov = override && typeof override === 'object' ? override : {};
+  for (const point of Object.keys(ov)) {
+    const add = Array.isArray(ov[point]) ? ov[point].map(normalizeSurfacePath).filter(Boolean) : [];
+    out[point] = Array.from(new Set((out[point] || []).concat(add))).sort();
+  }
+  return out;
+}
+
 // resolveExpansionOwnership — QUESTION: "which expansion point(s) own this finding's files?"
 // A point OWNS a file when its declared+amended surface COVERS that file (surfaceCoversFile).
 // Ownership is a SET: a finding whose files fall under two points' surfaces is owned by BOTH — each
@@ -12782,11 +12812,14 @@ function deriveReExpansion(finding, content, opts) {
   const contracts = validator.parseExpansionContracts(content);
   const spineNodes = validator.parseNodes(content);
   const findingFiles = Array.isArray(o.findingFiles) ? o.findingFiles : findingFilesFromIndexRow(finding);
+  // #762: route + own against declared+AMENDED surfaces (durable amend blocks ∪ caller override), so a
+  // finding on an already-amended (attributed) companion file resolves LOCAL to its owning point.
+  const amendedSurfaces = mergedAmendedSurfaces(content, o.amendedSurfaces);
   const route = routeFindingReExpansion({
     findingFiles,
     contextPoint: o.contextPoint || (finding && finding.context_point) || null,
     contracts,
-    amendedSurfaces: o.amendedSurfaces || {},
+    amendedSurfaces,
   });
   if (route.result === 'refuse') return route;
   if (route.decision !== 'local') return route;
@@ -12800,7 +12833,7 @@ function deriveReExpansion(finding, content, opts) {
     if (wall.result === 'refuse') return wall;
     const contract = contracts.get(point);
     const declared = (contract && Array.isArray(contract.expected_surfaces)) ? contract.expected_surfaces : [];
-    const amended = amendedSurfacesFor(point, o.amendedSurfaces);
+    const amended = amendedSurfacesFor(point, amendedSurfaces);
     const ownedFiles = findingFiles.map(normalizeSurfacePath).filter(f =>
       declared.concat(amended).some(s => surfaceCoversFile(s, f)));
     plans.push({
@@ -12959,6 +12992,11 @@ function runReExpandOpen(opts) {
   const contracts = validator.parseExpansionContracts(content);
   const ledger = readLedgerStatuses(content);
   const statusP = String(ledger[nodeId] || '').toLowerCase();
+  // #762: fold the DURABLE surface amendments (persisted `amend(<point>):` blocks) into the amended-
+  // surface map the selective re-verify below reads, so a milestone whose surface was WIDENED by an
+  // amendment re-verifies against declared+amended — the amendment invalidates EXACTLY the units whose
+  // surface intersects the fix, never the whole spine. Any caller override still wins on top.
+  const amendedSurfaces = mergedAmendedSurfaces(content, opts.amendedSurfaces);
 
   // GATE 1 — this is the RE-OPEN path: the point must be DISCHARGED (complete). A pending point is a
   // FIRST (or crash-interrupted) expansion → use expand-open / reconcile; an in_progress point has a
@@ -13015,7 +13053,7 @@ function runReExpandOpen(opts) {
       if (dStatus !== 'complete') continue;
       const dContract = contracts.get(d);
       const declared = (dContract && Array.isArray(dContract.expected_surfaces)) ? dContract.expected_surfaces : [];
-      const surfaces = declared.concat(amendedSurfacesFor(d, opts.amendedSurfaces));
+      const surfaces = declared.concat(amendedSurfacesFor(d, amendedSurfaces));
       const intersects = fixFiles.some(f => surfaces.some(s => surfaceCoversFile(s, f)));
       if (dependents.has(d) || intersects) {
         flipToPending(d);
@@ -13056,6 +13094,84 @@ function runReExpandOpen(opts) {
     downstream_untouched: Array.from(new Set(reactivationLog.downstream_untouched)).sort() };
 }
 
+// isExactFileToken (#762) — an amendment may widen a surface by CONCRETE FILES ONLY. A directory-
+// shaped token (trailing `/`), a glob (`* ? [ ]`), a bare `.`/`..`, or an empty token is REFUSED.
+// This is the write-side gate; the reader (parseSurfaceAmendments) drops the same shapes defensively.
+function isExactFileToken(tok) {
+  const t = normalizeSurfacePath(tok);
+  if (!t) return false;
+  if (t.endsWith('/')) return false;
+  if (/[*?\[\]]/.test(t)) return false;
+  if (t === '.' || t === '..' || t.split('/').some(seg => seg === '..')) return false;
+  return true;
+}
+
+// runAmendSurface (#762) — the ATTRIBUTE → AMEND → RE-REVIEW transaction. An ATTRIBUTABLE out-of-
+// surface companion file (a source-tree file the milestone genuinely produced but that fell outside
+// its declared surface) is handled by ATTRIBUTION + RE-REVIEW, not a hard barrier refusal:
+//   1. VALIDATE — the point is a DISCHARGED spine expansion point; every `--files` token is an EXACT
+//      file path (no directory, no glob — the whole granularity contract).
+//   2. AMEND — append an `amend(<point>):` block to `## Expansion Records` (append-only, OUTSIDE the
+//      plan_hash body, so the frozen spine identity is untouched). This is the durable attribution.
+//   3. RE-REVIEW — delegate to runReExpandOpen on the SAME point, which re-opens it with a fresh
+//      monotonic record + fixer unit, re-activates its post-dominating review wall, resets the sink,
+//      and SELECTIVELY re-verifies only the downstream milestones whose surface intersects the fix.
+// The ordering is load-bearing: the amend block is written FIRST so runReExpandOpen's
+// mergedAmendedSurfaces sees the widened surface. The flow is amend-then-re-review, NEVER a silent
+// widen — the barrier attributes the amended file ONLY after its point re-discharges (its wall
+// re-passes), so a write can never reach the sink attributed-but-unreviewed. Amendment loosens
+// ATTRIBUTION only; a consent-gated (S2) surface still halts at the consent valve inside the re-run
+// fixer unit, and the UNAMENDED out-of-surface write stays a fail-closed tamper refusal at the barrier.
+function runAmendSurface(opts) {
+  const { planPath, nodeId, readFile, writeFile } = opts;
+  if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point whose surface to amend' });
+  const rawFiles = Array.isArray(opts.files) ? opts.files : [];
+  const files = Array.from(new Set(rawFiles.map(f => String(f || '').trim()).filter(Boolean)));
+  if (!files.length) return refuse('amend_files_required', { node_id: nodeId, detail: '--files names the exact companion file(s) to attribute to the milestone' });
+  const bad = files.filter(f => !isExactFileToken(f));
+  if (bad.length) {
+    return refuse('amend_surface_not_exact_file', { node_id: nodeId,
+      detail: 'a surface amendment attributes EXACT files only — these are directory-shaped, glob, or '
+        + 'traversal tokens and are refused: ' + bad.join(', ') });
+  }
+  const exactFiles = files.map(normalizeSurfacePath).sort();
+
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+  const validator = require('./kaola-gitlab-workflow-plan-validator');
+  if (validator.parsePlanForm(content).form !== 'spine') {
+    return refuse('not_a_spine_plan', { node_id: nodeId, detail: 'amend-surface applies only to a plan frozen with plan_form: spine' });
+  }
+  const point = validator.parseNodes(content).find(n => n.id === nodeId);
+  if (!point) return refuse('node_not_found', { node_id: nodeId, detail: 'no such node in ## Nodes' });
+  if (point.role !== validator.SPINE_EXPANSION_ROLE) {
+    return refuse('node_not_expansion_point', { node_id: nodeId, detail: 'role is "' + point.role + '"; only an expansion point owns an amendable surface' });
+  }
+
+  // Build the fixer frontier the re-open re-runs over the attributed files (a caller may override the
+  // composition via stdin). The re-review is the point's SPINE wall, not a composed gate unit.
+  const composition = (opts.composition && typeof opts.composition === 'object')
+    ? opts.composition
+    : buildReExpansionComposition(nodeId, {
+        fixRole: opts.fixRole || 'implementer',
+        writeSet: exactFiles,
+        model: opts.model,
+      });
+
+  // Step 2: append the durable amend block FIRST (append-only, non-hash), so the delegated re-open
+  // scopes its selective re-verify against the widened surface.
+  writeFile(planPath, appendExpansionBlock(content, renderSurfaceAmendment(nodeId, exactFiles)));
+
+  // Step 3: route the amended surface to RE-REVIEW via the proven #761 re-open cascade.
+  const reopen = runReExpandOpen({ ...opts, composition });
+  if (reopen && reopen.result === 'refuse') {
+    return { ...reopen, amended_surface: exactFiles, amend_point: nodeId,
+      note: 'the amend block was recorded (append-only), but the re-review re-open refused — resolve the '
+        + 'refusal and retry; the durable amendment does not attribute at the barrier until the point re-discharges' };
+  }
+  return { ...reopen, amended: true, amend_point: nodeId, amended_surface: exactFiles };
+}
+
 // ===========================================================================
 // #761 (child 4) — RETIRE-AS-PRIMARY WIRING. A finding on a SPINE plan routes to LOCAL re-expansion
 // FIRST; the legacy escalation families (repair-node's dependent_producer_replay_required, reopen-
@@ -13088,9 +13204,12 @@ function spineReExpansionFirst(content, findingFiles, contextPoint) {
   let form; try { form = validator.parsePlanForm(content).form; } catch (_) { return null; }
   if (form !== 'spine') return null;
   let contracts; try { contracts = validator.parseExpansionContracts(content); } catch (_) { return null; }
+  // #762: a finding on an already-amended companion file must route LOCAL to its owning point — feed
+  // the durable amend blocks so ownership sees the widened surface (total + never-throwing).
+  let amendedSurfaces; try { amendedSurfaces = mergedAmendedSurfaces(content, null); } catch (_) { amendedSurfaces = {}; }
   const route = routeFindingReExpansion({
     findingFiles: Array.isArray(findingFiles) ? findingFiles : [],
-    contextPoint: contextPoint || null, contracts,
+    contextPoint: contextPoint || null, contracts, amendedSurfaces,
   });
   if (route && route.result === 'ok' && route.decision === 'local') {
     return { result: 'route_local_reexpansion', reason: 'reexpansion_available',
@@ -13431,6 +13550,7 @@ function main() {
       '  reconcile-running-set --project P           (#377 crash roll-forward/back)\n' +
       '  expand-open         --project P --node-id N --stdin  (compose + record + open one expansion point)\n' +
       '  expand-close        --project P --node-id N          (discharge a fully-settled expansion point)\n' +
+      '  amend-surface       --project P --node-id N --files "a,b"  (attribute an out-of-surface companion file + route to re-review)\n' +
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -13766,6 +13886,36 @@ function main() {
         });
       }
     }
+  } else if (subcommand === 'amend-surface') {
+    // #762: attribute an out-of-surface companion file to a DISCHARGED expansion point + route it to
+    // re-review. --files "a,b" names the EXACT files (dir/glob refused). An optional stdin composition
+    // overrides the default fixer frontier; --fix-role sets the built fixer's role (default implementer).
+    const filesIdx = args.indexOf('--files');
+    const fixRoleIdx = args.indexOf('--fix-role');
+    const filesRaw = (filesIdx >= 0 && filesIdx + 1 < args.length) ? args[filesIdx + 1] : '';
+    const filesList = String(filesRaw).split(/[\s,]+/).filter(Boolean);
+    let composition = null;
+    let parseError = null;
+    if (hasStdin) {
+      try { composition = JSON.parse(fs.readFileSync(0, 'utf8')); }
+      catch (err) { parseError = String(err && err.message || err); }
+    }
+    if (parseError) {
+      result = decorateOperatorHint(refuse('expansion_composition_malformed', { node_id: nodeId, detail: 'stdin is not valid JSON: ' + parseError }));
+    } else {
+      result = runAmendSurface({
+        planPath, project, nodeId, files: filesList, composition,
+        fixRole: (fixRoleIdx >= 0 && fixRoleIdx + 1 < args.length) ? args[fixRoleIdx + 1] : null,
+        codexDispatchMode, repoRoot: getRoot(),
+        max: Number.isInteger(maxArg) && maxArg >= 1 ? maxArg : null,
+        fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
+        speculativeConsent: args.includes('--speculative-consent'),
+        writeOverlapConsent: args.includes('--write-overlap-consent'),
+        shell, readFile, writeFile, cacheExists,
+        mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+        now: () => new Date().toISOString(),
+      });
+    }
   } else if (subcommand === 'expand-close') {
     result = runExpandClose({
       planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
@@ -14027,6 +14177,13 @@ module.exports = {
   reExpansionFixFiles,
   deriveSinkProgress,
   defaultSinkProgressProbe,
+  // #762 (declared-not-walled surfaces): the attribute→amend→re-review transaction, the amend-block
+  // writer, the exact-file gate, and the durable-amendment merge — exported for direct both-direction pins.
+  runAmendSurface,
+  renderSurfaceAmendment,
+  isExactFileToken,
+  mergedAmendedSurfaces,
+  amendedSurfacesFor,
   // #761 (retire-as-primary wiring): the spine-plan router precheck each legacy escalation site
   // consults FIRST, and the attempt→finding-files extractor it uses. DAG-inert; exported for pins.
   spineReExpansionFirst,

@@ -1019,6 +1019,59 @@ function expansionRecordSettled(record, ledgerStatuses) {
   return true;
 }
 
+// #762 (declared-not-walled write surfaces): the SURFACE AMENDMENT channel. A frozen expansion
+// surface is a DECLARATION for attribution + review-scoping, not a hard wall: when an ATTRIBUTABLE
+// out-of-surface companion file must be added to a milestone's owned surface, an `amend(<point>):`
+// block is APPENDED to `## Expansion Records` (the same append-only, outside-the-plan-hash channel
+// the records live in), and the point is routed to RE-REVIEW (reexpand-open). This is the ONE reader
+// of that block; the writer (renderSurfaceAmendment) and the transaction (runAmendSurface) live in
+// adaptive-node.js next to the re-expansion driver they route through.
+//
+//   amend(<point>):
+//     files: path/to/companion.js, path/to/other.js
+//
+// EXACT FILE PATHS ONLY — the whole granularity contract. A directory-shaped token (trailing `/`),
+// a glob (`* ? [ ]`), or an empty token is DROPPED here (never honored), so an amendment can only
+// ever widen a surface by a concrete file and never launder a directory grant through this channel.
+// Multiple amend blocks for one point ACCUMULATE (union). Total + non-throwing: an absent section
+// yields an empty map. Returns Map<pointId, string[]> of sorted, de-duplicated exact file paths.
+function parseSurfaceAmendments(content) {
+  const body = classifier.sectionBody(content, EXPANSION_RECORDS_HEADING);
+  const headerRe = /^amend\(([^)]*)\)[ \t]*:[ \t]*$/;              // column 0
+  const fieldRe = /^[ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)[ \t]*$/;  // indented key: value
+  const isExactFile = tok => {
+    let t = String(tok || '').trim();
+    while (t.startsWith('./')) t = t.slice(2);
+    if (!t) return false;
+    if (t.endsWith('/')) return false;            // directory-shaped: never an exact file
+    if (/[*?\[\]]/.test(t)) return false;         // glob metacharacters: never an exact file
+    if (t === '.' || t === '..' || t.split('/').some(seg => seg === '..')) return false;  // traversal: never attributes
+    return true;
+  };
+  const byPoint = new Map();
+  let curId = null;
+  for (const raw of String(body || '').split('\n')) {
+    const h = raw.match(headerRe);
+    if (h) { curId = h[1].trim() || null; continue; }
+    if (curId !== null) {
+      const fm = raw.match(fieldRe);
+      if (fm) {
+        if (fm[1] === 'files') {
+          const files = String(fm[2]).split(/[\s,]+/).filter(isExactFile);
+          if (!byPoint.has(curId)) byPoint.set(curId, new Set());
+          for (const f of files) byPoint.get(curId).add(f);
+        }
+        continue;
+      }
+      // a non-indented, non-empty line closes the current amend block; blanks stay inside it.
+      if (raw.trim() !== '' && !/^[ \t]/.test(raw)) curId = null;
+    }
+  }
+  const out = new Map();
+  for (const [point, set] of byPoint) out.set(point, Array.from(set).sort());
+  return out;
+}
+
 // expansionRecordEfficiency (#763) — pure aggregate over EVERY record composed for ONE expansion
 // point (including superseded re-expansions), used by BOTH the per-expansion evidence line
 // (adaptive-node's expand-close) and the per-run archive rollup line (claim.js), so the two
@@ -3074,6 +3127,24 @@ function barrierCheck(content, actualPaths, opts) {
     // writing a parent-epoch file is still that node's own overflow.
     for (const lp of (opts.lineagePlans || [])) {
       for (const n of (lp.nodes || [])) for (const p of n.writeSet) declared.add(p);
+    }
+    // #762: SURFACE AMENDMENT attribution (whole-plan / finalize barrier only). An `amend(<point>):`
+    // block declares that an ATTRIBUTABLE out-of-surface companion file now belongs to an expansion
+    // milestone's owned surface. A declared surface is a DECLARATION for attribution + review-scoping,
+    // not a hard wall — so an amended EXACT file (parseSurfaceAmendments drops any dir/glob token)
+    // enters the allowlist and is no longer write_set_overflow. It counts ONLY when the owning point
+    // is `complete`: the amendment routes to RE-REVIEW (reexpand-open re-opens the point + its
+    // post-dominating review wall + resets the sink), so a `complete` point is one whose re-review ran
+    // to completion and re-discharged. An amend block whose point is still pending/in_progress (a
+    // re-review in flight) does NOT attribute yet — the file stays overflow until the wall re-passes.
+    // An UNAMENDED out-of-surface write is never reached by this arm, so the fail-closed tamper refusal
+    // (write_set_overflow, then the unattributed_write floor below) is preserved verbatim. This arm is
+    // deliberately whole-plan only — like the #724 lineage union — a per-node/group overflow is still
+    // that node's own overflow.
+    const amendLedger = parseLedger(content);
+    for (const [point, files] of parseSurfaceAmendments(content)) {
+      if (String(amendLedger.get(point) || '').toLowerCase() !== 'complete') continue;
+      for (const p of files) declared.add(p);
     }
   }
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
@@ -6123,6 +6194,8 @@ module.exports = {
   parseExpansionRecords,
   expansionRecordOpened,
   expansionRecordSettled,
+  // #762: the surface-amendment reader (append-only `amend(<point>):` blocks; exact file paths only).
+  parseSurfaceAmendments,
   // #763: the shared efficiency-line derivation + formatter (expand-close's per-expansion line,
   // claim.js's per-run archive rollup line) — ONE owner so the two surfaces cannot drift.
   expansionRecordEfficiency,
