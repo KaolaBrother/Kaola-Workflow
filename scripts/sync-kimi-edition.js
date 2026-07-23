@@ -444,6 +444,38 @@ function skillRel(dirName) {
   return '.kimi/skills/' + dirName + '/SKILL.md';
 }
 
+// The EXACT set of skill directories a fresh render produces: one `kaola-role-<agent>`
+// per canonical agent plus one `<command>` per canonical command. Anything else in
+// .kimi/skills/ is a retired surface (e.g. the deleted fast/full `kaola-workflow-fast`
+// / `-phase{1..5}` commands) that a deterministic, idempotent mirror must remove — the
+// generator wrote canonical surfaces but never pruned, so --check reported parity while
+// the edition suite's exact-set assertion (K1) failed on the leftovers.
+function expectedSkillDirs() {
+  const set = new Set();
+  for (const name of listCanonAgents()) set.add('kaola-role-' + name);
+  for (const file of listCanonCommands()) set.add(file.slice(0, -3));
+  return set;
+}
+
+function retiredSkillDirs() {
+  const dir = path.join(REPO, '.kimi/skills');
+  if (!fs.existsSync(dir)) return [];
+  const expected = expectedSkillDirs();
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(e => e.isDirectory() && !expected.has(e.name))
+    .map(e => e.name);
+}
+
+function pruneSkills() {
+  let removed = 0;
+  for (const name of retiredSkillDirs()) {
+    fs.rmSync(path.join(REPO, '.kimi/skills', name), { recursive: true, force: true });
+    console.log('pruned     .kimi/skills/' + name + ' (retired surface)');
+    removed++;
+  }
+  return removed;
+}
+
 function writeAgents() {
   let wrote = 0;
   for (const name of listCanonAgents()) {
@@ -541,7 +573,8 @@ function runWrite() {
   const a = writeAgents();
   const c = writeCommands();
   const h = writeHooks();
-  const total = a + c + h;
+  const p = pruneSkills();
+  const total = a + c + h + p;
   console.log('sync-kimi-edition: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -584,6 +617,9 @@ function runCheck() {
     } else if (read(rel) !== renderKimiHooksToml()) {
       mismatches.push({ rel, reason: 'stale — regenerate' });
     }
+  }
+  for (const name of retiredSkillDirs()) {
+    mismatches.push({ rel: '.kimi/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
   if (mismatches.length) {
     console.error('sync-kimi-edition: PARITY FAILED (' + mismatches.length + ' file(s)):');

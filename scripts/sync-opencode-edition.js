@@ -763,13 +763,44 @@ function writePlugin() {
   return wrote;
 }
 
+// Retired *.md surfaces in an out dir whose basename is not in the expected canonical set.
+// A deterministic, idempotent mirror must remove them: the generator wrote canonical
+// surfaces but never pruned, so a deleted canonical command (the retired fast/full
+// `kaola-workflow-fast` / `-phase{1..5}`) lingered in the deployed tree while --check
+// reported parity — the edition suite's exact-count assertion (A4) caught the drift.
+function retiredMdFiles(outDir, expectedBasenames) {
+  if (!fs.existsSync(outDir)) return [];
+  const expected = new Set(expectedBasenames);
+  return fs.readdirSync(outDir)
+    .filter(f => f.endsWith('.md') && !expected.has(f.slice(0, -3)))
+    .sort();
+}
+
+function pruneRetired() {
+  let removed = 0;
+  const cmds = retiredMdFiles(OUT_COMMAND_DIR, listCanonCommands().map(f => f.slice(0, -3)));
+  for (const f of cmds) {
+    fs.rmSync(path.join(OUT_COMMAND_DIR, f), { force: true });
+    console.log('pruned     .opencode/command/' + f + ' (retired surface)');
+    removed++;
+  }
+  const agents = retiredMdFiles(OUT_AGENT_DIR, listCanonAgents());
+  for (const f of agents) {
+    fs.rmSync(path.join(OUT_AGENT_DIR, f), { force: true });
+    console.log('pruned     .opencode/agent/' + f + ' (retired surface)');
+    removed++;
+  }
+  return removed;
+}
+
 function runWrite(configForce, adapt) {
   const a = writeAgents();
   const c = writeCommands();
   const h = writeHooks();
   const p = writePlugin();
   const j = writeConfig(configForce, adapt);
-  const total = a + c + h + p + j;
+  const pr = pruneRetired();
+  const total = a + c + h + p + j + pr;
   console.log('sync-opencode-edition: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -839,6 +870,14 @@ function runCheck() {
         });
       }
     }
+  }
+  // Retired-surface guard: a *.md in the deployed command/agent dir whose canonical source
+  // was deleted (e.g. the fast/full commands) must be pruned; --write removes it.
+  for (const f of retiredMdFiles(OUT_COMMAND_DIR, listCanonCommands().map(x => x.slice(0, -3)))) {
+    mismatches.push({ rel: '.opencode/command/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+  }
+  for (const f of retiredMdFiles(OUT_AGENT_DIR, listCanonAgents())) {
+    mismatches.push({ rel: '.opencode/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a

@@ -815,6 +815,38 @@ if (exists(pluginRel)) {
 }
 
 // ---------------------------------------------------------------------------
+// A-prune: --write is an idempotent MIRROR, not an append-only writer. A retired
+// command/agent surface (a *.md whose canonical source was deleted — e.g. the
+// fast/full `kaola-workflow-fast` / `-phase{1..5}` commands) must be REMOVED, and
+// --check must flag it (the generator previously wrote canonical surfaces but never
+// pruned, so --check reported parity while a stale surface lingered in the tree).
+// Crash-safe: the transient probe is removed in a finally block.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const probe = path.join(REPO, '.opencode', 'command', 'kaola-workflow-__kw_retired_probe.md');
+  const runSync = (flag) => spawnSync(process.execPath,
+    [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), flag], { encoding: 'utf8' });
+  try {
+    fs.writeFileSync(probe, '# transient retired-surface probe — must not persist\n');
+    // (a) --check flags the retired surface: non-zero exit, names the offender.
+    const chk = runSync('--check');
+    assert(chk.status !== 0,
+      'A-prune(a): --check must exit NON-ZERO when a retired *.md surface is present in .opencode/command/');
+    assert(((chk.stdout || '') + (chk.stderr || '')).includes('__kw_retired_probe'),
+      'A-prune(a): --check output must name the retired surface');
+    // (b) --write prunes it: the file is gone and --check returns to 0.
+    runSync('--write');
+    assert(!fs.existsSync(probe),
+      'A-prune(b): --write must REMOVE the retired surface (idempotent mirror)');
+    assert(runSync('--check').status === 0,
+      'A-prune(b): --check exits 0 after the retired surface is pruned');
+  } finally {
+    try { fs.unlinkSync(probe); } catch (_) { /* best-effort cleanup */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // P1 + A (issue #543) + the folded #544 Claude path-leak fix. Hermetic per
 // sub-case: each provisions its OWN fresh temp HOME + temp --target under
 // os.tmpdir() ($TMPDIR), runs the REAL install-opencode.sh, then inspects the

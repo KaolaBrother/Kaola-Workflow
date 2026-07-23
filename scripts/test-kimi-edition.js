@@ -710,6 +710,36 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// K10-prune: --write is an idempotent MIRROR, not an append-only writer. A retired
+// skill dir (whose canonical source was deleted — e.g. the fast/full commands) must
+// be REMOVED, and --check must flag it (the generator previously wrote canonical
+// surfaces but never pruned, so --check reported parity while a stale dir lingered).
+// Crash-safe: the transient probe dir is removed in a finally block.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const probeDir = path.join(REPO, '.kimi', 'skills', 'kaola-workflow-__kw_retired_probe');
+  const runSync = (flag) => spawnSync(process.execPath,
+    [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), flag], { encoding: 'utf8' });
+  try {
+    fs.mkdirSync(probeDir, { recursive: true });
+    fs.writeFileSync(path.join(probeDir, 'SKILL.md'), '# transient retired-surface probe — must not persist\n');
+    const chk = runSync('--check');
+    assert(chk.status !== 0,
+      'K10-prune(a): --check must exit NON-ZERO when a retired skill dir is present in .kimi/skills/');
+    assert(((chk.stdout || '') + (chk.stderr || '')).includes('__kw_retired_probe'),
+      'K10-prune(a): --check output must name the retired skill dir');
+    runSync('--write');
+    assert(!fs.existsSync(probeDir),
+      'K10-prune(b): --write must REMOVE the retired skill dir (idempotent mirror)');
+    assert(runSync('--check').status === 0,
+      'K10-prune(b): --check exits 0 after the retired skill dir is pruned');
+  } finally {
+    try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (_) { /* best-effort cleanup */ }
+  }
+}
+
 if (failed) {
   console.error('\nkimi-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.');
   process.exit(1);
