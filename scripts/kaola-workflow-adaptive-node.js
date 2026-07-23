@@ -9285,8 +9285,15 @@ function probeCoordination(opts) {
 // Reason codes: serial_node_live / scheduler_active, each carrying the live-state context + the
 // concrete reconcile/close repair the operator should run. (#594: the retired batch surface / the
 // batch_active reason are gone — active-batch.json has no producer left.)
-function coordinationRefusal(coord, excl) {
+function coordinationRefusal(coord, excl, serialExclude) {
   const want = new Set(excl || []);
+  // #761: the discharged-point RE-OPEN legitimately runs while the terminal SINK is still in_progress —
+  // it is the node the re-open is invalidating, not a peer serial node it would race. `serialExclude`
+  // names ids (only ever the sink) whose in_progress state does NOT count as a live serial blocker for
+  // THIS command. Any OTHER in_progress serial node still refuses. Absent/empty ⇒ today's behaviour.
+  const exclude = new Set(serialExclude || []);
+  const liveSerialIds = (coord.inProgressIds || []).filter(id => !exclude.has(id));
+  const serialLive = coord.serialLive && liveSerialIds.length > 0;
   // Order matters only for which single reason surfaces first; the matrix never lets two of these be
   // simultaneously the EXCLUDED surface for one command without a deeper bug, but check deterministically.
   if (want.has('scheduler') && (coord.runningSetLive || coord.runningSetOpening)) {
@@ -9298,9 +9305,9 @@ function coordinationRefusal(coord, excl) {
         : 'close the live running-set nodes (close-node) or reconcile-running-set before this command',
     });
   }
-  if (want.has('serial') && coord.serialLive) {
+  if (want.has('serial') && serialLive) {
     return refuse('serial_node_live', {
-      inProgress: coord.inProgressIds,
+      inProgress: liveSerialIds,
       runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
       repair: 'close the live serial node (close-and-open-next) before fanning out',
     });
@@ -9369,10 +9376,11 @@ function mutationGuardPrologue(opts, cfg) {
     }
   }
 
-  // Layer 3 — live-coordination mutual exclusion (#383).
+  // Layer 3 — live-coordination mutual exclusion (#383). #761: cfg.serialExclude (only ever the sink,
+  // set by the re-open path) is forwarded so a re-open is not refused over the very sink it invalidates.
   if (cfg.excl && cfg.excl.length) {
     const coord = probeCoordination({ planPath, readFile, cacheExists });
-    const r = coordinationRefusal(coord, cfg.excl);
+    const r = coordinationRefusal(coord, cfg.excl, cfg.serialExclude);
     if (r) return r;
   }
 
@@ -12091,7 +12099,9 @@ function runExpandOpen(opts) {
   // == UNIFIED GUARD PROLOGUE — the SAME matrix open-ready runs (integrity / halt fence /
   // excl-serial). Expansion is a MUTATING subcommand and is not exempt from any layer. No
   // excl-scheduler: like open-ready, this command OWNS the running-set open. ==
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'] });
+  // #761: the RE-OPEN path forwards `_serialExclude` (only ever the sink id) so the guard does not
+  // refuse over the live sink the re-open is invalidating. Absent for every expand-open caller.
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'], serialExclude: opts._serialExclude });
   if (guard) return guard;
 
   if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point to expand' });
@@ -12115,7 +12125,10 @@ function runExpandOpen(opts) {
 
   const ledger = readLedgerStatuses(content);
   const terminal = new Set(['complete', 'n/a']);
-  if (terminal.has(String(ledger[nodeId] || '').toLowerCase())) {
+  // #761: the RE-OPEN path (runReExpandOpen) passes `_allowDischarged` — a discharged milestone is
+  // exactly what it re-opens. Absent (every expand-open caller), this refusal stands byte-for-byte: a
+  // FIRST composition may never land on an already-terminal point.
+  if (!opts._allowDischarged && terminal.has(String(ledger[nodeId] || '').toLowerCase())) {
     return refuse('expansion_point_discharged', { node_id: nodeId, detail: 'the milestone is already terminal — a discharged point cannot be re-expanded in place' });
   }
   const notReady = point.dependsOn.filter(d => !terminal.has(String(ledger[d] || '').toLowerCase()));
@@ -12170,9 +12183,22 @@ function runExpandOpen(opts) {
   }
 
   // ---- Phase 1: ONE atomic plan write (record block + unit ledger rows). ----
+  // #761 RE-OPEN: `_reactivate(content) -> { content, reactivation }` folds the discharged-point
+  // re-open cascade (owner complete→in_progress, its review wall + intersecting downstream walls
+  // complete→pending) into THIS SAME atomic write, so a crash between the write and the frontier open
+  // reconciles via the existing rollForwardExpansions roll-forward exactly like a first expansion.
+  // planHash is taken from the ORIGINAL content (the spine hash covers ## Nodes only — ledger status
+  // splices never perturb it), keeping the (spine plan_hash, expansion_id) review binding invariant.
   const planHash = planHashFromContent(content) || '';
   const block = renderExpansionRecord(recordId, nodeId, planHash, composed.derivation, composed.units);
-  const withRecord = appendExpansionBlock(content, block);
+  let baseForRecord = content;
+  let reactivation = null;
+  if (typeof opts._reactivate === 'function') {
+    const ra = opts._reactivate(content);
+    baseForRecord = ra.content;
+    reactivation = ra.reactivation;
+  }
+  const withRecord = appendExpansionBlock(baseForRecord, block);
   const led = appendLedgerRows(withRecord, unitIds);
   if (!led.ok) return refuse(led.reason, { node_id: nodeId, detail: 'cannot append unit rows to ## Node Ledger' });
   writeFile(planPath, led.content);
@@ -12184,6 +12210,7 @@ function runExpandOpen(opts) {
     expansion_id: recordId,
     expansion_point: nodeId,
     ordinal,
+    ...(reactivation ? { reactivation } : {}),
     units: composed.units.map((u, i) => ({ ...u, id: unitIds[i] })),
     derivation: composed.derivation,
     // The review journal binds to (SPINE plan_hash, expansion record id). plan_hash covers the spine
@@ -12617,6 +12644,242 @@ function deriveReExpansion(finding, content, opts) {
   return { result: 'ok', decision: 'local', owners: route.owners,
     covered_files: route.covered_files, uncovered_files: route.uncovered_files,
     out_of_surface: route.out_of_surface || [], plans };
+}
+
+// ===========================================================================
+// #761 (child 4): THE DISCHARGED-POINT RE-OPEN CASCADE + DERIVED SINK-PROGRESS ADMISSIBILITY.
+//
+// Every real re-expansion scenario surfaces its finding AFTER the owning milestone is already
+// DISCHARGED (a settled review that went stale, a finalize done-gate failure). runExpandOpen fails
+// closed with `expansion_point_discharged` on a terminal ledger status — correct for a FIRST
+// composition, wrong as a dead end for a finding. runReExpandOpen is the sanctioned re-open: it
+// re-opens the discharged point with a NEW monotonic expansion record (the SAME expand-open
+// transaction), re-activates the point's own post-dominating review wall so the re-expansion is
+// reviewed before any sink, and SELECTIVELY re-verifies ONLY downstream milestones whose
+// declared+amended surface intersects the fix (a disjoint downstream milestone is left untouched —
+// the whole efficiency point). The cascade is folded into the transaction's single atomic Phase-1
+// write, so a crash reconciles via the existing rollForwardExpansions roll-forward exactly like a
+// first expansion.
+// ===========================================================================
+
+// wallsOfMilestone — QUESTION: "which review gate(s) are THIS milestone's own post-dominating wall?"
+// In the linear spine (m_i → wall_i → m_{i+1} → …) a milestone's wall is the review-class node that
+// depends DIRECTLY on it; a later milestone's wall depends on it only transitively and is excluded.
+// Reads the milestone's declared review_class, so a node of some other gate role is never taken for
+// its wall. Empty when the milestone declares no review_class (the re-review wall assertion fails that
+// case closed separately). PURE.
+function wallsOfMilestone(point, contracts, nodes) {
+  const contract = contracts instanceof Map ? contracts.get(point)
+    : (Array.isArray(contracts) ? contracts.find(c => c && c.nodeId === point) : null);
+  const reviewClass = contract && Array.isArray(contract.review_class) ? contract.review_class.filter(Boolean) : [];
+  if (!reviewClass.length) return [];
+  return (Array.isArray(nodes) ? nodes : [])
+    .filter(n => n && Array.isArray(n.dependsOn) && n.dependsOn.includes(point) && reviewClass.includes(n.role))
+    .map(n => n.id).sort();
+}
+
+// downstreamMilestones — every expansion point that transitively DEPENDS on `point` (its spine cone).
+// Pure forward reachability over depends_on. Excludes `point` itself. Used to scope AC3 selectivity.
+function downstreamMilestones(point, nodes, expansionRole) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const dependents = new Map();
+  for (const n of list) for (const d of (n.dependsOn || [])) {
+    if (!dependents.has(d)) dependents.set(d, []);
+    dependents.get(d).push(n.id);
+  }
+  const byId = new Map(list.map(n => [n.id, n]));
+  const seen = new Set();
+  const stack = [point];
+  while (stack.length) {
+    for (const child of (dependents.get(stack.pop()) || [])) {
+      if (!seen.has(child)) { seen.add(child); stack.push(child); }
+    }
+  }
+  return Array.from(seen).filter(id => { const n = byId.get(id); return n && n.role === expansionRole; }).sort();
+}
+
+// reExpansionFixFiles — the fix's declared write surface: the union of the composition units' write
+// sets (space-separated cells), falling back to the finding's anchor files when the composition
+// declares none. Downstream re-verify selectivity (AC3) is decided against THIS surface.
+function reExpansionFixFiles(composition, finding) {
+  const files = new Set();
+  const units = composition && Array.isArray(composition.units) ? composition.units : [];
+  for (const u of units) {
+    for (const tok of String((u && u.write_set) || '').split(/\s+/)) {
+      const n = normalizeSurfacePath(tok);
+      if (n) files.add(n);
+    }
+  }
+  if (!files.size) for (const f of findingFilesFromIndexRow(finding)) files.add(f);
+  return Array.from(files).sort();
+}
+
+// deriveSinkProgress — Piece 3: the DERIVED sink-progress admissibility predicate. QUESTION: "has the
+// sink taken its first irreversible step (commit / push / merge) yet?" A finalize-surfaced re-expansion
+// is admissible ONLY BEFORE that step; after it the finding is a follow-up claim, never a re-expansion.
+// No in-band marker file is written (a settled design decision) — the state is DERIVED from the git
+// state the sink itself produces.
+//
+// THREE-VALUED and FAIL-CLOSED. Only 'pristine' admits; 'started' and 'unknown' both refuse. The
+// dangerous direction is a false 'pristine' after a push (which would re-open a shipped run), so every
+// doubt collapses to 'unknown' (⇒ refuse). `opts.sinkProgressProbe(opts, content)` is the injectable
+// seam (tests); absent, the default reads git.
+function deriveSinkProgress(opts, content) {
+  const probe = (opts && typeof opts.sinkProgressProbe === 'function')
+    ? opts.sinkProgressProbe : defaultSinkProgressProbe;
+  let out;
+  try { out = probe(opts, content); } catch (_) { return { state: 'unknown', evidence: 'sink-progress probe threw' }; }
+  const state = out && typeof out === 'object' ? out.state : out;
+  if (state === 'pristine' || state === 'started') {
+    return { state, evidence: (out && out.evidence) || String(state) };
+  }
+  return { state: 'unknown', evidence: (out && out.evidence) || 'sink-progress probe returned no classifiable state' };
+}
+
+// defaultSinkProgressProbe — the production derivation. Resolves the run's branch from workflow-state
+// (NEVER `git rev-parse HEAD`: the sink runs main-session-direct and sink-merge runs from the MAIN
+// root, so HEAD would make the predicate inert), then treats a PUSHED branch — `origin/<branch>`
+// exists — as the sink's first irreversible step. A missing origin ref (rev-parse exits 1) is the
+// pristine, not-yet-pushed signal; ANY other failure (no branch pointer, git error, non-repo) fails
+// CLOSED to 'unknown'.
+function defaultSinkProgressProbe(opts, content) {
+  const readFile = opts && opts.readFile;
+  if (typeof readFile !== 'function') return { state: 'unknown', evidence: 'no readFile seam' };
+  let branch = null;
+  try {
+    const statePath = path.join(path.dirname(opts.planPath), 'workflow-state.md');
+    const st = readFile(statePath);
+    const m = /^branch:\s*(\S+)\s*$/m.exec(String(st || ''));
+    if (m) branch = m[1];
+  } catch (_) { branch = null; }
+  if (!branch) return { state: 'unknown', evidence: 'no branch: pointer in workflow-state.md (cannot derive sink progress)' };
+  let root; try { root = opts.repoRoot || getRoot(); } catch (_) { root = process.cwd(); }
+  try {
+    const out = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/' + branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (String(out).trim()) return { state: 'started', evidence: 'origin/' + branch + ' exists — the sink has pushed (irreversible)' };
+    return { state: 'pristine', evidence: 'origin/' + branch + ' unresolved — the sink has not pushed' };
+  } catch (e) {
+    if (e && e.status === 1) return { state: 'pristine', evidence: 'no origin/' + branch + ' — the sink has not pushed' };
+    return { state: 'unknown', evidence: 'git rev-parse for origin/' + branch + ' failed (status ' + (e && e.status) + ') — cannot derive sink progress' };
+  }
+}
+
+// runReExpandOpen — the discharged-point re-open cascade (see the block header). MUTATES via a single
+// delegated expand-open transaction; the cascade splices are folded into its Phase-1 write.
+function runReExpandOpen(opts) {
+  const { planPath, nodeId, finding, readFile } = opts;
+  if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the discharged expansion point to re-open' });
+  let content;
+  try { content = readFile(planPath); } catch (_) { return refuse('plan_missing', { detail: planPath }); }
+  const validator = require('./kaola-workflow-plan-validator');
+  if (validator.parsePlanForm(content).form !== 'spine') {
+    return refuse('not_a_spine_plan', { node_id: nodeId, detail: 'reexpand-open applies only to a plan frozen with plan_form: spine' });
+  }
+  const nodes = validator.parseNodes(content);
+  const point = nodes.find(n => n.id === nodeId);
+  if (!point) return refuse('node_not_found', { node_id: nodeId, detail: 'no such node in ## Nodes' });
+  if (point.role !== validator.SPINE_EXPANSION_ROLE) {
+    return refuse('node_not_expansion_point', { node_id: nodeId, detail: 'role is "' + point.role + '"; only an expansion point has a frontier to re-compose' });
+  }
+  const contracts = validator.parseExpansionContracts(content);
+  const ledger = readLedgerStatuses(content);
+  const statusP = String(ledger[nodeId] || '').toLowerCase();
+
+  // GATE 1 — this is the RE-OPEN path: the point must be DISCHARGED (complete). A pending point is a
+  // FIRST (or crash-interrupted) expansion → use expand-open / reconcile; an in_progress point has a
+  // live frontier; an n/a (SKIPPED) milestone is a spine-shape change, not a local re-expansion.
+  if (statusP !== 'complete') {
+    return refuse('reexpansion_point_not_discharged', { node_id: nodeId,
+      detail: 'the milestone is "' + (statusP || 'unknown') + '"; reexpand-open re-opens a DISCHARGED (complete) point — '
+        + 'use expand-open for a never-expanded (pending) point, and an epoch replan for a skipped (n/a) one' });
+  }
+
+  // GATE 2 — the fail-closed re-review wall: re-opening may reach the sink only if the point is
+  // reviewed-before-sink. The one wall re-expansion may never weaken.
+  const wall = assertReExpansionReviewed(nodeId, contracts, nodes);
+  if (wall.result === 'refuse') return wall;
+
+  // GATE 3 — DERIVED sink-progress admissibility (Piece 3). Admit ONLY before the sink's first
+  // irreversible step; after it, refuse (follow-up claim, not a re-expansion). Fail-closed on 'unknown'.
+  const progress = deriveSinkProgress(opts, content);
+  if (progress.state !== 'pristine') {
+    return refuse('reexpansion_after_sink_started', { node_id: nodeId, sink_progress: progress.state,
+      detail: 'the sink has taken (or may have taken) its first irreversible step — ' + progress.evidence
+        + '; a finding after that is a follow-up claim, not an in-plan re-expansion' });
+  }
+
+  const fixFiles = reExpansionFixFiles(opts.composition, finding);
+  const expansionRole = validator.SPINE_EXPANSION_ROLE;
+  // Which OTHER milestones re-verify. A milestone that transitively DEPENDS on the owner is FORCED to
+  // re-verify (its work consumes the owner's output — leaving it settled above the re-opened owner
+  // would strand it). A milestone that does NOT depend on the owner re-verifies ONLY when its
+  // declared+amended surface INTERSECTS the fix; a disjoint, non-dependent milestone is LEFT UNTOUCHED
+  // — the whole AC3 efficiency point (do not re-verify the world).
+  const dependents = new Set(downstreamMilestones(nodeId, nodes, expansionRole));
+  const otherPoints = nodes.filter(n => n.role === expansionRole && n.id !== nodeId).map(n => n.id);
+
+  // The crash-atomic re-activation cascade, applied INSIDE the delegated transaction's Phase-1 write.
+  const reactivationLog = { owner: nodeId, walls_reactivated: [], downstream_reverified: [], downstream_untouched: [] };
+  const _reactivate = (planContent) => {
+    let c = planContent;
+    const flipToPending = (id) => {
+      const r = spliceLedgerNode(c, id, 'pending', { allowFrom: ['complete'] });
+      if (r.found) { c = r.content; return r.changed; }
+      return false;
+    };
+    const resetMilestones = [nodeId];
+    // (a) the owner: complete → PENDING. It returns to its un-discharged expansion-point state (the
+    // point is never itself a schedulable serial node — the UNITS are what open; flipping it to
+    // in_progress would make the running-set scheduler treat it as a live serial node and refuse the
+    // fan-out). Its review wall, re-activated in (c), stays withheld until the milestone re-discharges.
+    const ro = spliceLedgerNode(c, nodeId, 'pending', { allowFrom: ['complete'] });
+    if (ro.found) c = ro.content;
+    // (b) SELECTIVE re-verify of the other milestones (forced-by-dependency OR surface-intersection).
+    for (const d of otherPoints) {
+      const dStatus = String(ledger[d] || '').toLowerCase();
+      if (dStatus !== 'complete') continue;
+      const dContract = contracts.get(d);
+      const declared = (dContract && Array.isArray(dContract.expected_surfaces)) ? dContract.expected_surfaces : [];
+      const surfaces = declared.concat(amendedSurfacesFor(d, opts.amendedSurfaces));
+      const intersects = fixFiles.some(f => surfaces.some(s => surfaceCoversFile(s, f)));
+      if (dependents.has(d) || intersects) {
+        flipToPending(d);
+        resetMilestones.push(d);
+        reactivationLog.downstream_reverified.push(d);
+      } else {
+        reactivationLog.downstream_untouched.push(d);
+      }
+    }
+    // (c) re-activate every review wall that post-dominates a reset milestone (its candidate changed):
+    // no re-expansion may reach the sink unreviewed, and no settled gate may be stranded above a reset
+    // point. In the single-terminal-wall spine this is the one wall; each milestone's own wall(s) are
+    // its DIRECT review-class dependents.
+    const walls = new Set();
+    for (const m of resetMilestones) for (const w of wallsOfMilestone(m, contracts, nodes)) walls.add(w);
+    for (const w of Array.from(walls).sort()) if (flipToPending(w)) reactivationLog.walls_reactivated.push(w);
+    // (d) the sink: a re-expansion invalidates any in-flight or (locally) settled sink attempt — GATE 3
+    // has PROVEN no irreversible step ran (pristine), so resetting it is safe. Reset it to pending so it
+    // re-runs AFTER the re-expansion, and so the fan-out is never refused over a live serial sink.
+    const sink = nodes.find(n => n && n.role === 'finalize');
+    if (sink) {
+      const rs = spliceLedgerNode(c, sink.id, 'pending', { allowFrom: ['complete', 'in_progress'] });
+      if (rs.found && rs.changed) { c = rs.content; reactivationLog.sink_reset = sink.id; }
+    }
+    return { content: c, reactivation: reactivationLog };
+  };
+
+  // Delegate to the PROVEN expand-open transaction with the re-open shape enabled. runExpandOpen runs
+  // the guard prologue (with the sink excluded from the serial check, since the cascade below resets
+  // it), validates the composition, computes the monotonic ordinal, folds the cascade into its single
+  // atomic Phase-1 write, opens the frontier, and rolls forward on crash — all unchanged.
+  const sinkNode = nodes.find(n => n && n.role === 'finalize');
+  const out = runExpandOpen({ ...opts, _allowDischarged: true, _reactivate,
+    _serialExclude: sinkNode ? [sinkNode.id] : [] });
+  if (out && out.result === 'refuse') return out;
+  return { ...out, reopened: true, sink_progress: progress.state, fix_surface: fixFiles,
+    downstream_reverified: Array.from(new Set(reactivationLog.downstream_reverified)).sort(),
+    downstream_untouched: Array.from(new Set(reactivationLog.downstream_untouched)).sort() };
 }
 
 // ---------------------------------------------------------------------------
@@ -13251,6 +13514,38 @@ function main() {
         });
       }
     }
+  } else if (subcommand === 'reexpand-open') {
+    // #761: RE-OPEN a DISCHARGED expansion point. The fixer composition arrives on STDIN (same transit
+    // as expand-open); an optional --finding-json <path> supplies the finding's files for downstream
+    // re-verify selectivity when the composition declares no write set.
+    if (!hasStdin) {
+      result = { result: 'refuse', errors: ['--stdin required for reexpand-open (the fixer composition, as JSON)'] };
+    } else {
+      let composition = null;
+      let parseError = null;
+      try { composition = JSON.parse(fs.readFileSync(0, 'utf8')); }
+      catch (err) { parseError = String(err && err.message || err); }
+      let reFinding = null;
+      if (findingJsonIdx >= 0 && findingJsonIdx + 1 < args.length) {
+        const fjArg = args[findingJsonIdx + 1];
+        try { reFinding = JSON.parse(fjArg === '-' ? '' : readFile(fjArg)); } catch (_) { reFinding = null; }
+      }
+      if (parseError) {
+        result = decorateOperatorHint(refuse('expansion_composition_malformed', { node_id: nodeId, detail: 'stdin is not valid JSON: ' + parseError }));
+      } else {
+        result = runReExpandOpen({
+          planPath, project, nodeId, composition, finding: reFinding, codexDispatchMode,
+          repoRoot: getRoot(),
+          max: Number.isInteger(maxArg) && maxArg >= 1 ? maxArg : null,
+          fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
+          speculativeConsent: args.includes('--speculative-consent'),
+          writeOverlapConsent: args.includes('--write-overlap-consent'),
+          shell, readFile, writeFile, cacheExists,
+          mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+          now: () => new Date().toISOString(),
+        });
+      }
+    }
   } else if (subcommand === 'expand-close') {
     result = runExpandClose({
       planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
@@ -13501,6 +13796,15 @@ module.exports = {
   buildReExpansionComposition,
   findingFilesFromIndexRow,
   deriveReExpansion,
+  // #761 (re-open cascade + derived sink-progress): the discharged-point re-open transaction, the
+  // three-valued fail-closed sink-progress predicate + its default git probe, and the pure cascade
+  // helpers — exported for direct both-direction pins.
+  runReExpandOpen,
+  wallsOfMilestone,
+  downstreamMilestones,
+  reExpansionFixFiles,
+  deriveSinkProgress,
+  defaultSinkProgressProbe,
   runIsFinished,
   runRecordEvidence,
   runCloseAndOpenNext,
