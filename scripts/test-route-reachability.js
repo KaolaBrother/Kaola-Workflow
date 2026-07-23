@@ -1103,6 +1103,10 @@ const FOREIGN_MARKERS = new Set([
   '<!-- CARD: reopen-complete-node -->',
   '<!-- CARD: repair-routing -->',
   '<!-- CARD: resume -->',
+  // #767: the spine expansion doc-card pointer — a structural section card (the presence
+  // obligation for the expansion prose is the pr-expansion-lifecycle manifest block above), so it
+  // is managed like the other doc-pointer CARDs, not as its own presence block.
+  '<!-- CARD: expansion -->',
 ].map(norm));
 
 // Failed-review repair is an agent-owned decision over the authoritative attempt journal. Keep the

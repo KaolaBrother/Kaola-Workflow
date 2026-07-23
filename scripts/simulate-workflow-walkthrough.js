@@ -18697,6 +18697,7 @@ function buildRegistry() {
   add('testSerializationInversion760',                    testSerializationInversion760);
   add('testDeclaredNotWalled762',                         testDeclaredNotWalled762);
   add('testReExpansionEpochTransition756',                testReExpansionEpochTransition756);
+  add('testSpineAuthoringOrchestrationKeystone767',       testSpineAuthoringOrchestrationKeystone767);
   return reg;
 }
 
@@ -21667,6 +21668,218 @@ function testReExpansionEpochTransition756() {
   }
 
   console.log('testReExpansionEpochTransition756: PASSED');
+}
+
+// ── #767 SPINE authoring + orchestration keystone ──────────────────────────────────────────────
+// The keystone that makes progressive elaboration user-reachable end to end. The spine/expansion
+// machinery (#758/#759) is proven at the script level, but until #767 nothing AUTHORED a spine plan
+// (the planner prose) and nothing told the orchestrator to DRIVE the expansion lifecycle (the
+// plan-run routing prose). This pins BOTH new ends against the real CLIs, over a spine plan authored
+// EXACTLY as the PART A planner prose instructs (plan_form: spine; one expansion-point + its
+// expansion() contract; a CONCRETE code-reviewer wall post-dominating the point; a finalize sink):
+//   (1) it FREEZES in-grammar through the production validator freeze CLI; and
+//   (2) it MECHANICALLY EXECUTES the whole lifecycle the PART B routing prose instructs — orient
+//       surfaces expansionPending.readyToExpand, expand-open composes+opens a frontier, the units
+//       close, a composed gate role is refused by name (route the review to the wall), expand-close
+//       discharges, and the spine advances through the concrete wall to the finalize sink (allDone).
+const SPINE_PLAN_767 = [
+  '# Workflow Plan — issue #767', '',
+  '## Meta', '',
+  'project: issue-767',
+  'labels: enhancement',
+  'plan_schema_version: 2',
+  'plan_form: spine',
+  'validation_command: node scripts/simulate-workflow-walkthrough.js',
+  'validation_timeout_minutes: 20',
+  'code_certifier: wall',
+  'security_certifier: none',
+  'inherited_frontier_digest: none',
+  'inherited_frontier_classes: none', '',
+  'expansion(m1):',
+  '  milestone_goal: land the reader seam whose interior writers depend on the probe findings',
+  '  expected_surfaces: scripts/, docs/',
+  '  join_constraints: none',
+  '  review_class: code-reviewer', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+  '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+  '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+  '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Node Ledger', '',
+  '| id | status |',
+  '|---|---|',
+  '| probe | complete |',
+  '| m1 | pending |',
+  '| wall | pending |',
+  '| done | pending |', '',
+].join('\n');
+
+function testSpineAuthoringOrchestrationKeystone767() {
+  const validator = require('./kaola-workflow-plan-validator');
+
+  // (1) The exact #767 authoring contract validates in-grammar as plan_form spine (a pure-validator
+  // freeze view first — the same view the handoff CLI branches on).
+  {
+    const pv = validator.validatePlan(SPINE_PLAN_767, { root: repoRoot });
+    assert(pv.result === 'in-grammar' && pv.plan_form === 'spine',
+      '#767 (1): the authored spine must validate in-grammar as plan_form spine, got '
+      + JSON.stringify({ result: pv.result, plan_form: pv.plan_form, errors: pv.errors }));
+  }
+
+  const repo = adaptiveTmp('spine-767');
+  initGitRepoWithBareRemote(repo);
+  spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-767'], { encoding: 'utf8' });
+  const proj = path.join(repo, 'kaola-workflow', 'issue-767');
+  fs.mkdirSync(proj, { recursive: true });
+  const planPath = path.join(proj, 'workflow-plan.md');
+  const readPlan = () => fs.readFileSync(planPath, 'utf8');
+  const nextAction = () => JSON.parse(runNode(nextActionScript, [planPath, '--json'], repo).stdout);
+  const closeUnit = (id) => {
+    // Fill the seeded read-unit stub in place (the same thing a role agent does), then close.
+    fs.appendFileSync(path.join(proj, '.cache', id + '.md'), '\nfindings: none\n');
+    const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-767', '--node-id', id, '--json'], repo);
+    assert(c.status === 0, '#767: close-node ' + id + ' should exit 0, got ' + c.status + '\n' + c.stdout + c.stderr);
+    return JSON.parse(c.stdout);
+  };
+
+  try {
+    fs.writeFileSync(planPath, SPINE_PLAN_767);
+    // workflow-state.md so orient can orient the run and build its context packet.
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 767\n');
+
+    // (1) FREEZE in-grammar through the production validator freeze CLI.
+    const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+    assert(fz.status === 0, '#767 (1): the spine plan must freeze green through the production CLI, got '
+      + fz.status + '\n' + fz.stdout + fz.stderr);
+    const frozen = JSON.parse(fz.stdout);
+    assert(frozen.frozen === true && frozen.result === 'in-grammar',
+      '#767 (1): the freeze payload must report frozen in-grammar, got ' + fz.stdout);
+    const spineHash = frozen.planHash;
+    spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+    // (2a) ORIENT surfaces the ready expansion point on expansionPending — the exact signal the PART
+    // B routing prose keys on — and the point is NOT a dispatchable readyPending member.
+    {
+      const oriented = JSON.parse(runNode(adaptiveNodeScript, ['orient', '--project', 'issue-767', '--json'], repo).stdout);
+      assert(oriented.result === 'ok', '#767 (2a): orient must succeed on the frozen spine, got '
+        + JSON.stringify(oriented.reason || oriented));
+      const na = oriented.nextAction || {};
+      assert((na.expansionPending || []).length === 1 && na.expansionPending[0].id === 'm1'
+        && na.expansionPending[0].readyToExpand === true,
+        '#767 (2a): orient must show the ready expansion point on expansionPending.readyToExpand, got '
+        + JSON.stringify(na.expansionPending));
+      assert(!(na.readyPending || []).some(n => n.id === 'm1'),
+        '#767 (2a): an expansion point is never a dispatchable readyPending member, got '
+        + JSON.stringify((na.readyPending || []).map(n => n.id)));
+    }
+
+    // (2b) A composed GATE role is refused BY NAME with zero mutation — the review obligation is the
+    // spine's own concrete wall, never a unit inside the composition. Pinned on the FRESH point,
+    // before any record exists, so the refusal is the gate-role rule and not expansion_not_settled.
+    const composition = {
+      derivation: {
+        grain: 'each unit owns a distinct read surface, well over its setup cost',
+        path: 'this frontier is the critical path to the review wall',
+        join: 'mechanical — the units touch disjoint surfaces',
+        probe: 'no unit outcome reshapes the others',
+        serializer: 'none present — co-open',
+      },
+      units: [
+        { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        { name: 'u2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+      ],
+    };
+    {
+      const before = readPlan();
+      const gated = runNode(adaptiveNodeScript,
+        ['expand-open', '--project', 'issue-767', '--node-id', 'm1', '--json', '--stdin'], repo, null,
+        { input: JSON.stringify({ derivation: composition.derivation,
+          units: [{ name: 'g1', role: 'code-reviewer', model: 'standard', write_set: '', mode: 'co_open' }] }) });
+      assert(gated.status !== 0 && JSON.parse(gated.stdout).reason === 'expansion_unit_role_gate_unsupported',
+        '#767 (2b): composing a gate role must refuse expansion_unit_role_gate_unsupported, got ' + gated.stdout);
+      assert(readPlan() === before, '#767 (2b): the refused composition must mutate nothing at all');
+    }
+
+    // EXPAND-OPEN the real composed two-unit co_open read frontier (co-open by default — the
+    // derivation records no named serializer).
+    const eo = runNode(adaptiveNodeScript,
+      ['expand-open', '--project', 'issue-767', '--node-id', 'm1', '--json', '--stdin'],
+      repo, null, { input: JSON.stringify(composition) });
+    assert(eo.status === 0, '#767 (2b): expand-open should exit 0, got ' + eo.status + '\n' + eo.stdout + eo.stderr);
+    const eop = JSON.parse(eo.stdout);
+    assert(eop.result === 'ok' && eop.expansion_id === 'm1#1',
+      '#767 (2b): the first record on the point is m1#1, got ' + JSON.stringify({ result: eop.result, id: eop.expansion_id }));
+    assert(JSON.stringify((eop.opened || []).map(n => n.id).sort()) === JSON.stringify(['m1-r1-u1', 'm1-r1-u2']),
+      '#767 (2b): both composed co_open units must open through the running-set scheduler, got '
+      + JSON.stringify((eop.opened || []).map(n => n.id)));
+    assert(validator.computePlanHash(readPlan()) === spineHash,
+      '#767 (2b): appending an expansion record must NOT perturb the frozen spine identity');
+
+    // (2c) CLOSE each composed unit; the point becomes dischargeable, the wall still withheld.
+    for (const id of ['m1-r1-u1', 'm1-r1-u2']) closeUnit(id);
+    {
+      const na = nextAction();
+      assert((na.expansionPending || []).length === 1 && na.expansionPending[0].readyToDischarge === true,
+        '#767 (2c): a settled point must be dischargeable, got ' + JSON.stringify(na.expansionPending));
+      assert(!(na.readyPending || []).some(n => n.id === 'wall'),
+        '#767 (2c): the review wall stays withheld until the milestone discharges');
+    }
+
+    // (2d) EXPAND-CLOSE discharges the milestone; the spine advances to its concrete review wall.
+    const ec = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-767', '--node-id', 'm1', '--json'], repo);
+    assert(ec.status === 0, '#767 (2d): expand-close should exit 0, got ' + ec.status + '\n' + ec.stdout + ec.stderr);
+    assert(JSON.stringify(JSON.parse(ec.stdout).discharged) === JSON.stringify(['m1#1']),
+      '#767 (2d): the discharge must name the point record, got ' + ec.stdout);
+    {
+      const na = nextAction();
+      assert(JSON.stringify((na.readyPending || []).map(n => n.id)) === JSON.stringify(['wall']),
+        '#767 (2d): the spine advances to its review wall once the milestone discharges, got '
+        + JSON.stringify((na.readyPending || []).map(n => n.id)));
+    }
+
+    // (2e) The CONCRETE review wall opens + closes through the normal gate lifecycle, then the spine
+    // reaches the finalize sink — allDone. This proves the "never compose the gate; route it to the
+    // wall" end: the review the composition refused is discharged by the spine's own wall node.
+    {
+      const ow = JSON.parse(runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-767', '--json'], repo).stdout);
+      assert(ow.result === 'ok' && ow.opened && ow.opened.id === 'wall' && ow.opened.role === 'code-reviewer',
+        '#767 (2e): the review wall must open through the production opener, got ' + JSON.stringify(ow));
+      const wd = ow.opened.dispatch;
+      assert(wd && wd.contract_version === 2 && /^[0-9a-f]{64}$/.test(String(wd.review_context_hash)),
+        '#767 (2e): the spine review wall must open with the bound schema-2 contract, got ' + JSON.stringify(wd));
+      const wallEvidence = [
+        'evidence-binding: wall ' + ow.nonce, 'contract_version: 2',
+        'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
+        'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
+        'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
+        'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', '',
+      ].join('\n');
+      const rec = runNode(adaptiveNodeScript,
+        ['record-evidence', '--project', 'issue-767', '--node-id', 'wall', '--stdin', '--json'], repo, null, { input: wallEvidence });
+      assert(rec.status === 0, '#767 (2e): the wall evidence must record, got ' + rec.status + '\n' + rec.stdout + rec.stderr);
+      const cw = runNode(adaptiveNodeScript,
+        ['close-and-open-next', '--project', 'issue-767', '--node-id', 'wall', '--json'], repo);
+      assert(cw.status === 0, '#767 (2e): the review wall must close through the real transaction, got '
+        + cw.status + '\n' + cw.stdout + cw.stderr);
+      assert(/\| wall \| complete \|/.test(readPlan()),
+        '#767 (2e): the close transaction must move the wall row to complete');
+      const na = nextAction();
+      assert(na.nextNode && na.nextNode.id === 'done' && na.nextNode.role === 'finalize',
+        '#767 (2e): the unique finalize sink is next once the wall passes, got ' + JSON.stringify(na.nextNode));
+      fs.writeFileSync(planPath, readPlan().replace(/\| done \| (?:pending|in_progress) \|/, '| done | complete |'));
+      const naDone = nextAction();
+      assert(naDone.result === 'ok' && naDone.allDone === true,
+        '#767 (2e): the spine reaches allDone through the wall to the sink, got '
+        + JSON.stringify({ result: naDone.result, allDone: naDone.allDone }));
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testSpineAuthoringOrchestrationKeystone767: PASSED');
 }
 
 main().catch(err => {

@@ -67,6 +67,12 @@ const FEATURE_TOKENS = [
   'difficulty alone is not evidence',
   'never inflate a budget to hide a wedged agent',
   'semantic dependency and verification boundaries',
+  // #767: the spine plan-form authoring lever — the planner authors plan_form: spine (vs the
+  // default dag) with expansion-point milestone nodes whose interior frontier is composed at run
+  // time. Present in agents/workflow-planner.md's progressive-elaboration section, so this enforces
+  // all three .toml twins carry the spine grammar (md↔toml parity for the #767 authoring lever).
+  'plan_form',
+  'expansion-point',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
