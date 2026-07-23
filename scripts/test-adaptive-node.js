@@ -12677,9 +12677,10 @@ function rtHarness(initialFiles, opts) {
   // can RELAX and co-open. #546-G2 (DECISION B) shifted the SHARED-INFRA class to relax BY DEFAULT under
   // the structural net (a post-dominating code-reviewer gate over the legs + no PROTECTED file); #593
   // extends the SAME default-relax to the NON-shared COARSE class (two different top-level dirs,
-  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial). What
-  // STILL serial-degrades: a genuine overlap (exact / case-collision), a PROTECTED file (NET-2), a
-  // missing gate (NET-1), or a non-resolvable directory/glob coarse entry. Tests drive the REAL
+  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial); #760
+  // further extends coarse to relax even when disjointness is UNPROVABLE (a directory/glob entry —
+  // genuinely uncertain, not a named serializer). What STILL serial-degrades: a genuine PROVEN overlap
+  // (exact / case-collision), a PROTECTED file (NET-2), or a missing gate (NET-1). Tests drive the REAL
   // adaptive-node + plan-validator subprocesses in a REAL git repo.
   // =========================================================================
   {
