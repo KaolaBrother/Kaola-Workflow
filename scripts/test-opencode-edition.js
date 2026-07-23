@@ -929,8 +929,8 @@ if (exists(pluginRel)) {
     try { rmSync(r.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   };
 
-  // P1 — default (and now ONLY) install deploys adaptive-core, exactly, and
-  // seeds installed_paths:[].
+  // P1 — install deploys adaptive-core, exactly, and seeds parallel_mode only
+  // (no installed_paths field written).
   {
     const r = runInstaller([]);
     assert(r.ok,
@@ -960,10 +960,10 @@ if (exists(pluginRel)) {
     const cfg = readConfig(r.configPath);
     assert(cfg !== null,
       'P1: default install seeds ~/.config/kaola-workflow/config.json');
-    assert(cfg && Array.isArray(cfg.installed_paths),
-      'P1: default install seeds installed_paths as a list');
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '[]',
-      'P1: default install installed_paths deep-equals [] (adaptive-only, no opt-ins) — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    assert(cfg && !('installed_paths' in cfg),
+      'P1: default install does NOT write installed_paths — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    assert(cfg && cfg.parallel_mode !== undefined,
+      'P1: default install seeds parallel_mode (the only partition field written)');
     clean(r);
   }
 
@@ -1070,12 +1070,10 @@ if (exists(pluginRel)) {
   // so there is no opt-in scenario left to narrow-then-prune.
 
   // -------------------------------------------------------------------------
-  // U1 (#F4) — RETAINED, narrowed to adaptive-only: --uninstall removes the
-  // kaola-deployed surface, preserves the user-owned opencode.json, and resets
-  // installed_paths:[]; a subsequent bare install returns EXACTLY the
-  // adaptive-core commands (round-trip). Drops the former --with-fast seeding —
-  // the underlying uninstall/reinstall contract this locks in is unrelated to
-  // the retired opt-in partition.
+  // U1 (#F4): --uninstall removes the kaola-deployed surface, preserves the
+  // user-owned opencode.json, and strips any stale installed_paths from the
+  // shared config; a subsequent bare install returns EXACTLY the adaptive-core
+  // commands (round-trip).
   // -------------------------------------------------------------------------
   {
     const r1 = runInstaller([]);
@@ -1097,8 +1095,8 @@ if (exists(pluginRel)) {
     assert(existsSync(path.join(r1.dest, 'opencode.json')),
       'U1 (#F4): opencode.json PRESERVED by --uninstall (user-owned model config)');
     const cfg = readConfig(r1.configPath);
-    assert(cfg && JSON.stringify(cfg.installed_paths) === '[]',
-      'U1 (#F4): --uninstall resets installed_paths:[] — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    assert(cfg && !('installed_paths' in cfg),
+      'U1 (#F4): --uninstall leaves no installed_paths in the shared config — got ' + JSON.stringify(cfg && cfg.installed_paths));
     // Round-trip: a fresh install returns the adaptive-only default.
     const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
     assert(r2.ok, 'U1: reinstall after uninstall exits 0');
