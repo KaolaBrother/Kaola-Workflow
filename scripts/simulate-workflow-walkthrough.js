@@ -17764,6 +17764,202 @@ function testReExpandCascade761() {
   console.log('testReExpandCascade761: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// #760 — THE SERIALIZATION-TRIGGER INVERSION, end to end.
+//
+// A 2-unit write frontier whose declared write sets are UNCERTAIN, not proven disjoint AND not
+// proven overlapping — one unit declares an exact file, the other a directory-shaped surface that
+// (unbeknownst to the composer) covers the very same file. This is exactly the shape the pre-#760
+// PREVENT verdict serial-degraded (a coarse pair carrying a non-exactly-resolvable entry). Post-
+// #760 it co-opens BY DEFAULT: both legs actually touch the SAME concrete file at runtime (a real,
+// but non-conflicting, overlap), the mechanical octopus merge (the synthesizer) reconciles the two
+// non-overlapping edits into one commit, the spine's review wall passes, and the run reaches the
+// sink — proving the correctness net the inversion leans on (per-leg containment + the mandatory
+// post-dominating merge) already covers what the old fail-closed PREVENT verdict was buying nothing
+// against.
+// ---------------------------------------------------------------------------
+const SPINE_PLAN_760 = [
+  '# Workflow Plan — issue #760', '',
+  '## Meta', '',
+  'project: issue-760',
+  'labels: enhancement',
+  'plan_schema_version: 2',
+  'plan_form: spine',
+  'validation_command: node scripts/simulate-workflow-walkthrough.js',
+  'validation_timeout_minutes: 20',
+  'code_certifier: wall',
+  'security_certifier: none',
+  'inherited_frontier_digest: none',
+  'inherited_frontier_classes: none', '',
+  'expansion(m1):',
+  '  milestone_goal: land a shared helper in lib/',
+  '  expected_surfaces: lib/',
+  '  join_constraints: none',
+  '  review_class: code-reviewer', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+  '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+  '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+  '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Node Ledger', '',
+  '| id | status |',
+  '|---|---|',
+  '| probe | complete |',
+  '| m1 | pending |',
+  '| wall | pending |',
+  '| done | pending |', '',
+].join('\n');
+
+function testSerializationInversion760() {
+  const wrepo = adaptiveTmp('serialization-760');
+  initGitRepoWithBareRemote(wrepo);
+  spawnSync('git', ['-C', wrepo, 'checkout', '-b', 'workflow/issue-760'], { encoding: 'utf8' });
+  // The seed file BOTH legs will independently edit — a common ancestor so the octopus merge has a
+  // real 3-way base. `.kw/` is gitignored (leg worktrees live there) mirroring #759 (e)'s fixture.
+  fs.mkdirSync(path.join(wrepo, 'lib'), { recursive: true });
+  // shared.test.js (not shared.js): the barrier's isTestLikePath allowband exempts a test-like path
+  // from the declared-write-set allowlist ENTIRELY (both the per-leg AND the group barrier), which is
+  // what makes it possible for a genuinely directory-shaped (uncertain) declaration to co-open AND
+  // actually complete: a non-test concrete file always overflows its OWN leg's exact-path barrier the
+  // instant it is produced (declared vs. actual is a strict Set membership check, prefix declarations
+  // included), regardless of co-open vs. serial — that failure mode is orthogonal to this inversion.
+  fs.writeFileSync(path.join(wrepo, 'lib', 'shared.test.js'), 'line 2\nline 3\nline 4\n');
+  fs.writeFileSync(path.join(wrepo, '.gitignore'), '.kw/\n');
+  const proj = path.join(wrepo, 'kaola-workflow', 'issue-760');
+  fs.mkdirSync(proj, { recursive: true });
+  const planPath = path.join(proj, 'workflow-plan.md');
+  const readPlan = () => fs.readFileSync(planPath, 'utf8');
+  const expandOpen = (nodeId, composition) => runNode(adaptiveNodeScript,
+    ['expand-open', '--project', 'issue-760', '--node-id', nodeId, '--json', '--stdin'],
+    wrepo, null, { input: JSON.stringify(composition) });
+  const closeUnit = (id) => {
+    const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-760', '--node-id', id, '--json'], wrepo);
+    assert(c.status === 0, '#760: close-node ' + id + ' should exit 0, got ' + c.status + '\n' + c.stdout + c.stderr);
+    return JSON.parse(c.stdout);
+  };
+  const nextAction = () => JSON.parse(runNode(nextActionScript, [planPath, '--json'], wrepo).stdout);
+
+  try {
+    fs.writeFileSync(planPath, SPINE_PLAN_760);
+    const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], wrepo);
+    assert(fz.status === 0, '#760: the spine plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: wrepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: wrepo, encoding: 'utf8' });
+
+    // ---- expand-open: two units, UNCERTAIN overlap (one exact file, one directory-shaped entry
+    //      that turns out to cover it) — the pre-#760 PREVENT case (kind:'coarse', unresolvable). ----
+    const composition = {
+      derivation: {
+        grain: 'each unit is well over its setup cost',
+        path: 'this frontier is the critical path to the review wall',
+        join: 'mechanical — a merge, not the synthesizer agent',
+        probe: 'no unit outcome reshapes the other',
+        serializer: 'none present — no S1 artifact, no S2 shared resource, worktrees available; '
+          + 'exact-path disjointness between lib/shared.test.js and lib/ is unprovable (uncertain, not '
+          + 'proven), so this is not a named serializer and the frontier co-opens',
+      },
+      units: [
+        { name: 'w1', role: 'tdd-guide', model: 'standard', write_set: 'lib/shared.test.js', mode: 'co_open' },
+        { name: 'w2', role: 'tdd-guide', model: 'standard', write_set: 'lib/', mode: 'co_open' },
+      ],
+    };
+    const e = expandOpen('m1', composition);
+    assert(e.status === 0, '#760: expand-open should exit 0, got ' + e.status + '\n' + e.stdout + e.stderr);
+    const p = JSON.parse(e.stdout);
+    assert(p.result === 'ok' && p.kind === 'write', '#760: the composed frontier must open as kind "write", got ' + JSON.stringify(p));
+    assert(JSON.stringify((p.opened || []).map(n => n.id).sort()) === JSON.stringify(['m1-r1-w1', 'm1-r1-w2']),
+      '#760 RED-provable (pre-inversion this pair serial-degraded to a SINGLE opened write, kind:coarse '
+      + 'unresolvable ⇒ PREVENT): BOTH units of an uncertain-overlap frontier must co-open, got '
+      + JSON.stringify((p.opened || []).map(n => n.id)));
+    const rsPath = path.join(proj, '.cache', 'running-set.json');
+    const rs = JSON.parse(fs.readFileSync(rsPath, 'utf8'));
+    assert(rs.lane_group && Object.keys(rs.lane_group.legs || {}).length === 2,
+      '#760: the co-open must provision an isolated leg per unit, got ' + JSON.stringify(rs.lane_group));
+
+    // ---- both legs ACTUALLY touch the same file (the uncertainty materializes as a real, but
+    //      non-conflicting, overlap) — non-overlapping edits so the mechanical merge is clean. ----
+    const legW1 = path.join(wrepo, '.kw', 'legs', 'issue-760', 'm1-r1-w1', 'lib', 'shared.test.js');
+    const legW2 = path.join(wrepo, '.kw', 'legs', 'issue-760', 'm1-r1-w2', 'lib', 'shared.test.js');
+    fs.writeFileSync(legW1, 'line 2\nline 3\nline 4\nline 5 (from w1)\n');   // w1 appends
+    fs.writeFileSync(legW2, 'line 1 (from w2)\nline 2\nline 3\nline 4\n');  // w2 prepends
+    // #633: a write-role lane-group member SELF-WRITES its evidence INSIDE its own leg (never synced
+    // back to the parent) — resolveEvidenceCachePath prefers the leg's own copy over the parent's.
+    for (const id of ['m1-r1-w1', 'm1-r1-w2']) {
+      const evPath = path.join(wrepo, '.kw', 'legs', 'issue-760', id, 'kaola-workflow', 'issue-760', '.cache', id + '.md');
+      fs.appendFileSync(evPath, '\nRED: a failing test named the shared helper first\nGREEN: the implementation makes it pass\n');
+    }
+
+    // ---- close both units: the non-last DEFERS to the group; the last runs the group barrier — the
+    //      octopus merge (the synthesizer) reconciles the two non-conflicting edits into ONE commit. ----
+    const c1 = closeUnit('m1-r1-w1');
+    assert(c1.result === 'ok' && c1.barrier === 'deferred_to_group', '#760: the first close defers to the group, got ' + JSON.stringify(c1));
+    const c2 = closeUnit('m1-r1-w2');
+    assert(c2.result === 'ok' && c2.barrier === 'group_passed' && c2.synthesized === true && typeof c2.mergeCommit === 'string' && c2.mergeCommit.length >= 7,
+      '#760: the last close must run the group barrier and report a synthesizer merge commit — the '
+      + 'reconciliation this inversion relies on, got ' + JSON.stringify(c2));
+    const merged = execFileSync('git', ['-C', wrepo, 'show', 'HEAD:lib/shared.test.js'], { encoding: 'utf8' });
+    assert(merged.includes('line 5 (from w1)') && merged.includes('line 1 (from w2)'),
+      '#760: the merged lib/shared.test.js on HEAD must carry BOTH legs\' edits (the synthesizer '
+      + 'reconciled the real same-file overlap, not just declared it away), got:\n' + merged);
+
+    // ---- discharge the milestone; the spine advances to the review wall. ----
+    const dc = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-760', '--node-id', 'm1', '--json'], wrepo);
+    assert(dc.status === 0, '#760: expand-close should exit 0, got ' + dc.status + '\n' + dc.stdout + dc.stderr);
+    {
+      const na = nextAction();
+      assert(JSON.stringify((na.readyPending || []).map(n => n.id)) === JSON.stringify(['wall']),
+        '#760: the spine advances to its review wall once the milestone discharges, got '
+        + JSON.stringify((na.readyPending || []).map(n => n.id)));
+    }
+
+    // ---- the review wall PASSES (driven through the real production close lifecycle). ----
+    const openWallRun = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-760', '--json'], wrepo);
+    const openedWall = JSON.parse(openWallRun.stdout);
+    assert(openedWall.result === 'ok' && openedWall.opened && openedWall.opened.id === 'wall' && openedWall.opened.role === 'code-reviewer',
+      '#760: the review wall must open once the milestone discharges, got ' + openWallRun.stdout + openWallRun.stderr);
+    const wd = openedWall.opened.dispatch;
+    const wallEvidence = [
+      'evidence-binding: wall ' + openedWall.nonce,
+      'contract_version: 2',
+      'review_context_hash: ' + wd.review_context_hash,
+      'behavior_contract_hash: ' + wd.behavior_contract_hash,
+      'resolved_profile_hash: ' + wd.resolved_profile_hash,
+      'candidate_digest: ' + wd.candidate_digest,
+      'domain_outcome: approved',
+      'gate_claim: ' + wd.gate_claim,
+      'gate_surface: ' + wd.gate_surface,
+      'gate_aggregation: ' + wd.gate_aggregation,
+      'findings_none: true', '',
+    ].join('\n');
+    const wallRecord = runNode(adaptiveNodeScript, ['record-evidence', '--project', 'issue-760', '--node-id', 'wall', '--stdin', '--json'], wrepo, null, { input: wallEvidence });
+    assert(wallRecord.status === 0, '#760: the wall evidence must record, got ' + wallRecord.status + '\n' + wallRecord.stdout + wallRecord.stderr);
+    const wallClose = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-760', '--node-id', 'wall', '--json'], wrepo);
+    assert(wallClose.status === 0, '#760: the review wall must close through the real transaction, got ' + wallClose.status + '\n' + wallClose.stdout + wallClose.stderr);
+    const wcp = JSON.parse(wallClose.stdout);
+    assert(wcp.result === 'ok' && wcp.closed === 'wall', '#760: the review wall must PASS, got ' + JSON.stringify({ result: wcp.result, closed: wcp.closed, reason: wcp.reason }));
+    assert(/\| wall \| complete \|/.test(readPlan()), '#760: the review wall row must move to complete through the real close transaction');
+
+    // ---- the sink completes: the unique finalize sink is next and the run reaches allDone. ----
+    {
+      const na = nextAction();
+      assert(na.nextNode && na.nextNode.id === 'done' && na.nextNode.role === 'finalize',
+        '#760: the unique finalize sink is next once the wall passes, got ' + JSON.stringify(na.nextNode));
+      assert(/\| done \| (?:pending|in_progress) \|/.test(readPlan()), '#760: the sink row must still be open after the wall closes');
+      fs.writeFileSync(planPath, readPlan().replace(/\| done \| (?:pending|in_progress) \|/, '| done | complete |'));
+      const naDone = nextAction();
+      assert(naDone.result === 'ok' && naDone.allDone === true,
+        '#760: the sink completes — the run reaches allDone, got ' + JSON.stringify({ result: naDone.result, allDone: naDone.allDone }));
+    }
+  } finally {
+    fs.rmSync(wrepo, { recursive: true, force: true });
+    try { fs.rmSync(wrepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+  }
+
+  console.log('testSerializationInversion760: PASSED');
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -18047,6 +18243,7 @@ function buildRegistry() {
   add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
   add('testExpansionTransaction759',                      testExpansionTransaction759);
   add('testReExpandCascade761',                           testReExpandCascade761);
+  add('testSerializationInversion760',                    testSerializationInversion760);
   return reg;
 }
 

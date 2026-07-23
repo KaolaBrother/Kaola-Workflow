@@ -9449,10 +9449,12 @@ function laneWriteUnion(writeNodes) {
 // writeOverlapConsent (#500 leg-couple): still forwarded as opts.writeOverlapConsent for frozen-plan
 // back-compat, but it is now VESTIGIAL at this seam. A green (exact-file-disjoint, non-shared) frontier
 // short-circuits on dj.verdict==='green' before writeOverlapRelaxable. Per #546-G2 a shared-infra
-// frontier, and per #593 a COARSE (non-shared, exact-file-disjoint) frontier, BOTH co-open BY DEFAULT
-// under the retained net (a post-dominating code-reviewer gate + no PROTECTED file in either set) — NO
-// consent needed. Only a genuine overlap (same exact path / case-collision) or a coarse pair carrying a
-// non-exactly-resolvable directory/glob entry still serial-degrades, and no consent flag overrides that.
+// frontier, and per #593/#760 a COARSE (non-shared) frontier — whether or not exact-path disjointness is
+// PROVABLE — BOTH co-open BY DEFAULT under the retained net (a post-dominating code-reviewer gate + no
+// PROTECTED file in either set) — NO consent needed. A directory/glob-shaped entry (disjointness
+// unprovable) is genuinely UNCERTAIN overlap, not a named serializer, so #760 co-opens it too; only a
+// genuine PROVEN overlap (same exact path / case-collision) still serial-degrades, and no consent flag
+// overrides that.
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
 //        | { ok:false, reason:'overlapping_write_sets', overlapping? }
@@ -9550,11 +9552,12 @@ function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile)
 // PROVISIONED (a real `git worktree add` per co-opened write member) + telemetered +
 // reconcile/teardown-aware. Provisioning fires under `groupForm && legCoupled` (the runOpenReady
 // gate at :4015) — i.e. a formed lane group AND legCoupled (= parallelWritesDefaultOn(process.env),
-// default TRUE; #542 / D-542-01). Per #546-G2 a file-disjoint SHARED-INFRA frontier, and per #593 a
-// file-disjoint COARSE (non-shared) frontier, BOTH co-open BY DEFAULT under the retained net (a
+// default TRUE; #542 / D-542-01). Per #546-G2 a file-disjoint SHARED-INFRA frontier, and per #593/#760 a
+// COARSE (non-shared) frontier — file-disjoint OR carrying an unresolvable directory/glob entry (genuinely
+// UNCERTAIN overlap, not a named serializer) — BOTH co-open BY DEFAULT under the retained net (a
 // post-dominating code-reviewer gate + no PROTECTED file in either set) — no resolveLegIsolation
 // toggle and no opts.writeOverlapConsent required (consent is vestigial at this seam). Only a genuine
-// overlap (exact / case-collision) or an unresolvable directory/glob coarse pair serial-degrades. When
+// PROVEN overlap (exact / case-collision) still serial-degrades. When
 // legCoupled is false (KAOLA_PARALLEL_WRITES=0 / a host that cannot
 // provision per-leg worktrees) NO group forms, NO leg is provisioned, NO lane_group.legs key is
 // written ⇒ serial-fallback byte-identical.
@@ -10207,11 +10210,11 @@ function runOpenReady(opts) {
     //   groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier) close path;
     //   the attribution-blind legless union barrier (:4429, liveLegs===null) is never reached via
     //   co-open. opts.writeOverlapConsent is still forwarded (NOT legCoupled) for frozen-plan
-    //   back-compat, but per #593 it is VESTIGIAL: a shared-infra OR coarse (non-shared) exact-file-
-    //   disjoint frontier co-opens BY DEFAULT under the retained net (post-dominating code-reviewer gate
-    //   + no PROTECTED file), and disjoint green short-circuits — the validator relaxes/short-circuits
-    //   all three before any consent check. Only a genuine overlap (exact / case-collision) or a
-    //   coarse pair with a non-resolvable directory/glob entry serial-degrades, and no consent overrides.
+    //   back-compat, but per #593/#760 it is VESTIGIAL: a shared-infra OR coarse (non-shared) frontier
+    //   co-opens BY DEFAULT under the retained net (post-dominating code-reviewer gate + no PROTECTED
+    //   file) REGARDLESS of resolvability — a directory/glob entry is UNCERTAIN overlap, not a named
+    //   serializer, so #760 co-opens it too — and disjoint green short-circuits before any of this. Only
+    //   a genuine PROVEN overlap (exact / case-collision) serial-degrades, and no consent overrides that.
     // #615 (D-615-01): a lane group cannot co-open over a parent worktree that already carries
     // out-of-allowband production dirt (uncommitted work from already-closed SERIAL siblings — the
     // finalize-owned-commit accumulation). Such a group's last-member close is structurally
@@ -10898,8 +10901,10 @@ function evidenceDeclaresNoOp(evidenceContent) {
 // KAOLA_LANE_CONTAINMENT toggle no longer gates it) — takes the GROUP-scoped close path: evidence-shape +
 // per-member in-lane vacuity, then either DEFER the barrier (non-last member ⇒ `barrier: deferred_to_group`)
 // or run the GROUP barrier ONCE (last member ⇒ `barrier: group_passed`, clear lane_group, drop the group
-// baseline). The serial fallback (KAOLA_PARALLEL_WRITES=0 kill-switch, overlapping/uncertain writes, a
-// no-worktree host, or a non-member serial node) ⇒ the per-node serial close runs byte-identically (INV-6).
+// baseline). The serial fallback (KAOLA_PARALLEL_WRITES=0 kill-switch, a PROVEN exact-file overlap or a
+// missing/protected gate net, a no-worktree host, or a non-member serial node) ⇒ the per-node serial close
+// runs byte-identically (INV-6). Uncertain overlap (an unresolvable directory/glob entry) is NOT in this
+// list — it co-opens too (#760) and takes the SAME group-scoped path as any other co-opened pair.
 // ---------------------------------------------------------------------------
 function runCloseNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;

@@ -12677,9 +12677,10 @@ function rtHarness(initialFiles, opts) {
   // can RELAX and co-open. #546-G2 (DECISION B) shifted the SHARED-INFRA class to relax BY DEFAULT under
   // the structural net (a post-dominating code-reviewer gate over the legs + no PROTECTED file); #593
   // extends the SAME default-relax to the NON-shared COARSE class (two different top-level dirs,
-  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial). What
-  // STILL serial-degrades: a genuine overlap (exact / case-collision), a PROTECTED file (NET-2), a
-  // missing gate (NET-1), or a non-resolvable directory/glob coarse entry. Tests drive the REAL
+  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial); #760
+  // further extends coarse to relax even when disjointness is UNPROVABLE (a directory/glob entry —
+  // genuinely uncertain, not a named serializer). What STILL serial-degrades: a genuine PROVEN overlap
+  // (exact / case-collision), a PROTECTED file (NET-2), or a missing gate (NET-1). Tests drive the REAL
   // adaptive-node + plan-validator subprocesses in a REAL git repo.
   // =========================================================================
   {
@@ -14364,16 +14365,36 @@ function rtHarness(initialFiles, opts) {
     const r = ps(writePSPlan('v-ac3c', { aSet: 'plugins/kaola-workflow-gitlab/scripts/Foo.js', bSet: 'plugins/kaola-workflow-gitlab/scripts/foo.js', policy: 'disjoint' }), ['--write-overlap-consent']);
     assert(r.result === 'refuse', '#593-V-AC3-case: a case-collision stays blocking, got ' + JSON.stringify(r));
   }
-  // #593-V-AC4-dir (resolvability fallback): coarse + gate + a directory-shaped entry → refuse.
+  // #760-V-AC4-dir (RED→GREEN, the serialization-trigger inversion): coarse + gate + a directory-shaped
+  //   entry (exact-path disjointness UNPROVABLE) → NOW relaxes to ok. This is genuinely UNCERTAIN
+  //   overlap (no S1/S2/S3 named serializer), not a proven one — #593 pinned the pre-#760 PREVENT
+  //   verdict here; #760 inverts it: uncertainty is not a serializer, so it co-opens under the SAME
+  //   retained net (gate + no PROTECTED file), exactly like an exact-file-disjoint coarse pair.
   {
     const r = ps(writePSPlan('v-ac4d', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: PB }));
-    assert(r.result === 'refuse', '#593-V-AC4-dir: a directory-shaped entry makes exact-path disjointness unprovable ⇒ coarse refusal preserved, got ' + JSON.stringify(r));
-    assert(!r.relaxed, '#593-V-AC4-dir: nothing relaxed when disjointness is unprovable');
+    assert(r.result === 'ok', '#760-V-AC4-dir: a directory-shaped entry is UNCERTAIN (not a named serializer) ⇒ co-opens, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), '#760-V-AC4-dir: relaxed[] carries kind coarse, got ' + JSON.stringify(r.relaxed));
   }
-  // #593-V-AC4-glob (resolvability fallback): coarse + gate + a glob entry → refuse.
+  // #760-V-AC4-glob (RED→GREEN, mirror): coarse + gate + a glob entry → NOW relaxes to ok, same rationale.
   {
     const r = ps(writePSPlan('v-ac4g', { aSet: 'plugins/kaola-workflow-gitlab/scripts/*.js', bSet: PB }));
-    assert(r.result === 'refuse', '#593-V-AC4-glob: a glob entry makes exact-path disjointness unprovable ⇒ coarse refusal preserved, got ' + JSON.stringify(r));
+    assert(r.result === 'ok', '#760-V-AC4-glob: a glob entry is UNCERTAIN (not a named serializer) ⇒ co-opens, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), '#760-V-AC4-glob: relaxed[] carries kind coarse, got ' + JSON.stringify(r.relaxed));
+  }
+  // #760-V-AC4-dir-protected (NET-2 still fires on an uncertain pair): the SAME directory-shaped entry,
+  //   but the OTHER leg touches a PROTECTED concrete file → still refuse (S2/consent gate untouched by
+  //   the inversion; uncertainty loosens attribution, never the curated-root wall).
+  {
+    const r = ps(writePSPlan('v-ac4d-prot', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: 'plugins/kaola-workflow-gitea/package-lock.json' }));
+    assert(r.result === 'refuse', '#760-V-AC4-dir-protected: a PROTECTED file still blocks an uncertain-overlap pair (NET-2 unmoved), got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#760-V-AC4-dir-protected: nothing relaxed when a PROTECTED file is present');
+  }
+  // #760-V-AC4-dir-nogate (NET-1 still fires on an uncertain pair): the SAME directory-shaped entry with
+  //   NO post-dominating code-reviewer gate → still refuse (the gate net is non-negotiable either way).
+  {
+    const r = ps(writePSPlan('v-ac4d-nogate', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: PB, noGate: true }));
+    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', '#760-V-AC4-dir-nogate: an uncertain-overlap pair with NO post-dominating gate still refuses (NET-1 unmoved), got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#760-V-AC4-dir-nogate: nothing relaxed without a gate');
   }
   // #593-V-VESTIGIAL: write_overlap_policy / --write-overlap-consent are redundant at this seam — coarse
   //   relaxes at policy:off with NO consent, and identically with policy:coarse + consent.
