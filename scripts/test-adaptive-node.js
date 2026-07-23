@@ -21690,6 +21690,465 @@ function rtHarness(initialFiles, opts) {
     '#727-C: a role-less context names BOTH enums (never the generic fallback), got: ' + hintNoRole);
 }
 
+// ===========================================================================
+// CLUSTER #759 — THE EXPANSION TRANSACTION.
+//
+// Covers the pure composition validator, the two append primitives (the whole append-at-tail
+// durability story), the writer/parser round trip, the fail-closed gates on expand-open, and the
+// reconcile roll-forward arm.
+// ===========================================================================
+{
+  const {
+    runExpandOpen, runExpandClose, rollForwardExpansions,
+    validateComposition, renderExpansionRecord, appendExpansionBlock, appendLedgerRows,
+  } = require('./kaola-workflow-adaptive-node');
+  const validator759 = require('./kaola-workflow-plan-validator');
+  const roles759 = new Set(validator759.installedRoles(process.cwd()));
+
+  const DERIVATION = { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none' };
+  const comp = units => ({ derivation: { ...DERIVATION }, units });
+  const ctx759 = { point: 'm1', installedRoles: roles759 };
+  const refusalOf = (composition) => {
+    const r = validateComposition(composition, ctx759);
+    return r.ok ? null : r.refusal.reason;
+  };
+
+  // --- (A) validateComposition: the shape rules. -----------------------------------------------
+  {
+    const ok = validateComposition(comp([
+      { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+      { name: 'u2', role: 'tdd-guide', model: 'reasoning', write_set: 'scripts/a.js', mode: 'serial', depends_on: ['u1'] },
+    ]), ctx759);
+    assert(ok.ok === true, '#759-A: a well-formed composition must validate, got ' + JSON.stringify(ok.refusal || ok));
+    assert(ok.units[1].depends_on.length === 1 && ok.units[1].mode === 'serial',
+      '#759-A: the normalized unit must keep its named serializer edge');
+
+    // The five derivation lines are checked for PRESENCE only — never for content. Absence refuses.
+    for (const k of ['grain', 'path', 'join', 'probe', 'serializer']) {
+      const d = { ...DERIVATION }; delete d[k];
+      const r = validateComposition({ derivation: d, units: [{ name: 'u1', role: 'code-explorer', mode: 'co_open' }] }, ctx759);
+      assert(!r.ok && r.refusal.reason === 'expansion_derivation_incomplete',
+        '#759-A: a missing "' + k + '" derivation line must refuse expansion_derivation_incomplete, got ' + JSON.stringify(r.refusal || r));
+    }
+    assert(refusalOf({ derivation: { ...DERIVATION }, units: [] }) === 'expansion_units_empty',
+      '#759-A: an empty frontier refuses');
+    assert(refusalOf(null) === 'expansion_composition_malformed', '#759-A: a non-object composition refuses');
+    assert(refusalOf(comp([{ name: 'bad name', role: 'code-explorer', mode: 'co_open' }])) === 'expansion_unit_name_invalid',
+      '#759-A: a unit name outside [A-Za-z0-9_-] refuses (it becomes a plan node id)');
+    assert(refusalOf(comp([
+      { name: 'u1', role: 'code-explorer', mode: 'co_open' },
+      { name: 'u1', role: 'code-explorer', mode: 'co_open' },
+    ])) === 'expansion_unit_name_duplicate', '#759-A: a duplicated unit name refuses');
+    assert(refusalOf(comp([{ name: 'u1', role: 'not-a-role', mode: 'co_open' }])) === 'expansion_unit_role_unknown',
+      '#759-A: a role outside the installed library refuses');
+    for (const reserved of ['finalize', 'main-session-gate', 'expansion-point']) {
+      assert(refusalOf(comp([{ name: 'u1', role: reserved, mode: 'co_open' }])) === 'expansion_unit_role_reserved',
+        '#759-A: a composed unit may not take the built-in role "' + reserved + '"');
+    }
+    // COMPOSED REVIEW-GATE UNITS ARE REFUSED BY NAME — the hard-wedge fix.
+    //
+    // A composed gate unit used to be a LEGAL composition, and it made the run unrecoverable: the OPEN
+    // path resolves the review-gate contract through the FREEZE view (prepareReviewOpen ->
+    // validator.parseNodes, spine only) and cannot SEE a composed unit, so the gate is dispatched
+    // schema-1-shaped (required_tokens [evidence-binding, verdict, findings_blocking]; no
+    // contract_version, no review_context_hash); the CLOSE path resolves it through the EXECUTION view
+    // (planNodesWithExpansions), DOES see the gate role, and applies the schema-2 review close. The
+    // close then refuses review_context_mismatch forever, expand-close refuses scheduler_active over
+    // the still-live unit, reconcile-running-set no-ops on the stable set, and the ready set is empty.
+    // It is NOT "invisible and therefore fail-closed" — it is invisible at OPEN and ENFORCED at CLOSE.
+    // Hence a typed COMPOSE-TIME refusal that names the unit and the role.
+    for (const gate of ['code-reviewer', 'security-reviewer', 'adversarial-verifier']) {
+      const r = validateComposition(comp([{ name: 'g1', role: gate, mode: 'co_open' }]), ctx759);
+      assert(!r.ok && r.refusal.reason === 'expansion_unit_role_gate_unsupported',
+        '#759-A: a composed "' + gate + '" unit must refuse expansion_unit_role_gate_unsupported, got '
+        + JSON.stringify(r.refusal || r));
+      assert(new RegExp('g1').test(r.refusal.detail) && new RegExp(gate).test(r.refusal.detail)
+        && /not yet supported/.test(r.refusal.detail),
+      '#759-A: the refusal must NAME the unit and the role and say composed gate units are not yet '
+        + 'supported (never a silent drop), got ' + JSON.stringify(r.refusal.detail));
+    }
+    // The gate refusal must fire even when the role IS installed — it is a capability statement, not a
+    // library lookup. (All three gate roles ship in the library, so this is the live case, and the
+    // `expansion_unit_role_unknown` reason must never be what surfaces for them.)
+    assert(roles759.has('code-reviewer'),
+      '#759-A CONTROL: code-reviewer is an INSTALLED role, so the gate refusal is not an unknown-role artefact');
+    // main-session-gate is in BOTH reserved sets; the structural reservation wins (reason unchanged).
+    assert(refusalOf(comp([{ name: 'g1', role: 'main-session-gate', mode: 'co_open' }])) === 'expansion_unit_role_reserved',
+      '#759-A: main-session-gate keeps its structural reason code (precedence: reserved before gate)');
+    assert(refusalOf(comp([{ name: 'u1', role: 'code-explorer', mode: 'parallel' }])) === 'expansion_unit_mode_unsupported',
+      '#759-A: mode is a closed vocabulary (serial|co_open)');
+    assert(refusalOf(comp([{ name: 'u1', role: 'code-explorer', model: 'haiku', mode: 'co_open' }])) === 'expansion_unit_model_invalid',
+      '#759-A: an out-of-vocabulary tier refuses at expansion time (the tier seam has one owner)');
+    // SERIAL REQUIRES A NAMED EDGE. The recorded `serializer` line is audit evidence; the edge is the
+    // only form the scheduler can enforce, so a serial mode with no edge would be decorative.
+    assert(refusalOf(comp([{ name: 'u1', role: 'code-explorer', mode: 'serial' }])) === 'expansion_serial_without_edge',
+      '#759-A: mode serial with no depends_on edge refuses');
+    assert(refusalOf(comp([
+      { name: 'u1', role: 'code-explorer', mode: 'co_open' },
+      { name: 'u2', role: 'code-explorer', mode: 'serial', depends_on: ['ghost'] },
+    ])) === 'expansion_unit_edge_unresolved', '#759-A: an edge naming a non-unit refuses');
+    assert(refusalOf(comp([{ name: 'u1', role: 'code-explorer', mode: 'serial', depends_on: ['u1'] }])) === 'expansion_unit_edge_self',
+      '#759-A: a self-edge refuses');
+    assert(refusalOf(comp([
+      { name: 'u1', role: 'code-explorer', mode: 'serial', depends_on: ['u2'] },
+      { name: 'u2', role: 'code-explorer', mode: 'serial', depends_on: ['u1'] },
+    ])) === 'expansion_unit_edge_cycle', '#759-A: a cyclic frontier refuses (it would stall forever, silently)');
+    assert(refusalOf(comp([{ name: 'u1', role: 'code-explorer', mode: 'co_open', depends_on: [] },
+      { name: 'u2', role: 'code-explorer', mode: 'co_open', write_set: 'a|b' }])) === 'expansion_unit_field_illegal',
+      '#759-A: a "|" inside a record cell refuses (it would forge a unit column)');
+    const wide = [];
+    for (let i = 0; i < 13; i++) wide.push({ name: 'u' + i, role: 'code-explorer', mode: 'co_open' });
+    assert(refusalOf(comp(wide)) === 'expansion_units_over_cap', '#759-A: an over-cap composition refuses');
+  }
+
+  // --- (B) appendLedgerRows: append at tail, never a rewrite. -----------------------------------
+  {
+    const plan = ['# Plan', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| a | complete |', '| b | pending |', '',
+      '## Other', '', 'tail', ''].join('\n');
+    const r = appendLedgerRows(plan, ['x', 'y']);
+    assert(r.ok && r.appended.length === 2, '#759-B: two new rows must append, got ' + JSON.stringify(r));
+    assert(r.content.indexOf('| a | complete |') >= 0 && r.content.indexOf('| b | pending |') >= 0,
+      '#759-B: existing rows must survive byte-identical');
+    assert(/\| b \| pending \|\n\| x \| pending \|\n\| y \| pending \|/.test(r.content),
+      '#759-B: new rows must land AFTER the last existing row, got:\n' + r.content);
+    assert(r.content.indexOf('## Other') >= 0 && r.content.indexOf('tail') >= 0,
+      '#759-B: the following section must be untouched');
+    // Idempotent: an id that already has a row is not duplicated.
+    const again = appendLedgerRows(r.content, ['x', 'y', 'z']);
+    assert(again.ok && JSON.stringify(again.appended) === JSON.stringify(['z']),
+      '#759-B: re-appending an existing id must be a no-op (roll-forward idempotence), got ' + JSON.stringify(again.appended));
+    // A wider ledger keeps its column count so the table stays parseable.
+    const wide = ['# Plan', '', '## Node Ledger', '', '| id | status | note |', '|---|---|---|', '| a | complete | x |', ''].join('\n');
+    const wr = appendLedgerRows(wide, ['q']);
+    assert(/\| q \| pending \| — \|/.test(wr.content), '#759-B: a wider ledger keeps its width, got:\n' + wr.content);
+    // No ledger section at all is a typed failure, never a silent success.
+    assert(appendLedgerRows('# Plan\n\n## Nodes\n\n| id |\n|---|\n', ['x']).ok === false,
+      '#759-B: a plan with no ## Node Ledger must fail, not silently drop the rows');
+  }
+
+  // --- (C) appendExpansionBlock: creates the section, then appends strictly at the tail. --------
+  {
+    const base = '# Plan\n\n## Meta\n\nlabels: x\n\n## Node Ledger\n\n| id | status |\n|---|---|\n| a | pending |\n';
+    const one = appendExpansionBlock(base, 'record(m1#1):\n  point: m1\n');
+    assert(one.startsWith(base.replace(/\n$/, '')) || one.indexOf(base) === 0,
+      '#759-C: the pre-existing plan bytes must be a PREFIX of the result (append-only)');
+    assert(/## Expansion Records/.test(one), '#759-C: the section must be created when absent');
+    const two = appendExpansionBlock(one, 'open(m1#1):\n  at: T\n');
+    assert(two.indexOf(one) === 0, '#759-C: a second append must keep the first result as a byte prefix');
+    assert(two.indexOf('record(m1#1)') < two.indexOf('open(m1#1)'),
+      '#759-C: blocks must land in append order');
+    // With a following section present the block still lands INSIDE Expansion Records, at its tail.
+    const withTail = one + '\n## Later\n\ntail\n';
+    const three = appendExpansionBlock(withTail, 'open(m1#1):\n  at: T\n');
+    assert(three.indexOf('open(m1#1)') < three.indexOf('## Later'),
+      '#759-C: the block must land at the tail of the section, not after the whole file');
+    // APPEND AT **TAIL**, not at head — pinned on the `next >= 0` arm specifically. The two assertions
+    // above are both satisfied by an implementation that splices the new block in right after the
+    // heading (it is still inside the section and still before `## Later`), so neither of them can see
+    // a head-insert. These two can: the pre-existing bytes must remain a byte PREFIX, and the earlier
+    // block must still come first. Order in this channel is the durability story — a reader that
+    // replays blocks in file order would replay an `open()` before the `record()` it proves.
+    assert(three.indexOf(one.replace(/\s+$/, '')) === 0,
+      '#759-C: with a following section present, the pre-existing bytes must STILL be a byte prefix '
+      + '(the block appends at the section TAIL, never at its head), got:\n' + three);
+    assert(three.indexOf('record(m1#1)') < three.indexOf('open(m1#1)'),
+      '#759-C: append order must survive the `next >= 0` arm — record() before its own open(), got:\n' + three);
+  }
+
+  // --- (C2) parseExpansionRecords REPORTS a malformed block, never silently drops it. ------------
+  // The parser's contract is explicit that a malformed block is REPORTED rather than dropped, because
+  // a dropped record makes its already-opened units invisible to the ready-set derivation. The
+  // no-unit-lines case is the one that reads as "harmless" and is not: without the report the record
+  // parses CLEAN, and every consumer that branches on `malformed.length` (expand-open's
+  // `expansion_records_malformed` gate and the reconcile roll-forward's refusal arm) waves it through.
+  {
+    const noUnits = ['## Expansion Records', '',
+      'record(m1#1):', '  point: m1',
+      '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none', ''].join('\n');
+    const p = validator759.parseExpansionRecords(noUnits);
+    assert(p.records.length === 1, '#759-C2: the block must still be RETURNED, got ' + JSON.stringify(p.records));
+    assert(p.records[0].malformed.some(m => /declares no unit lines/.test(m)),
+      '#759-C2: a record with a header but NO unit lines must be reported malformed, got '
+      + JSON.stringify(p.records[0].malformed));
+    // CONTROL: the same block WITH a unit line parses clean, so the pin discriminates.
+    const withUnit = noUnits.replace('  serializer: none\n', '  serializer: none\n  unit: a | code-explorer | — | — | co_open | —\n');
+    const p2 = validator759.parseExpansionRecords(withUnit);
+    assert(p2.records[0].malformed.length === 0,
+      '#759-C2 CONTROL: a record WITH unit lines must parse clean, got ' + JSON.stringify(p2.records[0].malformed));
+  }
+
+  // --- (D) writer/parser round trip: exactly one writer, exactly one reader. --------------------
+  {
+    const units = [
+      { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open', depends_on: [] },
+      { name: 'u2', role: 'tdd-guide', model: '', write_set: 'scripts/a.js', mode: 'serial', depends_on: ['u1'] },
+    ];
+    const text = '## Expansion Records\n\n' + renderExpansionRecord('m1#1', 'm1', 'a'.repeat(64), DERIVATION, units);
+    const parsed = validator759.parseExpansionRecords(text);
+    assert(parsed.records.length === 1 && parsed.records[0].malformed.length === 0,
+      '#759-D: the writer output must parse clean, got ' + JSON.stringify(parsed.records[0]));
+    const rec = parsed.records[0];
+    assert(rec.id === 'm1#1' && rec.point === 'm1' && rec.ordinal === 1, '#759-D: identity round-trips');
+    assert(rec.plan_hash === 'a'.repeat(64), '#759-D: the spine hash round-trips (the review-journal binding component)');
+    assert(rec.units.length === 2 && rec.units[0].id === 'm1-r1-u1' && rec.units[1].id === 'm1-r1-u2',
+      '#759-D: unit ids are derived, not authored, got ' + JSON.stringify(rec.units.map(u => u.id)));
+    assert(rec.units[1].mode === 'serial' && JSON.stringify(rec.units[1].dependsOnNames) === JSON.stringify(['u1']),
+      '#759-D: the serializer edge round-trips');
+    assert(rec.units[0].model === 'standard' && rec.units[1].model === '',
+      '#759-D: an omitted tier round-trips as empty (it falls through to the role default seam)');
+    for (const k of ['grain', 'path', 'join', 'probe', 'serializer']) {
+      assert(rec.derivation[k] === DERIVATION[k], '#759-D: the "' + k + '" derivation line round-trips');
+    }
+  }
+
+  // --- (E) expand-open gates, through injected seams (zero mutation on every refusal). ----------
+  {
+    const SPINE759 = (ledgerRows, tail) => ['# Plan', '',
+      '## Meta', '', 'plan_form: spine', '',
+      'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/',
+      '  join_constraints: none', '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| probe | code-explorer | — | — | 1 | sequence |',
+      '| m1 | expansion-point | probe | — | 1 | sequence |',
+      '| m1-r1-u1 | code-explorer | probe | — | 1 | sequence |',
+      '| done | finalize | m1, m1-r1-u1 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', ...ledgerRows, '',
+      ...(tail || [])].join('\n');
+    const READY = ['| probe | complete |', '| m1 | pending |', '| m1-r1-u1 | pending |', '| done | pending |'];
+    const NOT_READY = ['| probe | pending |', '| m1 | pending |', '| m1-r1-u1 | pending |', '| done | pending |'];
+
+    let written = null;
+    const mkOpts = (content, nodeId, composition) => ({
+      planPath: '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md',
+      project: 'issue-759', nodeId, composition,
+      shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
+      readFile: () => content,
+      writeFile: (_p, c) => { written = c; },
+      cacheExists: () => false,
+      now: () => 'T',
+    });
+    const expectRefuse = (content, nodeId, composition, reason, label) => {
+      written = null;
+      const r = runExpandOpen(mkOpts(content, nodeId, composition));
+      assert(r.result === 'refuse' && r.reason === reason,
+        '#759-E ' + label + ': expected refuse/' + reason + ', got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+      assert(written === null, '#759-E ' + label + ': a refusal must mutate NOTHING');
+    };
+    const GOOD = comp([{ name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' }]);
+
+    expectRefuse(SPINE759(READY).replace('plan_form: spine\n', ''), 'm1', GOOD, 'not_a_spine_plan', 'dag plan');
+    expectRefuse(SPINE759(READY), null, GOOD, 'node_id_required', 'no --node-id');
+    expectRefuse(SPINE759(READY), 'ghost', GOOD, 'node_not_found', 'unknown node');
+    expectRefuse(SPINE759(READY), 'probe', GOOD, 'node_not_expansion_point', 'concrete node');
+    expectRefuse(SPINE759(NOT_READY), 'm1', GOOD, 'expansion_point_not_ready', 'frozen deps not terminal');
+    expectRefuse(SPINE759(['| probe | complete |', '| m1 | complete |', '| m1-r1-u1 | pending |', '| done | pending |']), 'm1', GOOD,
+      'expansion_point_discharged', 'already discharged');
+    expectRefuse(SPINE759(READY), 'm1', comp([{ name: 'u1', role: 'code-explorer', mode: 'serial' }]),
+      'expansion_serial_without_edge', 'composition refusal propagates');
+
+    // GATE DIRECTION 1 — a prior record with no open() proof routes to reconcile, never to a second
+    // co-opened frontier. The record deliberately omits every optional field.
+    const UNPROVEN = ['## Expansion Records', '', 'record(m1#1):', '  point: m1',
+      '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+      '  unit: a | code-explorer | — | — | co_open | —', ''];
+    expectRefuse(SPINE759(READY.concat(['| m1-r1-a | complete |']), UNPROVEN), 'm1', GOOD,
+      'expansion_open_incomplete', 'prior record not proven opened');
+
+    // GATE DIRECTION 2 — a prior record whose units are not POSITIVELY terminal blocks. A unit with NO
+    // ledger row at all is the load-bearing case: absence of evidence must not read as completion.
+    const PROVEN = UNPROVEN.concat(['open(m1#1):', '  at: T', '']);
+    expectRefuse(SPINE759(READY, PROVEN), 'm1', GOOD, 'expansion_not_settled', 'prior unit has NO ledger row');
+    // A prior unit that has a row but is NOT terminal also blocks. `pending` (not `in_progress`) is
+    // used deliberately: an in_progress row would trip the OUTER guard layer (serial_node_live) first,
+    // which is pinned separately below — this pin is about the expansion gate itself.
+    expectRefuse(SPINE759(READY.concat(['| m1-r1-a | pending |']), PROVEN), 'm1', GOOD,
+      'expansion_not_settled', 'prior unit non-terminal');
+    // ...and the LAYERED GUARD PROLOGUE still fences expansion like every other mutating subcommand:
+    // a live serial node refuses before the transaction body is even reached.
+    expectRefuse(SPINE759(READY.concat(['| m1-r1-a | in_progress |']), PROVEN), 'm1', GOOD,
+      'serial_node_live', 'guard prologue layer 3 fences expansion');
+
+    // A derived unit id that would collide with a spine node id is refused before anything is written.
+    // (The fixture carries a spine node literally named `m1-r1-u1` for exactly this pin — a real
+    // collision would silently share the `.cache/barrier-base-<sanitized>` key with that node.)
+    expectRefuse(SPINE759(READY), 'm1', comp([{ name: 'u1', role: 'code-explorer', mode: 'co_open' }]),
+      'expansion_unit_id_collision', 'id collision');
+
+    // --- expand-close: the same fail-closed settled gate, plus the never-composed case. ---
+    const mkCloseOpts = (content) => ({
+      planPath: '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md', project: 'issue-759', nodeId: 'm1',
+      shell: () => ({ exitCode: 0, ok: true, result: 'ok' }),
+      readFile: () => content, writeFile: (_p, c) => { written = c; }, cacheExists: () => false, now: () => 'T',
+    });
+    written = null;
+    let rc = runExpandClose(mkCloseOpts(SPINE759(READY)));
+    assert(rc.result === 'refuse' && rc.reason === 'expansion_never_composed' && written === null,
+      '#759-E expand-close over a never-composed point must refuse with zero mutation, got ' + JSON.stringify(rc));
+    written = null;
+    rc = runExpandClose(mkCloseOpts(SPINE759(READY, PROVEN)));
+    assert(rc.result === 'refuse' && rc.reason === 'expansion_not_settled' && written === null,
+      '#759-E expand-close over a unit with no ledger row must BLOCK, got ' + JSON.stringify(rc));
+    written = null;
+    rc = runExpandClose(mkCloseOpts(SPINE759(READY, UNPROVEN)));
+    assert(rc.result === 'refuse' && rc.reason === 'expansion_open_incomplete' && written === null,
+      '#759-E expand-close over an unproven open must route to reconcile, got ' + JSON.stringify(rc));
+    written = null;
+    rc = runExpandClose(mkCloseOpts(SPINE759(READY.concat(['| m1-r1-a | complete |']), PROVEN)));
+    assert(rc.result === 'ok' && written !== null && /discharge\(m1\)/.test(written),
+      '#759-E a fully-settled point discharges and appends a discharge block, got ' + JSON.stringify(rc));
+    assert(/\| m1 \| complete \|/.test(written), '#759-E the milestone row must flip to complete');
+
+    // --- (E2) THE FULL LAYERED GUARD PROLOGUE, pinned LAYER BY LAYER on BOTH subcommands. ---------
+    //
+    // Both `expand-open` and `expand-close` mutate the plan (ledger rows + the append-only channel) and
+    // the running set, so both run the same layered prologue every other mutating subcommand runs:
+    //   Layer 1 INTEGRITY   — a tampered/structurally-invalid frozen plan must not be partially executed.
+    //   Layer 2 HALT FENCE  — a durable consent_halt exists precisely to STOP work; it is the human
+    //                         escalation valve, and a subcommand that opens a whole frontier (or
+    //                         discharges a milestone) must not sail through it.
+    //   Layer 3 EXCLUSION   — the per-command mutual-exclusion set.
+    // Only Layer 3 was pinned before (and only for expand-open), which left the tamper gate and the
+    // consent valve free to be deleted from either subcommand with every suite still green. Each pin
+    // below also asserts ZERO MUTATION, which is the actual guarantee a prologue makes.
+    //
+    // EXCLUSION SETS ARE DIFFERENT ON PURPOSE and are pinned in both directions:
+    //   expand-open  excl {serial}            — like open-ready, it OWNS the running-set open.
+    //   expand-close excl {serial, scheduler} — it discharges a milestone and must not race a live set.
+    {
+      const CACHE_DIR = '/tmp/i759/kaola-workflow/issue-759/.cache/';
+      const RS_PATH = CACHE_DIR + RUNNING_SET_NAME;
+      // Every write of the transaction, in order. The `written` single-slot seam above only keeps the
+      // LAST write, and these seams are non-persistent (readFile always replays the ORIGINAL bytes), so
+      // phase 3's proof-block write lands on the pre-phase-1 content and would hide phase 1's record.
+      let writes = [];
+      const LIVE_SET = JSON.stringify({ state: 'open', nodes: [{ id: 'probe', role: 'code-explorer', kind: 'read' }] });
+      // A path-aware seam pair so the running-set surface can be made live independently of the plan.
+      const seams = (content, opts) => {
+        const o = opts || {};
+        return {
+          planPath: '/tmp/i759/kaola-workflow/issue-759/workflow-plan.md', project: 'issue-759',
+          shell: () => (o.integrityFails ? { exitCode: 1, ok: false, reason: 'plan_hash_mismatch' } : { exitCode: 0, ok: true, result: 'ok' }),
+          readFile: (fp) => (fp === RS_PATH ? (o.runningSet || '') : content),
+          writeFile: (_p, c) => { written = c; writes.push(c); },
+          cacheExists: (fp) => (fp === RS_PATH ? !!o.runningSet : false),
+          now: () => 'T',
+        };
+      };
+      const guardCase = (label, run, expected) => {
+        written = null; writes = [];
+        const r = run();
+        assert(r.result === 'refuse' && r.reason === expected,
+          '#759-E2 ' + label + ': expected refuse/' + expected + ', got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+        assert(written === null, '#759-E2 ' + label + ': a guard refusal must mutate NOTHING');
+      };
+      const GOOD_OPEN = comp([{ name: 'z1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' }]);
+      // A ready, fully-settled point so NOTHING in either transaction body can be the reason a refusal
+      // appears — every refusal below is attributable to the prologue alone.
+      const SETTLED = SPINE759(READY.concat(['| m1-r1-a | complete |']), PROVEN);
+      const HALTED = SPINE759(READY.concat(['| m1-r1-a | complete |', 'consent_halt: pending']), PROVEN);
+
+      // Layer 1 — INTEGRITY. --resume-check non-ok ⇒ plan_integrity_failed, zero mutation, both commands.
+      guardCase('expand-open integrity',
+        () => runExpandOpen({ ...seams(SETTLED, { integrityFails: true }), nodeId: 'm1', composition: GOOD_OPEN }),
+        'plan_integrity_failed');
+      guardCase('expand-close integrity',
+        () => runExpandClose({ ...seams(SETTLED, { integrityFails: true }), nodeId: 'm1' }),
+        'plan_integrity_failed');
+
+      // Layer 2 — CONSENT-HALT FENCE. A durable `consent_halt: pending` in the ledger stops both.
+      guardCase('expand-open halt fence',
+        () => runExpandOpen({ ...seams(HALTED), nodeId: 'm1', composition: GOOD_OPEN }), 'halt_pending');
+      guardCase('expand-close halt fence',
+        () => runExpandClose({ ...seams(HALTED), nodeId: 'm1' }), 'halt_pending');
+      // CONTROL: with the marker removed the very same call reaches its body and succeeds — so the two
+      // pins above discriminate the FENCE, not some unrelated property of the fixture.
+      written = null;
+      const unhalted = runExpandClose({ ...seams(SETTLED), nodeId: 'm1' });
+      assert(unhalted.result === 'ok' && written !== null && /discharge\(m1\)/.test(written),
+        '#759-E2 CONTROL: without the halt marker the identical expand-close must discharge, got ' + JSON.stringify(unhalted));
+
+      // Layer 3 — EXCLUSION, pinned in BOTH directions on the running-set surface.
+      guardCase('expand-close scheduler exclusion',
+        () => runExpandClose({ ...seams(SETTLED, { runningSet: LIVE_SET }), nodeId: 'm1' }), 'scheduler_active');
+      // ...and the DIRECTION that proves the sets differ: expand-open OWNS the running-set open, so the
+      // same live set must NOT stop it. (It proceeds into the body and appends a record.)
+      written = null; writes = [];
+      const opened = runExpandOpen({ ...seams(SETTLED, { runningSet: LIVE_SET }), nodeId: 'm1', composition: GOOD_OPEN });
+      assert(opened.result !== 'refuse' || opened.reason !== 'scheduler_active',
+        '#759-E2: expand-open must NOT be excluded by a live running set — it owns the open, got '
+        + JSON.stringify({ result: opened.result, reason: opened.reason }));
+      assert(writes.some(c => /record\(m1#2\)/.test(c) && /\| m1-r2-z1 \| pending \|/.test(c)),
+        '#759-E2: expand-open past the prologue must append its record AND the unit ledger row, got '
+        + JSON.stringify(writes.map(c => c.slice(-200))));
+    }
+  }
+
+  // --- (F) rollForwardExpansions is inert on a plan that has no spine form / no records. --------
+  {
+    const dag = ['## Meta', '', 'labels: x', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| a | code-explorer | — | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| a | pending |', ''].join('\n');
+    let touched = false;
+    const out = rollForwardExpansions({
+      planPath: '/tmp/i759/p.md', readFile: () => dag, writeFile: () => { touched = true; },
+      shell: () => ({ exitCode: 0, ok: true, result: 'ok' }), cacheExists: () => false,
+    });
+    assert(out.rolledForward.length === 0 && out.refusals.length === 0 && touched === false,
+      '#759-F: a dag plan must produce no roll-forward and no write, got ' + JSON.stringify(out));
+    const unreadable = rollForwardExpansions({
+      planPath: '/tmp/i759/p.md', readFile: () => { throw new Error('gone'); }, writeFile: () => { touched = true; },
+    });
+    assert(unreadable.rolledForward.length === 0, '#759-F: an unreadable plan must not throw out of reconcile');
+  }
+
+  // --- (F2) rollForwardExpansions SKIPS an already-proven record — non-vacuously. ----------------
+  //
+  // This is the idempotence claim, pinned where it is actually decided: the
+  // `expansionRecordOpened(...) -> continue` skip inside the roll-forward loop. It has to be pinned
+  // HERE rather than only through reconcile, because at the reconcile level the second run can be
+  // satisfied by an unrelated early return long before the loop is reached — which makes the
+  // idempotence assertion true for the wrong reason and blind to the skip being deleted.
+  //
+  // The fixture is a SPINE plan whose one record ALREADY carries its `open()` proof, with the seams
+  // wired so the re-open would SUCCEED if it ran. Deleting the skip therefore cannot hide behind a
+  // failure: the record would be reported rolledForward on a plan that needs nothing.
+  {
+    const opened = ['# Plan', '', '## Meta', '', 'plan_form: spine', '',
+      'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/',
+      '  join_constraints: none', '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| probe | code-explorer | — | — | 1 | sequence |',
+      '| m1 | expansion-point | probe | — | 1 | sequence |',
+      '| done | finalize | m1 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| probe | complete |', '| m1 | pending |', '| m1-r1-a | complete |', '| done | pending |', '',
+      '## Expansion Records', '',
+      'record(m1#1):', '  point: m1',
+      '  grain: g', '  path: p', '  join: j', '  probe: pr', '  serializer: none',
+      '  unit: a | code-explorer | — | — | co_open | —', '',
+      'open(m1#1):', '  at: T', ''].join('\n');
+    let wrote = null;
+    const out = rollForwardExpansions({
+      planPath: '/tmp/i759f2/kaola-workflow/p/workflow-plan.md', project: 'p',
+      readFile: () => opened, writeFile: (_p, c) => { wrote = c; },
+      shell: (sp) => (path.basename(sp) === 'kaola-workflow-next-action.js'
+        ? { exitCode: 0, result: 'ok', allDone: false, readyPending: [] }
+        : { exitCode: 0, ok: true, result: 'ok' }),
+      cacheExists: () => false, mkdirp: () => {}, now: () => 'T2',
+    });
+    assert(JSON.stringify(out.rolledForward) === '[]' && JSON.stringify(out.refusals) === '[]',
+      '#759-F2: a record that ALREADY carries its open() proof must be SKIPPED, not re-rolled — got '
+      + JSON.stringify(out));
+    assert(wrote === null,
+      '#759-F2: skipping must write nothing at all (no second proof block, no ledger touch), got:\n' + String(wrote));
+  }
+}
+
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
-const { parseNodes, parseLedger, parseSpeculativePolicy, parseOptimizeContracts, validateWaitBudgetNode, uniqueSink, hasUnresolvableEntry } = require('./kaola-gitlab-workflow-plan-validator');
+const { parseNodes, parseLedger, parseSpeculativePolicy, parseOptimizeContracts, validateWaitBudgetNode, uniqueSink, hasUnresolvableEntry, expansionUnitNodes, expansionRecordOpened, expansionRecordSettled, SPINE_EXPANSION_ROLE } = require('./kaola-gitlab-workflow-plan-validator');
 const { parseWriteSetCell, isProtected } = require('./kaola-gitlab-workflow-classifier');
 const { LEDGER_STATUSES, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
 const { enforceReasoningFloor, loadCodexSessionProof, isCodexPluginScriptDir } = require('./kaola-workflow-resolve-agent-model');
@@ -54,10 +54,25 @@ function computeNextAction(content, opts) {
   } : null;
 
   // 1. Parse nodes. Empty parse => refuse.
-  const nodes = parseNodes(content);
-  if (!nodes.length) {
+  const spineNodes = parseNodes(content);
+  if (!spineNodes.length) {
     return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'] };
   }
+
+  // 1b. #759: project the recorded expansion frontiers onto the SAME validator-shaped node model.
+  // The ready-set derivation therefore reads spine + expansion records through ONE graph — readiness,
+  // longest-path priority, allDone, the stall refusal and the reasoning-tier floor all range over the
+  // composed interior with no parallel code path. A plan with no `## Expansion Records` section
+  // produces zero units, so `nodes` IS the legacy array (by reference) and every typed refusal family
+  // below is reached on exactly the same inputs as before.
+  const expansion = expansionUnitNodes(content, spineNodes);
+  const nodes = expansion.units.length
+    ? spineNodes
+      .map(n => (expansion.pointDeps.has(n.id)
+        ? { ...n, dependsOn: n.dependsOn.concat(expansion.pointDeps.get(n.id)) }
+        : n))
+      .concat(expansion.units)
+    : spineNodes;
 
   // 2. Parse the ledger (may be empty Map if section absent).
   const ledger = parseLedger(content);
@@ -120,6 +135,11 @@ function computeNextAction(content, opts) {
     ...(runtime === 'codex' ? { codex_session_proof: dispatchProof } : {}),
     // Optional and conditional: legacy/no-override descriptor bytes stay unchanged.
     ...(Number.isInteger(node.wait_budget_minutes) ? { wait_budget_minutes: node.wait_budget_minutes } : {}),
+    // #759: expansion provenance, present ONLY on a synthesized unit. A spine node never carries
+    // these keys, so every legacy descriptor stays byte-identical.
+    ...(node.expansion_record
+      ? { expansion_record: node.expansion_record, expansion_point: node.expansion_point, expansion_mode: node.expansion_mode }
+      : {}),
   });
   const allAncestorsTerminal = startId => {
     const start = byId.get(startId);
@@ -212,9 +232,42 @@ function computeNextAction(content, opts) {
     return best;
   };
   const docIndex = new Map(nodes.map((n, i) => [n.id, i]));
+  // #759: an expansion point is NEVER a dispatchable frontier member. It carries no work of its own —
+  // its frontier is composed at open time by the expansion transaction — so emitting it on
+  // readyPending would hand the running-set scheduler a node with no agent profile to dispatch.
+  // It is excluded here (the single frontier producer) rather than in the scheduler, so every
+  // consumer of readyPending inherits the exclusion. It stays in readySet/nextNode/allDone, which is
+  // what keeps the stall refusal and the terminal-state derivation unchanged.
   const readyPending = readySet
     .filter(n => st(n.id) === 'pending')
+    .filter(n => n.role !== SPINE_EXPANSION_ROLE)
     .map(n => Object.assign({}, n, { longestPathToSink: longestPathToSink(n.id) }))
+    .sort((a, b) => (b.longestPathToSink - a.longestPathToSink) || (docIndex.get(a.id) - docIndex.get(b.id)));
+
+  // #759: expansionPending — the EXPANSION frontier (additive; absent when the plan has no ready
+  // expansion point, so a legacy emission is byte-unchanged). Each entry tells the executor exactly
+  // which transaction is legal next, using the two directed predicates:
+  //   readyToExpand    — no record yet, or every prior record is POSITIVELY settled  (gate: fail-closed)
+  //   readyToDischarge — at least one record exists and all of them are settled
+  //   openIncomplete   — a record exists that is not POSITIVELY proven opened        (resume: fail-closed)
+  const ledgerObj = {};
+  for (const [id, status] of ledger) ledgerObj[id] = status;
+  const expansionPending = readySet
+    .filter(n => n.role === SPINE_EXPANSION_ROLE && st(n.id) === 'pending')
+    .map(n => {
+      const recs = expansion.parsed.records.filter(r => r.point === n.id);
+      const unsettled = recs.filter(r => !expansionRecordSettled(r, ledgerObj)).map(r => r.id);
+      const unopened = recs.filter(r => !expansionRecordOpened(expansion.parsed, r.id)).map(r => r.id);
+      return {
+        ...n,
+        records: recs.map(r => r.id),
+        unsettledRecords: unsettled,
+        openIncomplete: unopened,
+        readyToExpand: unsettled.length === 0 && unopened.length === 0,
+        readyToDischarge: recs.length > 0 && unsettled.length === 0 && unopened.length === 0,
+        longestPathToSink: longestPathToSink(n.id),
+      };
+    })
     .sort((a, b) => (b.longestPathToSink - a.longestPathToSink) || (docIndex.get(a.id) - docIndex.get(b.id)));
   const active = nodes
     .filter(node => st(node.id) === 'in_progress')
@@ -262,6 +315,9 @@ function computeNextAction(content, opts) {
     speculativePending = nodes
       .filter(node => {
         if (st(node.id) !== 'pending') return false;        // only a not-yet-opened node is speculatively openable
+        // #759: same exclusion as readyPending — an expansion point is never dispatched, so it must
+        // not reach the speculative frontier either (open-ready hands that set straight to dispatch).
+        if (node.role === SPINE_EXPANSION_ROLE) return false;
         if (allAncestorsTerminal(node.id)) return false;    // already a NORMAL ready node — not speculative
         if (!isWriteEligible(node)) return false;           // #596: read OR write, subject to the write-axis conditions
         const unsatisfied = node.dependsOn.filter(d => !TERMINAL.has(st(d)));
@@ -293,6 +349,8 @@ function computeNextAction(content, opts) {
     active,
     // #439/#597: present at speculative_open_policy:consent AND auto (omitted at off ⇒ byte-identical pre-#439).
     ...(speculativePending ? { speculativePending } : {}),
+    // #759: omitted entirely when no expansion point is ready ⇒ a legacy plan's emission is unchanged.
+    ...(expansionPending.length ? { expansionPending } : {}),
   };
 }
 
