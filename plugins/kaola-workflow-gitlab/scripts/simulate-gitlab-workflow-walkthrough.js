@@ -70,7 +70,7 @@ function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
     { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
   ];
   const planBody = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -314,7 +314,7 @@ function testGitlabAdaptive() {
   const repairScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js');
   const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
   const PLAN = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
     '| e | code-explorer | — | — | 1 | sequence |',
@@ -375,7 +375,7 @@ function testGitlabAdaptive() {
     function gateVal(rows, label, rawDoc) {
       const p = path.join(tmp, 'gate-plan.md');
       const content = rawDoc !== undefined ? rawDoc : [
-        '# Plan', '', '## Meta', 'labels: ' + label, '', '## Nodes', '',
+        '# Plan', '', '## Meta', 'plan_form: spine', 'labels: ' + label, '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
       ].concat(rows).concat(['']).join('\n');
@@ -387,7 +387,7 @@ function testGitlabAdaptive() {
     assert.strictEqual(gateVal(['| n1 | doc-updater | — | Dockerfile | 1 | sequence |', '| d | finalize | n1 | — | 1 | sequence |'], 'chore').result,
       'refuse', 'gitlab A2: slashless root file must require code-reviewer (G1)');
     assert.strictEqual(gateVal(null, null, [
-      '# Plan', '', 'labels: chore', '', '## Meta', 'labels: security', '', '## Nodes', '',
+      '# Plan', '', 'labels: chore', '', '## Meta', 'plan_form: spine', 'labels: security', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
       '| n1 | tdd-guide | — | src/h.js | 1 | sequence |',
@@ -504,7 +504,7 @@ function testGitlabAdaptive() {
     const e2dir = path.join(tmp, 'kaola-workflow', 'issue-941');
     fs.mkdirSync(e2dir, { recursive: true });
     const e2plan = path.join(e2dir, 'workflow-plan.md');
-    fs.writeFileSync(e2plan, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| done | finalize | — | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| done | pending |', 'consent_halt: pending', ''].join('\n'));
+    fs.writeFileSync(e2plan, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| done | finalize | — | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| done | pending |', 'consent_halt: pending', ''].join('\n'));
     fs.writeFileSync(e2plan, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(e2plan, 'utf8')) + ' -->\n\n' + fs.readFileSync(e2plan, 'utf8'));
     spawnNode(valScript, [e2plan, '--freeze'], tmp);
     spawnNode(repairScript, ['issue-941'], tmp);
@@ -527,7 +527,7 @@ function testGitlabAdaptive() {
     ], 'enhancement').result, 'refuse', 'gitlab v3.20.1 #3: independent-branch exact-file overlap must refuse');
     // Fix #1 + #2 — pure barrierCheck on the fork validator.
     const fv = require(valScript);
-    const mkL = (nodes, ledger, lbl) => ['# Plan', '', '## Meta', 'labels: ' + (lbl || 'chore'), '', '## Nodes', '',
+    const mkL = (nodes, ledger, lbl) => ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: ' + (lbl || 'chore'), '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|']
       .concat(nodes).concat(['', '## Node Ledger', '', '| id | status |', '|---|---|']).concat(ledger).join('\n');
     const naT = mkL(['| imp | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | imp | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |'], ['| imp | n/a |', '| sec | n/a |', '| done | complete |'], 'security');
@@ -539,7 +539,7 @@ function testGitlabAdaptive() {
     const fcl = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-classifier.js'));
     const cdir = path.join(tmp, 'kaola-workflow', 'curated-claimed-238');
     fs.mkdirSync(cdir, { recursive: true });
-    fs.writeFileSync(path.join(cdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+    fs.writeFileSync(path.join(cdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
     const fr238 = fcl.classify({ body: 'this change also edits the Dockerfile build stage' }, [{ project: 'curated-claimed-238', project_dir: cdir }]);
     assert.strictEqual(fr238.verdict, 'yellow', 'gitlab #238: curated root (Dockerfile) overlap must be yellow, got ' + JSON.stringify(fr238));
     // v3.21.0: the candidate-side detector must normalize sentence punctuation (trailing '.', leading
@@ -561,7 +561,7 @@ function testGitlabAdaptive() {
     // declaration must intersect a canonical `Dockerfile` candidate (mutation-covers fork classifier:337).
     const lcdir = path.join(tmp, 'kaola-workflow', 'lc-curated-238');
     fs.mkdirSync(lcdir, { recursive: true });
-    fs.writeFileSync(path.join(lcdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+    fs.writeFileSync(path.join(lcdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
     const frLc = fcl.classify({ body: 'this change also edits the Dockerfile build stage' }, [{ project: 'lc-curated-238', project_dir: lcdir }]);
     assert.strictEqual(frLc.verdict, 'yellow', 'gitlab v3.21.0: lowercase structured curated declaration must intersect canonical candidate, got ' + JSON.stringify(frLc));
     assert.strictEqual(gateVal([
@@ -814,7 +814,7 @@ function testGitlabAdaptive() {
     // --freeze --repair normalizes it and surfaces header_normalized:true.
     {
       const planBodyLh = [
-        '# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+        '# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
@@ -856,7 +856,7 @@ function testGitlabAdaptive() {
       // Build the write-set string via join() to avoid triggering the forge-script literal guard.
       const codexScriptsPath = ['plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-plan-validator.js'].join('/');
       const splitPlanGl = [
-        '# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+        '# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
         '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, ' + codexScriptsPath + ' | 1 | sequence |',
@@ -881,7 +881,7 @@ function testGitlabAdaptiveFreezeChecked() {
   const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
   const PLAN = [
     '# Workflow Plan', '', '## Meta',
-    'plan_schema_version: 2', 'labels: enhancement',
+    'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
     'code_certifier: r', 'security_certifier: none',
     'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
     'validation_command: node --check index.js',
@@ -1307,7 +1307,7 @@ function testGitlabBundleOrientSurfacesBundleIdentity() {
     const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
       '# Workflow Plan — ' + project, '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -1854,7 +1854,7 @@ function testGitlabBundleStateIncoherent() {
   const adaptiveNodeScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js');
   const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
   const minimalPlan = [
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -1954,7 +1954,7 @@ function testGitlabBundle424432433NodeSeeding() {
 
   // --- scenario 7: doc-updater .md targets (pure barrierCheck) -------
   {
-    const PLAN_DOC = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+    const PLAN_DOC = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| doc | doc-updater | — | docs/guide.md, README.md | 1 | sequence |',
       '| done | finalize | doc | — | 1 | sequence |', '',
@@ -1979,7 +1979,7 @@ function testGitlabBundle424432433NodeSeeding() {
 
   // --- scenario 6: evidence seeding via open-next CLI (requires a git repo) ----
   {
-    const SEED_PLAN = ['# Workflow Plan — issue #433-seed-gl', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    const SEED_PLAN = ['# Workflow Plan — issue #433-seed-gl', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
       '| rv | code-reviewer | n1 | — | 1 | sequence |',

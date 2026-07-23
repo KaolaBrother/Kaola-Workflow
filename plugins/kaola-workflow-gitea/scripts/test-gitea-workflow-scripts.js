@@ -4339,7 +4339,7 @@ function testGiteaAdaptiveNodeOperatorHint445() {
 function testGiteaPlanValidatorRefusalMatrix401() {
   const root = tempRoot('kw-ge-planval-refuse-');
   const planHeader = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', ''
+    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', ''
   ];
   const sixCol = (writeSet) => planHeader.concat([
     '| id | role | depends_on | declared_write_set | cardinality | shape |',

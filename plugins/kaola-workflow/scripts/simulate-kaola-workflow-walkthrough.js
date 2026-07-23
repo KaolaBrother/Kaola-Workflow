@@ -1079,6 +1079,7 @@ function testCodexLedgerHeaderInvalid425() {
   const planBody = [
     '# Plan', '',
     '## Meta',
+    'plan_form: spine',
     'plan_schema_version: 2',
     'labels: chore',
     'code_certifier: review',
@@ -1141,7 +1142,7 @@ function testCodexGeneratedPortSplit431() {
 
   const splitPlan = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -1166,7 +1167,7 @@ function testCodexGeneratedPortSplit431() {
   // (c) bundled plan (all 4 editions) must freeze in-grammar via root validator.
   const bundledPlan = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',

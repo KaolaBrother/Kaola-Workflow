@@ -29,7 +29,7 @@ function seedAdaptiveFinalizeFixture(rootDir, project) {
   fs.mkdirSync(dir, { recursive: true });
   const planPath = path.join(dir, 'workflow-plan.md');
   const planBody = [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -156,7 +156,7 @@ const gtClaimScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaol
 const gtAdaptiveNode = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js');
 const gtPlanVal = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
 const gtMinimalPlan = [
-  '## Meta', 'labels: chore', '',
+  '## Meta', 'plan_form: spine', 'labels: chore', '',
   '## Nodes', '',
   '| id | role | depends_on | declared_write_set | cardinality | shape |',
   '|---|---|---|---|---|---|',
