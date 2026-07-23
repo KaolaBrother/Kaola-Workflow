@@ -1514,6 +1514,25 @@ const FINDING_FAILURE_CLASSES = Object.freeze([
 const SHA1_RE = /^[0-9a-f]{40}$/i;
 const TREE_MODE_RE = /^[0-7]{6}$/;
 
+// #761 (carry-forward from #759) — the OPTIONAL expansion_id binding on a review-journal attempt.
+// An expansion record's id is `<point>#<ordinal>` (see the plan-validator's expansionUnitId /
+// parseExpansionRecords): the point contains no `#`, `|`, whitespace, or newline (those are the record
+// grammar's own delimiters), and the ordinal is a positive integer. A re-expansion produces a SECOND
+// record on the same point, so a re-review's journal attempt must name WHICH record it reviewed — that
+// is exactly this field. It is OPTIONAL AND IGNORED WHEN ABSENT (an in-flight journal minted before
+// this field existed stays valid), and VALIDATED WHEN PRESENT (a malformed value is a typed refusal —
+// a binding that cannot be trusted must never pass as if it bound nothing).
+const EXPANSION_ID_RE = /^[^\s#|]+#[1-9][0-9]*$/;
+// expansionIdFieldOk — QUESTION: "is this attempt's expansion_id field acceptable?" FAILS CLOSED on a
+// present-but-malformed value; PASSES on absence (the in-flight-tolerance direction) and on a
+// well-formed record id. Returns true/false; the caller emits the typed refusal.
+function expansionIdFieldOk(attempt) {
+  if (!attempt || !Object.prototype.hasOwnProperty.call(attempt, 'expansion_id')) return true;
+  const v = attempt.expansion_id;
+  if (v === null) return true;                       // explicit "reviewed no re-expansion record"
+  return typeof v === 'string' && v.length <= 256 && EXPANSION_ID_RE.test(v);
+}
+
 function planNodeId(node) { return node && node.id != null ? String(node.id) : ''; }
 function planNodeRole(node) { return node && node.role != null ? String(node.role) : ''; }
 function planNodeDepends(node) {
@@ -2459,6 +2478,11 @@ function validateReviewJournalV2(journal, expectedPlanHash) {
       || typeof attempt.lifecycle_settled !== 'boolean') {
       return refuseJournal('review_journal_malformed', 'attempt scalar fields invalid');
     }
+    // #761: OPTIONAL expansion_id binding — a re-review's attempt names WHICH expansion record it
+    // reviewed. Absent => valid (in-flight tolerance). Present-and-malformed => typed refusal.
+    if (!expansionIdFieldOk(attempt)) {
+      return refuseJournal('review_journal_malformed', 'expansion_id must be a <point>#<ordinal> record id or null');
+    }
     const gate = attempt.logical_gate;
     if (!isPlainObject(gate) || !HEX64_RE.test(String(gate.key || ''))
       || !['sequence', 'group'].includes(gate.kind) || !Array.isArray(gate.members)
@@ -3338,15 +3362,19 @@ function resolveLaneContainment(env) {
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
-// #542: parallel-writes-default-ON. The workflow's design principle (D-542-01): when the PLANNER
-// proves a write frontier is a disjoint antichain (`parallel_safe`), the executor opens ISOLATED
-// per-leg worktrees and writes them CONCURRENTLY — by DEFAULT, with no operator toggle. The per-leg
-// worktree isolation (containment) + the mandatory post-dominating `synthesizer` reconcile are the
-// correctness net, so the workflow must NOT downgrade a planner-proven-disjoint frontier to serial
-// out of caution. This predicate drives `legCoupled` in the co-open / leg-provisioning gates.
-// Default TRUE; an operator forces serial writes with KAOLA_PARALLEL_WRITES=0|false|no. Genuinely
-// OVERLAPPING (non-disjoint) writes are NOT affected here — they still require an explicit
-// --write-overlap-consent + a leg-scoped code-reviewer gate (the validator's relaxation path).
+// #542 / #760: parallel-writes-default-ON — the S3 (environment/operator) serializer. When a write
+// frontier co-opens, the executor opens ISOLATED per-leg worktrees and writes them CONCURRENTLY — by
+// DEFAULT, with no operator toggle. The per-leg worktree isolation (containment) + the mandatory
+// post-dominating `synthesizer` reconcile are the correctness net, so the workflow must NOT downgrade
+// a frontier to serial out of caution. This predicate drives `legCoupled` in the co-open / leg-
+// provisioning gates. Default TRUE; an operator forces serial writes with KAOLA_PARALLEL_WRITES=0|
+// false|no — the ONE named S3 serializer this file carries (a positive operator directive is
+// present-tense evidence, unlike a guess). Overlapping (non-disjoint) writes are handled entirely by
+// the validator's writeOverlapRelaxable ladder, NOT here: #546-G2/#593/#760 relax an ordinary (non-
+// PROTECTED) overlap — proven-disjoint, exact-file-disjoint, OR genuinely uncertain (a directory/glob
+// declared entry) — by DEFAULT under the retained net (a post-dominating code-reviewer gate); only a
+// PROVEN same-file/case-collision overlap or a PROTECTED file still blocks, and --write-overlap-consent
+// is vestigial for every relaxable class.
 function parallelWritesDefaultOn(env) {
   const raw = (env || {})[PARALLEL_WRITES_ENV];
   if (raw === '0' || raw === 'false' || raw === 'no') return false;
@@ -3887,6 +3915,10 @@ module.exports = {
   REVIEW_CONTEXT_SCHEMA_VERSION,
   REVIEW_JOURNAL_SCHEMA_VERSION,
   REVIEW_GATE_ROLES,
+  // #761: the OPTIONAL expansion_id binding on a review-journal attempt (a re-review names WHICH
+  // expansion record it reviewed) + its fail-closed field validator — exported for direct pins.
+  EXPANSION_ID_RE,
+  expansionIdFieldOk,
   REVIEW_AGGREGATIONS,
   ADVERSARIAL_OUTCOMES,
   APPROVAL_OUTCOMES,

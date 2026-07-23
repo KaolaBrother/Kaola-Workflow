@@ -12680,9 +12680,10 @@ function rtHarness(initialFiles, opts) {
   // can RELAX and co-open. #546-G2 (DECISION B) shifted the SHARED-INFRA class to relax BY DEFAULT under
   // the structural net (a post-dominating code-reviewer gate over the legs + no PROTECTED file); #593
   // extends the SAME default-relax to the NON-shared COARSE class (two different top-level dirs,
-  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial). What
-  // STILL serial-degrades: a genuine overlap (exact / case-collision), a PROTECTED file (NET-2), a
-  // missing gate (NET-1), or a non-resolvable directory/glob coarse entry. Tests drive the REAL
+  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial); #760
+  // further extends coarse to relax even when disjointness is UNPROVABLE (a directory/glob entry —
+  // genuinely uncertain, not a named serializer). What STILL serial-degrades: a genuine PROVEN overlap
+  // (exact / case-collision), a PROTECTED file (NET-2), or a missing gate (NET-1). Tests drive the REAL
   // adaptive-node + plan-validator subprocesses in a REAL git repo.
   // =========================================================================
   {
@@ -14367,16 +14368,36 @@ function rtHarness(initialFiles, opts) {
     const r = ps(writePSPlan('v-ac3c', { aSet: 'plugins/kaola-workflow-gitlab/scripts/Foo.js', bSet: 'plugins/kaola-workflow-gitlab/scripts/foo.js', policy: 'disjoint' }), ['--write-overlap-consent']);
     assert(r.result === 'refuse', '#593-V-AC3-case: a case-collision stays blocking, got ' + JSON.stringify(r));
   }
-  // #593-V-AC4-dir (resolvability fallback): coarse + gate + a directory-shaped entry → refuse.
+  // #760-V-AC4-dir (RED→GREEN, the serialization-trigger inversion): coarse + gate + a directory-shaped
+  //   entry (exact-path disjointness UNPROVABLE) → NOW relaxes to ok. This is genuinely UNCERTAIN
+  //   overlap (no S1/S2/S3 named serializer), not a proven one — #593 pinned the pre-#760 PREVENT
+  //   verdict here; #760 inverts it: uncertainty is not a serializer, so it co-opens under the SAME
+  //   retained net (gate + no PROTECTED file), exactly like an exact-file-disjoint coarse pair.
   {
     const r = ps(writePSPlan('v-ac4d', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: PB }));
-    assert(r.result === 'refuse', '#593-V-AC4-dir: a directory-shaped entry makes exact-path disjointness unprovable ⇒ coarse refusal preserved, got ' + JSON.stringify(r));
-    assert(!r.relaxed, '#593-V-AC4-dir: nothing relaxed when disjointness is unprovable');
+    assert(r.result === 'ok', '#760-V-AC4-dir: a directory-shaped entry is UNCERTAIN (not a named serializer) ⇒ co-opens, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), '#760-V-AC4-dir: relaxed[] carries kind coarse, got ' + JSON.stringify(r.relaxed));
   }
-  // #593-V-AC4-glob (resolvability fallback): coarse + gate + a glob entry → refuse.
+  // #760-V-AC4-glob (RED→GREEN, mirror): coarse + gate + a glob entry → NOW relaxes to ok, same rationale.
   {
     const r = ps(writePSPlan('v-ac4g', { aSet: 'plugins/kaola-workflow-gitlab/scripts/*.js', bSet: PB }));
-    assert(r.result === 'refuse', '#593-V-AC4-glob: a glob entry makes exact-path disjointness unprovable ⇒ coarse refusal preserved, got ' + JSON.stringify(r));
+    assert(r.result === 'ok', '#760-V-AC4-glob: a glob entry is UNCERTAIN (not a named serializer) ⇒ co-opens, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), '#760-V-AC4-glob: relaxed[] carries kind coarse, got ' + JSON.stringify(r.relaxed));
+  }
+  // #760-V-AC4-dir-protected (NET-2 still fires on an uncertain pair): the SAME directory-shaped entry,
+  //   but the OTHER leg touches a PROTECTED concrete file → still refuse (S2/consent gate untouched by
+  //   the inversion; uncertainty loosens attribution, never the curated-root wall).
+  {
+    const r = ps(writePSPlan('v-ac4d-prot', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: 'plugins/kaola-workflow-gitea/package-lock.json' }));
+    assert(r.result === 'refuse', '#760-V-AC4-dir-protected: a PROTECTED file still blocks an uncertain-overlap pair (NET-2 unmoved), got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#760-V-AC4-dir-protected: nothing relaxed when a PROTECTED file is present');
+  }
+  // #760-V-AC4-dir-nogate (NET-1 still fires on an uncertain pair): the SAME directory-shaped entry with
+  //   NO post-dominating code-reviewer gate → still refuse (the gate net is non-negotiable either way).
+  {
+    const r = ps(writePSPlan('v-ac4d-nogate', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: PB, noGate: true }));
+    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', '#760-V-AC4-dir-nogate: an uncertain-overlap pair with NO post-dominating gate still refuses (NET-1 unmoved), got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#760-V-AC4-dir-nogate: nothing relaxed without a gate');
   }
   // #593-V-VESTIGIAL: write_overlap_policy / --write-overlap-consent are redundant at this seam — coarse
   //   relaxes at policy:off with NO consent, and identically with policy:coarse + consent.
@@ -22180,6 +22201,382 @@ function rtHarness(initialFiles, opts) {
     assert(wrote === null,
       '#759-F2: skipping must write nothing at all (no second proof block, no ledger touch), got:\n' + String(wrote));
   }
+}
+
+
+// ===========================================================================
+// CLUSTER #761 — LOCAL RE-EXPANSION ROUTING.
+//
+// The keystone routing decision plus the fail-closed re-review wall. Every predicate is pinned in
+// BOTH fail directions, and every optional-field predicate is pinned on an input that OMITS the
+// field. The router's default-local / positive-proof-to-escalate behaviour is the exact shape prior
+// siblings were rejected for getting backwards.
+// ===========================================================================
+{
+  const {
+    surfaceCoversFile, resolveExpansionOwnership, routeFindingReExpansion,
+    assertReExpansionReviewed, buildReExpansionComposition, findingFilesFromIndexRow,
+    deriveReExpansion, validateComposition,
+  } = require('./kaola-workflow-adaptive-node');
+  const validator761 = require('./kaola-workflow-plan-validator');
+  const schema761 = require('./kaola-workflow-adaptive-schema');
+  const roles761 = new Set(validator761.installedRoles(process.cwd()));
+
+  // A spine with THREE expansion points: m1 (walled by `rev` downstream), m2 (declares review_class
+  // but NO downstream gate reachable), m3 (declares an EMPTY review_class). This one fixture drives
+  // the ownership, router, and re-review-wall pins.
+  const SPINE761 = [
+    '# Plan', '',
+    '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g1', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m2):', '  milestone_goal: g2', '  expected_surfaces: docs/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m3):', '  milestone_goal: g3', '  expected_surfaces: lib/', '  join_constraints: none', '  review_class: ', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |',
+    '| rev | code-reviewer | m1 | — | 1 | sequence |',
+    '| m2 | expansion-point | rev | — | 1 | sequence |',
+    '| m3 | expansion-point | m2 | — | 1 | sequence |',
+    '| done | finalize | m3 | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '',
+  ].join('\n');
+  const contracts761 = validator761.parseExpansionContracts(SPINE761);
+  const nodes761 = validator761.parseNodes(SPINE761);
+
+  // --- (A) surfaceCoversFile: path-prefix containment, fail-safe to NO match. -------------------
+  {
+    // QUESTION: is the file inside the surface token? FAIL DIRECTION: only a positive containment matches.
+    assert(surfaceCoversFile('scripts/', 'scripts/a.js') === true, '#761-A: a dir token covers a file under it');
+    assert(surfaceCoversFile('scripts/a.js', 'scripts/a.js') === true, '#761-A: an exact path covers itself');
+    assert(surfaceCoversFile('scripts', 'scripts/a.js') === true, '#761-A: a slash-less token covers as a dir prefix');
+    assert(surfaceCoversFile('scripts', 'scripts') === true, '#761-A: a slash-less token covers the exact file too');
+    assert(surfaceCoversFile('scripts', 'scriptsfoo/x') === false, '#761-A: a prefix must respect the path boundary (no scripts→scriptsfoo)');
+    assert(surfaceCoversFile('scripts/', 'docs/a.js') === false, '#761-A: a non-matching file is NOT covered');
+    // The OMITTED / empty inputs — a blank cell may never silently claim ownership.
+    assert(surfaceCoversFile('', 'a.js') === false, '#761-A: an EMPTY surface covers nothing');
+    assert(surfaceCoversFile('scripts/', '') === false, '#761-A: an EMPTY file is covered by nothing');
+    assert(surfaceCoversFile('./scripts/', 'scripts/a.js') === true, '#761-A: a leading ./ is normalized off both sides');
+  }
+
+  // --- (B) resolveExpansionOwnership: surface ownership, spanning => multi-owner. ----------------
+  {
+    // QUESTION: which point(s) own the files? FAIL DIRECTION: an unmatched file lands in uncovered, never attributed.
+    const one = resolveExpansionOwnership(['scripts/a.js'], contracts761, {});
+    assert(JSON.stringify(one.owners) === '["m1"]' && JSON.stringify(one.uncoveredFiles) === '[]',
+      '#761-B: a file under m1 is owned by m1 alone, got ' + JSON.stringify(one));
+    const span = resolveExpansionOwnership(['scripts/a.js', 'docs/x.md'], contracts761, {});
+    assert(JSON.stringify(span.owners) === '["m1","m2"]',
+      '#761-B: a finding SPANNING two surfaces is owned by BOTH, got ' + JSON.stringify(span.owners));
+    const none = resolveExpansionOwnership(['README.md'], contracts761, {});
+    assert(JSON.stringify(none.owners) === '[]' && JSON.stringify(none.uncoveredFiles) === '["README.md"]',
+      '#761-B: a file outside every surface is uncovered, never attributed, got ' + JSON.stringify(none));
+    // OMITTED files — an anchorless finding yields empty owners AND empty uncovered (the router decides).
+    const empty = resolveExpansionOwnership([], contracts761, {});
+    assert(JSON.stringify(empty.owners) === '[]' && JSON.stringify(empty.uncoveredFiles) === '[]',
+      '#761-B: no files => empty owners AND empty uncovered, got ' + JSON.stringify(empty));
+    // The #762 amended-surface seam: an amendment brings a previously-uncovered file into ownership.
+    const amended = resolveExpansionOwnership(['README.md'], contracts761, { m1: ['README.md'] });
+    assert(JSON.stringify(amended.owners) === '["m1"]',
+      '#761-B: an amended surface (the #762 seam) extends ownership, got ' + JSON.stringify(amended));
+  }
+
+  // --- (C) routeFindingReExpansion: DEFAULT LOCAL; escalate ONLY on positive proof. --------------
+  {
+    // QUESTION: local re-expansion, or spine replan? FAIL DIRECTION: default local; escalate ONLY on
+    // positive proof the files lie outside every milestone's scope.
+    const local = routeFindingReExpansion({ findingFiles: ['scripts/a.js'], contracts: contracts761 });
+    assert(local.decision === 'local' && JSON.stringify(local.owners) === '["m1"]',
+      '#761-C: an owned file routes LOCAL to its point, got ' + JSON.stringify(local));
+    const span = routeFindingReExpansion({ findingFiles: ['scripts/a.js', 'docs/x.md'], contracts: contracts761 });
+    assert(span.decision === 'local' && JSON.stringify(span.owners) === '["m1","m2"]',
+      '#761-C: a spanning finding routes LOCAL to BOTH points, got ' + JSON.stringify(span));
+    // POSITIVE PROOF => escalate. Files present, none owned, no surfacing point.
+    const escalate = routeFindingReExpansion({ findingFiles: ['README.md'], contracts: contracts761 });
+    assert(escalate.decision === 'spine_replan' && JSON.stringify(escalate.owners) === '[]',
+      '#761-C: a file outside EVERY surface (no context) escalates to spine_replan — the ONLY replan trigger, got ' + JSON.stringify(escalate));
+    // OUT-OF-SURFACE but a real surfacing point claims it => LOCAL (the #762 amend case), never replan.
+    const oos = routeFindingReExpansion({ findingFiles: ['README.md'], contextPoint: 'm1', contracts: contracts761 });
+    assert(oos.decision === 'local' && JSON.stringify(oos.owners) === '["m1"]' && JSON.stringify(oos.out_of_surface) === '["README.md"]',
+      '#761-C: an out-of-surface finding at a NAMED point routes LOCAL + flags out_of_surface (never replan), got ' + JSON.stringify(oos));
+    // ANCHORLESS + no context => REFUSE, fail-closed, no silent guess in EITHER direction.
+    const anchorless = routeFindingReExpansion({ findingFiles: [], contracts: contracts761 });
+    assert(anchorless.result === 'refuse' && anchorless.reason === 'reexpansion_owner_unresolved',
+      '#761-C: an anchorless finding with NO surfacing point refuses (never a silent local pick, never a silent escalate), got ' + JSON.stringify(anchorless));
+    // ANCHORLESS but a real surfacing point => LOCAL to that point (cannot furnish escalation proof).
+    const anchoredCtx = routeFindingReExpansion({ findingFiles: [], contextPoint: 'm2', contracts: contracts761 });
+    assert(anchoredCtx.decision === 'local' && JSON.stringify(anchoredCtx.owners) === '["m2"]',
+      '#761-C: an anchorless finding at a named point routes LOCAL to it (never escalates on absence), got ' + JSON.stringify(anchoredCtx));
+    // A contextPoint that is NOT a real expansion point does not rescue an outside-every-surface file.
+    const ghostCtx = routeFindingReExpansion({ findingFiles: ['README.md'], contextPoint: 'not-a-point', contracts: contracts761 });
+    assert(ghostCtx.decision === 'spine_replan',
+      '#761-C: a bogus contextPoint cannot claim an outside file — still escalates, got ' + JSON.stringify(ghostCtx));
+    // OMITTED input object entirely — must not throw, must fail-closed.
+    const bare = routeFindingReExpansion({});
+    assert(bare.result === 'refuse' && bare.reason === 'reexpansion_owner_unresolved',
+      '#761-C: an empty input (no files, no context, no contracts) refuses, got ' + JSON.stringify(bare));
+  }
+
+  // --- (D) assertReExpansionReviewed: the FAIL-CLOSED re-review wall. -----------------------------
+  {
+    // QUESTION: may re-expanding this point reach the sink? FAIL DIRECTION: fail CLOSED — a point that
+    // is not reviewed-before-sink refuses; never sink unreviewed.
+    const ok = assertReExpansionReviewed('m1', contracts761, nodes761);
+    assert(ok.result === 'ok' && JSON.stringify(ok.walled_by) === '["rev"]',
+      '#761-D: a point walled by a reachable downstream gate is re-expandable, got ' + JSON.stringify(ok));
+    const noGate = assertReExpansionReviewed('m2', contracts761, nodes761);
+    assert(noGate.result === 'refuse' && noGate.reason === 'reexpansion_review_wall_missing',
+      '#761-D: a point with a review_class but NO reachable downstream gate FAILS CLOSED, got ' + JSON.stringify(noGate));
+    const emptyClass = assertReExpansionReviewed('m3', contracts761, nodes761);
+    assert(emptyClass.result === 'refuse' && emptyClass.reason === 'reexpansion_review_wall_missing',
+      '#761-D: a point declaring an EMPTY review_class FAILS CLOSED, got ' + JSON.stringify(emptyClass));
+    const ghost = assertReExpansionReviewed('nope', contracts761, nodes761);
+    assert(ghost.result === 'refuse' && ghost.reason === 'reexpansion_point_unknown',
+      '#761-D: a point with no expansion contract refuses reexpansion_point_unknown, got ' + JSON.stringify(ghost));
+    // OMITTED spineNodes — the wall cannot prove a downstream gate, so it FAILS CLOSED (never open).
+    const noNodes = assertReExpansionReviewed('m1', contracts761, []);
+    assert(noNodes.result === 'refuse' && noNodes.reason === 'reexpansion_review_wall_missing',
+      '#761-D: with NO spine nodes the wall cannot see a gate and fails CLOSED, got ' + JSON.stringify(noNodes));
+  }
+
+  // --- (E) buildReExpansionComposition: a fixer frontier the SAME expand-open transaction eats. ---
+  {
+    const comp = buildReExpansionComposition('m1', { writeSet: ['scripts/a.js', 'scripts/b.js'], fixRole: 'implementer', briefDigest: 'deadbeef' });
+    const vc = validateComposition(comp, { point: 'm1', installedRoles: roles761 });
+    assert(vc.ok === true, '#761-E: the built composition must pass the #759 shape validator, got ' + JSON.stringify(vc.refusal || vc));
+    assert(comp.units.length === 1 && comp.units[0].mode === 'co_open' && comp.units[0].write_set === 'scripts/a.js scripts/b.js',
+      '#761-E: a single co_open fixer unit carries the owned files as its write_set, got ' + JSON.stringify(comp.units[0]));
+    assert(comp.repair_brief_digest === 'deadbeef', '#761-E: the #730 brief digest is carried on the composition');
+    // The re-review is NOT a composed gate — the composition must carry NO gate-role unit (respects #759).
+    assert(!comp.units.some(u => schema761.REVIEW_GATE_ROLES.includes(u.role)),
+      '#761-E: the composition carries NO composed gate unit — the re-review is the spine wall (respects the #759 refusal)');
+    // OMITTED writeSet — a fixer with no owned files still composes (empty write_set is legal).
+    const bare = buildReExpansionComposition('m1', {});
+    assert(validateComposition(bare, { point: 'm1', installedRoles: roles761 }).ok === true,
+      '#761-E: a fixer with no writeSet still composes clean, got ' + JSON.stringify(bare));
+  }
+
+  // --- (E2) findingFilesFromIndexRow: the #729 finding_index → files extractor. -------------------
+  {
+    assert(JSON.stringify(findingFilesFromIndexRow({ anchor_paths: ['scripts/a.js', 'scripts/b.js'] })) === '["scripts/a.js","scripts/b.js"]',
+      '#761-E2: anchor_paths are preferred verbatim');
+    assert(JSON.stringify(findingFilesFromIndexRow({ primary_anchor: { path: 'scripts/a.js' } })) === '["scripts/a.js"]',
+      '#761-E2: primary_anchor.path is the fallback');
+    assert(JSON.stringify(findingFilesFromIndexRow({ file: 'scripts/a.js' })) === '["scripts/a.js"]',
+      '#761-E2: a flat `file` is the last fallback');
+    assert(JSON.stringify(findingFilesFromIndexRow({})) === '[]', '#761-E2: an anchorless row yields no files');
+    assert(JSON.stringify(findingFilesFromIndexRow(null)) === '[]', '#761-E2: a null row does not throw');
+  }
+
+  // --- (F) deriveReExpansion: the read-only DRIVER, end to end over a real spine. -----------------
+  {
+    // LOCAL: an owned finding on a walled point => one plan whose composition validates.
+    const localFinding = { uid: 'F1', anchor_paths: ['scripts/a.js'], fix_role: 'implementer', repair_brief_digest: 'abc' };
+    const d = deriveReExpansion(localFinding, SPINE761, {});
+    assert(d.result === 'ok' && d.decision === 'local' && d.plans.length === 1 && d.plans[0].point === 'm1',
+      '#761-F: an owned finding drives a LOCAL single-owner plan, got ' + JSON.stringify(d));
+    assert(validateComposition(d.plans[0].composition, { point: 'm1', installedRoles: roles761 }).ok === true,
+      '#761-F: the emitted plan composition validates');
+    // WALL FAILS CLOSED through the driver: a finding owned by m2 (walled=false) refuses, no plan emitted.
+    const m2Finding = { uid: 'F2', anchor_paths: ['docs/x.md'] };
+    const dw = deriveReExpansion(m2Finding, SPINE761, {});
+    assert(dw.result === 'refuse' && dw.reason === 'reexpansion_review_wall_missing',
+      '#761-F: an owner that is not reviewed-before-sink fails the WHOLE route closed (no partial sink), got ' + JSON.stringify(dw));
+    // ESCALATE through the driver.
+    const outside = { uid: 'F3', anchor_paths: ['README.md'] };
+    const de = deriveReExpansion(outside, SPINE761, {});
+    assert(de.result === 'ok' && de.decision === 'spine_replan',
+      '#761-F: an outside-every-surface finding escalates to spine_replan through the driver, got ' + JSON.stringify(de));
+    // ANCHORLESS + no context refuses through the driver.
+    const dr = deriveReExpansion({ uid: 'F4' }, SPINE761, {});
+    assert(dr.result === 'refuse' && dr.reason === 'reexpansion_owner_unresolved',
+      '#761-F: an anchorless finding with no context refuses through the driver, got ' + JSON.stringify(dr));
+  }
+
+  // --- (G) the #759 carry-forward: expansion_id is an OPTIONAL, VALIDATED review-journal field. ---
+  {
+    // QUESTION: is an attempt's expansion_id acceptable? FAIL DIRECTION: fail CLOSED on a
+    // present-but-malformed value; PASS on absence (in-flight tolerance) and on a well-formed id.
+    assert(schema761.expansionIdFieldOk({}) === true, '#761-G: an attempt that OMITS expansion_id is valid (in-flight tolerance)');
+    assert(schema761.expansionIdFieldOk({ expansion_id: null }) === true, '#761-G: an explicit null (reviewed no re-expansion) is valid');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 'm1#2' }) === true, '#761-G: a well-formed <point>#<ordinal> is valid');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 'n1-milestone_a#10' }) === true, '#761-G: a point with dashes/underscores + a multi-digit ordinal is valid');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 'm1' }) === false, '#761-G: a value with no #ordinal fails CLOSED');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 'm1#0' }) === false, '#761-G: a zero ordinal fails CLOSED');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 'm|1#2' }) === false, '#761-G: a pipe (record-cell delimiter) fails CLOSED');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 'm 1#2' }) === false, '#761-G: whitespace fails CLOSED');
+    assert(schema761.expansionIdFieldOk({ expansion_id: 5 }) === false, '#761-G: a non-string fails CLOSED');
+    // And through the REAL journal validator: a present-but-malformed expansion_id refuses; absence passes.
+    // (Build a minimal V2 journal by cloning a valid attempt shape is heavy; the field predicate above is
+    // the unit of truth; its INTEGRATION into validateReviewJournalV2 (the present-malformed FAIL-CLOSED
+    // arm the produced journals never reach on their own) is pinned in the walkthrough on a REAL produced
+    // schema-2 journal, and verified to go RED under the guard-deletion mutant.)
+    assert(typeof schema761.EXPANSION_ID_RE.test === 'function' && schema761.EXPANSION_ID_RE.test('a#1'),
+      '#761-G: the exported record-id regex accepts a minimal <point>#<ordinal>');
+  }
+}
+
+
+// ===========================================================================
+// CLUSTER #761b — THE DISCHARGED-POINT RE-OPEN CASCADE + DERIVED SINK-PROGRESS.
+//
+// The pure cascade helpers, the three-valued fail-closed sink-progress predicate (pinned in every
+// direction, including an input that OMITS the probe seam), and runReExpandOpen's three fail-closed
+// gates (which return BEFORE the delegated transaction). The happy-path re-open + AC3 selectivity are
+// driven end to end through the production CLI in the walkthrough.
+// ===========================================================================
+{
+  const {
+    wallsOfMilestone, downstreamMilestones, reExpansionFixFiles, deriveSinkProgress,
+    defaultSinkProgressProbe, runReExpandOpen,
+  } = require('./kaola-workflow-adaptive-node');
+  const v761b = require('./kaola-workflow-plan-validator');
+  // Parallel milestones (m1 scripts/, m2 docs/, m3 scripts/) under one terminal wall + sink. m3 declares
+  // an EMPTY review_class (drives the wall-missing gate).
+  const SPINE761b = [
+    '# Plan', '', '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g1', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m2):', '  milestone_goal: g2', '  expected_surfaces: docs/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    'expansion(m3):', '  milestone_goal: g3', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: ', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |',
+    '| m2 | expansion-point | — | — | 1 | sequence |',
+    '| m3 | expansion-point | m1 | — | 1 | sequence |',
+    '| wall | code-reviewer | m1, m2, m3 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| m1 | ST_M1 |', '| m2 | complete |', '| m3 | complete |', '| wall | complete |', '| done | pending |', '',
+  ].join('\n');
+  const contracts761b = v761b.parseExpansionContracts(SPINE761b);
+  const nodes761b = v761b.parseNodes(SPINE761b);
+
+  // --- wallsOfMilestone: a milestone's OWN direct review-class dependents; empty on no review_class. ---
+  assert(JSON.stringify(wallsOfMilestone('m1', contracts761b, nodes761b)) === '["wall"]',
+    '#761b: m1\'s own wall is the review-class node depending directly on it, got ' + JSON.stringify(wallsOfMilestone('m1', contracts761b, nodes761b)));
+  assert(JSON.stringify(wallsOfMilestone('m3', contracts761b, nodes761b)) === '[]',
+    '#761b: a milestone with an EMPTY review_class has no own wall, got ' + JSON.stringify(wallsOfMilestone('m3', contracts761b, nodes761b)));
+
+  // --- downstreamMilestones: transitive expansion-point dependents (m3 depends on m1). ---
+  assert(JSON.stringify(downstreamMilestones('m1', nodes761b, 'expansion-point')) === '["m3"]',
+    '#761b: m3 (depends on m1) is downstream of m1; m2 (parallel) is not, got ' + JSON.stringify(downstreamMilestones('m1', nodes761b, 'expansion-point')));
+  assert(JSON.stringify(downstreamMilestones('m2', nodes761b, 'expansion-point')) === '[]',
+    '#761b: nothing depends on m2, got ' + JSON.stringify(downstreamMilestones('m2', nodes761b, 'expansion-point')));
+
+  // --- reExpansionFixFiles: composition write-set union; fallback to the finding's anchors. ---
+  assert(JSON.stringify(reExpansionFixFiles({ units: [{ write_set: 'scripts/b.js scripts/a.js' }] }, null)) === '["scripts/a.js","scripts/b.js"]',
+    '#761b: fix files are the union of the composition unit write sets, sorted');
+  assert(JSON.stringify(reExpansionFixFiles({ units: [{ write_set: '' }] }, { anchor_paths: ['scripts/x.js'] })) === '["scripts/x.js"]',
+    '#761b: with no composition write set, fall back to the finding anchors');
+  assert(JSON.stringify(reExpansionFixFiles(null, null)) === '[]', '#761b: no composition + no finding ⇒ no fix files (no throw)');
+
+  // --- deriveSinkProgress: three-valued, fail-closed. QUESTION: has the sink taken an irreversible
+  //     step? FAILS to 'unknown' on any doubt; only 'pristine'/'started' are trusted verdicts. ---
+  assert(deriveSinkProgress({ sinkProgressProbe: () => ({ state: 'pristine', evidence: 'e' }) }).state === 'pristine',
+    '#761b: an injected pristine probe reads pristine');
+  assert(deriveSinkProgress({ sinkProgressProbe: () => ({ state: 'started' }) }).state === 'started',
+    '#761b: an injected started probe reads started');
+  assert(deriveSinkProgress({ sinkProgressProbe: () => ({ state: 'nonsense' }) }).state === 'unknown',
+    '#761b: an unclassifiable probe verdict FAILS CLOSED to unknown');
+  assert(deriveSinkProgress({ sinkProgressProbe: () => { throw new Error('boom'); } }).state === 'unknown',
+    '#761b: a THROWING probe FAILS CLOSED to unknown (never pristine)');
+  // OMITTED probe seam + a workflow-state that names NO branch ⇒ the default probe cannot derive ⇒ unknown.
+  assert(deriveSinkProgress({ planPath: '/x/workflow-plan.md', readFile: () => 'project: x\n' }).state === 'unknown',
+    '#761b: the DEFAULT probe with no branch pointer fails closed to unknown (never a false pristine)');
+  assert(defaultSinkProgressProbe({ planPath: '/x/workflow-plan.md', readFile: () => 'branch: wf/none-exists-761b\n', repoRoot: process.cwd() }).state !== undefined,
+    '#761b: the default probe returns a classifiable state over a real repo');
+
+  // --- runReExpandOpen GATES (each returns BEFORE the delegated transaction; every mutation seam is a
+  //     no-op so a refusal proves zero mutation). ---
+  const reOpts = (st, extra) => ({
+    planPath: '/x/workflow-plan.md', nodeId: 'm1', composition: { derivation: {}, units: [] },
+    readFile: (p) => String(p).endsWith('workflow-state.md') ? 'branch: wf/x\n' : SPINE761b.replace('ST_M1', st),
+    writeFile: () => { throw new Error('a refused re-open must not write'); },
+    cacheExists: () => false, shell: () => ({ exitCode: 0, ok: true }),
+    sinkProgressProbe: () => ({ state: 'pristine' }), ...extra,
+  });
+  // GATE 1 — a non-discharged (pending) owner refuses reexpansion_point_not_discharged.
+  {
+    const r = runReExpandOpen(reOpts('pending'));
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_point_not_discharged',
+      '#761b GATE1: a pending (never-discharged) point refuses reexpansion_point_not_discharged, got ' + JSON.stringify(r));
+  }
+  // GATE 3 — a discharged owner + a STARTED sink refuses reexpansion_after_sink_started.
+  {
+    const r = runReExpandOpen(reOpts('complete', { sinkProgressProbe: () => ({ state: 'started', evidence: 'origin/x exists' }) }));
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_after_sink_started' && r.sink_progress === 'started',
+      '#761b GATE3: a re-expansion after the sink started refuses reexpansion_after_sink_started, got ' + JSON.stringify(r));
+  }
+  // GATE 3 fail-closed — an UNKNOWN sink (probe throws) also refuses (never admits on doubt).
+  {
+    const r = runReExpandOpen(reOpts('complete', { sinkProgressProbe: () => { throw new Error('x'); } }));
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_after_sink_started' && r.sink_progress === 'unknown',
+      '#761b GATE3: an UNKNOWN sink state fails closed (refuse), got ' + JSON.stringify(r));
+  }
+  // GATE 2 — a discharged owner whose review_class names no reachable downstream gate refuses the wall.
+  //          (Target m3: it declares an EMPTY review_class, so the re-review wall is missing.)
+  {
+    const spineM3 = SPINE761b.replace('| m3 | complete |', '| m3 | ST_M3 |');
+    const r = runReExpandOpen({
+      planPath: '/x/workflow-plan.md', nodeId: 'm3', composition: { derivation: {}, units: [] },
+      readFile: (p) => String(p).endsWith('workflow-state.md') ? 'branch: wf/x\n' : spineM3.replace('ST_M1', 'complete').replace('ST_M3', 'complete'),
+      writeFile: () => { throw new Error('a refused re-open must not write'); },
+      cacheExists: () => false, shell: () => ({ exitCode: 0, ok: true }),
+      sinkProgressProbe: () => ({ state: 'pristine' }),
+    });
+    assert(r.result === 'refuse' && r.reason === 'reexpansion_review_wall_missing',
+      '#761b GATE2: re-opening a point with no reachable review wall fails CLOSED, got ' + JSON.stringify(r));
+  }
+}
+
+
+// ===========================================================================
+// CLUSTER #761c — RETIRE-AS-PRIMARY: the spine-plan router precheck each legacy escalation site
+// consults FIRST. Proves BOTH directions: an interior finding routes LOCAL (a route_local_reexpansion
+// directive, NOT dependent_producer_replay_required / would_orphan / would_strand / replan), and a
+// genuine spine-shape-change finding (and a legacy DAG plan) returns null so the retained family runs.
+// ===========================================================================
+{
+  const { spineReExpansionFirst, findingFilesFromAttempt } = require('./kaola-workflow-adaptive-node');
+  const SPINE761c = [
+    '# Plan', '', '## Meta', '', 'plan_form: spine', '',
+    'expansion(m1):', '  milestone_goal: g', '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| m1 | expansion-point | — | — | 1 | sequence |', '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | complete |', '| wall | complete |', '| done | pending |', '',
+  ].join('\n');
+  const DAG761c = SPINE761c.replace('plan_form: spine', 'plan_form: dag').replace('| m1 | expansion-point |', '| m1 | implementer |');
+
+  // INTERIOR finding routes LOCAL — the retire-as-primary win.
+  const interior = spineReExpansionFirst(SPINE761c, ['scripts/x.js']);
+  assert(interior && interior.result === 'route_local_reexpansion' && JSON.stringify(interior.owners) === '["m1"]',
+    '#761c: an interior finding on a SPINE plan routes to route_local_reexpansion(m1) — NOT the legacy replay/replan escalation, got ' + JSON.stringify(interior));
+  // SPINE-CHANGE finding (outside every milestone surface) returns null ⇒ the retained family escalates.
+  assert(spineReExpansionFirst(SPINE761c, ['README.md']) === null,
+    '#761c: a finding outside every milestone surface returns null so the SPINE-CHANGE (replan) family still fires');
+  // DAG plan is INERT ⇒ the legacy families are byte-identical.
+  assert(spineReExpansionFirst(DAG761c, ['scripts/x.js']) === null,
+    '#761c: a legacy DAG plan returns null (DAG-inert) — dependent_producer_replay_required / would_orphan / would_strand unchanged');
+  // Anchorless finding is not a local route (the router refuses; the precheck passes through).
+  assert(spineReExpansionFirst(SPINE761c, []) === null,
+    '#761c: an anchorless finding is not a local route (precheck passes through to the existing path)');
+  // Malformed content never throws.
+  assert(spineReExpansionFirst('not a plan', ['scripts/x.js']) === null, '#761c: unparseable content returns null (never throws)');
+
+  // findingFilesFromAttempt over the REAL route_candidates attempt shape (primary_anchor / file /
+  // anchor_paths), resolved rows excluded, unreadable shapes ⇒ [].
+  assert(JSON.stringify(findingFilesFromAttempt({ route_candidates: [{ status: 'open', primary_anchor: { path: 'scripts/y.js' } }] })) === '["scripts/y.js"]',
+    '#761c: findingFilesFromAttempt reads route_candidates primary_anchor.path');
+  assert(JSON.stringify(findingFilesFromAttempt({ route_candidates: [{ status: 'resolved', primary_anchor: { path: 'scripts/skip.js' } }] })) === '[]',
+    '#761c: findingFilesFromAttempt excludes RESOLVED rows');
+  assert(JSON.stringify(findingFilesFromAttempt(null)) === '[]', '#761c: findingFilesFromAttempt(null) ⇒ [] (no throw)');
+  // The wired combination: an attempt whose still-open finding lands in a milestone surface routes local.
+  const wiredFiles = findingFilesFromAttempt({ route_candidates: [{ status: 'open', primary_anchor: { path: 'scripts/impl.js' } }] });
+  const wired = spineReExpansionFirst(SPINE761c, wiredFiles);
+  assert(wired && wired.result === 'route_local_reexpansion',
+    '#761c: an attempt finding under a milestone surface routes local through the SAME precheck the escalation sites call, got ' + JSON.stringify(wired));
 }
 
 

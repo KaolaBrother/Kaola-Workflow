@@ -1863,6 +1863,21 @@ function prepareReplanUnlocked(paths, opts) {
   if (!lineage.ok) return schema.refuse(lineage.reason, { detail: lineage.detail || null });
   const sourceResult = readSourceAuthority(paths, parentPlan, parentPlanHash, opts, lineage);
   if (!sourceResult.ok) return schema.refuse(sourceResult.reason, { detail: sourceResult.detail || null });
+  // #761 RETIRE-AS-PRIMARY: an epoch replan is the SPINE-CHANGE path only. Before spending an epoch,
+  // consult the local re-expansion router on a SPINE plan: if the source finding routes LOCAL (its
+  // files lie inside some milestone's declared+amended surface), refuse the replan and direct the
+  // operator to reexpand-open — no epoch is consumed. Only a spine-shape change (finding outside every
+  // milestone) or a legacy DAG plan proceeds to the replan below. Lazy require avoids any load-time
+  // cycle; fail-OPEN (never block a legitimate replan on a precheck error); DAG-inert.
+  try {
+    const an = require('./kaola-gitlab-workflow-adaptive-node');
+    if (typeof an.spineReExpansionFirst === 'function') {
+      const findingFiles = an.findingFilesFromAttempt(sourceResult.attempt);
+      const localFirst = an.spineReExpansionFirst(parentPlan, findingFiles);
+      if (localFirst) return schema.refuse('replan_superseded_by_local_reexpansion', {
+        detail: localFirst.operator_hint, owners: localFirst.owners });
+    }
+  } catch (_) { /* precheck must never block a legitimate replan */ }
   const observation = deriveCandidateObservation(paths, lineage, sourceResult.attempt, opts);
   if (!observation.ok) return schema.refuse(observation.reason, { detail: observation.detail || null });
   const state = parseStateFields(parentState);

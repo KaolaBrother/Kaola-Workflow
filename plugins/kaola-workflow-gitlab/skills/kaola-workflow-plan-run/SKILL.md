@@ -1,6 +1,6 @@
 ---
 name: kaola-workflow-plan-run
-description: Use when executing a frozen adaptive workflow-plan.md — executes via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first); planner-proven-disjoint (parallel_safe) write frontiers co-open in isolated legs BY DEFAULT — no operator toggles — with serial as the fallback for overlapping/uncertain writes or hosts without worktree support. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
+description: Use when executing a frozen adaptive workflow-plan.md — executes via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first); planner-proven-disjoint (parallel_safe) write frontiers co-open in isolated legs BY DEFAULT — no operator toggles; serial is the fallback only on a named serializer (a proven exact-path overlap, the retained net not holding, or a host without worktree support) — uncertain overlap co-opens too and reconciles at the join. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
 ---
 
 <!-- PIN: codex-profile-preflight -->
@@ -445,15 +445,18 @@ reasoning-effort rule above. Pass `dispatch.nonce` (evidence-binding token). Ins
   as a NEW group, so makespan is the sum of the per-wave maxima, not a rolling drain.
   `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only fan-out.
 - Planner-proven-disjoint (`parallel_safe`), shared-infra, and coarse (same non-shared
-  top-level area, exact-file-disjoint — e.g. two cross-edition antichains both under
-  `plugins/`) write frontiers ALL co-open in isolated legs BY DEFAULT — no operator toggles —
-  under the retained net (a post-dominating `code-reviewer` gate over the legs, no PROTECTED
-  file in either set). Serial (`max_concurrent=1`) is the FALLBACK only for a genuine
-  exact-path overlap (same file or a case-collision), a directory/glob-shaped entry that
-  cannot prove exact-path disjointness, the retained net not holding, hosts without worktree
-  support, or an explicit `KAOLA_PARALLEL_WRITES=0` opt-out; `--write-overlap-consent` is
-  parsed for frozen-plan back-compat but is VESTIGIAL at this seam — see the leg-isolation
-  note below. `opening` marker + `reconcile-running-set` handle crash-resume.
+  top-level area — e.g. two cross-edition antichains both under `plugins/` — whether or
+  not exact-path disjointness is provable) write frontiers ALL co-open in isolated legs BY
+  DEFAULT — no operator toggles — under the retained net (a post-dominating `code-reviewer`
+  gate over the legs, no PROTECTED file in either set). Uncertain overlap (a directory/glob-
+  shaped declared entry) is NOT a serializer — it co-opens too, and a real collision is
+  caught by the per-leg barrier / synthesizer reconcile at the join. Serial
+  (`max_concurrent=1`) is the FALLBACK only on a NAMED serializer: a genuine exact-path
+  overlap (same file or a case-collision), the retained net not holding, a host whose
+  worktree-support probe fails, or an explicit `KAOLA_PARALLEL_WRITES=0` operator opt-out;
+  `--write-overlap-consent` is parsed for frozen-plan back-compat but is VESTIGIAL at this
+  seam — see the leg-isolation note below. `opening` marker + `reconcile-running-set`
+  handle crash-resume.
   `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: gate-instrumentation-provisioning -->
@@ -466,32 +469,44 @@ opt-out); legal exits are provisioning via an upstream writer node, `route-findi
 or `write-halt --reason consent`.
 
 <!-- PIN: leg-isolation-recipe -->
-**Write-parallelism is default-on for disjoint AND same-area (coarse) frontiers.** The per-leg
-isolation engine is COMPLETE and live, and every exact-file-disjoint write frontier —
-planner-proven-disjoint (`parallel_safe`) siblings in different top-level areas, a shared-infra
-frontier in the same infra area, or a coarse frontier in the same non-shared top-level area
-(e.g. two cross-edition antichains both under `plugins/`) — co-opens as isolated parallel legs
-**BY DEFAULT — no operator toggles**, gated only on the retained net: a post-dominating
-`code-reviewer` gate over the legs, and no PROTECTED file in either set. Per-leg worktree
-isolation + the mandatory synthesizer reconcile are the correctness net; co-open ALWAYS
-provisions a dedicated leg per write sibling (group-form ⟺ legs provisioned — never the legless
-attribution-blind union barrier).
-- Serial is the FALLBACK only for a genuine exact-path overlap (same file or a case-collision), a
-  directory/glob-shaped entry that cannot prove exact-path disjointness, the retained net not
-  holding (no post-dominating gate, or a PROTECTED file in either set), hosts without worktree
-  support, or an explicit `KAOLA_PARALLEL_WRITES=0` opt-out (which forces serial).
+**Co-open is the default for every write frontier; serial requires a NAMED serializer.** The
+per-leg isolation engine is COMPLETE and live, and every write frontier — planner-proven-disjoint
+(`parallel_safe`) siblings in different top-level areas, a shared-infra frontier in the same
+infra area, or a coarse frontier in the same non-shared top-level area (e.g. two cross-edition
+antichains both under `plugins/`) — co-opens as isolated parallel legs **BY DEFAULT — no
+operator toggles**, gated only on the retained net: a post-dominating `code-reviewer` gate over
+the legs, and no PROTECTED file in either set. This holds WHETHER OR NOT exact-path
+disjointness is provable: a directory/glob-shaped declared entry is UNCERTAIN overlap, not a
+proven one, and uncertainty is never a serializer — it co-opens too, with a real collision caught
+by the per-leg barrier / synthesizer merge at the join (reconciled by intent, never prevented by
+refusing to try). Per-leg worktree isolation + the mandatory synthesizer reconcile are the
+correctness net; co-open ALWAYS provisions a dedicated leg per write sibling (group-form ⟺ legs
+provisioned — never the legless attribution-blind union barrier).
+- Serial is the fallback ONLY when a serializer is POSITIVELY named, present-tense, and
+  checkable: a genuine exact-path overlap (same file or a case-collision — usually a sign the
+  two units are really ONE unit of work; merging them is the cheaper answer, serial on the named
+  path is the fallback when they stay separate), the retained net not holding (no
+  post-dominating gate, or a PROTECTED file in either set — a shared irreversible/curated-root
+  surface), a host whose worktree-support probe fails, or an explicit
+  `KAOLA_PARALLEL_WRITES=0` operator opt-out. A guess, an anticipated conflict, or "might
+  overlap" never counts — absence of a named serializer means co-open, never "serial to be
+  safe."
 - `--write-overlap-consent` and `write_overlap_policy` are parsed for frozen-plan back-compat but
   are VESTIGIAL at this seam — they neither enable nor block any co-open decision here. A
   genuinely-overlapping (exact-path or case-collision) frontier serial-degrades regardless of
   consent — no cross-contamination, no silent loss. No consent flag is needed for any disjoint,
-  shared-infra, or coarse frontier.
+  shared-infra, coarse, or uncertain-overlap frontier; a PROTECTED file still blocks with or
+  without it (the consent-gated curated-root wall is unmoved).
 
-**Serial requires evidence.** Every serial fallback above is an evidence-named exception — an
-exact-path overlap you can name, a directory entry that provably cannot resolve to disjoint paths,
-a failed worktree-support probe, an explicit operator opt-out — never a comfort choice. Do not
-serialize or narrow a frontier on a guess or an anticipated conflict: wrongly-parallel work costs
-one bounded synthesizer reconcile inside isolated legs, while wrongly-serial work silently costs
-wall-clock on every frontier.
+**Serial requires evidence — never a prediction.** Every serial fallback above cites
+present-tense, checkable evidence: an exact-path overlap you can name (the shared file itself),
+the retained net verifiably not holding, a failed worktree-support probe (a measurement, not a
+guess), or an explicit operator opt-out — never a guess, an anticipation, or "safer to
+serialize." Uncertain overlap (an unresolved directory/glob entry) is NOT evidence of a
+serializer — it co-opens, and a real collision reconciles at the join. Do not serialize or narrow
+a frontier on a feeling: wrongly-parallel work costs one bounded synthesizer reconcile inside
+isolated legs, while wrongly-serial work silently costs wall-clock on every frontier — the burden
+of proof sits on serial.
 
 <!-- CARD: speculative-open -->
 On `open-next` → `gate_not_complete` with a speculative gate (`speculative_open_policy: auto` — the

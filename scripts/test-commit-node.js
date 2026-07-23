@@ -597,12 +597,14 @@ function assert(condition, message) {
   }
 
   // =========================================================================
-  // #463 / #593 (D-419 write-overlap): the PREVENT→DETECT relaxation at --parallel-safe. #463 landed it
-  // policy+consent-gated; #593 made the coarse class (coarse-area-overlapping but EXACT-FILE-DISJOINT)
-  // relax BY DEFAULT under the retained net (a post-dominating code-reviewer gate + no PROTECTED file),
-  // with write_overlap_policy / --write-overlap-consent kept parsed but vestigial. The safety FLOOR
-  // holds at every no-gate/exact/PROTECTED case (and coarse pairs with a non-resolvable directory/glob
-  // entry keep the refusal — pinned in test-adaptive-node.js #593-V-AC4).
+  // #463 / #593 / #760 (D-419 write-overlap): the PREVENT→DETECT relaxation at --parallel-safe. #463
+  // landed it policy+consent-gated; #593 made the coarse class (coarse-area-overlapping but EXACT-FILE-
+  // DISJOINT) relax BY DEFAULT under the retained net (a post-dominating code-reviewer gate + no
+  // PROTECTED file); #760 extended coarse to ALSO relax when disjointness is UNPROVABLE (a directory/
+  // glob entry) — that is genuinely uncertain overlap, not a named serializer (pinned in
+  // test-adaptive-node.js #760-V-AC4-dir/#760-V-AC4-glob, superseding the old #593-V-AC4 refusal pin).
+  // write_overlap_policy / --write-overlap-consent stay parsed but vestigial. The safety FLOOR still
+  // holds at every no-gate/exact/PROTECTED case.
   // crates/a/x.rs vs crates/b/y.rs share the coarse area "crates" but are exact-file-disjoint.
   // =========================================================================
   const COARSE_A = 'crates/a/x.rs', COARSE_B = 'crates/b/y.rs';
