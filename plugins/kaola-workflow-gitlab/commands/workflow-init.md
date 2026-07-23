@@ -145,7 +145,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, `workflow-plan.md` (the `## Node Ledger`), and the compliance ledger before continuing.
 - State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from `workflow-plan.md` and its `## Node Ledger`, run the state repair helper and repair `workflow-state.md` before routing.
-- The adaptive DAG is the only workflow path.
+- The workflow path is adaptive.
 - End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
 - Active issue work runs in a repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` by default; set `KAOLA_WORKTREE_NATIVE=0` to disable. See README for the full contract.
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
@@ -181,7 +181,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > **Codex hooks note:** Running `install-codex-agent-profiles.js --global` installs the
 > agent profiles **globally** into `~/.codex` (one install, all repos) AND refreshes the
 > global hooks. Trust hooks once via `/hooks`. If a project-local `.codex/hooks.json`
-> exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
+> already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 > Audit Codex config before claiming role dispatch readiness: `codex features list`
 > must show `multi_agent` and `multi_agent_v2` enabled, and
 > `kaola-workflow-codex-preflight.js --doctor --json` must agree with the active
@@ -250,7 +250,7 @@ Worked example of a migrated AGENTS.md (two `---` dividers total):
 *All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 
 ---
-> Note: content below was the prior AGENTS.md before init unified the contract.
+> Note: the content below is the AGENTS.md contract.
 [original content here]
 ```
 

@@ -455,9 +455,9 @@ assertIncludes(giteaNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSU
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(giteaNextSkill, 'Startup Step 0a-1');
 assertIncludes(giteaNextSkill, 'Branch: {branch from Sink block');
-// #725: the status-report `Workflow path:` line reports adaptive as the ONLY workflow path (a
+// the status-report `Workflow path:` line reports the adaptive workflow path (a
 // non-adaptive KAOLA_PATH is refused by the claim's path_not_installed).
-assertIncludes(giteaNextSkill, 'Workflow path: {adaptive — the only workflow path');
+assertIncludes(giteaNextSkill, 'Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused');
 assertIncludes(giteaNextSkill, 'Parallel decision: {green|yellow|red');
 for (const skill of ['kaola-workflow-finalize']) {
   const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
@@ -625,7 +625,7 @@ assertIncludes(giteaClassifier207, "'Scope'");
 // #203: Select Project active-folder definition still lists fast-summary.md (the classifier's
 // tolerant read survives retirement, so the router recognizes a legacy fast-summary.md marker).
 const giteaNextCmd203 = pluginRoot + '/commands/workflow-next.md';
-assertIncludes(giteaNextCmd203, '`fast-summary.md` file, or a `workflow-state.md`');
+assertIncludes(giteaNextCmd203, '`workflow-plan.md` or a `workflow-state.md`');
 
 // issue #227: adaptive-path contract (Gitea fork command prose + renamed scripts).
 assert(exists(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'), 'Gitea adaptive plan validator missing');

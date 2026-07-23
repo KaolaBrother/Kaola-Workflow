@@ -220,7 +220,7 @@ assertIncludes('commands/workflow-next.md', '## Co-active Folders');
 // issue #203: Select Project active-folder definition must include fast-summary.md (drift-guard A;
 // the classifier's trap-2 tolerant fast-summary.md read survives retirement, so the router's
 // active-folder detection still recognizes a legacy fast-summary.md marker).
-assertIncludes('commands/workflow-next.md', '`fast-summary.md` file, or a `workflow-state.md`');
+assertIncludes('commands/workflow-next.md', '`workflow-plan.md` or a `workflow-state.md`');
 // #380: the issue-scout auto-bundle entry must stay REACHABLE — Step 0 branches on whether the
 // user named an issue, and the no-issue-named branch dispatches the scout (regression-locks the
 // #380 unreachable-entry defect). Pin the branch marker + the env-wiring contract.

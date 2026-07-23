@@ -128,10 +128,6 @@ issue — which roles, how many, in what shape — into a `workflow-plan.md`. Th
 template library and no knob-binding ceremony. Mirror of `commands/kaola-workflow-adapt.md`
 for the Codex runtime. Reads and updates `kaola-workflow/{project}/workflow-state.md`.
 
-Adaptive is the unconditional default; `fast`/`full` are explicit path-naming
-escapes, never an automatic fallback (see `kaola-workflow-next`
-Startup Step 0a-1).
-
 <!-- PIN: reviewer-contract-v2-authoring -->
 ## Reviewer Contract V2 Authoring
 
@@ -260,7 +256,7 @@ the example above models both.
 - **Plan before you build.** For a non-trivial implement, consider a `planner` (or
   `code-architect`) **node** that precedes — and so dominates — the implement nodes (the
   forward-reasoning roles). One `planner` above a fan-out's shared parent covers every leg
-  (not one per leg). Trivial or mechanical work can skip it, or use the fast path.
+  (not one per leg). Trivial or mechanical work can skip it.
 - **Update the docs you changed.** When the change touches README / API docs /
   architecture / a public interface, consider a `doc-updater` node before `finalize` — the
   sink only does CHANGELOG / state bookkeeping.
@@ -329,7 +325,7 @@ If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP.
 delegating: nothing is claimed yet — run the Startup git-freshness checks against the MAIN repo
 (`git pull --ff-only` if behind). If it cannot resolve cleanly (dirty, or a merge / rebase / stash /
 reset is needed), STOP and ask — do NOT delegate, so **no folder / `workflow:in-progress`
-label is created until git is clean** (the front end claims here at repo-root — the adaptive claim provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`, the same as full/fast paths; the planner authors + freezes at repo-root and does NOT itself cd into the worktree — so the router's post-claim freshness-block release no longer guards this path).
+label is created until git is clean** (the front end claims here at repo-root — the adaptive claim provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`; the planner authors + freezes at repo-root and does NOT itself cd into the worktree — so the router's post-claim freshness-block release does not guard this path).
 
 **Co-tenant clean-check.** That dirty check disregards `kaola-workflow/*` and `.kw/*` scratch of OTHER active lanes (so a co-tenant session is not falsely refused) but still fails on any uncommitted code change; this session's own in-progress state stays enforced.
 
@@ -376,7 +372,7 @@ and freeze). The claim (at repo-root — the adaptive claim provisions a worktre
 
 - **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-gitea-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-gitea-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. This fallback applies only to normal startup while the draft is unfrozen; it is forbidden under `replan_in_progress`. NEVER downgrade to fast/full — there is no automatic fallback between paths; the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-gitea-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. This fallback applies only to normal startup while the draft is unfrozen; it is forbidden under `replan_in_progress`. The only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
 
 After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
 

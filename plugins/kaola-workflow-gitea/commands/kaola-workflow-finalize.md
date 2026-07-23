@@ -70,7 +70,7 @@ the `model=` line on any dispatch.
 
 ## Prerequisite — script-enforced barrier
 
-Adaptive is the only path (`workflow_path: adaptive`). `workflow-plan.md` must exist, be frozen
+The workflow path is adaptive (`workflow_path: adaptive`). `workflow-plan.md` must exist, be frozen
 (re-check `plan_hash`), and every `## Node Ledger` row must be `complete` or `n/a`. The barrier is
 four gates — run all four and capture each exit code DIRECTLY (never gate on a piped `| tail`):
 
@@ -177,7 +177,7 @@ and ask.
 - **Trivial Inline Edit Exception:** the main session may make a one-line/mechanically-obvious edit
   (no behavior/API/security/design judgment) that fixes finalization friction/formatting/typo/import,
   stays in scope, is recorded in `finalization-summary.md`, and reruns affected validation. Anything
-  else routes to `tdd-guide`/`build-error-resolver` or back to Phase 5.
+  else routes to `tdd-guide`/`build-error-resolver` or back through the review gate.
 
 Routed-fix dispatches (include the `model=` line exactly):
 
@@ -206,10 +206,10 @@ Agent(
 build-error-resolver`), then run the repo-kind validation from the Validation Gate above, saving raw
 output to `kaola-workflow/{project}/.cache/final-validation.md`. On failure route
 (build/type/lint/tooling → `build-error-resolver`; behavior/regression/coverage → `tdd-guide`;
-review/security → Phase 5), write fix output to `.cache/final-validation-fix-{n}.md`, and rerun the
+review/security → the review/security gate), write fix output to `.cache/final-validation-fix-{n}.md`, and rerun the
 failed command.
 
-**Step 2 — Acceptance Check.** Verify the deliverable matches Phase 1 criteria, all Phase 3 tasks
+**Step 2 — Acceptance Check.** Verify the deliverable matches the acceptance criteria, all planned nodes
 complete, tests pass (per validation result, not a re-run universal suite), no type/lint errors, no
 CRITICAL/HIGH review findings, no debug statements. Adaptive's `--verdict-check` barrier is the sole
 compliance gate.
@@ -254,7 +254,7 @@ executors, roadmap refresh, archive completed folder, final commit and push — 
 Status/Evidence/Skip Reason; no `pending` rows except `final commit and push` may be `ready`), and
 `## Status: READY FOR FINAL GIT GATE`.
 
-**Step 6 — Closure Decision Gate.** Scan all phase artifacts for deferred items, unresolved
+**Step 6 — Closure Decision Gate.** Scan all node evidence for deferred items, unresolved
 conflicts, partial-implementation notes, open review follow-ups, or user-decision items. If none,
 record the scan and continue. If any exist, route them to the USER with your recommendation and **ask
 before creating/closing/splitting/merging/reorganizing** any issue or roadmap entry.

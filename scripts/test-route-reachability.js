@@ -695,7 +695,7 @@ for (const ed of codexEditions) {
     'never mutate the frozen parent `workflow-plan.md`',
     'do not run claim/startup',
     'bounded unfrozen child-repair loop',
-    'the main session never repairs the child DAG',
+    'the main session never repairs the child spine',
     '`transaction_id`', '`packet_digest`', '`dispatch_nonce`', '`profile_identity`',
     '`child_path`', '`child_digest`', '`worktree_path`', '`attestation_digest`',
     'resume --project {project} --json',

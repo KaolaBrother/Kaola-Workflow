@@ -1,7 +1,7 @@
 # Kaola-Workflow — Claude Code Instructions
 
 ## Project Overview
-Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, GitHub-issue-driven workflow for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler. Adaptive is the only workflow path — the prior `fast` and `full` six-phase paths were retired (see `docs/decisions/D-725-01.md`). The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
+Kaola-Workflow is a loop-engineering system for coding agents — an adaptive, GitHub-issue-driven workflow for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler. The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
 
 ## Durable State Contract
 
@@ -32,7 +32,7 @@ Issue selection is an agent decision, not a hidden script decision.
 
 - **When user names an issue**: use that exact issue. Scripts validate and claim but must not fall back to another.
 - **When user asks for "next issue"**: agent inspects local roadmap, GitHub issues, recent completed work, active folders, and user goal, then states the selected issue before claiming via `KAOLA_TARGET_ISSUE=N`.
-- **Startup scripts validate, not select**: `cmdStartup`, `cmdPickNext`, and `cmdBootstrap` now require explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
+- **Startup scripts validate, not select**: `cmdStartup`, `cmdPickNext`, and `cmdBootstrap` require an explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
 - **Ambiguity handling**: When next issue is ambiguous or conflicts with active state, ask or stop. Do not let a script silently choose.
 
 ### Maximize Workflow Efficiency by Faithful Decomposition
@@ -63,19 +63,19 @@ Minimize **synergy** (coupling to systems the workflow does not own); maximize *
 - **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
 - **Accuracy still comes from inside** — this does not weaken axiom 1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*.
 
-### Adaptive Is the Only Path
+### The Adaptive Workflow
 
-The orchestrator does not spend tokens or wall-clock deciding between paths — there is only one to run.
+The workflow runs one path; the orchestrator does not spend tokens or wall-clock choosing between paths.
 
-- **Adaptive is the unconditional, exclusive path.** No on/off switch, no install-time opt-in axis, nothing to deliberate. Every install ships adaptive only.
-- **`fast` and `full` are retired**, not merely uninstalled by default: their commands, skills, and transaction scripts are deleted (see `docs/decisions/D-725-01.md`, which supersedes `D-538-01`/`D-543-01`). A non-adaptive `KAOLA_PATH` / `--workflow-path` request is refused with a typed `path_not_installed` — never a silent fallback. A stale `installed_paths` field from a pre-retirement install is tolerated on read and never re-written.
-- **No automatic fallback — adaptive has nowhere left to fall back to.** When it can't proceed: bounded planner repair → discard+restart → stop+ask. The only fallbacks are *inside* adaptive (repair, in-place posture).
+- **The workflow is adaptive.** Every install ships it; there is nothing to select or configure.
+- A non-adaptive `KAOLA_PATH` / `--workflow-path` request is refused with a typed `path_not_installed`; the claim never silently substitutes adaptive for a path the request named.
+- **When adaptive can't proceed, it recovers inside adaptive**: bounded planner repair → discard+restart → stop+ask. Repair and the in-place posture are the only fallbacks.
 
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
 - `scripts/kaola-workflow-roadmap.js` — roadmap generation from GitHub issues
-- `scripts/kaola-workflow-plan-validator.js` — adaptive-path plan validator: closed-library + three-shape grammar + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`/`--freeze-checked`/`--governance-ack`); `plan_hash` lives inside `workflow-plan.md`. Emits a typed `reason` field in `barrierCheck` output (the emit envelope — precedence-ordered failure family so callers classify structurally, never by string-match). Toggle-agnostic.
+- `scripts/kaola-workflow-plan-validator.js` — adaptive-path plan validator: closed-library + three-shape grammar + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`/`--freeze-checked`/`--governance-ack`); `plan_hash` lives inside `workflow-plan.md`. Emits a typed `reason` field in `barrierCheck` output (the emit envelope — precedence-ordered failure family so callers classify structurally, never by string-match).
 - `scripts/kaola-workflow-adaptive-schema.js` — adaptive-path forge-neutral constants + toggle resolution; byte-identical across all four editions (cross-edition drift anchor).
 - `scripts/kaola-workflow-next-action.js` — adaptive aggregator: ready-set / next node / resolved model from a frozen `workflow-plan.md` (n/a-aware; typed refusal on a stalled/corrupt DAG). Shelled by `kaola-workflow-adaptive-node.js`.
 - `scripts/kaola-workflow-commit-node.js` — adaptive aggregator: composes the per-node barrier choreography (`--record-base` → `--barrier-check` + `--gate-verify`) by shelling the plan-validator. Shelled by `kaola-workflow-adaptive-node.js`; fails closed on a missing baseline; never mutates the ledger/state.
