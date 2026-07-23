@@ -16714,6 +16714,28 @@ function testReviewerContractV2Conformance() {
     'review-v2 discovery plus strict-progress closure persist two settled schema-v2 attempts');
     assert(schema.validateReviewJournal(journal, freezeOut.planHash, 2).ok === true,
       'review-v2 persisted journal revalidates against the exact frozen plan hash');
+    // OPTIONAL, VALIDATED expansion_id review-journal field — INTEGRATION pin (not the isolated field
+    // predicate). This journal is a REAL produced schema-2 journal that OMITS expansion_id, so the
+    // assert above already exercised the absence-PASSES arm inside validateReviewJournalV2. The
+    // PRESENT-but-malformed FAIL-CLOSED arm is what no produced fixture reached, which left the guard
+    // deletable with zero test signal. Pin BOTH remaining directions on the byte-exact produced journal.
+    assert(!Object.prototype.hasOwnProperty.call(journal.attempts[1], 'expansion_id'),
+      'expansion_id integration: the produced attempt genuinely OMITS the field — only absence-passes ran before');
+    {
+      const malformedExpId = JSON.parse(JSON.stringify(journal));
+      malformedExpId.attempts[1].expansion_id = 'm1'; // present, no #ordinal ⇒ malformed
+      const mr = schema.validateReviewJournal(malformedExpId, freezeOut.planHash, 2);
+      assert(mr.ok === false && mr.reason === 'review_journal_malformed',
+        'expansion_id integration: a PRESENT-but-malformed expansion_id must refuse review_journal_malformed '
+        + 'through validateReviewJournalV2 — a binding that cannot be trusted must never pass as if it bound '
+        + 'nothing, got ' + JSON.stringify(mr));
+      const wellFormedExpId = JSON.parse(JSON.stringify(journal));
+      wellFormedExpId.attempts[1].expansion_id = 'm1#2'; // present, well-formed <point>#<ordinal>
+      const wr = schema.validateReviewJournal(wellFormedExpId, freezeOut.planHash, 2);
+      assert(wr.ok === true,
+        'expansion_id integration: a PRESENT well-formed <point>#<ordinal> binds and validates OK — the '
+        + 'guard rejects malformation, never mere presence, got ' + JSON.stringify(wr));
+    }
     const forgedProfileJournal = JSON.parse(JSON.stringify(journal));
     forgedProfileJournal.attempts[1].profile_hashes = ['f'.repeat(64)];
     assert(schema.validateReviewJournal(forgedProfileJournal, freezeOut.planHash, 2).reason
