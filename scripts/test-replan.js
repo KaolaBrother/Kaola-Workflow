@@ -2040,6 +2040,13 @@ for (const target of [
     ok(cycled.planner.dispatch_nonce !== initial.planner.dispatch_nonce,
       'candidate oscillation derives a fresh dispatch nonce despite the repeated transaction id');
     ok(schema.validateReplanTransaction(cycled).ok, 'cycled transaction and both failed-attempt receipts strictly validate');
+    // #730 AC-9: a candidate-changed re-author must carry `writer_briefs` FORWARD unchanged (the
+    // attempt_id — and therefore the brief — did not change, only the candidate tree oscillated).
+    ok(initial.writer_briefs && initial.writer_briefs.impl,
+      '#730 AC-9 fixture: the initial transaction carries a seeded writer brief for `impl`');
+    deepEqual(cycled.writer_briefs, initial.writer_briefs,
+      '#730 AC-9: reauthorCandidate carries writer_briefs forward unchanged across a '
+      + 'candidate-changed re-author, never re-derived from the narrower transaction.source');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
@@ -4907,6 +4914,125 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
     '#729: ...and the freeze wall refuses "' + token + '" outright, so the strict reading is '
       + 'the only reading a real child can ever be judged under');
   }
+}
+
+// #730 AC-9 — direct repair and replan-child repair must use the SAME feedback-delivery contract.
+// `replanWriterBriefs` partitions on `findingOwnershipSummary`'s `blockingFindings`
+// (`repairResponsibleFindings`, fail-CLOSED), never the gate's fail-OPEN `unresolvedInScopeFixes`.
+// Both fail directions are pinned directly against the exported constructor, no fixture required.
+{
+  const attempt = {
+    attempt_id: 'ac9-brief-fixture:1',
+    findings: [
+      { id: 'F1', uid: 'F1', file: 'a.js', severity: 'high' },
+      { id: 'F2', uid: 'F2', file: 'b.js', severity: 'high' },
+      { id: 'F3', uid: 'F3', file: 'c.js', severity: 'high' },
+      { id: 'F4', uid: 'F4', file: 'd.js', severity: 'high' },
+    ],
+    route_candidates: [
+      // (a) omits scope/action/status entirely — the schema-1 flat-row shape
+      // (`finding: id=F-A status=open severity=high file=scripts/a.js`) — MUST be included.
+      { source_node: 'review', finding_id: 'F1', id: 'F1', ownership_candidates: ['impl'], owning_node: 'impl' },
+      // (b) explicitly resolved — MUST be excluded.
+      { source_node: 'review', finding_id: 'F2', id: 'F2', status: 'resolved',
+        ownership_candidates: ['impl'], owning_node: 'impl' },
+      // (b) explicitly deferred — MUST be excluded.
+      { source_node: 'review', finding_id: 'F3', id: 'F3', status: 'deferred',
+        ownership_candidates: ['impl'], owning_node: 'impl' },
+      // (b) explicitly non-fix action — MUST be excluded.
+      { source_node: 'review', finding_id: 'F4', id: 'F4', action: 'document',
+        ownership_candidates: ['impl'], owning_node: 'impl' },
+    ],
+    receipts: [],
+  };
+  const briefs = replan.replanWriterBriefs(attempt);
+  ok(briefs && briefs.impl, '#730 AC-9: the owner of the omitted-scope/action row receives a brief: '
+    + JSON.stringify(briefs));
+  deepEqual(briefs.impl.brief.assigned_uids, ['F1'],
+    '#730 AC-9: a finding row omitting scope/action is INCLUDED (fail-closed) while the explicitly '
+    + 'resolved/deferred/non-fix rows are EXCLUDED: ' + JSON.stringify(briefs.impl.brief.assigned_uids));
+  // F2 is `resolved` — resolved rows are no longer "still open" at all (stillOpenRouteCandidates
+  // filters them out upstream, mirroring the effective-verdict reducer), so it is absent from BOTH
+  // assigned_uids and context_uids entirely, not merely non-blocking. F3 (deferred) and F4 (explicit
+  // non-fix action) remain OPEN but non-blocking, so they surface as non-obligatory context.
+  deepEqual(briefs.impl.brief.context_uids.slice().sort(), ['F3', 'F4'],
+    '#730 AC-9: the excluded-but-still-open rows surface as non-obligatory context, never silently '
+    + 'dropped: ' + JSON.stringify(briefs.impl.brief.context_uids));
+  // Regression pin for the THIRD-REJECTION root cause: partitioning on the gate's fail-OPEN
+  // `unresolvedInScopeFixes` instead of `repairResponsibleFindings` would drop the omitted-scope/
+  // action row entirely (it requires EXPLICIT scope=in_scope action=fix), leaving `assigned_uids`
+  // empty — this MUST NOT happen.
+  ok(briefs.impl.brief.assigned_uids.length > 0,
+    '#730 AC-9: the assigned set must never silently empty out on an omitted scope/action row '
+    + '(the unresolvedInScopeFixes regression this predicate replaces)');
+}
+
+// #730 AC-9 — owner discovery is scoped to `findingOwnershipSummary`'s `blockingFindings`, never the
+// wider `openFindings` set: an owner whose ONLY finding is non-blocking (deferred/out-of-scope/
+// non-fix) must receive NO brief entry at all — there is nothing that writer is obliged to fix, so
+// seeding it a brief would be noise, not feedback.
+{
+  const attempt = {
+    attempt_id: 'ac9-owner-scope-fixture:1',
+    findings: [
+      { id: 'G1', uid: 'G1', file: 'a.js' },
+      { id: 'G2', uid: 'G2', file: 'b.js' },
+    ],
+    route_candidates: [
+      { source_node: 'review', finding_id: 'G1', id: 'G1', ownership_candidates: ['impl'], owning_node: 'impl' },
+      { source_node: 'review', finding_id: 'G2', id: 'G2', status: 'deferred',
+        ownership_candidates: ['other'], owning_node: 'other' },
+    ],
+    receipts: [],
+  };
+  const briefs = replan.replanWriterBriefs(attempt);
+  ok(briefs && briefs.impl, '#730 AC-9: the owner of the sole BLOCKING finding receives a brief');
+  ok(!briefs.other,
+    '#730 AC-9: an owner whose ONLY finding is non-blocking (deferred) receives NO brief entry — '
+    + 'owner discovery is scoped to blockingFindings, never the wider openFindings set: '
+    + JSON.stringify(Object.keys(briefs || {})));
+}
+
+// #730 AC-9 — integration: a replan-child-reopened writer receives the SAME brief BYTES as a
+// direct-repair-reopened writer for the SAME attempt. Drives a real prepare -> planner dispatch ->
+// activation (child reuses node id `impl`, per `sameGateChild`), then compares the transaction's
+// carried `writer_briefs` (also relayed verbatim into the planner packet — the child dispatch) for
+// `impl` against `buildRepairBrief`/`renderRepairBrief` invoked directly — the exact call direct
+// repair itself makes (adaptive-node.js STEP #730).
+{
+  const fx = initFixture({ sameGateChild: true });
+  try {
+    const journal = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'review-attempts.json'), 'utf8'));
+    const attempt = journal.attempts.find(a => a.attempt_id === fx.sourceAttemptId);
+    ok(attempt, '#730 AC-9 fixture: the source attempt is present in the journal');
+
+    const committed = driveReplanToCommit(fx);
+    ok(['committed', 'already_committed'].includes(committed.result),
+      '#730 AC-9: the replan-child transaction commits (same-gate child reuses `impl`): '
+      + JSON.stringify(committed));
+
+    const direct = adaptiveNode.buildRepairBrief(attempt, 'impl');
+    const directRendered = adaptiveNode.renderRepairBrief(direct);
+
+    const tx = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-transaction.json'), 'utf8'));
+    ok(tx.writer_briefs && tx.writer_briefs.impl,
+      '#730 AC-9: the committed transaction carries a seeded brief for the reused writer `impl`: '
+      + JSON.stringify(tx.writer_briefs));
+    equal(tx.writer_briefs.impl.brief.digest, direct.digest,
+      '#730 AC-9: the transaction-carried brief digest is byte-identical to the direct-repair brief '
+      + 'digest for the same (attempt, nodeId)');
+    equal(tx.writer_briefs.impl.rendered, directRendered,
+      '#730 AC-9: the transaction-carried rendered brief is BYTE-IDENTICAL to what a direct '
+      + 'repair-node reopen would have appended to `impl`\'s own evidence file for the same attempt '
+      + '— the two feedback-delivery paths are now the same contract');
+
+    const packet = JSON.parse(fs.readFileSync(path.join(fx.cacheDir, 'replan-planner-packet.json'), 'utf8'));
+    ok(packet.source && packet.source.writer_briefs && packet.source.writer_briefs.impl,
+      '#730 AC-9: the child-dispatch planner packet also relays the same seeded brief for `impl`: '
+      + JSON.stringify(packet.source && packet.source.writer_briefs));
+    equal(packet.source.writer_briefs.impl.rendered, directRendered,
+      '#730 AC-9: the planner-packet-relayed brief is ALSO byte-identical to the direct-repair brief');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
 console.log(`test-replan: PASSED (${passed} assertions)`);

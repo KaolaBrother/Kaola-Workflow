@@ -185,10 +185,13 @@ settled fail with findings present but none of them blocking; `unstructured_revi
 settled fail with no structured finding at all. In both cases nothing is pre-assigned, no empty
 `repair_brief_assigned_uids:` line is emitted, and the reviewer evidence paths are named instead.
 
-**Scope limit (known gap).** The brief is seeded on the DIRECT `repair-node` path only. A writer
-reopened by a replan CHILD (`kaola-workflow-replan.js`) still receives the inherited frontier without
-this digest-bound brief, so the two feedback-delivery paths are not yet identical; a replan-child fixer
-must still read the reviewer evidence named in `.cache/replan-source.json`. Unifying them is deferred.
+**Replan-child parity.** Direct repair-node and a replan CHILD's reopened writer now use the SAME
+feedback-delivery contract. `kaola-workflow-replan.js` computes the identical, digest-bound brief
+(`buildRepairBrief`/`renderRepairBrief`, keyed by the parent-plan writer that owns the finding) once at
+prepare time, against the FULL settled attempt, and carries it verbatim — never re-derived — as
+`writer_briefs` on the transaction and into the planner packet's `source.writer_briefs`. A replan-child
+fixer reads the same brief bytes a direct repair would have appended to its own evidence file, without
+having to independently trace `.cache/replan-source.json` back through the review journal.
 
 ## 1. Reading the refusal envelope
 
