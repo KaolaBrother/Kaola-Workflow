@@ -451,6 +451,9 @@ the transport, never the contract.
 <!-- SPLICE:pr-instruct-lead -->
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 <!-- PIN: node-briefs-relay -->
+- When `dispatch.context_packet` is present, relay it VERBATIM into every role dispatch as the
+  shared orientation brief — the SAME packet on every unit of the frontier — carried ahead of the
+  node's own `goal_line` so each agent starts from the run's common context instead of re-deriving it.
 - When `dispatch.goal_line` is present, carry it VERBATIM into the role dispatch as the node's
   task direction.
 - When `dispatch.upstream_evidence` is present, instruct the role to READ each listed evidence

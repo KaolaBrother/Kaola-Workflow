@@ -186,8 +186,9 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // node-briefs-relay: the step-3 dispatch bullets that carry a node's
-    // authored brief (`goal_line`) verbatim into the role dispatch and
+    // node-briefs-relay: the step-3 dispatch bullets that relay the shared
+    // context packet verbatim into every role dispatch, carry a node's
+    // authored brief (`goal_line`) verbatim into the role dispatch, and
     // instruct the role to read+echo each `upstream_evidence` file's nonce.
     // Raw skeleton text (no SLOT/SPLICE divergence), so it obligates all six
     // surfaces identically.
@@ -197,6 +198,7 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       '<!-- PIN: node-briefs-relay -->',
+      'relay it VERBATIM into every role dispatch as the',
       'carry it VERBATIM into the role dispatch',
       'record a column-0 `upstream_read: <node-id> <nonce>` line',
       'never from the card — the card never carries it',
