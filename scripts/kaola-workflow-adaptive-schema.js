@@ -3338,15 +3338,19 @@ function resolveLaneContainment(env) {
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
-// #542: parallel-writes-default-ON. The workflow's design principle (D-542-01): when the PLANNER
-// proves a write frontier is a disjoint antichain (`parallel_safe`), the executor opens ISOLATED
-// per-leg worktrees and writes them CONCURRENTLY — by DEFAULT, with no operator toggle. The per-leg
-// worktree isolation (containment) + the mandatory post-dominating `synthesizer` reconcile are the
-// correctness net, so the workflow must NOT downgrade a planner-proven-disjoint frontier to serial
-// out of caution. This predicate drives `legCoupled` in the co-open / leg-provisioning gates.
-// Default TRUE; an operator forces serial writes with KAOLA_PARALLEL_WRITES=0|false|no. Genuinely
-// OVERLAPPING (non-disjoint) writes are NOT affected here — they still require an explicit
-// --write-overlap-consent + a leg-scoped code-reviewer gate (the validator's relaxation path).
+// #542 / #760: parallel-writes-default-ON — the S3 (environment/operator) serializer. When a write
+// frontier co-opens, the executor opens ISOLATED per-leg worktrees and writes them CONCURRENTLY — by
+// DEFAULT, with no operator toggle. The per-leg worktree isolation (containment) + the mandatory
+// post-dominating `synthesizer` reconcile are the correctness net, so the workflow must NOT downgrade
+// a frontier to serial out of caution. This predicate drives `legCoupled` in the co-open / leg-
+// provisioning gates. Default TRUE; an operator forces serial writes with KAOLA_PARALLEL_WRITES=0|
+// false|no — the ONE named S3 serializer this file carries (a positive operator directive is
+// present-tense evidence, unlike a guess). Overlapping (non-disjoint) writes are handled entirely by
+// the validator's writeOverlapRelaxable ladder, NOT here: #546-G2/#593/#760 relax an ordinary (non-
+// PROTECTED) overlap — proven-disjoint, exact-file-disjoint, OR genuinely uncertain (a directory/glob
+// declared entry) — by DEFAULT under the retained net (a post-dominating code-reviewer gate); only a
+// PROVEN same-file/case-collision overlap or a PROTECTED file still blocks, and --write-overlap-consent
+// is vestigial for every relaxable class.
 function parallelWritesDefaultOn(env) {
   const raw = (env || {})[PARALLEL_WRITES_ENV];
   if (raw === '0' || raw === 'false' || raw === 'no') return false;
