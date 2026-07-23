@@ -17910,6 +17910,131 @@ function testContextPacketEfficiencyRollup763() {
   console.log('testContextPacketEfficiencyRollup763: PASSED');
 }
 
+// ── #763 ARCHIVE ROLLUP PIN ──────────────────────────────────────────────────────────────────
+// The per-run expansion-efficiency rollup line reaches the ARCHIVE summary through TWO call sites:
+// cmdFinalize (the standard archiver) and sink-merge's sole-archiver metadata step (a run that
+// finalizes through --sink alone). testContextPacketEfficiencyRollup763 (b) pins the WRITER in
+// isolation, but a direct-writer test leaves BOTH call sites unprotected — deleting either the
+// cmdFinalize call or the sink-merge call survives it. This drives a REAL cmdFinalize and a REAL
+// sole-archiver --sink and asserts the rollup line lands in the archived finalization-summary.md,
+// so removing either call goes RED.
+function testArchiveRollupPin763() {
+  // The discharged-expansion journal is NOT hash-covered (it is appended post-freeze as a runtime
+  // channel), so a frozen plan can carry it without perturbing its identity; both archivers read it
+  // from the ARCHIVED workflow-plan.md. Same shape as testContextPacketEfficiencyRollup763 (b):
+  // points=2 (m1, m2); width = (3 units on m1#1 + 1 on m1#2) + (2 on m2#1) = 6;
+  // rework = (2 records - 1 on m1) + (1 record - 1 on m2) = 1.
+  const stamp = '2026-01-01T00:00:00.000Z';
+  const expansionRecords = [
+    '', '## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: none present — co-open',
+    '  unit: u1 | code-explorer | standard | — | co_open | —',
+    '  unit: u2 | code-explorer | standard | — | co_open | —',
+    '  unit: u3 | code-explorer | standard | — | co_open | —', '',
+    'open(m1#1):', '  at: ' + stamp, '',
+    'record(m1#2):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: none present — co-open',
+    '  unit: v1 | code-explorer | standard | — | co_open | —', '',
+    'open(m1#2):', '  at: ' + stamp, '',
+    'discharge(m1):', '  at: ' + stamp, '  records: m1#1, m1#2', '',
+    'record(m2#1):', '  point: m2', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+    '  serializer: S2 — a shared config file',
+    '  unit: w1 | code-explorer | standard | — | co_open | —',
+    '  unit: w2 | code-explorer | standard | — | co_open | —', '',
+    'open(m2#1):', '  at: ' + stamp, '',
+    'discharge(m2):', '  at: ' + stamp, '  records: m2#1', '',
+  ].join('\n');
+  const ROLLUP_LINE = 'expansion rollup: points=2 width=6 rework=1';
+
+  // ---- M18: a REAL cmdFinalize archives the run and MUST write the rollup into the archived
+  // finalization-summary.md. Removing the persistExpansionRollupToSummary call in cmdFinalize reds here.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-finalize-')));
+    try {
+      initGitRepo(tmp);
+      plantRoadmapIssue(tmp, 76318, '');
+      json(runNode(claimScript, ['startup', '--target-issue', '76318', '--runtime', 'claude'], tmp));
+      seedAdaptiveFinalizeFixture(tmp, 'issue-76318');
+      // Append the discharged-expansion journal to the LIVE plan (post-freeze, un-hashed).
+      fs.appendFileSync(path.join(tmp, 'kaola-workflow', 'issue-76318', 'workflow-plan.md'), expansionRecords);
+      const result = json(runNode(claimScript, ['finalize', '--project', 'issue-76318'], tmp));
+      assert(result.status === 'closed', '#763 M18: finalize must report closed, got ' + JSON.stringify(result));
+      const archived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-76318'));
+      assert(archived.length === 1, '#763 M18: finalize must archive exactly one folder, got ' + JSON.stringify(archived));
+      const summary = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'finalization-summary.md'));
+      assert(summary.includes('## Expansion Rollup') && summary.includes(ROLLUP_LINE),
+        '#763 M18: cmdFinalize must write the per-run expansion rollup into the archived '
+        + 'finalization-summary.md — removing the persistExpansionRollupToSummary call in cmdFinalize '
+        + 'must red HERE. got:\n' + summary);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // ---- M19: a REAL --sink that is the SOLE archiver (the live project folder is still in main; no
+  // prior cmdFinalize --keep-worktree already archived it) MUST write the rollup into the archived
+  // finalization-summary.md too. Removing the persistExpansionRollupToSummary call in sink-merge's
+  // sole-archiver metadata step (persistSinkClosureMetadata) reds here.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-sink-')));
+    const env = { ...process.env, ...GIT_ISOLATION_ENV,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+    const project = 'issue-76319';
+    const branch = 'workflow/issue-76319';
+    try {
+      initGitRepo(tmp);
+      // Feature branch worktree: commit the deliverable AND the live project folder (its plan carries
+      // the discharged-expansion journal, its state is closed). The sink FF-merges these onto main,
+      // then — no prior cmdFinalize --keep-worktree having archived it — is the SOLE archiver: its own
+      // archiveProjectDir renames kaola-workflow/<project>/ → the archive dest persistSinkClosureMetadata
+      // writes the rollup into.
+      const wtPath = path.join(tmp, '.kw', 'worktrees', project);
+      fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+      spawnSync('git', ['-C', tmp, 'worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
+      fs.writeFileSync(path.join(wtPath, 'impl-76319.txt'), 'impl\n');
+      const wtLive = path.join(wtPath, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(wtLive, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(wtLive, 'workflow-state.md'), [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: closed', '',
+        '## Sink', 'branch: ' + branch, 'issue_number: 76319', 'sink: merge', ''
+      ].join('\n'));
+      fs.writeFileSync(path.join(wtLive, 'workflow-plan.md'),
+        '# Workflow Plan — sink rollup fixture\n\n## Meta\n\nplan_form: spine\n' + expansionRecords + '\n');
+      spawnSync('git', ['-C', wtPath, 'add', '-A'], { env, encoding: 'utf8' });
+      spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: impl 76319'], { env, encoding: 'utf8' });
+
+      const result = spawnSync(process.execPath, [
+        sinkMergeScript, '--sink', '--branch', branch, '--issue', '76319', '--project', project, '--json',
+      ], { cwd: tmp, encoding: 'utf8', env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+      const parsed = (() => { try { return JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) { return {}; } })();
+      assert(result.status === 0 && parsed.status === 'sinked',
+        '#763 M19: the sole-archiver --sink must succeed, got status=' + result.status
+        + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      // archiveProjectDir suffixes the dest with .archived-<ts> when archive/<project>/ already
+      // exists (a prior receipt write), so search EVERY archive dir for this project and assert the
+      // rollup lands in the summary of the one the sole-archiver actually populated.
+      const archiveRoot = path.join(tmp, 'kaola-workflow', 'archive');
+      const archived = fs.readdirSync(archiveRoot).filter(n => n === project || n.startsWith(project + '.archived-'));
+      assert(archived.length >= 1, '#763 M19: the sink must archive the project folder, got ' + JSON.stringify(archived));
+      const summaries = archived
+        .map(n => path.join(archiveRoot, n, 'finalization-summary.md'))
+        .filter(p => fs.existsSync(p))
+        .map(p => read(p));
+      assert(summaries.some(s => s.includes('## Expansion Rollup') && s.includes(ROLLUP_LINE)),
+        '#763 M19: the sole-archiver --sink must write the per-run expansion rollup into the archived '
+        + 'finalization-summary.md — removing the persistExpansionRollupToSummary call in '
+        + 'persistSinkClosureMetadata must red HERE. archived dirs=' + JSON.stringify(archived)
+        + '; summaries=\n' + summaries.join('\n---\n'));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testArchiveRollupPin763: PASSED');
+}
+
 // ── #761 DISCHARGED-POINT RE-OPEN CASCADE ────────────────────────────────────────────────────
 // Every real re-expansion scenario surfaces its finding AFTER the owning milestone is DISCHARGED.
 // Driven END TO END through the production CLIs (never string replacement on the ledger):
@@ -18567,6 +18692,7 @@ function buildRegistry() {
   add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
   add('testExpansionTransaction759',                      testExpansionTransaction759);
   add('testContextPacketEfficiencyRollup763',             testContextPacketEfficiencyRollup763);
+  add('testArchiveRollupPin763',                          testArchiveRollupPin763);
   add('testReExpandCascade761',                           testReExpandCascade761);
   add('testSerializationInversion760',                    testSerializationInversion760);
   return reg;
