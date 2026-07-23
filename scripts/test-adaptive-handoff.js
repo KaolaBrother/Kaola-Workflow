@@ -1436,6 +1436,7 @@ function runMirrorHandoffCase(mirrorResponse) {
     return [
       '# Workflow Plan — test-project', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'contract_version: 2',
       // Unified schema-2 (#695): schema-2 gate metadata requires the epoch contract. A docs-only child
@@ -1558,7 +1559,7 @@ function runMirrorHandoffCase(mirrorResponse) {
   const { validatePlan } = require('./kaola-workflow-plan-validator');
   const frontierPlan = (classes, digest) => [
     '# Workflow Plan — test-project', '',
-    '## Meta', 'plan_schema_version: 2', 'contract_version: 2', 'epoch_schema_version: 2', 'plan_epoch: 2',
+    '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'contract_version: 2', 'epoch_schema_version: 2', 'plan_epoch: 2',
     'epoch_lineage_id: ' + '1'.repeat(64), 'parent_plan_hash: ' + '2'.repeat(64),
     'parent_snapshot_manifest_digest: pending', 'claim_root_base_digest: ' + '3'.repeat(64),
     'source_evidence_digest: ' + '5'.repeat(64), 'transition_reason: review_repair_requires_replan',
@@ -1611,6 +1612,7 @@ function runMirrorHandoffCase(mirrorResponse) {
     const base = [
       '# Workflow Plan — test-project', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'labels: area:scripts',
       'code_certifier: none',
@@ -2047,6 +2049,7 @@ function runMirrorHandoffCase(mirrorResponse) {
   const g4Plan = (docPath, extraMeta) => [
     '# Workflow Plan — test-project', '',
     '## Meta',
+    'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
     'plan_schema_version: 2',
     'labels: area:scripts',
     'code_certifier: reviewer',

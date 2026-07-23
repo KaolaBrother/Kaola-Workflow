@@ -54,6 +54,9 @@ function frozenPlan(project, meta, nodes, ledger) {
   }).join('\n');
   let text = [
     `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
+    // #765 (Wave E2): the legacy dag grammar is retired at the freeze wall — every all-concrete
+    // fixture must declare the spine discriminator (a caller may still override via meta.plan_form).
+    ...((meta && 'plan_form' in meta) ? [] : ['plan_form: spine']),
     'labels: enhancement', 'speculative_open_policy: auto', 'validation_command: node scripts/test-replan.js',
     // Schema-2 code-producing plans require a validation policy (bundle #693/#696/#697/#698): the command
     // above plus a timeout. Emitted for schema-2 only so legacy v1 fixtures stay byte-stable.

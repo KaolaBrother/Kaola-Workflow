@@ -141,7 +141,7 @@ function seedAdaptiveFinalizeFixture(root, project, writeSet) {
     { id: 'n2', role: 'finalize', ledger_status: 'complete', status: 'completed' },
   ];
   fs.writeFileSync(planPath, [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -313,7 +313,7 @@ function testKeepOpenArchiveStamp() {
       { KAOLA_WORKTREE_NATIVE: '0' }));
     const planPath = path.join(dir, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
-      '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -1049,7 +1049,7 @@ function adaptiveTmp(slug) {
 }
 const ADAPTIVE_PLAN = [
   '# Workflow Plan — issue #901', '',
-  '## Meta', 'labels: enhancement', '',
+  '## Meta', 'plan_form: spine', 'labels: enhancement', '',
   '## Nodes', '',
   '| id | role | depends_on | declared_write_set | cardinality | shape |',
   '|---|---|---|---|---|---|',
@@ -1060,9 +1060,40 @@ const ADAPTIVE_PLAN = [
   ''
 ].join('\n');
 
+// #765 (Wave E2 cutover): the legacy `dag` grammar is retired at the freeze wall — `plan_form: spine`
+// is the only authorable shape. A fully-known-at-freeze plan is an all-concrete spine (zero expansion
+// points), semantically equal to the old dag. This injects `plan_form: spine` into a fixture's ## Meta
+// when the field is absent, so the legacy dag fixtures that route through the shared freeze helpers
+// migrate to concrete spines in one place. No-op when plan_form is already declared or there is no
+// ## Meta header (a headerless fixture is not a freeze-wall success case).
+function injectSpineForm(content) {
+  if (/^[ \t]*plan_form[ \t]*:/m.test(content)) return content;
+  // Fence-aware: inject after the FIRST genuine (non-fenced) `## Meta` header, skipping any decoy
+  // `## Meta` inside a ``` / ~~~ code fence (variable-length markers, closed by a fence of length >=
+  // the opener). Return unchanged when there is no genuine Meta header (a headerless fixture is not a
+  // freeze-wall success case and is migrated inline instead).
+  const lines = content.split('\n');
+  let fence = null; // the opening fence marker string when inside a fence
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(/^([`~]{3,})/);
+    if (m) {
+      if (fence === null) fence = m[1][0].repeat(m[1].length); // open
+      else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; // close
+      continue;
+    }
+    if (fence === null && /^## Meta[ \t]*$/.test(line)) {
+      lines.splice(i + 1, 0, 'plan_form: spine');
+      return lines.join('\n');
+    }
+  }
+  return content;
+}
+
 function stampVerifiedLegacyPlan(planPath, validatorPath) {
-  const content = fs.readFileSync(planPath, 'utf8');
-  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)) return;
+  const raw = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) return;
+  const content = injectSpineForm(raw);
   const validator = require(validatorPath || planValidatorScript);
   const hash = validator.computePlanHash(content);
   fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
@@ -1074,6 +1105,7 @@ function runLegacyFreeze(validatorPath, planPath, cwd, extraArgs) {
 }
 
 function freezeLegacyContent(validator, content) {
+  content = injectSpineForm(content); // #765: migrate legacy dag fixtures to concrete spine
   const hash = validator.computePlanHash(content);
   return validator.freezePlan('<!-- plan_hash: ' + hash + ' -->\n\n' + content);
 }
@@ -1246,7 +1278,7 @@ function testAdaptiveConsentHaltSurfaces() {
 //    coverage the ACs require.
 const CROSS_SURFACE_PLAN = [
   '# Workflow Plan — issue #386', '',
-  '## Meta', 'labels: enhancement', '',
+  '## Meta', 'plan_form: spine', 'labels: enhancement', '',
   '## Nodes', '',
   '| id | role | depends_on | declared_write_set | cardinality | shape |',
   '|---|---|---|---|---|---|',
@@ -1323,7 +1355,11 @@ function testAdaptiveCrossSurfaceMutexWalkthrough() {
 // (j) validator governance: auto-run / ask / typed-refusal over real plan fixtures.
 function validatePlanFixture(tmp, nodesRows, labels) {
   const planPath = path.join(tmp, 'plan.md');
-  const meta = labels !== undefined ? ['## Meta', 'labels: ' + labels.join(', '), ''] : [];
+  // #765: every fixture here is an all-concrete plan asserted in-grammar/refuse at the freeze wall, so
+  // it must carry the spine discriminator now that the legacy dag grammar is retired.
+  const meta = labels !== undefined
+    ? ['## Meta', 'plan_form: spine', 'labels: ' + labels.join(', '), '']
+    : ['## Meta', 'plan_form: spine', ''];
   fs.writeFileSync(planPath, ['# Plan', ''].concat(meta).concat([
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
@@ -1489,12 +1525,13 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'in-grammar',
       '#381: exact files (incl a root-level slashless file + a dot-leading path) must freeze green, got: ' + JSON.stringify(v));
 
-    // #381 (FREEZE-ONLY / no-brick): a plan FROZEN by a pre-#381 validator (legal then) carrying a
-    // `src/` entry must still PASS --resume-check (revalidateForResume is untouched) even though
-    // --freeze now REFUSES the same content — so an in-flight legacy plan resumes, never bricks.
+    // #381 (FREEZE-ONLY / no-brick): a plan carrying a `src/` entry must still PASS --resume-check
+    // (revalidateForResume is untouched) even though --freeze now REFUSES the same content — so an
+    // in-flight plan resumes, never bricks. #765: the fixture is a concrete spine so the freeze wall
+    // reaches the directory-shaped write-set refusal (past the retired-dag check).
     {
       const pv = require('./kaola-workflow-plan-validator');
-      const legacy = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+      const legacy = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | src/ | 1 | sequence |',
@@ -1519,7 +1556,8 @@ function testAdaptiveValidatorGovernance() {
     // main-session-gate carrying a model refuses at freeze; an absent column is back-compat.
     const vModel = (rows) => {
       const pth = path.join(tmp, 'plan-model.md');
-      fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+      // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall.
+      fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
         '|---|---|---|---|---|---|---|'].concat(rows).concat(['']).join('\n'));
       return JSON.parse(runNode(planValidatorScript, [pth, '--json'], tmp).stdout);
@@ -1591,7 +1629,7 @@ function testAdaptiveValidatorGovernance() {
       const pv = require('./kaola-workflow-plan-validator');
       const schema = require('./kaola-workflow-adaptive-schema');
       const na = require('./kaola-workflow-next-action');
-      const legacyBody = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+      const legacyBody = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
         '|---|---|---|---|---|---|---|',
         '| arch | code-architect | — | — | 1 | sequence | opus |',
@@ -1638,7 +1676,8 @@ function testAdaptiveValidatorGovernance() {
     // LEGAL-membership check narrows to unknown-only, it does not vanish).
     const vSpec = (policyLine) => {
       const pth = path.join(tmp, 'plan-spec.md');
-      fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'labels: area:scripts', ...(policyLine ? [policyLine] : []), '', '## Nodes', '',
+      // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall.
+      fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', ...(policyLine ? [policyLine] : []), '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
@@ -1936,7 +1975,7 @@ function testAdaptiveValidatorGovernance() {
     // --freeze refuses. Mirrors the #381 freeze-only landmine.
     {
       const pv = require('./kaola-workflow-plan-validator');
-      const legacyDup = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+      const legacyDup = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | lib/a.js | 1 | sequence |',
@@ -1953,7 +1992,7 @@ function testAdaptiveValidatorGovernance() {
     // #655: optional, header-indexed frozen wait-budget grammar. This suite's `tmp`
     // is a real temporary directory, matching freeze-time filesystem behavior.
     const waitPlan = (cell, role = 'implementer', model = 'standard') => [
-      '# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+      '# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '', // #765: all-concrete spine
       '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
       '| --- | --- | --- | --- | --- | --- | --- | --- |',
       `| impl | ${role} | — | ${role === 'code-reviewer' ? '—' : 'src/x.js'} | 1 | sequence | ${model} | ${cell} |`,
@@ -2007,7 +2046,7 @@ function testMetricOptimizerContract() {
   // validation_command) — validatePlanFixture only supports `labels:`, so this variant is dedicated.
   function optPlan(metaExtra, nodesRows) {
     const planPath = path.join(tmp, 'plan.md');
-    fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: enhancement']
+    fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement']
       .concat(metaExtra || [])
       .concat(['', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
@@ -2047,7 +2086,7 @@ function testMetricOptimizerContract() {
   ];
   const errs = v => (v.errors || []).join(';');
   // A frozen plan WITH a `## Node Ledger` (id -> status) for the runtime --verdict-check surface.
-  const mkLedgerPlan = (nodesRows, ledgerRows, labels) => ['# Plan', '', '## Meta', 'labels: ' + (labels || 'chore'), '', '## Nodes', '',
+  const mkLedgerPlan = (nodesRows, ledgerRows, labels) => ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: ' + (labels || 'chore'), '', '## Nodes', '', // #765: all-concrete spine
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|'].concat(nodesRows).concat(['', '## Node Ledger', '', '| id | status |', '|---|---|'])
     .concat(ledgerRows).concat(['']).join('\n');
@@ -2174,14 +2213,14 @@ function testMetricOptimizerContract() {
     v = optPlan(optBlock('opt'), validNodes);
     assert(v.result === 'in-grammar', 'OPT-1: exactly one optimize(<id>) block must freeze in-grammar, got: ' + JSON.stringify(v));
     // optimizeHeaderCounts is exported and counts per-id headers from the raw ## Meta body.
-    const dupBody = ['# Plan', '', '## Meta', 'labels: enhancement']
+    const dupBody = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement']
       .concat(optBlock('opt')).concat(optBlock('opt', { budget_iterations: '30' }))
       .concat(['', '## Nodes', '']).join('\n');
     assert(pv.optimizeHeaderCounts(dupBody).get('opt') === 2, 'optimizeHeaderCounts counts duplicate optimize(opt) headers, got: ' + JSON.stringify([...pv.optimizeHeaderCounts(dupBody)]));
 
     // AC2 — the optimize contract is plan_hash-covered (computePlanHash normalizes the whole ## Meta
     // body). A post-freeze field mutation flips the hash ⇒ resume refusal.
-    const validBody = ['# Plan', '', '## Meta', 'labels: enhancement']
+    const validBody = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement']
       .concat(optBlock('opt'))
       .concat(['', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
@@ -2237,7 +2276,7 @@ function testMetricOptimizerContract() {
       const proj = path.join(grepo, 'kaola-workflow', 'issue-634-ratchet');
       fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
       const planPath = path.join(proj, 'workflow-plan.md');
-      fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: enhancement']
+      fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement']
         .concat(optBlock('opt'))
         .concat(['', '## Nodes', '',
           '| id | role | depends_on | declared_write_set | cardinality | shape |',
@@ -2496,7 +2535,7 @@ function testAdaptiveReadySetDisjointness() {
 function testAdaptiveGateBarrierEnforcement() {
   const tmp = adaptiveTmp('gate-barrier');
   const planValidator = require(planValidatorScript);
-  const mkLedgerPlan = (nodes, ledger, labels) => ['# Plan', '', '## Meta', 'labels: ' + (labels || 'chore'), '', '## Nodes', '',
+  const mkLedgerPlan = (nodes, ledger, labels) => ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: ' + (labels || 'chore'), '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|']
     .concat(nodes).concat(['', '## Node Ledger', '', '| id | status |', '|---|---|']).concat(ledger).join('\n');
   try {
@@ -2590,7 +2629,7 @@ function testAdaptiveGateBarrierEnforcement() {
     // directory-shaped declared tokens. Iff subtree-covered; a foreign (non-subtree) write keeps it
     // plain write_set_overflow. MUTATION: removing the subtree-prefix check would make granularity
     // fire on the foreign-present case below (which asserts write_set_overflow) => RED.
-    const granPlan = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+    const granPlan = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| impl | tdd-guide | — | src/ | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -2740,7 +2779,7 @@ function testAdaptiveGateBarrierEnforcement() {
       fs.mkdirSync(proj, { recursive: true });
       const planPath = path.join(proj, 'workflow-plan.md');
       fs.writeFileSync(planPath, [
-        '# Workflow Plan — issue #950', '', '## Meta', 'labels: refactor', '', '## Nodes', '',
+        '# Workflow Plan — issue #950', '', '## Meta', 'plan_form: spine', 'labels: refactor', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
         '| rv | code-reviewer | impl | — | 1 | sequence |',
@@ -2824,7 +2863,7 @@ function testAdaptiveGateBarrierEnforcement() {
 function testAdaptivePerInstanceBarrier() {
   const tmp = adaptiveTmp('per-instance');
   const planValidator = require(planValidatorScript);
-  const mkPlan = () => ['# Workflow Plan — issue #970', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+  const mkPlan = () => ['# Workflow Plan — issue #970', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
     '| ex | code-explorer | — | — | 1 | sequence |',
     '| a | tdd-guide | ex | aaa/x.js | 1 | fanout(impl) |',
@@ -2889,7 +2928,7 @@ function testAdaptivePerInstanceBarrier() {
 // (resume-safe). Each scenario starts from a fresh real git repo so the prod logic — not a fixture
 // artifact — decides the verdict; every assertion flips if the corresponding prod line is reverted.
 function testAdaptivePerInstanceBarrierHardening() {
-  const PLAN = ['# Workflow Plan — issue #971', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+  const PLAN = ['# Workflow Plan — issue #971', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
     '| ex | code-explorer | — | — | 1 | sequence |',
     '| a | tdd-guide | ex | aaa/x.js | 1 | fanout(impl) |',
@@ -2901,7 +2940,7 @@ function testAdaptivePerInstanceBarrierHardening() {
   // a sensitive file declared IN node a's own lane (no security-reviewer) — left UNFROZEN on purpose
   // (the validator would refuse to freeze a sensitive lane with no security-reviewer; the barrier only
   // needs a parseable ## Nodes table, so the sensitivity teeth can be exercised in isolation).
-  const SENS_PLAN = ['# Workflow Plan — issue #972', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+  const SENS_PLAN = ['# Workflow Plan — issue #972', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
     '| ex | code-explorer | — | — | 1 | sequence |',
     '| a | tdd-guide | ex | src/auth/session.js | 1 | sequence |',
@@ -3124,7 +3163,7 @@ function testBundle424432433ValidatorGates() {
 
   // --- #424 (1) NARROW .md ALLOWBAND: a behavioral .md OUTSIDE the band, undeclared, must REFUSE
   //     (the blanket suffix exemption let it pass). agents/*.md is production now.
-  const PLAN_MD = ['# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+  const PLAN_MD = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
     '| impl | implementer | — | lib/foo.js | 1 | sequence |',
     '| rv | code-reviewer | impl | — | 1 | sequence |',
@@ -3223,7 +3262,7 @@ function testBundle424432433ValidatorGates() {
     const an = require('./kaola-workflow-adaptive-node');
     const briefedPlan = [
       '# Workflow Plan — channel', '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| design | code-architect | — | — | 1 | sequence |',
@@ -3271,7 +3310,7 @@ function testBundle424432433ValidatorGates() {
   }
 
   // --- CLI-integration scenarios over a real git repo (root-pin, drop-base window-lock, finalize gate).
-  const FPLAN = ['# Workflow Plan — issue #424', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+  const FPLAN = ['# Workflow Plan — issue #424', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
     '| a | implementer | — | aaa/x.js | 1 | sequence |',
     '| rv | code-reviewer | a | — | 1 | sequence |',
@@ -3964,7 +4003,7 @@ function testBundle424432433NodeSeeding() {
   // is in the trivial band; tested at the validator level by testAdaptiveTier2Composition, but
   // the BARRIER is a separate gate and must also pass).
   {
-    const PLAN_DOC = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+    const PLAN_DOC = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| doc | doc-updater | — | docs/guide.md, README.md | 1 | sequence |',
       '| done | finalize | doc | — | 1 | sequence |', '',
@@ -3991,7 +4030,7 @@ function testBundle424432433NodeSeeding() {
   // --- scenario 6: evidence seeding via open-next CLI (requires a git repo) -------------------
   {
     // Build the plan: an implementer-role node so we can verify role-specific stubs.
-    const SEED_PLAN = ['# Workflow Plan — issue #433-seed', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    const SEED_PLAN = ['# Workflow Plan — issue #433-seed', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
       '| rv | code-reviewer | n1 | — | 1 | sequence |',
@@ -4121,7 +4160,7 @@ function testAdaptiveDurableConsentHalt() {
   const adaptiveSchema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
   try {
     // unit: the reader is heading-scoped.
-    const base = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+    const base = ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| done | finalize | — | — | 1 | sequence |', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| done | pending |', ''];
@@ -4176,7 +4215,7 @@ function testAdaptiveAuthoringEntryGuard() {
       '#538: authoring must always be allowed (unconditional), got: ' + JSON.stringify(out));
     // toggle-agnostic: the validator --freeze must still work (unchanged contract)
     const planPath = path.join(tmp, 'p.md');
-    fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+    fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| done | finalize | — | — | 1 | sequence |', ''].join('\n'));
     const fr = runLegacyFreeze(planValidatorScript, planPath, tmp, ['--json']);
@@ -4290,7 +4329,7 @@ function testAdaptiveTier2Composition() {
     // REGRESSION: plan_hash covers ## Meta labels — tampering labels after freeze must fail resume-check.
     const planValidator = require(planValidatorScript);
     const frozen = freezeLegacyContent(planValidator, [
-      '# Plan', '', '## Meta', 'labels: security', '', '## Nodes', '',
+      '# Plan', '', '## Meta', 'plan_form: spine', 'labels: security', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
       '| i | tdd-guide | — | lib/foo.js | 1 | sequence |',
@@ -4394,7 +4433,7 @@ function testAdaptiveAuditFixes() {
     // B1: a decoy `labels:` line OUTSIDE ## Meta (not covered by plan_hash) must not override the
     // real labels and drop G2. Label-only-sensitive plan with no security-reviewer must refuse.
     const decoyPlan = [
-      '# Plan', '', 'labels: chore', '', '## Meta', '', 'labels: security', '',
+      '# Plan', '', 'labels: chore', '', '## Meta', 'plan_form: spine', '', 'labels: security', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4409,7 +4448,7 @@ function testAdaptiveAuditFixes() {
     // B2/B3: a fenced `## ` line inside ## Nodes must not hide an appended node from the validator
     // (it shares the fence-aware reader with the executor) — the hidden node makes a second sink.
     const fencedPlan = [
-      '# Plan', '', '## Meta', '', 'labels: chore', '',
+      '# Plan', '', '## Meta', 'plan_form: spine', '', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4425,7 +4464,7 @@ function testAdaptiveAuditFixes() {
     // B3: and the plan_hash must cover post-fence content — appending such a node after freeze
     // must fail --resume-check (hash mismatch), not pass silently.
     const clean = freezeLegacyContent(planValidator, [
-      '# Plan', '', '## Meta', '', 'labels: chore', '',
+      '# Plan', '', '## Meta', 'plan_form: spine', '', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4551,7 +4590,7 @@ function testAdaptiveAuditCoverage() {
     // I5: the --resume-check CLI flag end-to-end (not just the library).
     const resumePlan = path.join(tmp, 'resume-plan.md');
     fs.writeFileSync(resumePlan, [
-      '# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '# Plan', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
       '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
@@ -4819,7 +4858,7 @@ function testClassifierDotPathOverlapRed() {
     plantActiveFolder(tmp, 'adaptive-ci-active', 300, null, 'active');
     plantFrozenPlan(tmp, 'adaptive-ci-active', [
       '# Workflow Plan — issue #300', '',
-      '## Meta', 'labels: chore', '',
+      '## Meta', 'plan_form: spine', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4869,7 +4908,7 @@ function testClassifierDotAreaOverlapRed() {
     plantActiveFolder(tmp, 'ci-area-active', 320, null, 'active');
     plantFrozenPlan(tmp, 'ci-area-active', [
       '# Workflow Plan — issue #320', '',
-      '## Meta', 'labels: chore', '',
+      '## Meta', 'plan_form: spine', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4901,7 +4940,7 @@ function testClassifierCuratedRootOverlapYellow() {
     plantActiveFolder(tmp, 'curated-claimed', 330, null, 'active');
     plantFrozenPlan(tmp, 'curated-claimed', [
       '# Workflow Plan — issue #330', '',
-      '## Meta', 'labels: chore', '',
+      '## Meta', 'plan_form: spine', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -4978,7 +5017,7 @@ function testClassifierCuratedRootStructuredLowercaseYellow() {
   try {
     plantActiveFolder(tmp, 'lc-claimed', 370, null, 'active');
     plantFrozenPlan(tmp, 'lc-claimed', [
-      '# Workflow Plan — issue #370', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '# Workflow Plan — issue #370', '', '## Meta', 'plan_form: spine', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| ci | doc-updater | — | dockerfile | 1 | sequence |',
       '| review | code-reviewer | ci | — | 1 | sequence |',
@@ -5217,9 +5256,9 @@ function testPlanConsumerFenceMatrix() {
   ];
   const plan = [
     '# Workflow Plan — fence matrix', '',
-    '`````markdown', '## Meta', 'labels: fake', '## Nodes', '| fake | row |',
+    '`````markdown', '## Meta', 'plan_form: spine', 'labels: fake', '## Nodes', '| fake | row |',
     '## Node Briefs', 'fake', '## Node Ledger', '| fake | complete |', '```', '`````',
-    '## Meta', 'labels: enhancement', '',
+    '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|', '| explore | code-explorer | — | — | 1 | sequence |',
     '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
@@ -5271,7 +5310,7 @@ function testNodeBriefAuthoritativeSectionMatrix() {
     ['gitea', require('../plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator'), path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-plan-validator.js')],
   ];
   const base = [
-    '# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '# Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '', '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
     '| impl | tdd-guide | — | lib/x.js | 1 | sequence |',
     '| review | code-reviewer | impl | — | 1 | sequence |',
@@ -10523,7 +10562,7 @@ function testKeepOpenMergeFullChain() {
     fs.writeFileSync(mainState, stContent);
     const plan860 = path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-plan.md');
     fs.writeFileSync(plan860, [
-      '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -10669,7 +10708,7 @@ function testKeepOpenFinalizeFlagAlias() {
     fs.writeFileSync(mainState, stContent);
     const plan861 = path.join(tmp, 'kaola-workflow', 'issue-861', 'workflow-plan.md');
     fs.writeFileSync(plan861, [
-      '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -12450,7 +12489,7 @@ function testAdaptiveFreezeRepairReconcile() {
   const planValidator = require(planValidatorScript);
   const plan = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -12498,7 +12537,7 @@ function testAdaptiveVerdictCheck() {
   // Helper: build a minimal ledger plan table for verifyVerdictBlock tests.
   const mkVerdictPlan = (nodes, ledger, labels) => [
     '# Plan', '',
-    '## Meta', 'labels: ' + (labels || 'chore'), '',
+    '## Meta', 'plan_form: spine', 'labels: ' + (labels || 'chore'), '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -12989,7 +13028,7 @@ function testAdaptiveVerdictCheck() {
     // Build a 7-column select plan for selector-check tests
     const scPlanContent = [
       '# Plan', '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
       '|---|---|---|---|---|---|---|',
@@ -13181,7 +13220,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-valid-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13205,7 +13244,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-one-arm-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13225,7 +13264,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-gate-arm-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13246,7 +13285,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-write-classifier-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13267,7 +13306,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-no-dep-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13290,7 +13329,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-blank-src-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13311,7 +13350,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-overlap-plan.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: enhancement', '',
+        '## Meta', 'plan_form: spine', 'labels: enhancement', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13333,7 +13372,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-dup-group-diff-classifier.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: bug', '',
+        '## Meta', 'plan_form: spine', 'labels: bug', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13362,7 +13401,7 @@ function testAdaptivePatternLibrary() {
       const selPlanPath = path.join(tmp, 'select-dup-group-same-classifier.md');
       fs.writeFileSync(selPlanPath, [
         '# Plan', '',
-        '## Meta', 'labels: bug', '',
+        '## Meta', 'plan_form: spine', 'labels: bug', '',
         '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
         '|---|---|---|---|---|---|---|',
@@ -13406,7 +13445,9 @@ function testAdaptivePatternLibrary() {
 
 // Helper: write a 7-column selector plan file and run the validator.
 function validateSelectFixture(planPath, nodesRows7col, labels) {
-  const meta = labels !== undefined ? ['## Meta', 'labels: ' + labels.join(', '), ''] : [];
+  const meta = labels !== undefined
+    ? ['## Meta', 'plan_form: spine', 'labels: ' + labels.join(', '), '']
+    : ['## Meta', 'plan_form: spine', '']; // #765: all-concrete spine — legacy dag grammar retired
   fs.writeFileSync(planPath, ['# Plan', ''].concat(meta).concat([
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
@@ -13539,7 +13580,7 @@ function testAdaptiveSelectNaPropagation() {
     const planPath = path.join(tmp, 'na-plan.md');
     fs.writeFileSync(planPath, [
       '# Plan', '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
       '|---|---|---|---|---|---|---|',
@@ -13585,7 +13626,7 @@ function testAdaptiveSelectResumeCheck() {
     // The planText includes all-pending ledger rows — plantFrozenPlan freezes it as written.
     const planText = [
       '# Workflow Plan — issue #g4-sim', '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
       '|---|---|---|---|---|---|---|',
@@ -13647,7 +13688,7 @@ function testAdaptiveSelectSelectorSourceFanoutMember() {
     // classifier is both a fanout(sweep) member AND the selector_source for select(fix).
     fs.writeFileSync(planPath, [
       '# Plan', '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
       '|---|---|---|---|---|---|---|',
@@ -13688,7 +13729,7 @@ function makeHandoffPlan(nodesRows, ledgerRows, labels) {
   });
   return [
     '# Workflow Plan — issue #255-sim', '',
-    '## Meta',
+    '## Meta', 'plan_form: spine',
     'plan_schema_version: 2',
     'labels: ' + labelLine,
     'code_certifier: ' + (codeReviewer ? codeReviewer[0] : 'none'),
@@ -14212,7 +14253,7 @@ function testAdaptiveHandoffFreezeChainTwoSpawns() {
 // ack freezes (control). This is the assertion the design's own #408 test-plan named but omitted.
 // ---------------------------------------------------------------------------
 function testFreezeCheckedGovernanceAckStale() {
-  const PLAN = ['# Workflow Plan — issue #408', '', '## Meta',
+  const PLAN = ['# Workflow Plan — issue #408', '', '## Meta', 'plan_form: spine',
     'plan_schema_version: 2', 'labels: enhancement',
     'code_certifier: rv', 'security_certifier: none',
     'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
@@ -14693,7 +14734,7 @@ function testAdaptiveWorktreeProvisionedE2E() {
     // every required agent row is resolved before the finalization gate.
     const planContent = [
       '# Workflow Plan — issue #530', '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -15613,7 +15654,7 @@ function testGateEvidenceNonceRotation654() {
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 0;\n');
     const planPath = path.join(projectDir, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
-      '# Workflow Plan — issue #654', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan — issue #654', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -15701,7 +15742,7 @@ function testMixedRepairReplayJournal748() {
     fs.writeFileSync(path.join(tmp, 'lib', 'tail.js'), 'module.exports = 0;\n');
     const planPath = path.join(projectDir, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
-      '# Workflow Plan — mixed repair/replay journal', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan — mixed repair/replay journal', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -16514,7 +16555,7 @@ function testReviewerContractV2Conformance() {
     const planPath = path.join(projectDir, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
       '# Workflow Plan — reviewer contract v2', '',
-      '## Meta',
+      '## Meta', 'plan_form: spine',
       'plan_schema_version: 2',
       'labels: enhancement',
       'code_certifier: reviewer',
@@ -16811,7 +16852,7 @@ function testSpinePlanFormFreeze758() {
   const refuses = (content, label, needle) => {
     const r = validator.validatePlan(content, { root: repoRoot });
     assert(r.result === 'refuse', '#758 ' + label + ': expected refuse, got ' + r.result);
-    assert(r.reason === 'plan_invalid' || r.reason === 'plan_form_duplicate' || r.reason === 'plan_form_unsupported',
+    assert(r.reason === 'plan_invalid' || r.reason === 'plan_form_duplicate' || r.reason === 'plan_form_unsupported' || r.reason === 'plan_form_dag_retired',
       '#758 ' + label + ': refusal must stay in an existing typed family, got reason=' + r.reason);
     assert((r.errors || []).some(e => e.includes(needle)),
       '#758 ' + label + ': expected an error containing "' + needle + '", got ' + JSON.stringify(r.errors));
@@ -16890,16 +16931,25 @@ function testSpinePlanFormFreeze758() {
     'expansion point pre-declares a fan-out', 'SPINE-3: expansion point m1 has shape');
   refuses(SPINE_PLAN_758.replace('| m1 | expansion-point | probe | — |', '| m1 | expansion-point | probe | scripts/x.js |'),
     'expansion point declares a write set', 'read-only role expansion-point (node m1) declares a write set');
-  // The `expansion-point` token is built-in ONLY under the discriminator; in a `dag` plan it stays
-  // an unknown role, so a legacy plan can never acquire the spine grammar by accident.
+  // #765 (Wave E2): the legacy `dag` grammar is retired at the freeze wall. Dropping `plan_form: spine`
+  // makes this an absent-⇒-dag plan, which now refuses `plan_form_dag_retired` BEFORE the closed-library
+  // check ever sees the expansion-point token — so a legacy plan can never acquire the spine grammar by
+  // accident, and can no longer be authored at all.
   refuses(SPINE_PLAN_758.replace('plan_form: spine\n', ''),
-    'expansion point in a dag plan', 'unknown role "expansion-point" not in installed library');
-  // ...and the label alone buys nothing: a spine with no expansion point is a DAG wearing the label.
-  refuses(SPINE_PLAN_758
-    .replace(/expansion\(m1\):[\s\S]*?review_class: code-reviewer\n\nexpansion\(m2\):[\s\S]*?review_class: code-reviewer\n/, '')
-    .replace('| m1 | expansion-point | probe |', '| m1 | code-explorer | probe |')
-    .replace('| m2 | expansion-point | m1 |', '| m2 | code-explorer | m1 |'),
-  'spine label with no expansion point', 'SPINE-1: plan_form: spine declares no expansion-point node');
+    'dag plan retired at freeze', 'plan_form: dag is retired');
+  // #765: SPINE-1 is RELAXED — a spine with NO expansion point (an all-concrete spine) is now the legal
+  // way to author a fully-known-at-freeze DAG, semantically equal to the retired dag. It must freeze
+  // in-grammar, not refuse.
+  {
+    const concreteSpine = SPINE_PLAN_758
+      .replace(/expansion\(m1\):[\s\S]*?review_class: code-reviewer\n\nexpansion\(m2\):[\s\S]*?review_class: code-reviewer\n/, '')
+      .replace('| m1 | expansion-point | probe |', '| m1 | code-explorer | probe |')
+      .replace('| m2 | expansion-point | m1 |', '| m2 | code-explorer | m1 |');
+    const r = validator.validatePlan(concreteSpine, { root: repoRoot });
+    assert(r.result === 'in-grammar' && r.plan_form === 'spine',
+      '#758/#765: a zero-expansion (all-concrete) spine must be in-grammar (SPINE-1 relaxed), got '
+      + JSON.stringify({ result: r.result, reason: r.reason, errors: r.errors }));
+  }
   refuses(SPINE_PLAN_758.replace('plan_form: spine', 'plan_form: spine\nplan_form: dag'),
     'duplicate plan_form', 'more than one plan_form field');
   refuses(SPINE_PLAN_758.replace('plan_form: spine', 'plan_form: tree'),
@@ -16942,14 +16992,16 @@ function testSpinePlanFormFreeze758() {
     refuses(withModel, 'expansion point declares a model', 'SPINE-3: expansion point m1 declares model "reasoning"');
   }
 
-  // (e) LEGACY NO-REGRESSION PIN over the real archived corpus (200+ frozen plans, a mix of
-  // in-grammar and every typed refusal family). Two invariants, both stable under repo evolution:
-  //   1. no archived plan emits the new `plan_form` field — every legacy emission is untouched;
-  //   2. the implicit legacy path and an EXPLICIT `plan_form: dag` are the same path, field for
-  //      field (planHash aside, which necessarily moves when a Meta line is added).
-  // Deliberately NOT pinned: absolute verdict counts. Several legacy refusals key off live repo
-  // facts (the generated-aggregator set, on-disk directory shapes), so a count pin would go red on
-  // unrelated repo growth rather than on a spine regression.
+  // (e) CUTOVER PIN over the real archived corpus (200+ frozen plans, all legacy dag/absent-plan_form).
+  // #765 (Wave E2) retires the legacy dag grammar at the FREEZE wall but NOT at the RESUME wall. The
+  // invariants, stable under repo evolution:
+  //   1. every archived (dag) plan now REFUSES at the freeze wall — dag can never reach in-grammar;
+  //   2. no archived plan emits the `plan_form` field (the dag refuse path does not set it);
+  //   3. the implicit legacy path and an EXPLICIT `plan_form: dag` are the SAME refusal (planHash aside);
+  //   4. the retirement fires on the corpus: at least some plans refuse `plan_form_dag_retired`;
+  //   5. FREEZE-ONLY no-brick: the retirement is ABSENT from the resume wall — revalidateForResume never
+  //      refuses `plan_form_dag_retired`, and some frozen legacy plans still resume green.
+  // Deliberately NOT pinned: absolute verdict counts (several refusals key off live repo facts).
   {
     const archiveRoot = path.join(repoRoot, 'kaola-workflow', 'archive');
     const plans = [];
@@ -16964,24 +17016,70 @@ function testSpinePlanFormFreeze758() {
     }
     assert(plans.length >= 150,
       '#758 (e): the archived-plan regression pin needs the real corpus; found only ' + plans.length + ' plans');
-    let inGrammar = 0;
-    let refused = 0;
+    let dagRetired = 0;
+    let resumeGreen = 0;
     for (const p of plans.sort()) {
       const content = fs.readFileSync(p, 'utf8');
       const legacy = validator.validatePlan(content, { root: repoRoot });
+      assert(legacy.result === 'refuse',
+        '#765 (e): archived legacy dag plan ' + p + ' must refuse at the freeze wall (dag retired), got ' + legacy.result);
       assert(legacy.plan_form === undefined,
         '#758 (e): archived legacy plan ' + p + ' must not gain a plan_form field');
-      if (legacy.result === 'in-grammar') inGrammar++; else refused++;
+      if (legacy.reason === 'plan_form_dag_retired') dagRetired++;
       const explicitDag = validator.validatePlan(
         content.replace(/^(## Meta[ \t]*)$/m, '$1\nplan_form: dag'), { root: repoRoot });
       const strip = r => JSON.stringify({ ...r, planHash: null });
       assert(strip(legacy) === strip(explicitDag),
         '#758 (e): implicit legacy and explicit plan_form: dag must be the SAME path for ' + p
         + '\n  implicit: ' + strip(legacy).slice(0, 300) + '\n  explicit: ' + strip(explicitDag).slice(0, 300));
+      // FREEZE-ONLY: the resume wall must stay tolerant of the frozen legacy dag plan.
+      const resume = validator.revalidateForResume(content, { root: repoRoot });
+      assert(resume.reasonCode !== 'plan_form_dag_retired',
+        '#765 (e): the dag retirement must be ABSENT from the resume wall (no-brick) for ' + p);
+      if (resume.ok) resumeGreen++;
     }
-    assert(inGrammar > 0 && refused > 0,
-      '#758 (e): the corpus pin must exercise BOTH the in-grammar and the refusing legacy paths (in-grammar='
-      + inGrammar + ', refused=' + refused + ')');
+    assert(dagRetired > 0,
+      '#765 (e): the dag retirement must fire on the corpus (dagRetired=' + dagRetired + ')');
+    assert(resumeGreen > 0,
+      '#765 (e): freeze-only no-brick — some frozen legacy dag plans must still resume green (resumeGreen='
+      + resumeGreen + ')');
+  }
+
+  // (f) #765 Wave E2 cutover, focused unit pin: the legacy dag grammar is RETIRED at the FREEZE wall
+  // but TOLERATED at the RESUME wall (freeze-only no-brick), and the all-concrete spine is the migration.
+  {
+    const dagPlan = [ // #765(f): DELIBERATELY absent plan_form (a legacy dag) — do not add plan_form here
+      '# Workflow Plan — dag retirement', '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| explore | pending |', '| done | pending |', '',
+    ].join('\n');
+    // absent plan_form ⇒ dag ⇒ refuses at freeze
+    const rAbsent = validator.validatePlan(dagPlan, { root: repoRoot });
+    assert(rAbsent.result === 'refuse' && rAbsent.reason === 'plan_form_dag_retired',
+      '#765 (f): an absent-plan_form (dag) plan must refuse plan_form_dag_retired at freeze, got '
+      + JSON.stringify({ result: rAbsent.result, reason: rAbsent.reason }));
+    // explicit plan_form: dag ⇒ the SAME refusal
+    const rExplicit = validator.validatePlan(dagPlan.replace('## Meta', '## Meta\nplan_form: dag'), { root: repoRoot });
+    assert(rExplicit.result === 'refuse' && rExplicit.reason === 'plan_form_dag_retired',
+      '#765 (f): an explicit plan_form: dag plan must refuse plan_form_dag_retired at freeze, got '
+      + JSON.stringify({ result: rExplicit.result, reason: rExplicit.reason }));
+    // FREEZE-ONLY: a plan frozen BEFORE the cutover (a hash-stamped dag) must still RESUME green.
+    const frozenDag = '<!-- plan_hash: ' + validator.computePlanHash(dagPlan) + ' -->\n\n' + dagPlan;
+    const resume = validator.revalidateForResume(frozenDag, { root: repoRoot });
+    assert(resume.ok === true && resume.plan_form === undefined,
+      '#765 (f): a frozen legacy dag plan must still resume green (freeze-only no-brick), got '
+      + JSON.stringify({ ok: resume.ok, reasonCode: resume.reasonCode }));
+    // ...and the all-concrete spine twin of the same plan freezes in-grammar (the migration path).
+    const rSpine = validator.validatePlan(dagPlan.replace('## Meta', '## Meta\nplan_form: spine'), { root: repoRoot });
+    assert(rSpine.result === 'in-grammar' && rSpine.plan_form === 'spine',
+      '#765 (f): the all-concrete spine twin must freeze in-grammar, got '
+      + JSON.stringify({ result: rSpine.result, errors: rSpine.errors }));
   }
 
   console.log('testSpinePlanFormFreeze758: PASSED');
@@ -17052,12 +17150,13 @@ function testExpansionTransaction759() {
       '#759 (d): a schema-2 SPINE plan with no validation policy must refuse validation_policy_required '
       + '(the expansion point is a code producer we cannot inspect at freeze), got '
       + JSON.stringify({ result: r.result, reason: r.reason, decision: r.decision }));
-    // The CONTROL that makes the pin discriminate: the byte-equivalent DAG plan already refused, and
-    // still does. If this ever passes while the spine one fails, the rule has been split in two.
-    const dag = strip.replace('plan_form: spine\n', '').replace('| m1 | expansion-point | probe |', '| m1 | tdd-guide | probe |');
-    const rd = validator.validatePlan(dag, { root: repoRoot });
+    // The CONTROL that makes the pin discriminate: the equivalent ALL-CONCRETE spine (#765 retired the
+    // dag grammar, so the concrete spine is the byte-equivalent of the old dag) already refused, and
+    // still does. If this ever passes while the expansion-point one fails, the rule has been split in two.
+    const concrete = strip.replace('| m1 | expansion-point | probe |', '| m1 | tdd-guide | probe |');
+    const rd = validator.validatePlan(concrete, { root: repoRoot });
     assert(rd.result === 'refuse' && rd.reason === 'validation_policy_required',
-      '#759 (d) CONTROL: the byte-equivalent DAG plan must refuse identically, got ' + JSON.stringify({ result: rd.result, reason: rd.reason }));
+      '#759 (d) CONTROL: the equivalent all-concrete spine must refuse identically, got ' + JSON.stringify({ result: rd.result, reason: rd.reason }));
     // Over-refusal control: WITH a policy the same spine plan freezes green (the rule is not a blanket ban).
     const ok = validator.validatePlan(SPINE_PLAN_759, { root: repoRoot });
     assert(ok.result === 'in-grammar',
@@ -17621,7 +17720,7 @@ function testContextPacketEfficiencyRollup763() {
     const adaptiveNode = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js'));
     const planContent = [
       '# Workflow Plan — issue #763 packet fixture', '',
-      '## Meta', '',
+      '## Meta', 'plan_form: spine', '',
       'labels: enhancement',
       'goal: land the shared context packet', '',
       'expansion(m1):',
@@ -17689,7 +17788,7 @@ function testContextPacketEfficiencyRollup763() {
       const planPath = path.join(dir, 'workflow-plan.md');
       fs.writeFileSync(planPath, [
         '# Workflow Plan — issue #763 packet serial-dispatch fixture', '',
-        '## Meta', '',
+        '## Meta', 'plan_form: spine', '',
         'labels: enhancement',
         'goal: land the shared context packet', '',
         '## Nodes', '',
@@ -17737,7 +17836,7 @@ function testContextPacketEfficiencyRollup763() {
       const planPath = path.join(dir, 'workflow-plan.md');
       fs.writeFileSync(planPath, [
         '# Workflow Plan — issue #763 packet batch-dispatch fixture', '',
-        '## Meta', '',
+        '## Meta', 'plan_form: spine', '',
         'labels: enhancement',
         'goal: land the shared context packet', '',
         '## Nodes', '',
@@ -19511,7 +19610,7 @@ function testFinalizeIncompleteWorktreeReentryFix() {
     // finalize refuses adaptive_plan_missing).
     const archivePlan = path.join(archiveDir, 'workflow-plan.md');
     fs.writeFileSync(archivePlan, [
-      '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -19795,7 +19894,7 @@ function testBundleAdaptiveResumeSurfacesBundleIdentity() {
     // Plant and freeze an adaptive plan so orient can run resume-check
     const planText = [
       '# Workflow Plan — ' + project, '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -19980,7 +20079,7 @@ function testAdaptiveLedgerHeaderInvalid425() {
   // A minimal in-grammar plan body with a `| node | status |` ledger header (alias for `id`).
   const planBody = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -20037,7 +20136,7 @@ function testAdaptiveGeneratedPortSplit431() {
   // Split plan: canonical + codex only — missing both forge ports.
   const splitPlan = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -20057,7 +20156,7 @@ function testAdaptiveGeneratedPortSplit431() {
   // (2) bundled plan: all 4 editions in the same node — must freeze in-grammar.
   const bundledPlan = [
     '# Plan', '',
-    '## Meta', 'labels: chore', '',
+    '## Meta', 'plan_form: spine', 'labels: chore', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -20425,7 +20524,7 @@ function testFinalizeBaseFlagScopesAttributionSweep() {
     fs.writeFileSync(path.join(dir, 'workflow-plan.md'), [
       '<!-- plan_hash: ' + 'c'.repeat(64) + ' -->', '',
       '# Workflow Plan — ' + project, '',
-      '## Meta', 'labels: enhancement', '',
+      '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -20553,7 +20652,7 @@ function testStartupRefusesTargetSetMismatch() {
     // Plant + freeze a minimal adaptive plan so orient can run.
     const planText = [
       '# Workflow Plan — ' + project, '',
-      '## Meta', 'labels: chore', '',
+      '## Meta', 'plan_form: spine', 'labels: chore', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
@@ -20717,7 +20816,7 @@ function testSummaryDispatchSegments602() {
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
-      '# Workflow Plan — issue #602a', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan — issue #602a', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
       '|---|---|---|---|---|---|---|',
@@ -20750,7 +20849,7 @@ function testSummaryDispatchSegments602() {
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
-      '# Workflow Plan — issue #602b', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan — issue #602b', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
       '|---|---|---|---|---|---|---|',
@@ -20786,7 +20885,7 @@ function testSummaryDispatchSegments602() {
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(planPath, [
-      '# Workflow Plan — issue #602c', '', '## Meta', 'labels: enhancement', '',
+      '# Workflow Plan — issue #602c', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
       '|---|---|---|---|---|---|---|',
@@ -20843,7 +20942,7 @@ function testReadOnlyLaneEmptyWriteSet752() {
   // The roles MUST be write-roles: parseWriteSetCell('none').size === 1, so the freeze-time
   // "read-only role declares a write set" check refuses if a/b are authored as read roles.
   const plan = (slug, rows, ledger) => [
-    '# Workflow Plan — issue #' + slug, '', '## Meta', 'labels: enhancement', '',
+    '# Workflow Plan — issue #' + slug, '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
     '|---|---|---|---|---|---|---|',
@@ -20951,7 +21050,7 @@ function testReadOnlyLaneEmptyWriteSet752() {
 // with a typed verdict and ZERO state mutation.
 function testCodexDispatchModeThreading603() {
   const NODE_PLAN = (n) => [
-    '# Workflow Plan — issue #' + n, '', '## Meta', 'labels: enhancement', '',
+    '# Workflow Plan — issue #' + n, '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -21037,7 +21136,7 @@ function testCodexDispatchModeThreading603() {
 // when no worktree is linked (serial in-repo runs are already root-visible).
 function testRunProgressMirror605() {
   const PLAN = (n) => [
-    '# Workflow Plan — issue #' + n, '', '## Meta', 'labels: enhancement', '',
+    '# Workflow Plan — issue #' + n, '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
@@ -21605,7 +21704,7 @@ function testReExpansionEpochTransition756() {
     fs.mkdirSync(proj, { recursive: true });
     const planPath = path.join(proj, 'workflow-plan.md');
     fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-756c\nbranch: workflow/issue-756c\n');
-    const childPlan = ['# Plan — #756 epoch child (diagnosis_to_build)', '', '## Meta', '',
+    const childPlan = ['# Plan — #756 epoch child (diagnosis_to_build)', '', '## Meta', 'plan_form: spine', '',
       'plan_schema_version: 2', 'validation_command: node x', 'validation_timeout_minutes: 20',
       'code_certifier: wall', 'security_certifier: none', 'inherited_frontier_digest: none', 'inherited_frontier_classes: none', '',
       '## Nodes', '',

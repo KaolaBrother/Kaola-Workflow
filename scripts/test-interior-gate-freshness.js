@@ -80,6 +80,7 @@ try {
   fs.writeFileSync(planPath, [
     '# Workflow Plan — interior gate freshness (#740)', '',
     '## Meta',
+    'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
     'plan_schema_version: 2',
     'labels: enhancement',
     'code_certifier: cert',
@@ -229,6 +230,7 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
     fs.writeFileSync(planPath, [
       '# Workflow Plan — interior reviewer gate freshness (#745)', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'labels: enhancement',
       'code_certifier: cert',
@@ -402,6 +404,7 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
     fs.writeFileSync(planPath, [
       '# Workflow Plan — interior reviewer surface is recomputed (#745)', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'labels: enhancement',
       'code_certifier: cert',
@@ -532,6 +535,7 @@ for (const probeRole of ['adversarial-verifier', 'code-reviewer']) {
       fs.writeFileSync(planPath, [
         '# Workflow Plan — seal-map corroboration', '',
         '## Meta',
+        'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
         'plan_schema_version: 2',
         'labels: enhancement',
         'code_certifier: cert',
@@ -699,6 +703,7 @@ for (const certKind of ['group', 'single']) {
     fs.writeFileSync(planPath, [
       '# Workflow Plan — group certifier wall', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'contract_version: 2',
       'epoch_schema_version: 2',
@@ -839,6 +844,7 @@ for (const probeRole of ['code-reviewer', 'security-reviewer']) {
     fs.writeFileSync(planPath, [
       '# Workflow Plan — interior reviewer fail-closed matrix', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'labels: enhancement',
       'code_certifier: cert',

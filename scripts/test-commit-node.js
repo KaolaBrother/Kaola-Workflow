@@ -814,6 +814,7 @@ function assert(condition, message) {
       const plan = [
         '# Workflow Plan — test-project', '',
         '## Meta',
+        'plan_form: spine', // #765: all-concrete spine — the legacy dag grammar is retired at freeze
         'plan_schema_version: 2',
         'contract_version: 2',
         // Unified schema-2 (#695): a plan that carries reviewer-contract-v2 gate metadata also carries the
@@ -1067,7 +1068,10 @@ function assert(condition, message) {
       ];
     const plan = [
       '# Workflow Plan — test-project', '',
-      '## Meta', ...meta, '',
+      // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall (v1 and
+      // schema-2 fixtures alike declare the spine discriminator; the v1 case still gains no
+      // compliance section — plan_form is orthogonal to plan_schema_version).
+      '## Meta', 'plan_form: spine', ...meta, '',
       '## Nodes', '',
       ...nodeTable, '',
       '## Node Ledger', '',

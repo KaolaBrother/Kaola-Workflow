@@ -126,7 +126,8 @@ function seedAdaptiveFinalizeFixture(tmpRoot, project) {
   fs.mkdirSync(dir, { recursive: true });
   const planPath = path.join(dir, 'workflow-plan.md');
   fs.writeFileSync(planPath, [
-    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '',
+    // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall.
+    '# Workflow Plan', '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',

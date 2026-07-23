@@ -140,9 +140,33 @@ function assert(condition, message) {
 // Schema 2 deliberately refuses a newly authored field-absent draft, so these
 // fixtures first materialize the historical verified-frozen state they mean to
 // simulate, then run the same --freeze --repair transaction.
+// #765 (Wave E2 cutover): the legacy `dag` grammar is retired at the freeze wall — `plan_form: spine`
+// is the only authorable shape (a fully-known-at-freeze plan is an all-concrete spine, semantically
+// equal to the old dag). Inject the discriminator into a fixture's ## Meta when absent, fence-aware so
+// a decoy `## Meta` inside a code fence is skipped. No-op when plan_form is already declared.
+function injectSpineForm(content) {
+  if (/^[ \t]*plan_form[ \t]*:/m.test(content)) return content;
+  const lines = content.split('\n');
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([`~]{3,})/);
+    if (m) {
+      if (fence === null) fence = m[1][0].repeat(m[1].length);
+      else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence === null && /^## Meta[ \t]*$/.test(lines[i])) {
+      lines.splice(i + 1, 0, 'plan_form: spine');
+      return lines.join('\n');
+    }
+  }
+  return content;
+}
+
 function stampVerifiedLegacyPlan(planPath) {
-  const content = fs.readFileSync(planPath, 'utf8');
-  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)) return;
+  const raw = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) return;
+  const content = injectSpineForm(raw);
   const hash = planValidator.computePlanHash(content);
   fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
 }
@@ -3996,6 +4020,7 @@ function makePlan(ledgerRows, extraNodes) {
     '# Workflow Plan — test-project',
     '',
     '## Meta',
+    'plan_form: spine', // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall
     'labels: area:scripts',
     '',
     '## Nodes',
@@ -4015,7 +4040,7 @@ function makePlan(ledgerRows, extraNodes) {
 
 function makeWaitPlan(ledgerRows, nodes) {
   return [
-    '# Workflow Plan — wait-budget-test', '', '## Meta', 'labels: area:scripts', '',
+    '# Workflow Plan — wait-budget-test', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '',
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
@@ -20905,6 +20930,7 @@ function rtHarness(initialFiles, opts) {
     fs.writeFileSync(planPath713, [
       '# Workflow Plan — issue 713', '',
       '## Meta',
+      'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
       'plan_schema_version: 2',
       'labels: enhancement',
       'code_certifier: gateB',
@@ -21209,6 +21235,7 @@ function rtHarness(initialFiles, opts) {
       fs.writeFileSync(planPath, [
         '# Workflow Plan — ' + project, '',
         '## Meta',
+        'plan_form: spine', // #765: all-concrete spine — legacy dag grammar retired at freeze
         'plan_schema_version: 2',
         'labels: enhancement',
         'code_certifier: codegate',
@@ -21505,7 +21532,7 @@ function rtHarness(initialFiles, opts) {
       const planPath = path.join(projectDir, 'workflow-plan.md');
       fs.writeFileSync(planPath, [
         '# Workflow Plan — ' + project, '',
-        '## Meta', 'plan_schema_version: 2', 'labels: enhancement',
+        '## Meta', 'plan_form: spine', 'plan_schema_version: 2', 'labels: enhancement',
         'code_certifier: codegate', 'security_certifier: none',
         'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
         'validation_command: node --check ' + implRel, 'validation_timeout_minutes: 5', '',
