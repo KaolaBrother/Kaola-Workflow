@@ -723,11 +723,9 @@ assertIncludes('agents/implementer.md', 'verification_tier');
 assertIncludes('agents/implementer.md', 'smoke-integration');
 assertIncludes('agents/tdd-guide.md', 'evidence block contains BOTH literal tokens');
 assertManifestScript('kaola-workflow-plan-validator.js');   // #407: was install.sh literal
-// #725: adaptive is the unconditional default and the ONLY installed path — the fast/full opt-ins
-// (`--with-fast` / `--with-full`) are retired. The legacy `--enable-adaptive` flag stays warn-ignored
-// (accepted for back-compat, sets nothing). Pin the deprecation notice so a regression that silently
-// re-honors the retired switch reds the chain.
-assertIncludes('install.sh', '--enable-adaptive is retired (#538)');
+// The `--enable-adaptive` flag is warn-ignored: accepted for back-compat and sets nothing. Pin the
+// notice so a regression that silently honors the flag (writes a field / branches on it) reds the chain.
+assertIncludes('install.sh', '--enable-adaptive has no effect');
 // #255: the adaptive-handoff script must be in the install allowlist (now the #407 manifest) for
 // every edition, or a manual (non-plugin) install omits it and the planner's `--project` handoff
 // invocation fails at `$HOME/.claude/.../scripts/`. Guards the 5.4.0 omission. (#407: manifest-sourced.)

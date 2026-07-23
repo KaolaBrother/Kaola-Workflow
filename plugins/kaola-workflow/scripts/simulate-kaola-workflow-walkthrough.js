@@ -826,15 +826,62 @@ function initGitRepo(tmp) {
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n'); git(['add', '-A'], tmp); git(['commit', '-m', 'init'], tmp);
   const remote = tmp + '-remote'; git(['init', '--bare', remote], path.dirname(tmp)); git(['remote', 'add', 'origin', remote], tmp); git(['push', '-u', 'origin', 'main'], tmp);
 }
+function injectSpineForm(content) {
+  if (/^[ \t]*plan_form[ \t]*:/m.test(content)) return content;
+  // Fence-aware: inject after the FIRST genuine (non-fenced) `## Meta` header, skipping any decoy
+  // `## Meta` inside a ``` / ~~~ code fence. Return unchanged when there is no genuine Meta header.
+  const lines = content.split('\n');
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(/^([`~]{3,})/);
+    if (m) {
+      if (fence === null) fence = m[1][0].repeat(m[1].length);
+      else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence === null && /^## Meta[ \t]*$/.test(line)) {
+      lines.splice(i + 1, 0, 'plan_form: spine');
+      return lines.join('\n');
+    }
+  }
+  // No genuine `## Meta` header: synthesize a minimal Meta block before the first `## Nodes`.
+  fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(/^([`~]{3,})/);
+    if (m) {
+      if (fence === null) fence = m[1][0].repeat(m[1].length);
+      else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence === null && /^## Nodes[ \t]*$/.test(line)) {
+      lines.splice(i, 0, '## Meta', 'plan_form: spine', '');
+      return lines.join('\n');
+    }
+  }
+  return content;
+}
 function stampVerifiedLegacyCodexPlan(planPath) {
-  const content = fs.readFileSync(planPath, 'utf8');
-  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(content)
-      || /^plan_schema_version:\s*2\s*$/m.test(content)) return;
+  const raw = fs.readFileSync(planPath, 'utf8');
+  if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)
+      || /^plan_schema_version:\s*2\s*$/m.test(raw)) return;
+  const content = injectSpineForm(raw); // #765: migrate legacy dag fixtures to concrete spine
   const validator = require(codexValidator);
   const hash = validator.computePlanHash(content);
   fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
 }
 function runVal(args, cwd) {
+  // #765: a fresh (not yet hash-stamped) fixture that hits the freeze-wall grammar is migrated to a
+  // concrete spine (plan_form: spine). resume-check validates the dag-tolerant path, and a pre-stamped
+  // fixture keeps its authoritative hash — both are left untouched.
+  if (args[0] && !args[0].startsWith('--') && fs.existsSync(args[0]) && !args.includes('--resume-check')) {
+    const raw = fs.readFileSync(args[0], 'utf8');
+    if (!/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) {
+      const migrated = injectSpineForm(raw);
+      if (migrated !== raw) fs.writeFileSync(args[0], migrated);
+    }
+  }
   // These historical walkthrough fixtures are byte-preserved, already-adopted v1 plans.
   // New field-absent drafts remain refused by production; stamp only before their legacy freeze.
   if (args.includes('--freeze') && args[0] && fs.existsSync(args[0])) stampVerifiedLegacyCodexPlan(args[0]);

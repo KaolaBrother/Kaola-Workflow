@@ -151,6 +151,8 @@ try {
     }).join('\n');
     let text = [
       `# Workflow Plan — ${project}`, '', '## Meta', `project: ${project}`,
+      // fixture must declare the spine discriminator (a caller may still override via meta.plan_form).
+      ...((meta && 'plan_form' in meta) ? [] : ['plan_form: spine']),
       'labels: enhancement', 'speculative_open_policy: auto',
       'validation_command: node scripts/test-replan.js',
       ...(s2 ? ['validation_timeout_minutes: 30'] : []),

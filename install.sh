@@ -91,6 +91,11 @@ while [[ "$#" -gt 0 ]]; do
       PROFILE="$2"
       shift 2
       ;;
+    --enable-adaptive|--enable-adaptive=*)
+      # Warn-and-ignore: adaptive is always installed, so this flag is a no-op. Accepted
+      # (exit 0) rather than rejected so callers passing it are not broken.
+      echo "note: --enable-adaptive has no effect; adaptive is always installed. Ignoring." >&2
+      shift ;;
     *)
       echo "Unknown argument: $1" >&2
       usage >&2

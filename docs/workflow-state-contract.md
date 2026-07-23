@@ -17,6 +17,10 @@ here for the full contract.
 - Adaptive is the workflow path (issue #227). Every active project uses `workflow-plan.md` as its durable
   evidence spine — the frozen DAG — plus `finalization-summary.md` as the terminal artifact.
   Contract resolution is explicit and hash-bound.
+- A `fast-summary.md` on disk is read only tolerantly: the classifier's defensive `## Scope`
+  parse (feeding in-flight write-set overlap detection) and the router's active-folder detection
+  both recognize such a marker. It is never newly authored, so these parses do not fire for a
+  freshly claimed project.
 - A verified already-frozen plan whose
   `## Meta` predates `plan_schema_version` is contract 1 and remains byte-preserving; a newly
   authored plan must carry `plan_schema_version: 2`, which maps to dispatch/journal contract 2.

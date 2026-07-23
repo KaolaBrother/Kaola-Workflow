@@ -125,8 +125,10 @@ try {
     assert(cfg.user_field === 'keep', 'AC4: install must preserve unrelated user config fields, got ' + JSON.stringify(cfg));
   }
 
-  // AC5: --enable-adaptive warns-and-ignores (exit 0, no enable_adaptive field written, deprecation
-  // warning on stderr); the seeded config carries parallel_mode:auto and no retired installed_paths.
+  // AC5: --enable-adaptive warns-and-ignores (exit 0, no enable_adaptive field written, a
+  // present-tense no-op note on stderr); the seeded config carries parallel_mode:auto and no
+  // installed_paths. The flag is a no-op (adaptive is always installed) but is accepted rather
+  // than rejected so callers passing it are not broken.
   {
     const home = freshHome('ac5-deprecated'); homes.push(home);
     const result = spawnSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge', '--enable-adaptive=yes'], {
@@ -142,9 +144,9 @@ try {
       'AC5: config must seed parallel_mode:auto after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
     assert(!('installed_paths' in cfg),
       'AC5: config must NOT carry installed_paths after --enable-adaptive=yes install, got ' + JSON.stringify(cfg));
-    const hasWarning = (result.stderr || '').includes('retired') || (result.stderr || '').includes('#538');
+    const hasWarning = (result.stderr || '').includes('--enable-adaptive') && (result.stderr || '').includes('Ignoring');
     assert(hasWarning,
-      'AC5: --enable-adaptive must emit a deprecation warning on stderr mentioning retired/#538, got stderr: ' + result.stderr);
+      'AC5: --enable-adaptive must emit a warn-and-ignore note on stderr naming the flag, got stderr: ' + result.stderr);
   }
 
   // Preserved test: issue #242 — uninstall.sh must remove .kaola-agent-models.json
@@ -170,8 +172,8 @@ try {
 
   // #2: opencode install-time parity — install-opencode.sh seeds the shared
   // ~/.config/kaola-workflow/config.json with parallel_mode:'auto' (default-ON parallelism),
-  // mirroring the github AC1 assertion. opencode is adaptive-only (no fast/full opt-ins), so
-  // installed_paths is []. This locks the opencode seed against drift from the github install.
+  // mirroring the github AC1 assertion. The installer writes parallel_mode only and never an
+  // installed_paths field. This locks the opencode seed against drift from the github install.
   {
     const home = freshHome('opencode-parallel'); homes.push(home);
     const target = freshHome('opencode-target'); homes.push(target);
@@ -179,8 +181,8 @@ try {
     const cfg = readConfig(home);
     assert(cfg.parallel_mode === 'auto',
       'OPENCODE: install-opencode.sh must write parallel_mode:auto, got ' + JSON.stringify(cfg));
-    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.length === 0,
-      'OPENCODE: install-opencode.sh must write installed_paths:[] (adaptive-only), got ' + JSON.stringify(cfg));
+    assert(!('installed_paths' in cfg),
+      'OPENCODE: install-opencode.sh must NOT write installed_paths, got ' + JSON.stringify(cfg));
     assert(!('enable_adaptive' in cfg),
       'OPENCODE: install-opencode.sh must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
   }
