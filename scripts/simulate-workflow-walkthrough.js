@@ -17227,6 +17227,15 @@ function testExpansionTransaction759() {
     assert(JSON.stringify(dcp.discharged) === JSON.stringify(['m1#1', 'm1#2']),
       '#759 (a): the discharge must name every record on the point, got ' + JSON.stringify(dcp.discharged));
     assertAppendOnly('after discharge');
+
+    // #763 (efficiency evidence line): expand-close appends ONE line to the point's OWN evidence
+    // file. This point settled over TWO records (m1#1: 3 co_open units, m1#2: 1 co_open unit — a
+    // re-expansion), so width sums BOTH records' units (4), no unit anywhere declared mode serial
+    // (co_open), neither record's recorded serializer line names S1/S2/S3 (none), and rework counts
+    // the one re-expansion beyond the first record (2 records - 1 = 1).
+    const m1Evidence = fs.readFileSync(path.join(proj, '.cache', 'm1.md'), 'utf8');
+    assert(m1Evidence.includes('expansion m1: width=4 mode=co_open serializer=none rework=1'),
+      '#763: expand-close must append the efficiency evidence line to .cache/m1.md, got:\n' + m1Evidence);
     {
       const na = nextAction();
       assert(JSON.stringify((na.readyPending || []).map(n => n.id)) === JSON.stringify(['wall']),
@@ -17564,6 +17573,228 @@ function testExpansionTransaction759() {
   console.log('testExpansionTransaction759: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// #763 — SHARED CONTEXT PACKET + PER-EXPANSION EFFICIENCY LINE. The per-expansion evidence-line AC
+// is pinned inline inside testExpansionTransaction759 above (right after its real expand-close call,
+// against REAL composed records — width=4/mode=co_open/serializer=none/rework=1). The remaining
+// three ACs, each independent of the others:
+//   (a) orient regenerates .cache/context-packet.md (goal / key_files / conventions /
+//       join_expectations) and carries it VERBATIM on both the orient result and every entry of a
+//       dispatched batch preview (`frontier`);
+//   (b) the per-run archive rollup line (persistExpansionRollupToSummary) aggregates every
+//       expansion point a run discharged, reduced through the SAME shared derivation the
+//       per-expansion evidence line uses — pinned directly against the exported writer, with a
+//       presence-guard re-run and a no-expansions negative control;
+//   (c) the #759 carry-forward: workflow-tasks.json (task-mirror.js) lists composed expansion
+//       units via planNodesWithExpansions, with a direct CONTROL proving parseNodes (the old freeze
+//       view it replaced) does NOT see them.
+// ---------------------------------------------------------------------------
+function testContextPacketEfficiencyRollup763() {
+  // ---- (a1) buildContextPacket content assembly — a direct PURE-FUNCTION check (no freeze, no
+  // CLI): goal / key_files (union of declared_write_set + expansion-contract expected_surfaces) /
+  // join_expectations (expansion-contract join_constraints) / conventions (the project's own
+  // CLAUDE.md non-negotiable section, truncated at the NEXT ## heading). ----
+  {
+    const adaptiveNode = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js'));
+    const planContent = [
+      '# Workflow Plan — issue #763 packet fixture', '',
+      '## Meta', '',
+      'labels: enhancement',
+      'goal: land the shared context packet', '',
+      'expansion(m1):',
+      '  milestone_goal: land the reader seam',
+      '  expected_surfaces: scripts/packet-fixture',
+      '  join_constraints: mechanical merge only',
+      '  review_class: code-reviewer', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| a | tdd-guide | — | lib/a.js | 1 | sequence |',
+      '| b | tdd-guide | — | lib/b.js | 1 | sequence |', '',
+    ].join('\n');
+    const claudeMd = [
+      '# Fixture Project', '',
+      '## Non-Negotiable Rules', '',
+      '- Read before writing.',
+      '- Make surgical changes.', '',
+      '## Some Other Section', '', 'irrelevant prose that must NOT leak into the packet', ''
+    ].join('\n');
+    const packet = adaptiveNode.buildContextPacket({
+      planContent, stateContent: 'issue_number: 76301\n', project: 'issue-763-packet', claudeMd,
+    });
+    assert(packet.includes('goal: land the shared context packet'),
+      '#763 (a1): the packet must carry the plan\'s ## Meta goal, got:\n' + packet);
+    assert(packet.includes('lib/a.js') && packet.includes('lib/b.js') && packet.includes('scripts/packet-fixture'),
+      '#763 (a1): key_files must union declared_write_set with expected_surfaces, got:\n' + packet);
+    assert(packet.includes('m1: mechanical merge only'),
+      '#763 (a1): join_expectations must carry the expansion contract\'s join_constraints, got:\n' + packet);
+    assert(packet.includes('Read before writing.') && packet.includes('Make surgical changes.'),
+      '#763 (a1): conventions must carry the project CLAUDE.md non-negotiable section verbatim, got:\n' + packet);
+    assert(!packet.includes('irrelevant prose'),
+      '#763 (a1): conventions must stop at the NEXT ## heading, not spill the whole CLAUDE.md');
+
+    // Fallback legs: no goal / no expansion contracts / no CLAUDE.md all degrade to a stated
+    // fallback line rather than an absent section or a thrown error.
+    const bare = adaptiveNode.buildContextPacket({
+      planContent: '# Plan\n\n## Meta\n\nlabels: enhancement\n\n## Nodes\n\n',
+      stateContent: '', project: 'issue-763-bare', claudeMd: null,
+    });
+    assert(bare.includes('(no goal declared in ## Meta or workflow-state.md)'),
+      '#763 (a1) fallback: an absent goal must degrade to the stated fallback line, got:\n' + bare);
+    assert(bare.includes('(none declared yet — no write surface has been composed)'),
+      '#763 (a1) fallback: no write surfaces must degrade to the stated fallback line, got:\n' + bare);
+    assert(bare.includes('(no expansion point declares a join constraint yet)'),
+      '#763 (a1) fallback: no expansion contracts must degrade to the stated fallback line, got:\n' + bare);
+    assert(bare.includes("(no CLAUDE.md non-negotiable/conventions section found"),
+      '#763 (a1) fallback: an absent CLAUDE.md must degrade to the stated fallback line, got:\n' + bare);
+  }
+
+  // ---- (a2) the WIRING: a real orient call writes .cache/context-packet.md and carries it
+  // VERBATIM on both the orient result and every entry of a dispatched batch preview (`frontier`). ----
+  {
+    const tmp = adaptiveTmp('763-packet');
+    const project = 'issue-763-packet';
+    try {
+      initGitRepo(tmp);
+      const dir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(dir, { recursive: true });
+      const planPath = path.join(dir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — issue #763 packet wiring fixture', '',
+        '## Meta', '',
+        'labels: enhancement',
+        'goal: land the shared context packet', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| a | tdd-guide | — | lib/a.js | 1 | sequence |',
+        '| b | tdd-guide | — | lib/b.js | 1 | sequence |',
+        '| review | code-reviewer | a,b | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| a | pending |', '| b | pending |', '| review | pending |', '| done | pending |', ''
+      ].join('\n'));
+      const fz = runLegacyFreeze(planValidatorScript, planPath, tmp);
+      assert(fz.status === 0, '#763 (a2): the fixture plan must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), '# Workflow State\nstatus: active\nissue_number: 76301\n');
+
+      const oriented = json(runNode(adaptiveNodeScript, ['orient', '--project', project, '--json'], tmp));
+      const packetPath = path.join(dir, '.cache', 'context-packet.md');
+      assert(fs.existsSync(packetPath), '#763 (a2): orient must write .cache/context-packet.md');
+      const packetOnDisk = fs.readFileSync(packetPath, 'utf8');
+      assert(typeof oriented.context_packet === 'string' && oriented.context_packet === packetOnDisk,
+        '#763 (a2): orient result.context_packet must equal the file it just wrote, byte for byte');
+      assert(packetOnDisk.includes('goal: land the shared context packet'),
+        '#763 (a2): the packet must carry the plan\'s ## Meta goal, got:\n' + packetOnDisk);
+
+      // Every entry of the DISPATCHED batch preview (both `a` and `b` are ready with no in_progress
+      // node — enterBatch) must carry the packet VERBATIM — byte-identical to the file on disk.
+      assert(oriented.enterBatch === true && Array.isArray(oriented.frontier) && oriented.frontier.length === 2,
+        '#763 (a2): the fixture must produce a 2-wide dispatched batch preview, got '
+        + JSON.stringify({ enterBatch: oriented.enterBatch, frontier: oriented.frontier }));
+      for (const entry of oriented.frontier) {
+        assert(entry.context_packet === packetOnDisk,
+          '#763 (a2): frontier entry ' + entry.id + ' must carry the context packet VERBATIM, got: '
+          + JSON.stringify(entry.context_packet));
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (b) the per-run archive rollup line, reduced from a REAL discharged-records shape. ----
+  {
+    const claim = require(claimScript);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-'));
+    const tmpNone = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-763-rollup-none-'));
+    try {
+      const stamp = '2026-01-01T00:00:00.000Z';
+      const planContent = [
+        '# Workflow Plan — rollup fixture', '',
+        '## Meta', '', 'plan_form: spine', '',
+        '## Expansion Records', '',
+        'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+        '  serializer: none present — co-open',
+        '  unit: u1 | code-explorer | standard | — | co_open | —',
+        '  unit: u2 | code-explorer | standard | — | co_open | —',
+        '  unit: u3 | code-explorer | standard | — | co_open | —', '',
+        'open(m1#1):', '  at: ' + stamp, '',
+        'record(m1#2):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+        '  serializer: none present — co-open',
+        '  unit: v1 | code-explorer | standard | — | co_open | —', '',
+        'open(m1#2):', '  at: ' + stamp, '',
+        'discharge(m1):', '  at: ' + stamp, '  records: m1#1, m1#2', '',
+        'record(m2#1):', '  point: m2', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+        '  serializer: S2 — a shared config file',
+        '  unit: w1 | code-explorer | standard | — | co_open | —',
+        '  unit: w2 | code-explorer | standard | — | co_open | —', '',
+        'open(m2#1):', '  at: ' + stamp, '',
+        'discharge(m2):', '  at: ' + stamp, '  records: m2#1', '',
+      ].join('\n');
+      fs.writeFileSync(path.join(tmp, 'workflow-plan.md'), planContent);
+      const wrote = claim.persistExpansionRollupToSummary(tmp);
+      assert(wrote === true, '#763 (b): persistExpansionRollupToSummary must report a write, got ' + wrote);
+      const summary = fs.readFileSync(path.join(tmp, 'finalization-summary.md'), 'utf8');
+      // points=2 (m1, m2); width = (3+1 units on m1) + (2 units on m2) = 6;
+      // rework = (2 records - 1 on m1) + (1 record - 1 on m2) = 1.
+      assert(summary.includes('## Expansion Rollup') && summary.includes('expansion rollup: points=2 width=6 rework=1'),
+        '#763 (b): the archive rollup line must aggregate every discharged point, got:\n' + summary);
+      // Idempotent: a second call over an already-stamped summary is a no-op (presence-guarded).
+      const secondCall = claim.persistExpansionRollupToSummary(tmp);
+      assert(secondCall === false, '#763 (b): a second call must be a no-op (presence-guarded), got ' + secondCall);
+      assert(fs.readFileSync(path.join(tmp, 'finalization-summary.md'), 'utf8') === summary,
+        '#763 (b): a presence-guarded re-run must not perturb the already-written summary');
+
+      // Negative control: a plan with NO discharged expansion point writes nothing at all.
+      fs.writeFileSync(path.join(tmpNone, 'workflow-plan.md'), '# Workflow Plan — no expansions\n\n## Meta\n\nlabels: enhancement\n');
+      const wroteNone = claim.persistExpansionRollupToSummary(tmpNone);
+      assert(wroteNone === false, '#763 (b) CONTROL: a plan with no discharged expansion point must write nothing, got ' + wroteNone);
+      assert(!fs.existsSync(path.join(tmpNone, 'finalization-summary.md')),
+        '#763 (b) CONTROL: no finalization-summary.md should be created when there is nothing to roll up');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(tmpNone, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (c) workflow-tasks.json lists composed units (the #759 carry-forward). ----
+  {
+    const taskMirror = require(path.join(repoRoot, 'scripts', 'kaola-workflow-task-mirror.js'));
+    const validator = require('./kaola-workflow-plan-validator');
+    const planContent = [
+      '# Workflow Plan — mirror fixture', '',
+      '## Meta', '', 'plan_form: spine', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| probe | code-explorer | — | — | 1 | sequence |',
+      '| m1 | expansion-point | probe | — | 1 | sequence |',
+      '| done | finalize | m1 | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| probe | complete |', '| m1 | pending |', '| m1-r1-u1 | in_progress |', '| done | pending |', '',
+      '## Expansion Records', '',
+      'record(m1#1):', '  point: m1', '  grain: g', '  path: p', '  join: j', '  probe: pr',
+      '  serializer: none present — co-open',
+      '  unit: u1 | code-explorer | standard | — | co_open | —', '',
+      'open(m1#1):', '  at: 2026-01-01T00:00:00.000Z', '',
+    ].join('\n');
+    const hash = validator.computePlanHash(planContent);
+    const stamped = '<!-- plan_hash: ' + hash + ' -->\n\n' + planContent;
+    const mirror = taskMirror.generateMirror({ planContent: stamped, now: '2026-01-01T00:00:01.000Z' });
+    assert(mirror.source_plan_hash === hash, '#763 (c): the mirror must read the stamped plan_hash');
+    const unitTask = mirror.tasks.find(t => t.id === 'm1-r1-u1');
+    assert(unitTask, '#763 (c): workflow-tasks.json must list the COMPOSED unit after an expansion, got '
+      + JSON.stringify(mirror.tasks.map(t => t.id)));
+    assert(unitTask.role === 'code-explorer' && unitTask.status === 'in_progress' && unitTask.ledger_status === 'in_progress',
+      '#763 (c): the composed unit task must carry its real role + ledger-derived status, got ' + JSON.stringify(unitTask));
+    // Control: parseNodes (the OLD freeze view) must NOT see it — the exact gap planNodesWithExpansions closes.
+    assert(!validator.parseNodes(stamped).some(n => n.id === 'm1-r1-u1'),
+      '#763 (c) CONTROL: parseNodes (freeze view) must NOT see the composed unit');
+  }
+
+  console.log('testContextPacketEfficiencyRollup763: PASSED');
+}
+
 function buildRegistry() {
   const reg = [];
   // Helper: add a self-contained (own-tmp) entry.
@@ -17846,6 +18077,7 @@ function buildRegistry() {
   add('testReviewerContractV2Conformance',                testReviewerContractV2Conformance);
   add('testSpinePlanFormFreeze758',                       testSpinePlanFormFreeze758);
   add('testExpansionTransaction759',                      testExpansionTransaction759);
+  add('testContextPacketEfficiencyRollup763',             testContextPacketEfficiencyRollup763);
   return reg;
 }
 

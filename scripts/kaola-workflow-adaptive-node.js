@@ -13238,6 +13238,8 @@ module.exports = {
   allowedDomainOutcomes,
   // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.
   deriveMaxSimultaneousOpen,
+  // #763: the pure context-packet text builder — exported for direct unit coverage.
+  buildContextPacket,
   runOrient,
   runMirrorProject,
   runOpenNext,
