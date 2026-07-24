@@ -62,7 +62,8 @@ here for the full contract.
   milestone's frontier is composed at OPEN time and recorded, **append-only**, in a
   `## Expansion Records` section of the SAME `workflow-plan.md`. Three durable-state facts follow.
   (1) The section lives **outside** the `plan_hash` body (the hash covers `## Meta` + `## Nodes` +
-  `## Node Briefs`), so records never perturb the frozen spine identity and a plan carrying them
+  `## Node Briefs` + `## Design` when present), so records never perturb the frozen spine identity
+  and a plan carrying them
   still `--resume-check`s green. (2) The section is **append-at-tail**: every mutation adds ONE new
   block — `record(<point>#<n>)`, `open(<point>#<n>)`, or `discharge(<point>)` — and no already-written
   line is rewritten, re-ordered or removed. (3) Each composed unit gets its own **`## Node Ledger`
@@ -258,7 +259,9 @@ here for the full contract.
       closes.
     - **Outside `plan_hash`.** `lane_group` is a runtime scheduler artifact, not plan structure.
       It is written into `running-set.json` (a non-hashed `.cache/` artifact), not into
-      `workflow-plan.md`. The `plan_hash` covers only `## Meta` and the complete `## Nodes` section,
+      `workflow-plan.md`. The `plan_hash` covers only `## Meta`, the complete `## Nodes` section,
+      the `## Node Briefs`, and `## Design` when present (appended conditionally, so a designless
+      plan hashes byte-identically to pre-#790) —
       including an optional `wait_budget_minutes` header and its cells — `lane_group`
       changes never invalidate the frozen plan hash.
     - **Two-phase crash-safety.** The group open follows the same crash-safe two-phase pattern as
@@ -606,7 +609,7 @@ authoring boundary: freezing a `plan_schema_version: 2` plan that carries no
 row in place at its node's close — presence of a row is never proof of completion. The pre-seed is
 inject-if-absent (a plan already carrying the section, such as a re-plan child or a mid-run
 re-freeze with advanced rows, is left byte-identical) and never applies to a legacy v1 plan. It is
-`plan_hash`-neutral: the compliance table sits outside the hashed `Meta`/`Nodes`/`Node Briefs`
+`plan_hash`-neutral: the compliance table sits outside the hashed `Meta`/`Nodes`/`Node Briefs`/`Design`
 surface, so governance-ack and resume-check are unaffected. This is what lets the shared
 epoch-authority check stay strict — it validates the section unconditionally for an epoch-planned
 claim, so any absence it sees is genuine corruption rather than a normal fresh-plan state.
@@ -651,7 +654,7 @@ progress is never mistaken for authoring tamper:
 | Tier | Surface | Check | Typed refusal |
 |---|---|---|---|
 | Epoch envelope | `epoch_schema_version`, `epoch_lineage_id`, and their identity/root-digest basis | Recomputed and compared; a fully absent envelope reads as pre-epoch legacy state | `state_epoch_schema_missing`, `state_epoch_schema_unsupported`, `state_epoch_lineage_missing`, `state_epoch_lineage_invalid`, `state_epoch_lineage_basis_invalid`, `state_epoch_lineage_mismatch` |
-| Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs` | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
+| Immutable authored plan | `## Meta`, `## Nodes`, `## Node Briefs`, `## Design` (when present) | Exact hash equality: stored hash = recomputed hash = `active_plan_hash` | `state_active_plan_invalid`, `state_active_plan_hash_mismatch` |
 | Legal runtime progress | `## Node Ledger`, `## Required Agent Compliance` | Parsed and consistency-checked, not byte-compared; closed-node evidence and dependency-consistent status required | `state_ledger_authority_invalid`, `state_ledger_progress_invalid`, `state_compliance_authority_invalid`, `state_compliance_progress_invalid` |
 
 `workflow-tasks.json` is deliberately **not** an authority tier. It is a pure projection of the same
