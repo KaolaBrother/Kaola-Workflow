@@ -891,11 +891,30 @@ function injectSpineForm(content) {
   }
   return content;
 }
+// #790: a frozen plan requires a non-empty `## Design` section at the freeze wall. Inject a minimal
+// prose block when absent — BEFORE `## Node Ledger` (so the hash-neutral ledger tail is preserved for
+// fixtures that append a row / halt marker to it), fence-aware. No-op when a `## Design` heading exists.
+function injectDesignSection(content) {
+  if (/^##[ \t]+Design[ \t]*$/m.test(content)) return content;
+  const block = '## Design\n\nDecompose the frozen spine into its concrete role nodes; every sequence '
+    + 'edge is a real data dependency (S1 — the downstream node consumes the upstream node\'s change) '
+    + 'or a gate ordering, and any co-opened write legs touch disjoint paths. Done means the review gate '
+    + 'clears and validation_command passes.\n';
+  const lines = content.split('\n');
+  let fence = null, ledgerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([`~]{3,})/);
+    if (m) { if (fence === null) fence = m[1][0].repeat(m[1].length); else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
+    if (fence === null && /^##[ \t]+Node Ledger[ \t]*$/.test(lines[i])) { ledgerIdx = i; break; }
+  }
+  if (ledgerIdx >= 0) { lines.splice(ledgerIdx, 0, block, ''); return lines.join('\n'); }
+  return content.replace(/\n*$/, '\n') + '\n' + block;
+}
 function stampVerifiedLegacyCodexPlan(planPath) {
   const raw = fs.readFileSync(planPath, 'utf8');
   if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)
       || /^plan_schema_version:\s*2\s*$/m.test(raw)) return;
-  const content = injectSpineForm(raw); // #765: migrate legacy dag fixtures to concrete spine
+  const content = injectDesignSection(injectSpineForm(raw)); // #765 spine + #790 design at the freeze wall
   const validator = require(codexValidator);
   const hash = validator.computePlanHash(content);
   fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
@@ -907,7 +926,7 @@ function runVal(args, cwd) {
   if (args[0] && !args[0].startsWith('--') && fs.existsSync(args[0]) && !args.includes('--resume-check')) {
     const raw = fs.readFileSync(args[0], 'utf8');
     if (!/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) {
-      const migrated = injectSpineForm(raw);
+      const migrated = injectDesignSection(injectSpineForm(raw)); // #765 spine + #790 design
       if (migrated !== raw) fs.writeFileSync(args[0], migrated);
     }
   }
@@ -1124,6 +1143,7 @@ function testCodexLedgerHeaderInvalid425() {
     '| review | code-reviewer | impl | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| done | finalize | review | — | 1 | sequence | — | — | — | — |',
     '',
+    '## Design', '', 'Decompose: impl builds lib/foo.js; review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', '',
     '## Node Ledger', '',
     '| node | status |',
     '|---|---|',
@@ -1204,6 +1224,7 @@ function testCodexGeneratedPortSplit431() {
     '| review | code-reviewer | impl | — | 1 | sequence |',
     '| done | finalize | review | — | 1 | sequence |',
     '',
+    '## Design', '', 'Decompose: impl ports the aggregator across all four editions in one node (they must move together); review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', '',
   ].join('\n');
   const bundledResult = rootPv.validatePlan(bundledPlan, { root: repoRoot });
   assert(bundledResult.result === 'in-grammar',

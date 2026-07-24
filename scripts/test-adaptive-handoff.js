@@ -1464,6 +1464,8 @@ function runMirrorHandoffCase(mirrorResponse) {
       '| gate     | ' + gateRole + ' | seed | —            | 1 | sequence | ' + observesValue + ' | inspect-observation | scratch | sequence | — |',
       '| w        | doc-updater   | seed   | docs/decisions/D-641-01.md | 1 | sequence | — | — | — | — | — |',
       '| finalize | finalize      | gate,w | —              | 1 | sequence | — | — | — | — | — |', '',
+      '## Design', '',
+      'Decompose: seed explores; gate observes scratch; w writes the decision doc (disjoint from gate); finalize sinks. Sequence edges are gate/data dependencies (S1). Done: decision doc landed and gate clears.', '',
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
@@ -1573,6 +1575,8 @@ function runMirrorHandoffCase(mirrorResponse) {
     '| gate     | adversarial-verifier | seed | —        | 1 | sequence | scratch | inspect-observation | scratch | sequence | — |',
     '| w        | doc-updater   | seed   | docs/decisions/D-641-01.md | 1 | sequence | — | — | — | — | — |',
     '| finalize | finalize      | gate,w | —              | 1 | sequence | — | — | — | — | — |', '',
+    '## Design', '',
+    'Decompose: seed explores; gate (adversarial-verifier) and w (doc-updater) are disjoint frontier legs — gate observes scratch, w writes docs — co-opened; finalize sinks. Sequence edges are gate/data dependencies (S1). Done: docs landed and gate clears.', '',
     '## Node Ledger', '', '| id | status |', '| --- | --- |',
     '| seed | pending |', '| gate | pending |', '| w | pending |', '| finalize | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '| --- | --- | --- | --- |',
@@ -1624,6 +1628,8 @@ function runMirrorHandoffCase(mirrorResponse) {
       '| --- | --- | --- | --- | --- | --- |',
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| finalize | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+      '## Design', '',
+      'Decompose: explore probes, finalize sinks. sequence explore→finalize: S1 — finalize consumes explore\'s findings. Done: CHANGELOG updated.', '',
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| explore | pending |', '| finalize | pending |', '',
@@ -1756,22 +1762,27 @@ function runMirrorHandoffCase(mirrorResponse) {
     } finally { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }
   }
 
-  // (c) BACK-COMPAT + parser: a briefless plan hashes byte-identically to the pre-briefs formula
-  //     (Meta + Nodes only); parseNodeBriefs returns one trimmed entry per ### sub-block. typeof-guarded
-  //     so a missing export produces a clean assertion FAIL (RED) rather than a top-level throw.
+  // (c) BACK-COMPAT + parser: a briefless plan carries NO briefs segment in its hash (the ## Node
+  //     Briefs channel contributes nothing when absent). The fixture carries a ## Design section
+  //     (#790 freeze requirement), which is hash-covered by the SAME conditional-append pattern, so the
+  //     no-briefs formula is Meta + Nodes + Design. parseNodeBriefs returns one trimmed entry per ###
+  //     sub-block. typeof-guarded so a missing export produces a clean assertion FAIL (RED).
   {
     const classifier = require('./kaola-workflow-classifier');
     const crypto = require('crypto');
-    const legacyHash = (content) => {
+    const noBriefsHash = (content) => {
       const norm = section => classifier.sectionBody(content, section).split('\n').map(l => l.trim()).filter(Boolean).join('\n');
-      const body = norm('Meta') + '\n---NODES---\n' + norm('Nodes');
+      let body = norm('Meta') + '\n---NODES---\n' + norm('Nodes');
+      // The ## Design section is hash-covered by the same conditional-append pattern as ## Node Briefs.
+      const design = classifier.sectionBodyState(content, 'Design');
+      if (design.status === 'present') body += '\n---DESIGN---\n' + design.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
       return crypto.createHash('sha256').update(body).digest('hex');
     };
     const briefless = briefsPlan(null);
     assert(typeof nodeBriefsPresent === 'function' && nodeBriefsPresent(briefless) === false,
       'briefs-backcompat: a briefless plan reports nodeBriefsPresent===false');
-    assert(computePlanHash(briefless) === legacyHash(briefless),
-      'briefs-backcompat: a briefless plan hashes byte-identically to the pre-briefs formula (Meta + Nodes only)');
+    assert(computePlanHash(briefless) === noBriefsHash(briefless),
+      'briefs-backcompat: a briefless plan carries NO briefs segment in its hash (Meta + Nodes + Design)');
     assert(typeof nodeBriefsPresent === 'function' && nodeBriefsPresent(briefsPlan(goodBriefs)) === true,
       'briefs-backcompat: a ## Node Briefs plan reports nodeBriefsPresent===true');
     const parsed = (typeof parseNodeBriefs === 'function') ? parseNodeBriefs(briefsPlan(goodBriefs)) : [];

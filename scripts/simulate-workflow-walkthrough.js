@@ -1090,10 +1090,38 @@ function injectSpineForm(content) {
   return content;
 }
 
+// #790: a frozen plan requires a non-empty `## Design` section at the freeze wall. Legacy fixtures
+// predate it, so inject a minimal prose block when absent — the same normalization posture as
+// injectSpineForm. Inserted BEFORE `## Node Ledger` (so the ledger remains the LAST, hash-NEUTRAL
+// section — several fixtures append a ledger row / durable halt marker to the tail expecting the hash
+// to stay valid; `## Design` IS hash-covered, so it must not become the tail). No `## Node Ledger` ⇒
+// appended at the end. No-op when a `## Design` heading already exists.
+function injectDesignSection(content) {
+  if (/^##[ \t]+Design[ \t]*$/m.test(content)) return content;
+  const block = '## Design\n\n'
+    + 'Decompose the frozen spine into its concrete role nodes; every sequence edge is a real data '
+    + 'dependency (S1 — the downstream node consumes the upstream node\'s change) or a gate ordering, '
+    + 'and any co-opened write legs touch disjoint paths. Done means the review gate clears and '
+    + 'validation_command passes.\n';
+  const lines = content.split('\n');
+  // Fence-aware scan for the FIRST GENUINE `## Node Ledger` (skip a decoy inside a ``` / ~~~ fence).
+  let fence = null, ledgerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([`~]{3,})/);
+    if (m) { if (fence === null) fence = m[1][0].repeat(m[1].length); else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
+    if (fence === null && /^##[ \t]+Node Ledger[ \t]*$/.test(lines[i])) { ledgerIdx = i; break; }
+  }
+  if (ledgerIdx >= 0) {
+    lines.splice(ledgerIdx, 0, block, '');
+    return lines.join('\n');
+  }
+  return content.replace(/\n*$/, '\n') + '\n' + block;
+}
+
 function stampVerifiedLegacyPlan(planPath, validatorPath) {
   const raw = fs.readFileSync(planPath, 'utf8');
   if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) return;
-  const content = injectSpineForm(raw);
+  const content = injectDesignSection(injectSpineForm(raw));
   const validator = require(validatorPath || planValidatorScript);
   const hash = validator.computePlanHash(content);
   fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
@@ -1105,7 +1133,7 @@ function runLegacyFreeze(validatorPath, planPath, cwd, extraArgs) {
 }
 
 function freezeLegacyContent(validator, content) {
-  content = injectSpineForm(content); // #765: migrate legacy dag fixtures to concrete spine
+  content = injectDesignSection(injectSpineForm(content)); // #765 spine + #790 design at the freeze wall
   const hash = validator.computePlanHash(content);
   return validator.freezePlan('<!-- plan_hash: ' + hash + ' -->\n\n' + content);
 }
@@ -1363,11 +1391,16 @@ function validatePlanFixture(tmp, nodesRows, labels) {
   const meta = labels !== undefined
     ? ['## Meta', 'plan_form: spine', 'labels: ' + labels.join(', '), '']
     : ['## Meta', 'plan_form: spine', ''];
+  // #790: a frozen plan requires a non-empty ## Design (freeze wall's design_missing fires LAST, so a
+  // refuse-case fixture still surfaces its own reason first; an in-grammar fixture needs the section).
+  const design = ['## Design', '',
+    'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the review gate clears and validation passes.',
+    ''];
   fs.writeFileSync(planPath, ['# Plan', ''].concat(meta).concat([
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
-  ]).concat(nodesRows).concat(['']).join('\n'));
+  ]).concat(nodesRows).concat(['']).concat(design).join('\n'));
   return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
 }
 function testAdaptiveValidatorGovernance() {
@@ -1562,7 +1595,9 @@ function testAdaptiveValidatorGovernance() {
       // #765: all-concrete spine — the legacy dag grammar is retired at the freeze wall.
       fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'plan_form: spine', 'labels: area:scripts', '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
-        '|---|---|---|---|---|---|---|'].concat(rows).concat(['']).join('\n'));
+        '|---|---|---|---|---|---|---|'].concat(rows).concat(['',
+        '## Design', '', 'Decompose the spine into concrete role nodes; sequence edges are real data dependencies (S1) or gate orderings. Done: gate clears and validation passes.', ''
+      ]).join('\n'));
       return JSON.parse(runNode(planValidatorScript, [pth, '--json'], tmp).stdout);
     };
     v = vModel([
@@ -1685,7 +1720,8 @@ function testAdaptiveValidatorGovernance() {
         '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
         '| review | code-reviewer | impl | — | 1 | sequence |',
-        '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+        '| done | finalize | review | — | 1 | sequence |', '',
+        '## Design', '', 'Decompose: impl builds lib/foo.js; review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', ''].join('\n'));
       return JSON.parse(runNode(planValidatorScript, [pth, '--json'], tmp).stdout);
     };
     for (const pol of ['speculative_open_policy: off', 'speculative_open_policy: consent', 'speculative_open_policy: auto', null]) {
@@ -2000,7 +2036,8 @@ function testAdaptiveValidatorGovernance() {
       '| --- | --- | --- | --- | --- | --- | --- | --- |',
       `| impl | ${role} | — | ${role === 'code-reviewer' ? '—' : 'src/x.js'} | 1 | sequence | ${model} | ${cell} |`,
       '| review | code-reviewer | impl | — | 1 | sequence | reasoning | — |',
-      '| done | finalize | review | — | 1 | sequence | — | — |', ''
+      '| done | finalize | review | — | 1 | sequence | — | — |', '',
+      '## Design', '', 'Decompose: impl builds src/x.js; review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', ''
     ].join('\n');
     const waitValidator = require('./kaola-workflow-plan-validator');
     for (const empty of ['', '-', '—']) {
@@ -2054,7 +2091,9 @@ function testMetricOptimizerContract() {
       .concat(['', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape | model | wait_budget_minutes |',
         '|---|---|---|---|---|---|---|---|'])
-      .concat(nodesRows).concat(['']).join('\n'));
+      .concat(nodesRows).concat(['',
+        '## Design', '', 'Decompose the spine into concrete role nodes; sequence edges are real data dependencies (S1) or gate orderings. Done: gate clears and validation passes.', ''
+      ]).join('\n'));
     return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
   }
   // A fully-valid optimize block keyed by node id; `overrides` may set a field to null to OMIT it.
@@ -13259,6 +13298,9 @@ function testAdaptivePatternLibrary() {
         '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
         '| done | finalize | review | — | 1 | sequence | — |',
         '',
+        '## Design', '',
+        'Decompose: classify reads and picks an arm; arm-csv and arm-html are disjoint select arms (exporter/csv.js vs renderer/html.js); review gates the chosen arm; done sinks. The select is the only ordering (S1 — arms consume classify\'s selection). Done: review clears and validation passes.',
+        '',
       ].join('\n'));
       v = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
     }
@@ -13481,7 +13523,11 @@ function validateSelectFixture(planPath, nodesRows7col, labels) {
     '## Nodes', '',
     '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
     '|---|---|---|---|---|---|---|',
-  ]).concat(nodesRows7col).concat(['']).join('\n'));
+  ]).concat(nodesRows7col).concat(['',
+    // #790: freeze wall's design_missing fires LAST, so a refuse-case fixture still surfaces its own
+    // reason first; an in-grammar fixture needs the section.
+    '## Design', '', 'Decompose the spine into concrete role nodes; sequence edges are real data dependencies (S1) or gate/select orderings, and co-opened write legs touch disjoint paths. Done: the gate clears and validation passes.', ''
+  ]).join('\n'));
   return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], path.dirname(planPath)).stdout);
 }
 
@@ -13728,6 +13774,7 @@ function testAdaptiveSelectSelectorSourceFanoutMember() {
       '| review | code-reviewer | arm-a,arm-b | — | 1 | sequence | — |',
       '| done | finalize | review | — | 1 | sequence | — |',
       '',
+      '## Design', '', 'Decompose: sweep reads, classifier (a fanout member) picks an arm; arm-a and arm-b are disjoint select arms (exporter/csv.js vs renderer/html.js); review gates; done sinks. The select is the only ordering (S1). Done: review clears and validation passes.', '',
     ].join('\n'));
     const v = JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
     // Empirically observed result: in-grammar. The validator permits a read-only node to
@@ -13771,6 +13818,9 @@ function makeHandoffPlan(nodesRows, ledgerRows, labels) {
     '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
     '|---|---|---|---|---|---|---|---|---|---|',
   ].concat(schema2Rows).concat([
+    '',
+    '## Design', '',
+    'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the review gate clears and validation passes.',
     '',
     '## Node Ledger', '',
     '| id | status |',
@@ -14294,6 +14344,8 @@ function testFreezeCheckedGovernanceAckStale() {
     '| a | tdd-guide | ex | aaa/x.js | 1 | sequence | — | — | — | — |',
     '| rv | code-reviewer | a | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| done | finalize | rv | — | 1 | sequence | — | — | — | — |', '',
+    '## Design', '',
+    'Decompose: ex explores; a builds aaa/x.js; rv gates; done sinks. sequence a→rv: S1 — rv consumes a\'s change. Done: review clears and validation passes.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
     '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
@@ -16599,6 +16651,8 @@ function testReviewerContractV2Conformance() {
       '| writer | tdd-guide | — | lib/impl.js | 1 | sequence | — | — | — | — |',
       '| reviewer | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
       '| finalize | finalize | reviewer | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '',
+      'Decompose: writer builds lib/impl.js; reviewer gates it; finalize sinks. sequence writer→reviewer: S1 — reviewer consumes writer\'s change. Done: review clears and validation passes.', '',
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| reviewer | pending |', '| finalize | pending |', '',
@@ -16866,6 +16920,8 @@ const SPINE_PLAN_758 = [
   '| m2 | expansion-point | m1 | — | 1 | sequence | — | — | — | — |',
   '| wall | code-reviewer | m2 | — | 1 | sequence | both milestone expansions land their declared goal with no unreviewed surface | the accumulated candidate across both expansions | sequence | — |',
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Design', '',
+  'Decompose: probe explores; m1 and m2 are milestones whose interior frontiers are composed at open time (m2 consumes m1\'s evidence packet — S1); wall reviews both composed frontiers; done sinks. Done: both milestones land their goals reviewed and validation passes.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -17085,6 +17141,7 @@ function testSpinePlanFormFreeze758() {
       '|---|---|---|---|---|---|',
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| done | finalize | explore | — | 1 | sequence |', '',
+      '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: validation passes.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| explore | pending |', '| done | pending |', '',
     ].join('\n');
@@ -17155,6 +17212,8 @@ const SPINE_PLAN_759 = [
   '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
   '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Design', '',
+  'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -18246,6 +18305,7 @@ function testReExpandCascade761() {
       '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
       '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761a', PLAN, 'workflow/issue-761a');
     try {
@@ -18285,6 +18345,7 @@ function testReExpandCascade761() {
       '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
       '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761b', PLAN, 'workflow/issue-761b');
     try {
@@ -18313,6 +18374,7 @@ function testReExpandCascade761() {
       '| m3 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
       '| wall | code-reviewer | m1, m2, m3 | — | 1 | sequence | every milestone lands its goal with no unreviewed surface | the accumulated candidate across all expansions | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose: probe explores; m1/m2/m3 are independent milestones composed at open time (disjoint surfaces scripts//docs/); wall reviews all composed frontiers; done sinks. Done: every milestone lands its goal reviewed and validation passes.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| probe | complete |', '| m1 | pending |', '| m2 | pending |', '| m3 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     const ctx = mkRepo('issue-761c', PLAN, 'workflow/issue-761c');
@@ -18380,6 +18442,8 @@ const SPINE_PLAN_760 = [
   '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
   '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Design', '',
+  'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',
@@ -20225,6 +20289,9 @@ function testAdaptiveGeneratedPortSplit431() {
     '| review | code-reviewer | impl | — | 1 | sequence |',
     '| done | finalize | review | — | 1 | sequence |',
     '',
+    '## Design', '',
+    'Decompose: impl ports the aggregator across all four editions in one node (they must move together); review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.',
+    '',
   ].join('\n');
   const vb = pv.validatePlan(bundledPlan);
   assert(vb.result === 'in-grammar',
@@ -21373,6 +21440,7 @@ function testDeclaredNotWalled762() {
     '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
 
   const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
@@ -21740,6 +21808,7 @@ function testReExpansionEpochTransition756() {
     '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — |',
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Design', '', 'Decompose: m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
   const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
   const fixerComp = (writeSet) => ({ derivation: DERIV,
@@ -21884,6 +21953,7 @@ function testReExpansionEpochTransition756() {
       '| impl | implementer | — | lib/companion.js | 1 | sequence | — | — | — | — |',
       '| wall | code-reviewer | impl | — | 1 | sequence | the recovered companion file is correct | lib/companion.js | sequence | — |',
       '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '', 'Decompose (epoch child): impl re-builds the recovered companion lib/companion.js; wall re-reviews it; done sinks. sequence impl→wall: S1 — wall consumes impl\'s change. Done: the companion is reviewed and validation passes.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
     try {
       fs.writeFileSync(planPath, childPlan);
@@ -21977,6 +22047,8 @@ const SPINE_PLAN_767 = [
   '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
   '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Design', '',
+  'Decompose: probe explores; m1 is a milestone whose interior frontier is composed at open time (its writers cannot be proven at freeze); wall reviews the composed frontier; done sinks. sequence edges are gate/data dependencies (S1). Done: the milestone lands its goal reviewed and validation passes.', '',
   '## Node Ledger', '',
   '| id | status |',
   '|---|---|',

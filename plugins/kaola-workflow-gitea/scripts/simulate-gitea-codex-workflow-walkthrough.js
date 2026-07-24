@@ -161,7 +161,8 @@ const gtMinimalPlan = [
   '| id | role | depends_on | declared_write_set | cardinality | shape |',
   '|---|---|---|---|---|---|',
   '| explore | code-explorer | — | — | 1 | sequence |',
-  '| done | finalize | explore | — | 1 | sequence |', ''
+  '| done | finalize | explore | — | 1 | sequence |', '',
+  '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: validation passes.', ''
 ].join('\n');
 const { spawnSync: gtSpawn } = require('child_process');
 const gtOs = require('os');

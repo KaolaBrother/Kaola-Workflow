@@ -152,7 +152,10 @@ lifecycle including the first). `decision:ask` is audit metadata only — it fre
   when `decision:ask`, no approval gate).
 - **`handoff_status: plan_invalid`** (validator refused; NOTHING written) → bounded **repair loop**:
   re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` to overwrite the
-  UNFROZEN plan. Retry ~2x (counter in the ORCHESTRATOR). After repeated failure → **discard+restart a
+  UNFROZEN plan. Repair may fix `## Meta` / `## Nodes` / `## Node Briefs` / ledger scaffolding to reach
+  in-grammar but MUST NOT alter `## Design` (the frozen decomposition intent) — if in-grammar is
+  unreachable without changing the design, that is not repair. Retry ~2x (counter in the ORCHESTRATOR).
+  After repeated failure → **discard+restart a
   fresh adaptive run** (`kaola-gitlab-workflow-claim.js discard --project {project}`) or **STOP + surface a
   concrete blocker**. Forbidden under `replan_in_progress`.
 

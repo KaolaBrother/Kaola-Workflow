@@ -165,6 +165,7 @@ function node(id, role, dependsOn, writeSet, shape) {
     '| --- | --- | --- | --- | --- | --- |',
     '| explore | code-explorer | — | — | 1 | sequence |',
     '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: CHANGELOG updated.', '',
     '## Node Ledger', '', '| id | status |', '| --- | --- |',
     '| explore | pending |', '| done | pending |', '',
   ].join('\n') + '\n';
@@ -231,6 +232,7 @@ function node(id, role, dependsOn, writeSet, shape) {
     '| --- | --- | --- | --- | --- | --- |',
     '| explore | code-explorer | — | — | 1 | sequence |',
     '| done | finalize | explore | CHANGELOG.md | 1 | sequence |', '',
+    '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: CHANGELOG updated.', '',
     '## Node Ledger', '', '| id | status |', '| --- | --- |',
     '| explore | pending |', '| done | pending |', '',
   ].join('\n') + '\n';

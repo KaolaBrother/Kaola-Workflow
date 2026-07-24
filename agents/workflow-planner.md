@@ -143,6 +143,18 @@ refusals teach the walls at freeze — author to them, never clamp around them.
 - **Node Ledger header MUST be canonical** — `| id | status |` exactly (an alias fails
   `ledger_header_invalid`; `--repair` normalizes). Author `## Node Briefs` (one `### <node-id>`
   heading per brief: intent, approach, constraints, which upstream evidence to read).
+- **Author `## Design` — REQUIRED, prose, no grammar inside it.** Record the plan-level WHY: the
+  named units of work and what each delivers; the named serializer-evidence line (S1 artifact /
+  S2 resource / S3 probe) for EVERY `sequence` edge between otherwise-independent writers — this
+  section is those lines' durable home; why any co-opened write legs are disjoint; and what "done"
+  means beyond `validation_command`. Conventions say what must appear, not length. Freeze REFUSES an
+  absent or empty section (`design_missing`) and duplicate/malformed headings (`design_section_ambiguous`).
+  The section is frozen with the plan (hash-covered — a post-freeze edit surfaces as `plan_hash_mismatch`)
+  and **FENCED from the repair loop**: the bounded `plan_invalid` repair may fix `## Meta` / `## Nodes` /
+  `## Node Briefs` / ledger scaffolding to reach in-grammar but MUST NOT alter `## Design`. If in-grammar
+  is unreachable without changing the design, that is not repair — escalate down the recovery ladder
+  (discard+restart → stop+ask). Whether the ledger faithfully implements the design is agent-judged
+  (adversarial verify, audits), never a mechanical design↔DAG check.
 - **Compact-plan posture.** Simple issue: author NO design node — be the architect yourself and write
   the direction into the implement node's brief. Complex issue: author the design node and point the
   implement brief at its evidence.
@@ -404,7 +416,8 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
      a determinate fail-closed fact; `escalate` (`target_indeterminate`/`target_set_indeterminate`)
      is an indeterminate verdict the orchestrator pauses on.
 2. **Author the plan.** Write `kaola-workflow/{project}/workflow-plan.md` — `## Meta` `labels:` (so
-   the validator derives sensitivity), the `## Nodes` table, `## Node Briefs`, and an empty
+   the validator derives sensitivity), the `## Nodes` table, `## Node Briefs`, `## Design` (the
+   plan-level WHY — required, see above), and an empty
    `## Node Ledger` (one `pending` row per node). **In no-target mode ONLY**, also record the selection
    record in `## Meta` (`selection_bundle:`, `selection_priority_basis:`, `selection_rejected:`,
    `selection_disjointness:` — see § selection record); the handoff folds these into
@@ -441,6 +454,10 @@ normal Method, and **never mutate the frozen parent `workflow-plan.md`** or its 
   regular file, absent/empty at dispatch. Author the schema-2 child, preserve claim/root/epoch
   lineage, carry inherited code/security + unresolved-finding obligations to reachable certifiers,
   and initialize every child ledger row `pending`.
+- **Re-plan anchor for `## Design`.** The child's `## Design` DERIVES from the parent's — carry it
+  forward and make any amendment EXPLICIT (state what changed and why), never a silent rewrite. The
+  child passes the same freeze wall, so a present, non-empty `## Design` is enforced for free
+  (`design_missing` refuses an absent/empty one).
 - Provenance is mandatory: append the dispatch record to `.cache/dispatch-log.jsonl`; write
   `.cache/replan-planner-attestation.json` (schema 1, canonical `attestation_digest`); run the
   edition-local `kaola-workflow-replan.js` `resume --project {project} --json`. Missing/mismatched

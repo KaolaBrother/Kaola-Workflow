@@ -163,10 +163,38 @@ function injectSpineForm(content) {
   return content;
 }
 
+// #790: a frozen plan requires a non-empty `## Design` section at the freeze wall. Legacy fixtures
+// predate the section, so inject a minimal prose block when absent — the same normalization posture as
+// injectSpineForm. Inserted BEFORE `## Node Ledger` (so the hash-NEUTRAL ledger remains the tail
+// section — fixtures that append a ledger row / halt marker to the tail rely on that; `## Design` IS
+// hash-covered and must not become the tail). No `## Node Ledger` ⇒ appended at the end. No-op when a
+// `## Design` heading already exists.
+function injectDesignSection(content) {
+  if (/^##[ \t]+Design[ \t]*$/m.test(content)) return content;
+  const block = '## Design\n\n'
+    + 'Decompose the frozen spine into its concrete role nodes; every sequence edge is a real data '
+    + 'dependency (S1 — the downstream node consumes the upstream node\'s change) or a gate ordering, '
+    + 'and any co-opened write legs touch disjoint paths. Done means the review gate clears and '
+    + 'validation_command passes.\n';
+  const lines = content.split('\n');
+  // Fence-aware scan for the FIRST GENUINE `## Node Ledger` (skip a decoy inside a ``` / ~~~ fence).
+  let fence = null, ledgerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([`~]{3,})/);
+    if (m) { if (fence === null) fence = m[1][0].repeat(m[1].length); else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
+    if (fence === null && /^##[ \t]+Node Ledger[ \t]*$/.test(lines[i])) { ledgerIdx = i; break; }
+  }
+  if (ledgerIdx >= 0) {
+    lines.splice(ledgerIdx, 0, block, '');
+    return lines.join('\n');
+  }
+  return content.replace(/\n*$/, '\n') + '\n' + block;
+}
+
 function stampVerifiedLegacyPlan(planPath) {
   const raw = fs.readFileSync(planPath, 'utf8');
   if (/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(raw)) return;
-  const content = injectSpineForm(raw);
+  const content = injectDesignSection(injectSpineForm(raw));
   const hash = planValidator.computePlanHash(content);
   fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n\n' + content);
 }
@@ -4028,6 +4056,10 @@ function makePlan(ledgerRows, extraNodes) {
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '| --- | --- | --- | --- | --- | --- |',
     ...nodes,
+    '',
+    '## Design',
+    '',
+    'Decompose the frozen spine into its concrete role nodes; each sequence edge is a real data dependency (S1 — the downstream node consumes the upstream node\'s change). Done means the review gate clears and validation passes.',
     '',
     '## Node Ledger',
     '',
@@ -9106,6 +9138,8 @@ function rtHarness(initialFiles, opts) {
     '| a        | tdd-guide     | —      | scripts/a.js | 1 | sequence |',
     '| review   | code-reviewer | a      | —            | 1 | sequence |',
     '| finalize | finalize      | review | —            | 1 | sequence |', '',
+    '## Design', '',
+    'Decompose: a builds scripts/a.js; review gates; finalize sinks. sequence a→review: S1 — review consumes a\'s change. Done: validation passes and review clears.', '',
     '## Node Ledger', '',
     '| id | status |', '| --- | --- |',
     '| a | pending |',
@@ -20979,6 +21013,8 @@ function rtHarness(initialFiles, opts) {
       '| gateA | security-reviewer | writer | — | 1 | sequence | security review clean | code-tree | sequence | — |',
       '| gateB | code-reviewer | gateA | — | 1 | sequence | review-change | code-tree | sequence | — |',
       '| finalize | finalize | gateB | — | 1 | sequence | — | — | — | — |', '',
+      '## Design', '',
+      'Decompose: writer builds lib/impl.js; gateA (security) then gateB (code) post-dominate it; finalize sinks. sequence writer→gateA→gateB: S1 — each gate consumes the prior change. Done: both gates clear and validation passes.', '',
       '## Node Ledger', '',
       '| id | status |', '|---|---|',
       '| writer | pending |', '| gateA | pending |', '| gateB | pending |', '| finalize | pending |', '',
@@ -21285,6 +21321,8 @@ function rtHarness(initialFiles, opts) {
           + ' | change is sound | code-tree | ' + aggregation + ' | writer |'),
         '| codegate | code-reviewer | ' + avIds.join(',') + ' | — | 1 | sequence | review-change | code-tree | sequence | — |',
         '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
+        '## Design', '',
+        'Decompose: writer builds the impl; adversarial-verifier gate(s) fan out over it; codegate post-dominates; finalize sinks. sequence edges are gate/data dependencies (S1). Done: gates clear and validation passes.', '',
         '## Node Ledger', '',
         '| id | status |', '|---|---|',
         '| writer | pending |', ...avIds.map(id => '| ' + id + ' | pending |'),
@@ -21575,6 +21613,8 @@ function rtHarness(initialFiles, opts) {
         '| writer | tdd-guide | — | ' + implRel + ' | 1 | sequence | — | — | — | — |',
         '| codegate | code-reviewer | writer | — | 1 | sequence | review-change | code-tree | sequence | — |',
         '| finalize | finalize | codegate | — | 1 | sequence | — | — | — | — |', '',
+        '## Design', '',
+        'Decompose: writer builds the impl; codegate post-dominates it; finalize sinks. sequence writer→codegate: S1 — codegate consumes the writer change. Done: gate clears and validation passes.', '',
         '## Node Ledger', '', '| id | status |', '|---|---|',
         '| writer | pending |', '| codegate | pending |', '| finalize | pending |', '',
         '## Required Agent Compliance', '',

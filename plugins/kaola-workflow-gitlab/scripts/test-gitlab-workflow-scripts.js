@@ -4529,7 +4529,8 @@ function testGitlabPlanValidatorRefusalMatrix401() {
     '| e | code-explorer | — | — | 1 | sequence |',
     `| i | tdd-guide | e | ${writeSet} | 1 | sequence |`,
     '| r | code-reviewer | i | — | 1 | sequence |',
-    '| d | finalize | r | — | 1 | sequence |', ''
+    '| d | finalize | r | — | 1 | sequence |', '',
+    '## Design', '', 'Decompose: e explores; i builds; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change. Done: review clears and validation passes.', ''
   ]).join('\n');
   // 7-col plan carrying an invalid model tier (haiku) on the first node.
   const sevenColModel = planHeader.concat([

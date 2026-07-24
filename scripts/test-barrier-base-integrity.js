@@ -162,6 +162,7 @@ try {
         : '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
       s2 ? '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
         : '| --- | --- | --- | --- | --- | --- | --- |', rows,
+      '', '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.',
       '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows,
       '', '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
       '| --- | --- | --- | --- |', complianceRows, '',

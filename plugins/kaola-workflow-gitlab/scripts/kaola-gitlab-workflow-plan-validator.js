@@ -137,6 +137,8 @@ const OPERATOR_HINT_REGISTRY = {
   brief_unknown_node: (ctx) => `## Node Briefs names unknown node id "${ctx.nodeId || '(unknown)'}" — every brief's ### <node-id> header must match a node in the ## Nodes table. Fix the id (or add the node) and re-freeze.`,
   brief_duplicate_node: (ctx) => `## Node Briefs carries more than one ### block for node id "${ctx.nodeId || '(unknown)'}" — a node has exactly ONE brief (a duplicate would silently win/lose by parse order). Merge the blocks into one and re-freeze.`,
   briefs_section_ambiguous: () => '## Node Briefs identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
+  design_missing: () => 'A frozen plan requires a non-empty ## Design section — the plan-level WHY: the decomposition rationale, the named serializer-evidence line for every `sequence` edge, why co-opened write legs are disjoint, and what "done" means beyond validation_command. Author ## Design (prose — no grammar inside it) and re-freeze. FREEZE-ONLY: a plan frozen before this section existed resumes unchanged.',
+  design_section_ambiguous: () => '## Design identity is ambiguous because the plan contains duplicate genuine headings or malformed/unclosed fencing. Repair the Markdown structure and re-freeze.',
   cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
   too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
   no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
@@ -1140,21 +1142,30 @@ function nodeHasStructuralRelation(n) {
 //       verdict; coarse/shared-infra/green are all exact-file-disjoint and CO-OPEN by default (#760);
 //   (c) NEITHER endpoint carries a gate/selector/loop relation (nodeHasStructuralRelation).
 // Under "Parallel by Default; Serial Requires Evidence" such an edge must name a serializer
-// (S1 artifact / S2 resource / S3 probe) in the DEPENDENT node's brief — the node asserting the wait.
-// Existence-only (mirrors expansionRecordEfficiency's `/\bS[123]\b/` read): we look for an S1/S2/S3
-// token and never judge its content. No token named → FLAG (the edge is returned {from,to}).
-// `briefs` is a Map<nodeId, briefText> (or an array of {nodeId, brief}). Pure; never throws.
-function evidenceLessSerializingEdges(nodes, briefs) {
+// (S1 artifact / S2 resource / S3 probe) in the DEPENDENT node's brief OR in the plan-level `## Design`
+// section — the durable home for exactly these serializer-evidence lines. Existence-only (mirrors
+// expansionRecordEfficiency's `/\bS[123]\b/` read): we look for an S1/S2/S3 token and never judge its
+// content. An edge is flagged only if NEITHER the dependent brief NOR `## Design` names a serializer.
+// `## Design` is prose with no per-edge grammar, so its check is plan-global: any S1/S2/S3 token in the
+// section discharges (the audit — adversarial verifier, not this existence check — judges whether the
+// named serializer actually covers the edge). `briefs` is a Map<nodeId, briefText> (or an array of
+// {nodeId, brief}); `design` is the `## Design` body string (optional — omitted ⇒ '' ⇒ #789 behavior).
+// Pure; never throws.
+function evidenceLessSerializingEdges(nodes, briefs, design) {
   const list = Array.isArray(nodes) ? nodes : [];
   const byId = new Map(list.map(n => [n.id, n]));
   const briefMap = briefs instanceof Map
     ? briefs
     : new Map((Array.isArray(briefs) ? briefs : []).map(b => [b.nodeId, b.brief]));
   const namesSerializer = text => /\bS[123]\b/.test(String(text || ''));
+  // Plan-global discharge: an S1/S2/S3 token anywhere in `## Design` discharges every candidate edge
+  // (existence-only, audit-only — the content is never judged here).
+  const designNamesSerializer = namesSerializer(design);
   const out = [];
   for (const v of list) {
     if (nodeHasStructuralRelation(v)) continue;
     if (!v.writeSet || v.writeSet.size === 0) continue;            // dependent must be a writer
+    if (designNamesSerializer) continue;                          // ## Design names a serializer ⇒ discharged
     if (namesSerializer(briefMap.get(v.id))) continue;            // an S1/S2/S3 token discharges every in-edge
     for (const uId of (v.dependsOn || [])) {
       const u = byId.get(uId);
@@ -3463,6 +3474,14 @@ function barrierCheck(content, actualPaths, opts) {
 // probed on the heading, not the body.
 function nodeBriefsSection(content) { return classifier.sectionBodyState(content, 'Node Briefs'); }
 function nodeBriefsPresent(content) { return nodeBriefsSection(content).status === 'present'; }
+// `## Design` — the plan-level WHY channel (decomposition rationale, the named serializer-evidence
+// line for every `sequence` edge, disjointness rationale, what "done" means). PROSE, no sub-grammar.
+// designSection: the same fence-safe section-identity probe the briefs channel uses. Hash-covered by
+// computePlanHash's CONDITIONAL append (absent ⇒ NO append ⇒ a designless plan hashes byte-identically
+// to the pre-Design formula, so every in-flight frozen plan resume-checks unchanged), refused at the
+// freeze wall when absent/empty (design_missing) or ambiguous (design_section_ambiguous). FREEZE-ONLY:
+// revalidateForResume never reads it, so a plan frozen before this channel existed resumes green.
+function designSection(content) { return classifier.sectionBodyState(content, 'Design'); }
 // parseNodeBriefs: parse the `## Node Briefs` section into [{ nodeId, brief }]. The section body is
 // sliced via the fence-aware classifier.sectionBody (an h3 does NOT close the h2 section); the
 // `### <node-id>` headers are scanned fence-aware (mirroring sectionBody's fenceRe) so a fenced
@@ -3504,6 +3523,15 @@ function computePlanHash(content) {
     body += '\n---BRIEFS---\n' + briefs.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
   } else if (briefs.status === 'ambiguous') {
     body += '\n---BRIEFS-AMBIGUOUS---';
+  }
+  // The `## Design` section is hash-covered ONLY when present — a designless plan appends NOTHING and
+  // therefore produces a BYTE-IDENTICAL hash body to the pre-Design formula, so every existing frozen /
+  // in-flight plan resume-checks unchanged. Mirror of the `## Node Briefs` conditional-append pattern.
+  const design = designSection(content);
+  if (design.status === 'present') {
+    body += '\n---DESIGN---\n' + design.body.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  } else if (design.status === 'ambiguous') {
+    body += '\n---DESIGN-AMBIGUOUS---';
   }
   return crypto.createHash('sha256').update(body).digest('hex');
 }
@@ -3689,6 +3717,15 @@ function validatePlan(content, opts) {
   const briefsSection = nodeBriefsSection(content);
   if (briefsSection.status === 'ambiguous') {
     return { result: 'refuse', reason: 'briefs_section_ambiguous', operator_hint: getOperatorHint('briefs_section_ambiguous'), errors: ['## Node Briefs section identity is ambiguous'], planHash: computePlanHash(content) };
+  }
+  // `## Design` section-identity is a STRUCTURAL check (like ## Node Briefs above): an ambiguous
+  // section (duplicate genuine headings / unclosed fence) short-circuits before anything reads its
+  // body. The design_missing completeness gate is deferred to the END of the freeze wall (see below) so
+  // it only fires on an otherwise-in-grammar plan — a plan that refuses for another reason surfaces THAT
+  // reason first. Both are FREEZE-ONLY (revalidateForResume never reads ## Design).
+  const designSectionState = designSection(content);
+  if (designSectionState.status === 'ambiguous') {
+    return { result: 'refuse', reason: 'design_section_ambiguous', operator_hint: getOperatorHint('design_section_ambiguous'), errors: ['## Design section identity is ambiguous'], planHash: computePlanHash(content) };
   }
   const nodes = parseNodes(content);
   const schemaVersionValues = metaFieldValues(content, 'plan_schema_version');
@@ -4686,6 +4723,19 @@ function validatePlan(content, opts) {
     // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}) };
 
+  // `## Design` completeness gate (FREEZE-ONLY). Placed at the END of the freeze wall — after every
+  // structural/grammar refusal above has had its chance — so a plan that is broken for another reason
+  // surfaces THAT reason, and only an otherwise-in-grammar plan is held for a missing rationale. An
+  // absent OR empty section (heading present, blank body) both refuse: the section is the durable home
+  // for the serializer-evidence lines, so freezing without it would silently drop the plan-level WHY.
+  // Deliberately absent from revalidateForResume — a plan frozen before this section existed resumes.
+  if (designSectionState.status !== 'present' || designSectionState.body.trim() === '') {
+    return { result: 'refuse', reason: 'design_missing', operator_hint: getOperatorHint('design_missing'),
+      errors: ['## Design is absent or empty — author the plan-level WHY (decomposition rationale, named serializer-evidence per sequence edge, disjointness, what done means) and re-freeze'],
+      planHash, sink, plan_schema_version: planSchemaVersion, contract_version: contractVersion,
+      ...(isSpine ? { plan_form: 'spine' } : {}) };
+  }
+
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
   const reasons = [];
   let sensitivity = false, blastRadius = false, uncertain = false;
@@ -4702,7 +4752,8 @@ function validatePlan(content, opts) {
   // flag, computed ONCE and shared. Never moves a verdict — assembled only on the in-grammar return, no
   // error is pushed. #789 (D0): the no-target survey selection record (null in explicit-target mode).
   const briefMapForShape = new Map(parseNodeBriefs(content).map(b => [b.nodeId, b.brief]));
-  const evidenceLessEdges = evidenceLessSerializingEdges(nodes, briefMapForShape);
+  const designBodyForShape = designSectionState.status === 'present' ? designSectionState.body : '';
+  const evidenceLessEdges = evidenceLessSerializingEdges(nodes, briefMapForShape, designBodyForShape);
   const planShape = computePlanShape(nodes, evidenceLessEdges);
   const selectionRecord = parseSelectionRecord(content).selection;
   return {
@@ -6455,6 +6506,8 @@ module.exports = {
   // `## Node Briefs` channel: the parser + presence probe (fence-aware; hash-covered when present).
   parseNodeBriefs,
   nodeBriefsPresent,
+  // `## Design` channel: fence-aware section-identity probe (hash-covered when present; freeze-only wall).
+  designSection,
   parseNodes,
   resolvePlanContract,
   buildPlanView,

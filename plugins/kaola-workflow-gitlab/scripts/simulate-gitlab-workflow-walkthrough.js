@@ -75,6 +75,7 @@ function seedAdaptiveFinalizeFixture(fixtureRoot, project, writeSet) {
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
     ...nodesTable, '',
+    '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering. Done means the gate clears and validation passes.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
     ...ledgerRows, '',
     '## Required Agent Compliance', '',
@@ -320,7 +321,8 @@ function testGitlabAdaptive() {
     '| e | code-explorer | — | — | 1 | sequence |',
     '| i | tdd-guide | e | lib/x.js | 1 | sequence |',
     '| r | code-reviewer | i | — | 1 | sequence |',
-    '| d | finalize | r | — | 1 | sequence |', ''
+    '| d | finalize | r | — | 1 | sequence |', '',
+    '## Design', '', 'Decompose: e explores; i builds lib/x.js; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change. Done: review clears and validation passes.', ''
   ].join('\n');
   function spawnNode(script, args, cwd, env) {
     return spawnSync(process.execPath, [script, ...args], {
@@ -378,7 +380,9 @@ function testGitlabAdaptive() {
         '# Plan', '', '## Meta', 'plan_form: spine', 'labels: ' + label, '', '## Nodes', '',
         '| id | role | depends_on | declared_write_set | cardinality | shape |',
         '|---|---|---|---|---|---|',
-      ].concat(rows).concat(['']).join('\n');
+      ].concat(rows).concat(['',
+        '## Design', '', 'Decompose the spine into concrete role nodes; sequence edges are real data dependencies (S1) or gate orderings, and co-opened write legs touch disjoint paths. Done: the gate clears and validation passes.', ''
+      ]).join('\n');
       fs.writeFileSync(p, content);
       return JSON.parse(spawnNode(valScript, [p, '--json'], tmp).stdout);
     }
@@ -820,7 +824,8 @@ function testGitlabAdaptive() {
         '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
         '| review | code-reviewer | impl | — | 1 | sequence |',
         '| done | finalize | review | — | 1 | sequence |',
-        '', '## Node Ledger', '',
+        '', '## Design', '', 'Decompose: impl builds lib/foo.js; review gates; done sinks. sequence impl→review: S1 — review consumes impl\'s change. Done: validation passes.', '',
+        '## Node Ledger', '',
         '| node | status |',
         '|---|---|',
         '| impl | pending |',
@@ -892,6 +897,7 @@ function testGitlabAdaptiveFreezeChecked() {
     '| i | tdd-guide | e | lib/x.js | 1 | sequence | — | — | — | — |',
     '| r | code-reviewer | i | — | 1 | sequence | review-change | code-tree | sequence | — |',
     '| d | finalize | r | — | 1 | sequence | — | — | — | — |', '',
+    '## Design', '', 'Decompose: e explores; i builds lib/x.js; r gates; d sinks. sequence i→r: S1 — r consumes i\'s change. Done: review clears and validation passes.', '',
     '## Node Ledger', '', '| id | status |', '|---|---|',
     '| e | pending |', '| i | pending |', '| r | pending |', '| d | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |', '|---|---|---|---|',
@@ -1312,7 +1318,8 @@ function testGitlabBundleOrientSurfacesBundleIdentity() {
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '|---|---|---|---|---|---|',
       '| explore | code-explorer | — | — | 1 | sequence |',
-      '| done | finalize | explore | — | 1 | sequence |', ''
+      '| done | finalize | explore | — | 1 | sequence |', '',
+      '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: validation passes.', ''
     ].join('\n'));
     fs.writeFileSync(planPath, '<!-- plan_hash: ' + require(valScript).computePlanHash(fs.readFileSync(planPath, 'utf8')) + ' -->\n\n' + fs.readFileSync(planPath, 'utf8'));
     const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
@@ -1859,7 +1866,8 @@ function testGitlabBundleStateIncoherent() {
     '| id | role | depends_on | declared_write_set | cardinality | shape |',
     '|---|---|---|---|---|---|',
     '| explore | code-explorer | — | — | 1 | sequence |',
-    '| done | finalize | explore | — | 1 | sequence |', ''
+    '| done | finalize | explore | — | 1 | sequence |', '',
+    '## Design', '', 'Decompose: explore then finalize. sequence explore→done: S1 — done consumes explore\'s findings. Done: validation passes.', ''
   ];
 
   // (a) bundle_id present, issue_numbers absent.
@@ -1984,6 +1992,7 @@ function testGitlabBundle424432433NodeSeeding() {
       '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
       '| rv | code-reviewer | n1 | — | 1 | sequence |',
       '| done | finalize | rv | — | 1 | sequence |', '',
+      '## Design', '', 'Decompose: n1 builds lib/impl.js; rv gates; done sinks. sequence n1→rv: S1 — rv consumes n1\'s change. Done: review clears and validation passes.', '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
 

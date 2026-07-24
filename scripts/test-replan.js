@@ -69,6 +69,7 @@ function frozenPlan(project, meta, nodes, ledger) {
     schema2
       ? '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
       : '| --- | --- | --- | --- | --- | --- | --- |', rows,
+    '', '## Design', '', 'Decompose the spine into concrete role nodes; every sequence edge is a real data dependency (S1) or a gate ordering, and co-opened write legs touch disjoint paths. Done means the gates clear and validation passes.',
     '', '## Node Ledger', '', '| id | status |', '| --- | --- |', ledgerRows,
     '', '## Required Agent Compliance', '',
     '| Requirement | Status | Evidence | Skip Reason |',
@@ -5081,6 +5082,8 @@ const SPINE_PLAN_779 = [
   '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
   '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
   '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Design', '',
+  'Decompose: probe explores; m1 is a milestone composed at open time; wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
   '## Node Ledger', '',
   '| id | status |',
   '| --- | --- |',
@@ -5351,6 +5354,7 @@ function initExpandedFamilyFixture(opts) {
     '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
     '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Design', '', 'Decompose: probe explores; m1 is a milestone composed at open time (surface lib/); wall reviews the composed frontier; done sinks. Done: the milestone lands its goal reviewed and validation passes.', '',
     '## Node Ledger', '', '| id | status |', '| --- | --- |',
     '| probe | complete |', '| m1 | pending |', '| wall | pending |', '| done | pending |', '',
     '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
