@@ -14,3 +14,10 @@ kaola-workflow/issue-55/
 # cwd/.cache). Anchored to the repo root so the tracked per-project / archive
 # kaola-workflow/**/.cache/ evidence is unaffected.
 /.cache/
+# Oracle Kernel (kaola-workflow-adaptive-schema.js): de-duplicated to ONE committed source in
+# scripts/. The three per-forge tree copies are byte-identical materializations produced on demand
+# (`node scripts/edition-sync.js --materialize-kernel`, folded into `--write` and the forge test
+# chains, and copied from canonical by install.sh) — never committed.
+/plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js
+/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js
+/plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js

@@ -20,15 +20,19 @@ const repoRoot = path.resolve(__dirname, '..');
 let failed = 0, passed = 0;
 function assert(cond, msg) { if (cond) { passed++; return; } failed++; process.stderr.write('FAIL: ' + msg + '\n'); }
 
-// Issue #699 registration guard: replan is canonical<->Codex byte-identical,
-// while adaptive-schema and closure-contract stay byte-identical across all four editions.
+// Issue #699 registration guard: replan is canonical<->Codex byte-identical, and closure-contract
+// stays byte-identical across all four editions. (The former adaptive-schema 4-tree group is RETIRED:
+// the kernel is de-duplicated to one committed source and materialized per-forge on demand, so there
+// is nothing left to byte-police — its group must be ABSENT here.)
 assert((sync.COMMON_SCRIPTS || []).includes('kaola-workflow-replan.js'),
   '#699: COMMON_SCRIPTS enrolls kaola-workflow-replan.js');
-for (const base of ['kaola-workflow-adaptive-schema.js', 'kaola-workflow-closure-contract.js']) {
+for (const base of ['kaola-workflow-closure-contract.js']) {
   const group = (sync.BYTE_IDENTICAL_GROUPS || []).find(g => (g.files || []).some(f => f === 'scripts/' + base));
   assert(group && group.files.length === 4,
     '#699: ' + base + ' remains a four-edition byte-identical group');
 }
+assert(!(sync.BYTE_IDENTICAL_GROUPS || []).some(g => (g.files || []).some(f => f === 'scripts/kaola-workflow-adaptive-schema.js')),
+  '#778: the adaptive-schema byte-identical group is retired (kernel de-duplicated to one committed source)');
 
 // 1) The family generalizes beyond the classifier to the divergent cross-required hand-ports.
 const fam = sync.FORGE_EXPORT_SUPERSET_FAMILY;

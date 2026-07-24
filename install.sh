@@ -603,6 +603,14 @@ fi
 mkdir -p "$SUPPORT_SCRIPTS_DIR"
 for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
   script_file="$SOURCE_SCRIPTS_DIR/$script_name"
+  # The Oracle Kernel (kaola-workflow-adaptive-schema.js) is byte-identical across every edition and
+  # de-duplicated to a SINGLE canonical source in scripts/; the per-forge plugin tree no longer holds
+  # a copy. Source it from canonical regardless of forge so gitlab/gitea (whose SOURCE_SCRIPTS_DIR is
+  # their plugin tree) still find it — github's SOURCE_SCRIPTS_DIR already IS $SCRIPT_DIR/scripts, so
+  # this is a no-op there. The fail-closed guard below then resolves it at canonical.
+  if [[ "$script_name" == "kaola-workflow-adaptive-schema.js" ]]; then
+    script_file="$SCRIPT_DIR/scripts/$script_name"
+  fi
   # #363: fail CLOSED — an allowlisted name missing from source is a bug (the 5.4.0 incident class),
   # not something to silently skip (which previously installed nothing yet verified green on forges).
   if [[ ! -f "$script_file" ]]; then

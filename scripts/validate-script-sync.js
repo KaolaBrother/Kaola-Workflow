@@ -155,20 +155,12 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/hooks/kaola-workflow-subagent-dispatch-log.sh',
     ],
   },
-  {
-    // issue #227: the adaptive-path cross-fork DRIFT ANCHOR. Forge-neutral constants
-    // (path whitelist, plan-run command, caps, ledger enum, escalation markers, config
-    // path) shared by claim/repair-state/plan-validator across all four trees. Because
-    // it is byte-identical and the forks require it, a fork that hand-ports routeAdaptive
-    // but forgets to mirror a constant edit fails here — catching silent fork drift.
-    label: 'adaptive-schema constant copies',
-    files: [
-      'scripts/kaola-workflow-adaptive-schema.js',
-      'plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js',
-      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js',
-      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js',
-    ],
-  },
+  // NOTE: the former 'adaptive-schema constant copies' 4-tree byte-identical group is RETIRED.
+  // The kernel (kaola-workflow-adaptive-schema.js) is de-duplicated to ONE committed source in
+  // scripts/; the three forge copies are gitignored, materialized on demand from canonical by
+  // `edition-sync.js --materialize-kernel` (and install.sh). One committed copy = nothing to police
+  // here, so nothing byte-drifts. The materializer is DECOUPLED from this list (see edition-sync's
+  // MATERIALIZED_SHARED) so this retirement cannot silently disable it.
   {
     // issue #266 AC-B: Codex agent-profile freshness preflight. Authored require-free
     // (only fs + path + inline regex) so it qualifies as a true 4-tree byte-identical

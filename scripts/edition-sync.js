@@ -60,6 +60,20 @@ const codexRel = base => 'plugins/kaola-workflow/scripts/' + base;
 const forgeBase = (base, forge) => base.replace(/^kaola-workflow-/, `kaola-${forge}-workflow-`);
 const forgeRel = (base, forge) => `plugins/kaola-workflow-${forge}/scripts/${forgeBase(base, forge)}`;
 
+// Materialized shared kernel(s): a byte-identical-across-all-editions module de-duplicated to ONE
+// committed source in scripts/ and materialized into each forge tree ON DEMAND (install/test-time).
+// This list is DELIBERATELY DECOUPLED from validate-script-sync's BYTE_IDENTICAL_GROUPS: with a
+// single committed copy there is nothing left to police, so that group is retired — and retiring it
+// must NOT silently disable the materializer (step (c) of --write iterates BYTE_IDENTICAL_GROUPS).
+// The forge copy keeps the CANONICAL base name (no rename), so its tree path is built directly here,
+// not via forgeRel (which would rename the base). Forge 'codex' = the plugins/kaola-workflow/ tree.
+const MATERIALIZED_SHARED = [
+  { base: 'kaola-workflow-adaptive-schema.js', forges: ['gitlab', 'gitea', 'codex'] },
+];
+const materializedForgeRel = (base, forge) => forge === 'codex'
+  ? 'plugins/kaola-workflow/scripts/' + base
+  : `plugins/kaola-workflow-${forge}/scripts/${base}`;
+
 // The declared rename set for a forge: every canonical base-name `kaola-workflow-X`
 // that has a renamed `kaola-<forge>-workflow-X.js` port on disk. Cached per forge.
 const _renameSetCache = {};
@@ -169,6 +183,30 @@ function firstDiff(expected, actual) {
   return 'content differs';
 }
 
+// --- materialize the shared kernel(s) from canonical into each forge tree. Buffer copy (guaranteed
+// byte-identical → md5-identical to canonical), idempotent (skips an already-identical copy),
+// create-on-missing. INDEPENDENT of BYTE_IDENTICAL_GROUPS so retiring the kernel's policing entry
+// cannot disable it. Wired as a `--materialize-kernel` preamble into the forge test chains (whose
+// scripts require() the kernel as a __dirname sibling that no longer lives in the committed tree)
+// and folded into --write. Returns the number of files written. ---
+function runMaterializeKernel() {
+  let wrote = 0;
+  for (const entry of MATERIALIZED_SHARED) {
+    const srcBytes = fs.readFileSync(path.join(REPO, canonRel(entry.base)));
+    for (const forge of entry.forges) {
+      const rel = materializedForgeRel(entry.base, forge);
+      const abs = path.join(REPO, rel);
+      const existing = fs.existsSync(abs) ? fs.readFileSync(abs) : null;
+      if (existing && existing.equals(srcBytes)) continue;
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, srcBytes);
+      console.log('materialize ' + rel);
+      wrote++;
+    }
+  }
+  return wrote;
+}
+
 // --- write: regenerate forge aggregators + cp COMMON_SCRIPTS -> codex + byte groups. ---
 function runWrite() {
   let wrote = 0;
@@ -211,6 +249,10 @@ function runWrite() {
       }
     }
   }
+  // (d) materialized shared kernel(s): canonical -> each forge tree. DECOUPLED from step (c)'s
+  // BYTE_IDENTICAL_GROUPS (the kernel's policing entry is retired), so --write still produces the
+  // per-forge sibling the forge chains + install need.
+  wrote += runMaterializeKernel();
   console.log('edition-sync: write complete (' + wrote + ' file(s) updated'
     + (wrote === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -219,13 +261,20 @@ function main() {
   const arg = process.argv[2];
   if (arg === '--check') return runCheck();
   if (arg === '--write') return runWrite();
+  if (arg === '--materialize-kernel') {
+    const n = runMaterializeKernel();
+    console.log('edition-sync: materialized shared kernel(s) into forge trees ('
+      + n + ' file(s) ' + (n === 0 ? 'already present' : 'written') + ').');
+    return;
+  }
   process.stdout.write(
-    'usage: node scripts/edition-sync.js (--check | --write)\n'
-    + '  --check   assert forge aggregator ports match canonical (rename-normalized parity)\n'
-    + '  --write   regenerate forge aggregators + cp COMMON_SCRIPTS->codex + byte groups (sync:editions)\n'
+    'usage: node scripts/edition-sync.js (--check | --write | --materialize-kernel)\n'
+    + '  --check              assert forge aggregator ports match canonical (rename-normalized parity)\n'
+    + '  --write              regenerate forge aggregators + cp COMMON_SCRIPTS->codex + byte groups + materialize kernel (sync:editions)\n'
+    + '  --materialize-kernel copy the shared kernel(s) canonical->each forge tree (forge test-chain preamble; idempotent)\n'
   );
 }
 
 if (require.main === module) main();
 
-module.exports = { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, genHeader, syncIfDrift };
+module.exports = { renderForgePort, renameSet, GENERATED_AGGREGATORS, forgeRel, genHeader, syncIfDrift, MATERIALIZED_SHARED, materializedForgeRel, runMaterializeKernel };
