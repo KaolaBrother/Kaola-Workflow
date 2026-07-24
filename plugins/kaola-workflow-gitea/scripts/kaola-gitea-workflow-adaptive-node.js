@@ -9639,6 +9639,115 @@ function coordinationRefusal(coord, excl, serialExclude) {
 // @param {object} opts  the subcommand opts (planPath, shell, readFile, cacheExists)
 // @param {{integrity?:boolean, halt?:boolean, excl?:string[]}} cfg  which layers apply
 // @returns {object|null} a refusal envelope, or null to proceed.
+// ---------------------------------------------------------------------------
+// #777 — ledger tamper-evidence hash chain.
+//
+// The SINGLE write choke point. Every durable plan write in this lifecycle routes
+// through opts.writeFile(planPath, …); wrapping it once here instruments ALL 27
+// spliceLedgerNode call sites + appendLedgerRows + the four multi-row writes without
+// enumerating any of them — the wrapper diffs the FINAL old->new ledger map at the
+// durable write, so any number of in-memory splices collapse to ONE entry carrying a
+// deltas[] array, and no legal transition can be missed (missing one wedges every
+// honest frontier — the dominant risk).
+//
+// Ordering is journal-ahead: append + fsync (writeFileAtomicReplace) FIRST, plan write
+// SECOND. Append ONLY when the ledger MAP actually changed (a no-op resume writes no
+// phantom entry). Fail-soft: no epoch identity => chain dormant (write through
+// untouched — keeps the ~293 headless fixtures + in-memory harnesses green). A
+// transition that cannot extend from the committed head throws a tagged tamper error
+// (main() converts it to a typed refuse) so an integrity-less mutator (close-and-open-
+// next) can never launder an out-of-band edit into a fresh entry.
+// ---------------------------------------------------------------------------
+function makeLedgerChainWriteFile(rawWriteFile, ctx) {
+  const journalPath = path.join(ctx.cacheDir, reviewSchema.LEDGER_CHAIN_JOURNAL_NAME);
+  const planReal = path.resolve(ctx.planPath);
+  return function writeFileLedgerAware(fpath, content) {
+    if (path.resolve(fpath) !== planReal) return rawWriteFile(fpath, content);
+
+    let oldContent = '';
+    try { oldContent = ctx.readFile(fpath); } catch (_) { oldContent = ''; }
+
+    let lineage = null;
+    try {
+      const st = reviewSchema.parseStateFields(ctx.readFile(ctx.statePath));
+      if (st && /^[0-9a-f]{64}$/i.test(String(st.epoch_lineage_id || ''))) {
+        lineage = String(st.epoch_lineage_id).toLowerCase();
+      }
+    } catch (_) { lineage = null; }
+
+    // Chain dormant (no epoch identity to bind a genesis to): write through untouched.
+    if (!lineage) return rawWriteFile(fpath, content);
+
+    const oldMap = reviewSchema.ledgerChainStatusMap(oldContent);
+    const newMap = reviewSchema.ledgerChainStatusMap(content);
+    const oldDigest = reviewSchema.ledgerChainMapDigest(oldMap);
+    const newDigest = reviewSchema.ledgerChainMapDigest(newMap);
+    const oldHead = reviewSchema.ledgerChainHeadFromContent(oldContent);
+
+    if (oldDigest === newDigest) {
+      // No ledger transition — keep the head consistent with the committed head (never
+      // let a stale in-memory head from a prior write overwrite the durable one).
+      const out = oldHead
+        ? reviewSchema.stampLedgerChainHead(content, oldHead)
+        : reviewSchema.stripLedgerChainHead(content);
+      return rawWriteFile(fpath, out);
+    }
+
+    let oldJournal = null;
+    try { oldJournal = JSON.parse(ctx.readFile(journalPath)); } catch (_) { oldJournal = null; }
+
+    const planHash = planHashFromContent(oldContent) || planHashFromContent(content) || '';
+    const ext = reviewSchema.extendLedgerChain({
+      oldHead: oldHead, oldJournal: oldJournal, epochLineageId: lineage, planHash: planHash,
+      subcommand: ctx.subcommand,
+      oldLedgerDigest: oldDigest, newLedgerDigest: newDigest,
+      deltas: reviewSchema.ledgerChainDeltas(oldMap, newMap),
+      oldExpansionDigest: reviewSchema.ledgerChainExpansionDigest(oldContent),
+      newExpansionDigest: reviewSchema.ledgerChainExpansionDigest(content),
+    });
+    if (!ext.ok) {
+      const err = new Error('ledger_chain_tampered:' + ext.reason);
+      err.ledgerChainTamper = ext.reason;
+      throw err;
+    }
+    const newJournal = { schema_version: reviewSchema.LEDGER_CHAIN_SCHEMA_VERSION,
+      epoch_lineage_id: lineage, entries: ext.entries };
+    // Journal-ahead: durable append (atomic tmp+fsync+rename) BEFORE the plan write.
+    rawWriteFile(journalPath, JSON.stringify(newJournal, null, 2) + '\n');
+    return rawWriteFile(fpath, reviewSchema.stampLedgerChainHead(content, ext.head));
+  };
+}
+
+// #777 — the in-process ledger-chain verification for mutationGuardPrologue. The Layer 1
+// plan_hash fast path SKIPS --resume-check on a match, and the ledger is outside
+// plan_hash BY CONSTRUCTION, so every ledger tamper leaves the hash matching — this check
+// must therefore run in-process REGARDLESS of that match, or it would be dead in
+// production. Migration: no head => PASS. Head present with no readable epoch identity or
+// journal => REFUSE (else deleting the journal is a universal bypass).
+function verifyLedgerChainForPlan(planPath, readFile) {
+  let planContent;
+  try { planContent = readFile(planPath); } catch (_) { return { ok: true }; }
+  const head = reviewSchema.ledgerChainHeadFromContent(planContent);
+  if (!head) return { ok: true };
+  const dir = path.dirname(planPath);
+  let lineage = null;
+  try {
+    const st = reviewSchema.parseStateFields(readFile(path.join(dir, 'workflow-state.md')));
+    if (st && /^[0-9a-f]{64}$/i.test(String(st.epoch_lineage_id || ''))) {
+      lineage = String(st.epoch_lineage_id).toLowerCase();
+    }
+  } catch (_) { lineage = null; }
+  if (!lineage) return { ok: false, reason: 'ledger_chain_journal_missing' };
+  let journal = null;
+  try { journal = JSON.parse(readFile(path.join(dir, '.cache', reviewSchema.LEDGER_CHAIN_JOURNAL_NAME))); }
+  catch (_) { journal = null; }
+  const res = reviewSchema.verifyLedgerChain({
+    head: head, journal: journal, epochLineageId: lineage,
+    currentLedgerDigest: reviewSchema.ledgerChainMapDigest(planContent),
+  });
+  return res.ok ? { ok: true } : { ok: false, reason: res.reason };
+}
+
 function mutationGuardPrologue(opts, cfg) {
   const { planPath, shell, readFile, cacheExists } = opts;
   cfg = cfg || {};
@@ -9670,6 +9779,16 @@ function mutationGuardPrologue(opts, cfg) {
       const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
       if (integrity.exitCode !== 0 || integrity.ok !== true) {
         return refuse('plan_integrity_failed', { detail: integrity.reason || null });
+      }
+    }
+    // #777 — ledger tamper-evidence. The ## Node Ledger is OUTSIDE plan_hash, so a ledger
+    // tamper leaves the fast-path hash matching (the skip above is always taken) and even a
+    // clean --resume-check passes it. Verify the back-linked chain IN-PROCESS here, always,
+    // regardless of the hash verdict — this is the only slot that is live in production.
+    if (typeof readFile === 'function') {
+      const chain = verifyLedgerChainForPlan(planPath, readFile);
+      if (!chain.ok) {
+        return refuse(chain.reason, { detail: 'ledger tamper-evidence chain broke — the ## Node Ledger was edited out of band' });
       }
     }
   }
@@ -13817,7 +13936,11 @@ function main() {
   const shell    = (scriptPath, scriptArgs) => shellNode(scriptPath, scriptArgs);
   const readFile = (fpath) => fs.readFileSync(fpath, 'utf8');
   // #353: route every durable-state write (plan/ledger) through the crash-safe atomic replace.
-  const writeFile = (fpath, content) => { writeFileAtomicReplace(fpath, content); };
+  const rawWriteFile = (fpath, content) => { writeFileAtomicReplace(fpath, content); };
+  // #777: the SINGLE ledger-tamper-evidence choke point — every durable plan write flows
+  // through this wrapper (non-plan paths pass straight through). Journal-ahead + head-stamp
+  // on a real ledger transition; dormant (byte-identical) when the project has no epoch identity.
+  const writeFile = makeLedgerChainWriteFile(rawWriteFile, { planPath, statePath, cacheDir, readFile, subcommand });
   const cacheExists = (fpath) => fs.existsSync(fpath);
 
   // #699: fence before worktree mirroring, any scheduler-lock creation, stdin
@@ -14292,6 +14415,20 @@ function main() {
     process.exitCode = 1;
   }
 
+  } catch (err) {
+    // #777 — a ledger-chain transition that could not extend from the committed head (an
+    // out-of-band ## Node Ledger edit reaching an integrity-less mutator like close-and-open-
+    // next) throws a tagged tamper error at the write seam rather than laundering it into a
+    // fresh entry. Convert ONLY that tag to a typed refuse; re-throw everything else so no
+    // other error's behavior changes.
+    if (err && err.ledgerChainTamper) {
+      const out = decorateOperatorHint(refuse(err.ledgerChainTamper, {
+        detail: 'ledger tamper-evidence chain broke — the ## Node Ledger was edited out of band' }));
+      process.stdout.write(JSON.stringify(out) + '\n');
+      process.exitCode = 1;
+    } else {
+      throw err;
+    }
   } finally {
     // #585: always release the scheduler lock — on success, on a refuse, or on a thrown error (the
     // module-level exit hook is the belt-and-suspenders backstop for a crash that skips this finally).
@@ -14330,6 +14467,9 @@ module.exports = {
   buildContextPacket,
   runOrient,
   runMirrorProject,
+  // #777 — ledger tamper-evidence chain: the write choke-point wrapper + in-process verifier.
+  makeLedgerChainWriteFile,
+  verifyLedgerChainForPlan,
   runOpenNext,
   runOpenReady,
   runCloseNode,

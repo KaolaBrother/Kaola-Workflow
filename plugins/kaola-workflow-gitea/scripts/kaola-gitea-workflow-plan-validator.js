@@ -4612,6 +4612,26 @@ function revalidateForResume(content, opts) {
   }
   if (hasCycle(nodes)) return refuse('cycle', 'cycle detected');
   if (!uniqueSink(nodes)) return refuse('no_unique_sink', 'no unique sink');
+  // #777 — ledger tamper-evidence (content-pure via injected readCache seam, the pattern
+  // verifyGateExecution uses). The ## Node Ledger is outside plan_hash, so a resume that
+  // passes the plan_hash checks above proves nothing about the execution record. Migration:
+  // no head => not in force => PASS. Head present + journal missing/unparseable, or a ledger
+  // that the chain head cannot derive => REFUSE.
+  // Content-pure: verify the chain ONLY when the caller injects the journal seam (the
+  // `--resume-check` CLI does; the freeze fold strips the head so never reaches here). An
+  // in-process caller that does not supply readCache defers verification to the seam-bearing
+  // CLI + the in-process mutationGuardPrologue (the primary enforcement point), exactly like
+  // verifyGateExecution defers cache-dependent checks when its readCache seam is absent.
+  const chainHead = typeof opts.readCache === 'function' ? schema.ledgerChainHeadFromContent(content) : null;
+  if (chainHead) {
+    let journal = null;
+    try { journal = JSON.parse(opts.readCache(schema.LEDGER_CHAIN_JOURNAL_NAME)); } catch (_) { journal = null; }
+    const chain = schema.verifyLedgerChain({
+      head: chainHead, journal: journal, epochLineageId: opts.epochLineageId || null,
+      currentLedgerDigest: schema.ledgerChainMapDigest(content),
+    });
+    if (!chain.ok) return refuse(chain.reason, chain.reason);
+  }
   return { ok: true, result: 'pass', reasonCode: null, planHash: computed,
     plan_schema_version: contract.plan_schema_version, contract_version: contract.contract_version,
     // #758: emitted ONLY for a spine plan, so every legacy emission stays byte-identical.
@@ -4657,6 +4677,13 @@ function seedRequiredAgentCompliance(content, parsedNodes) {
 // #340: opts thread the repo root so Check 1's anchor-gated agent-registration surface
 // resolves against the validated root (not process.cwd()); backward-compatible (opts optional).
 function freezePlan(content, opts) {
+  // #777 — freeze is the chain-RESET point. A mid-run --freeze --repair legitimately
+  // rewrites ## Node Ledger bytes (normalizeLedgerHeader adds no rows; reconcileLedger's
+  // absent->pending DOES), which would stale a live head. Strip any head so the next
+  // mutating transition re-adopts the authoritative post-freeze ledger as a fresh genesis
+  // rather than wedging. Hash-neutral (the head is outside computePlanHash by construction);
+  // a no-op on the common initial freeze (no head yet).
+  content = schema.stripLedgerChainHead(content);
   const contract = resolvePlanContract(content, { forFreeze: true });
   if (!contract.ok) {
     return { result: 'refuse', reason: contract.reason, errors: [contract.detail || contract.reason],
@@ -5112,7 +5139,17 @@ function main() {
   }
 
   if (args.includes('--resume-check')) {
-    const r = revalidateForResume(content, { root });
+    // #777 — supply the ledger-chain seams (project .cache journal + epoch identity) so the
+    // content-pure revalidateForResume can verify the tamper-evidence chain. Fail-soft reads:
+    // a headless plan never touches them (revalidateForResume returns before the chain check).
+    const projDir = path.dirname(path.resolve(planPath));
+    const readCache = name => { try { return fs.readFileSync(path.join(projDir, '.cache', name), 'utf8'); } catch (_) { return null; } };
+    let epochLineageId = null;
+    try {
+      const st = schema.parseStateFields(fs.readFileSync(path.join(projDir, 'workflow-state.md'), 'utf8'));
+      if (st && /^[0-9a-f]{64}$/i.test(String(st.epoch_lineage_id || ''))) epochLineageId = String(st.epoch_lineage_id).toLowerCase();
+    } catch (_) { epochLineageId = null; }
+    const r = revalidateForResume(content, { root, readCache, epochLineageId });
     process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'resume ok' : 'typed refusal: ' + r.reason)) + '\n');
     if (!r.ok) process.exitCode = 1;
     return;

@@ -484,6 +484,236 @@ function sha256Canonical(value) {
   return sha256Hex(Buffer.from(canonicalJson(value), 'utf8'));
 }
 
+// ===========================================================================
+// #777 — ledger tamper-evidence hash chain (per durable WRITE, back-linked).
+//
+// `plan_hash` covers the immutable half of workflow-plan.md (## Meta + ## Nodes);
+// the ## Node Ledger — the execution record — mutates on every legitimate
+// transition and is deliberately outside it. This append-only back-linked chain
+// reuses verifyConsentLedger's idiom (do NOT invent a second) to give the mutable
+// half tamper-EVIDENCE: an out-of-band edit to a ledger status produces a state the
+// chain cannot derive.
+//
+// Granularity is per durable WRITE, not per row: one plan write flips ANY number of
+// ledger rows (four paths flip MANY in one atomic write), so a chain entry carries a
+// `deltas` array. The head is an HTML-comment sibling of <!-- plan_hash --> after the
+// first H1 — OUTSIDE every ## section (so it is outside every sectionBody the hash
+// reads and never moves plan_hash), riding the SAME atomic plan write as the row it
+// describes. Scope is over parseLedger's id->status map, NEVER section bytes
+// (--freeze --repair's normalizeLedgerHeader/reconcileLedger legitimately rewrite
+// bytes). Migration is tolerate-and-adopt keyed on head ABSENCE: no head => not in
+// force => PASS; the first mutating transition writes a genesis snapshot (not forged
+// history); head present + journal missing/unparseable => REFUSE.
+// ===========================================================================
+
+const LEDGER_CHAIN_JOURNAL_NAME = 'ledger-chain.json';
+const LEDGER_CHAIN_SCHEMA_VERSION = 1;
+const LEDGER_CHAIN_HEAD_RE = /<!--[ \t]*ledger_chain_head:[ \t]*([0-9a-f]{64})[ \t]*-->/i;
+
+// The canonical id->status map for the chain. Byte-identical semantics to
+// adaptive-node.readLedgerStatuses / validator.parseLedger (header-driven, fence-aware
+// via locateSection), so post_ledger_digest is stable across write-time (adaptive-node)
+// and verify-time (adaptive-node fast path + validator resume).
+function ledgerChainStatusMap(content) {
+  const out = {};
+  const { start, next } = locateSection(String(content == null ? '' : content), LEDGER_HEADING);
+  if (start < 0) return out;
+  const text = String(content == null ? '' : content);
+  const block = next >= 0 ? text.slice(start, next) : text.slice(start);
+  const rows = block.split('\n').filter(l => l.trim().startsWith('|'));
+  if (rows.length < 2) return out;
+  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const idIdx = header.indexOf('id');
+  const stIdx = header.indexOf('status');
+  if (idIdx < 0 || stIdx < 0) return out;
+  for (let i = 1; i < rows.length; i++) {
+    const cells = rows[i].split('|').slice(1, -1).map(c => c.trim());
+    const id = cells[idIdx] || '';
+    if (id && !/^[-:\s]+$/.test(id)) out[id] = (cells[stIdx] || '').toLowerCase();
+  }
+  return out;
+}
+
+// Digest over the id->status map — reuses ledgerDigest's scheme (sorted {id,status}
+// rows -> sha256Canonical) so post_ledger_digest and ledgerDigest never diverge. Accepts
+// either raw plan content or an already-parsed map.
+function ledgerChainMapDigest(mapOrContent) {
+  const map = (typeof mapOrContent === 'string') ? ledgerChainStatusMap(mapOrContent) : (mapOrContent || {});
+  const rows = Object.keys(map).sort().map(id => ({ id, status: map[id] }));
+  return sha256Canonical(rows);
+}
+
+// Digest over the ## Expansion Records section — RECORDED in every entry (bound into
+// entry_digest) but never re-derived at verify time, so raw-section bytes are a fine,
+// deterministic-per-write source. Empty section digests to the empty-string constant.
+function ledgerChainExpansionDigest(content) {
+  const text = String(content == null ? '' : content);
+  const { start, next } = locateSection(text, 'Expansion Records');
+  if (start < 0) return sha256Canonical('');
+  return sha256Canonical(next >= 0 ? text.slice(start, next) : text.slice(start));
+}
+
+// The per-write delta set: symmetric diff of two id->status maps. An added row is
+// {from:null,to:'pending'} (appendLedgerRows/reconcile absent->pending); a removed row
+// {from:...,to:null}. Sorted by id for determinism.
+function ledgerChainDeltas(oldMap, newMap) {
+  const a = oldMap || {}, b = newMap || {};
+  const ids = new Set(Object.keys(a).concat(Object.keys(b)));
+  const out = [];
+  for (const id of Array.from(ids).sort()) {
+    const from = Object.prototype.hasOwnProperty.call(a, id) ? a[id] : null;
+    const to = Object.prototype.hasOwnProperty.call(b, id) ? b[id] : null;
+    if (from !== to) out.push({ id: id, from: from, to: to });
+  }
+  return out;
+}
+
+function ledgerChainHeadFromContent(content) {
+  const m = String(content == null ? '' : content).match(LEDGER_CHAIN_HEAD_RE);
+  return m ? m[1].toLowerCase() : null;
+}
+
+// Insert or replace the head marker as a sibling of <!-- plan_hash --> (after the first
+// H1), OUTSIDE every ## section. Idempotent (replaces an existing marker in place).
+function stampLedgerChainHead(content, head) {
+  const marker = '<!-- ledger_chain_head: ' + head + ' -->';
+  const text = String(content == null ? '' : content);
+  if (LEDGER_CHAIN_HEAD_RE.test(text)) return text.replace(LEDGER_CHAIN_HEAD_RE, marker);
+  const ph = text.match(/<!--[ \t]*plan_hash:[ \t]*[0-9a-f]{64}[ \t]*-->/i);
+  if (ph) {
+    const idx = text.indexOf(ph[0]) + ph[0].length;
+    return text.slice(0, idx) + '\n' + marker + text.slice(idx);
+  }
+  const lines = text.split('\n');
+  const h1 = lines.findIndex(l => /^#\s+/.test(l));
+  if (h1 >= 0) { lines.splice(h1 + 1, 0, '', marker); return lines.join('\n'); }
+  return marker + '\n' + text;
+}
+
+// Remove the head marker (and the single newline it introduced) — the chain-RESET point.
+// --freeze (initial + mid-run --repair) strips it so the next transition re-adopts the
+// authoritative post-freeze ledger as a fresh genesis rather than staling the head.
+function stripLedgerChainHead(content) {
+  return String(content == null ? '' : content)
+    .replace(/\n?[ \t]*<!--[ \t]*ledger_chain_head:[ \t]*[0-9a-f]{64}[ \t]*-->[ \t]*/i, '');
+}
+
+// Build one back-linked entry: entry_digest = sha256Canonical(entry without entry_digest),
+// exactly the verifyConsentLedger idiom.
+function buildLedgerChainEntry(fields) {
+  const base = {
+    schema_version: LEDGER_CHAIN_SCHEMA_VERSION,
+    epoch_lineage_id: String(fields.epoch_lineage_id),
+    plan_hash: String(fields.plan_hash == null ? '' : fields.plan_hash),
+    subcommand: String(fields.subcommand == null ? '' : fields.subcommand),
+    genesis: !!fields.genesis,
+    deltas: (fields.deltas || []).map(d => ({
+      id: String(d.id),
+      from: d.from == null ? null : String(d.from),
+      to: d.to == null ? null : String(d.to),
+    })),
+    post_ledger_digest: String(fields.post_ledger_digest),
+    expansion_records_digest: String(fields.expansion_records_digest),
+    previous_entry_digest: fields.previous_entry_digest == null ? null : String(fields.previous_entry_digest),
+  };
+  return Object.assign({}, base, { entry_digest: sha256Canonical(base) });
+}
+
+// Pure transition planner (does NO I/O): given the plan's OLD head, the prior journal,
+// and the transition facts, return the NEW entries array + head — genesis-adopting when
+// no head is in force, else truncating any crash roll-forward residue back to the
+// committed head before extending. Refuses (never launders) when the on-disk ledger does
+// not match the committed head, or the head is absent from the journal.
+function extendLedgerChain(input) {
+  const entries = [];
+  let prev = null;
+  if (input.oldHead) {
+    if (!input.oldJournal || !Array.isArray(input.oldJournal.entries)) {
+      return { ok: false, reason: 'ledger_chain_journal_missing' };
+    }
+    const idx = input.oldJournal.entries.findIndex(e => e && e.entry_digest === input.oldHead);
+    if (idx < 0) return { ok: false, reason: 'ledger_chain_head_not_in_journal' };
+    const headEntry = input.oldJournal.entries[idx];
+    // Laundering guard: only extend from a state consistent with the committed head.
+    if (headEntry.post_ledger_digest !== input.oldLedgerDigest) {
+      return { ok: false, reason: 'ledger_chain_ledger_mismatch' };
+    }
+    for (let i = 0; i <= idx; i++) entries.push(input.oldJournal.entries[i]);
+    prev = input.oldHead;
+  } else {
+    const genesis = buildLedgerChainEntry({
+      epoch_lineage_id: input.epochLineageId, plan_hash: input.planHash,
+      subcommand: 'genesis', genesis: true, deltas: [],
+      post_ledger_digest: input.oldLedgerDigest,
+      expansion_records_digest: input.oldExpansionDigest,
+      previous_entry_digest: null,
+    });
+    entries.push(genesis);
+    prev = genesis.entry_digest;
+  }
+  const transition = buildLedgerChainEntry({
+    epoch_lineage_id: input.epochLineageId, plan_hash: input.planHash,
+    subcommand: input.subcommand, genesis: false, deltas: input.deltas,
+    post_ledger_digest: input.newLedgerDigest,
+    expansion_records_digest: input.newExpansionDigest,
+    previous_entry_digest: prev,
+  });
+  entries.push(transition);
+  return { ok: true, entries: entries, head: transition.entry_digest };
+}
+
+// Verify a plan's ledger chain (pure). Mirrors verifyConsentLedger: walk from genesis,
+// recompute each entry_digest, check back-links, ANCHOR on the plan's committed head
+// (ignoring roll-forward residue after it), and confirm the head entry's
+// post_ledger_digest equals the current ledger's map digest.
+//   no head              => { ok:true, in_force:false }              (migration: PASS)
+//   head + no journal    => refuse ledger_chain_journal_missing
+//   head + broken chain  => refuse ledger_chain_{broken_link,entry_digest_mismatch,invalid}
+//   head not in journal  => refuse ledger_chain_head_not_in_journal
+//   ledger != head state => refuse ledger_chain_ledger_mismatch      (the tamper case)
+function verifyLedgerChain(input) {
+  const head = input.head;
+  if (!head) return { ok: true, in_force: false };
+  const journal = input.journal;
+  const epochLineageId = input.epochLineageId;
+  if (!journal || journal.schema_version !== LEDGER_CHAIN_SCHEMA_VERSION
+      || !Array.isArray(journal.entries) || journal.epoch_lineage_id !== epochLineageId) {
+    return { ok: false, in_force: true, reason: 'ledger_chain_journal_missing' };
+  }
+  let previous = null;
+  for (let i = 0; i < journal.entries.length; i++) {
+    const entry = journal.entries[i];
+    if (!entry || entry.schema_version !== LEDGER_CHAIN_SCHEMA_VERSION
+        || entry.epoch_lineage_id !== epochLineageId
+        || typeof entry.plan_hash !== 'string'
+        || typeof entry.subcommand !== 'string'
+        || typeof entry.genesis !== 'boolean'
+        || !Array.isArray(entry.deltas)
+        || typeof entry.post_ledger_digest !== 'string'
+        || typeof entry.expansion_records_digest !== 'string'
+        || (entry.previous_entry_digest !== null && typeof entry.previous_entry_digest !== 'string')
+        || typeof entry.entry_digest !== 'string') {
+      return { ok: false, in_force: true, reason: 'ledger_chain_invalid' };
+    }
+    if (entry.previous_entry_digest !== previous) {
+      return { ok: false, in_force: true, reason: 'ledger_chain_broken_link' };
+    }
+    const copy = Object.assign({}, entry);
+    delete copy.entry_digest;
+    if (sha256Canonical(copy) !== entry.entry_digest) {
+      return { ok: false, in_force: true, reason: 'ledger_chain_entry_digest_mismatch' };
+    }
+    previous = entry.entry_digest;
+    if (entry.entry_digest === head) {
+      if (entry.post_ledger_digest !== input.currentLedgerDigest) {
+        return { ok: false, in_force: true, reason: 'ledger_chain_ledger_mismatch' };
+      }
+      return { ok: true, in_force: true, head: head };
+    }
+  }
+  return { ok: false, in_force: true, reason: 'ledger_chain_head_not_in_journal' };
+}
+
 function nonEmptyString(value, reason) {
   const text = String(value == null ? '' : value);
   if (!text || /[\r\n\0]/.test(text)) throw new Error(reason);
@@ -3843,6 +4073,20 @@ module.exports = {
   canonicalJson,
   sha256Hex,
   sha256Canonical,
+  // #777 — ledger tamper-evidence hash chain
+  LEDGER_CHAIN_JOURNAL_NAME,
+  LEDGER_CHAIN_SCHEMA_VERSION,
+  LEDGER_CHAIN_HEAD_RE,
+  ledgerChainStatusMap,
+  ledgerChainMapDigest,
+  ledgerChainExpansionDigest,
+  ledgerChainDeltas,
+  ledgerChainHeadFromContent,
+  stampLedgerChainHead,
+  stripLedgerChainHead,
+  buildLedgerChainEntry,
+  extendLedgerChain,
+  verifyLedgerChain,
   normalizeIssueNumbers,
   buildClaimIdentity,
   buildClaimRootBase,
