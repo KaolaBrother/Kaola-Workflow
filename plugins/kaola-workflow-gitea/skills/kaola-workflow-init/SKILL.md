@@ -151,25 +151,60 @@ Writes `~/.codex/agents/kaola-workflow/*.toml` + the managed block in `~/.codex/
 Run an agent-guided Codex config audit before claiming role dispatch readiness:
 
 ```bash
-codex features list | rg 'multi_agent|multi_agent_v2' || true
+codex features list | rg 'multi_agent_v2' || true
 node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project-root "$PWD" --json
 ```
 
-Read the doctor JSON's additive per-scope `dispatch_posture` field alongside the
-existing checks — it is the effort-gated runtime dispatch MODE (version-guarded on
-codex-tui 0.142.5; may change in a future Codex release), distinct from feature
-enablement: `none` (spawn tools not exposed), `explicitRequestOnly` (tools exposed,
-but the runtime model-refuses a spawn unless the session explicitly asks), or
-`proactive` (`model_reasoning_effort = "ultra"` — the runtime accepts a spawn with
-no per-session ask). Classify the result:
+Read the doctor JSON's `codex_version` field first — it gates everything else.
+Codex >=0.145.0 unified multi-agent settings under a top-level `[agents]` table
+and stabilized MultiAgentV2 as the only dispatch path; an unsupported version
+returns a typed `codex_version_unsupported` refusal (repair: upgrade Codex)
+before any profile/config check runs. Once the version floor is met, read the
+per-scope `dispatch_posture` field alongside the existing checks — it is the
+effort-gated runtime dispatch MODE, distinct from enablement: `none` (spawn
+tools not exposed — `agents.enabled` absent-or-false), `explicitRequestOnly`
+(tools exposed, but the runtime model-refuses a spawn unless the session
+explicitly asks), or `proactive` (`model_reasoning_effort = "ultra"` — the
+runtime accepts a spawn with no per-session ask). Classify the result:
 
-- `ok`: `multi_agent` and `multi_agent_v2` are enabled, `codex_v2_role_transport_ready` is `true` (`codex_v2_tool_namespace: "agents"`, visible role metadata, direct-only transport), generated role profiles are fresh, agent limits are absent or sufficient, AND `dispatch_posture` reads `proactive`.
-- `explicit_request_only`: features are enabled, `codex_v2_role_transport_ready` is `true`, and profiles are fresh, but `dispatch_posture` reads `explicitRequestOnly` — report the doctor's `dispatch_posture_warning` remediation verbatim (leads with an explicit in-session ask for sub-agents/delegation/parallel work — always available and always documented — and only then, if your Codex exposes an `ultra` reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5; check the `/model` picker), `model_reasoning_effort = "ultra"` in `~/.codex/config.toml` or per-session `codex -c model_reasoning_effort=ultra`). NEVER report this state as `ok` — features enabled alone is not dispatch-ready.
-- `warning_only`: only `[notice].suppress_unstable_features_warning = true` differs; this is optional warning posture, not dispatch proof.
-- `needs_update`: V2/subagent config is missing or too constrained for Kaola's intended behavior, `dispatch_posture` reads `none`, or `codex_v2_role_transport_ready` is not `true`. Preserve either typed refusal (`codex_v2_encrypted_transport_unsafe` or `codex_v2_role_transport_unsafe`) and show its repair verbatim.
-- `blocked`: config is malformed, policy-managed, or conflicts with a user/admin constraint.
+- `ok`: `multi_agent_v2_enabled` reads `true` (`agents.enabled = true` in the
+  top-level `[agents]` table), generated role profiles are fresh, agent limits
+  are absent or sufficient, AND `dispatch_posture` reads `proactive`.
+- `explicit_request_only`: `multi_agent_v2_enabled` reads `true` and profiles
+  are fresh, but `dispatch_posture` reads `explicitRequestOnly` — report the
+  doctor's `dispatch_posture_warning` remediation verbatim (leads with an
+  explicit in-session ask for sub-agents/delegation/parallel work — always
+  available and always documented — and only then, if your Codex exposes an
+  `ultra` reasoning effort for your model/plan (undocumented as of Codex
+  >=0.145.0; check the `/model` picker), `model_reasoning_effort = "ultra"` in
+  `~/.codex/config.toml` or per-session `codex -c model_reasoning_effort=ultra`).
+  NEVER report this state as `ok` — enablement alone is not dispatch-ready.
+- `warning_only`: only `[notice].suppress_unstable_features_warning = true`
+  differs; this is optional warning posture, not dispatch proof.
+- `needs_update`: `agents.enabled` is missing or false, or `dispatch_posture`
+  reads `none`. Preserve the typed `codex_multi_agent_v2_required` refusal and
+  show its repair diff verbatim — Kaola does not write this flag for you.
+- `blocked`: config is malformed, policy-managed, or conflicts with a
+  user/admin constraint.
 
-The supported role-aware V2 form is `multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true, ... }`, or the equivalent `[features.multi_agent_v2]` table. Codex 0.144.1 reserves `collaboration.spawn_agent` for its hidden-metadata schema: visible `agent_type`/model fields under that name fail the first request with HTTP 400, while the hidden default removes Kaola role selection. Explicit `non_code_mode_only = false` remains unsafe because it exposes collaboration through the nested Code Mode adapter. Warning suppression is independent: never treat `[notice].suppress_unstable_features_warning = true` as evidence that V2 is enabled. Do not silently edit `~/.codex/config.toml`; if a required setting is missing, show the minimal diff and apply it only when the user asked the agent to configure this machine or explicitly consents. After a transport change, require a fresh Codex session. Do not claim effort-safe dispatch from config text alone; a tiered fallback still needs a child-session effort proof — for Codex, that proof is the doctor's `dispatch_posture` field, not the feature flags alone.
+The supported form is a top-level `[agents]` table — `[agents]\nenabled = true`
+— with `agents.max_concurrent_threads_per_session` (canonical; its
+`agents.max_threads` alias resolves to the same value) governing sub-agent
+concurrency: the cap is inclusive of the root session, so sub-agent width is
+the configured cap minus one. A legacy `[features.multi_agent_v2]` table, a
+top-level `[features] multi_agent` flag, or the retired `tool_namespace` /
+`hide_spawn_agent_metadata` / `non_code_mode_only` sub-fields have no effect
+under Codex >=0.145.0 and are not read by this gate. Warning suppression is
+independent: never treat `[notice].suppress_unstable_features_warning = true`
+as evidence that MultiAgentV2 is enabled. Kaola does not silently edit
+`~/.codex/config.toml`'s `[agents]` table on the user's behalf — enabling it is
+a hand edit the user makes from the `codex_multi_agent_v2_required` refusal's
+diff; Kaola also never writes or overrides `agents.default_subagent_model` /
+`agents.default_subagent_reasoning_effort` — Codex resolves the sub-agent's own
+model/reasoning effort independently. After a config change, require a fresh
+Codex session. Do not claim effort-safe dispatch from config text alone; a
+tiered fallback still needs a child-session effort proof — for Codex, that
+proof is the doctor's `dispatch_posture` field, not the feature flags alone.
 
 Trust the hooks once with `/hooks` in Codex. If a project-local `.codex/hooks.json`
 already exists, remove it (or run `uninstall.sh`) to avoid double-firing.

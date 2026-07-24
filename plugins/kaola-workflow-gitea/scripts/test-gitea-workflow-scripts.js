@@ -35,6 +35,18 @@ fs.writeFileSync(
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
+// #775: no sandbox running this suite has a `codex` binary on PATH, so every
+// kaola-workflow-codex-preflight.js invocation needs a version-floor attestation or it would
+// refuse codex_version_unsupported before any other check runs. Pinned globally (like HOME above)
+// so every spawnSync call in this file that merges ...process.env inherits it automatically.
+process.env.KAOLA_CODEX_VERSION = '0.145.0';
+
+// #775: seed [agents] enabled=true into the shared sandbox HOME too — owner decision D2 means
+// preflight would otherwise refuse codex_multi_agent_v2_required (exit 7) before reaching any of
+// the profile-freshness checks the tests below that reuse kwSandboxHome are actually about.
+fs.mkdirSync(path.join(kwSandboxHome, '.codex'), { recursive: true });
+fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[agents]\nenabled = true\n\n');
+
 const forge = require('./kaola-gitea-forge');
 const active = require('./kaola-gitea-workflow-active-folders');
 const classifier = require('./kaola-gitea-workflow-classifier');
@@ -178,6 +190,18 @@ function trustCodexProject(homeRoot, projectRoot) {
   const prefix = existing.length === 0 ? '' : existing.replace(/\s*$/, '\n\n');
   fs.writeFileSync(configPath,
     prefix + '[projects.' + JSON.stringify(path.resolve(projectRoot)) + ']\ntrust_level = "trusted"\n');
+}
+
+// #775: fixtures below expect preflight to pass at exit 0 for a "fresh, fully working" install —
+// that now additionally requires the top-level [agents] table's enabled=true (owner decision D2:
+// Kaola never writes this itself). PREPENDED, never appended: TOML forbids re-declaring a bare
+// [agents] header once an [agents.<role>] sub-table has already opened it, and the managed block
+// (when present, e.g. a project config after install-codex-agent-profiles.js) opens exactly that.
+function enableMultiAgentV2(homeRoot) {
+  const configPath = path.join(homeRoot, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  fs.writeFileSync(configPath, '[agents]\nenabled = true\n\n' + existing);
 }
 
 function runNode(args, cwd) {
@@ -2003,9 +2027,11 @@ function testInstallProfilesFeaturesTableHandling() {
     const existingHomeEnv = { HOME: tempHomeExisting, USERPROFILE: tempHomeExisting };
     const freshResult = runInstallProfiles(fresh, freshHomeEnv);
     const freshConfig = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
-    assert.ok(freshConfig.includes('[features]'), 'fresh install should include managed [features]');
-    assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
+    // #775: the installer no longer writes any [features]/multi_agent flag at all — owner decision
+    // D2 keeps [agents].enabled a user hand-edit reported (never written) by preflight.
+    assert.ok(!freshConfig.includes('[features]'), '#775: fresh install must NOT write any [features] table');
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
+    assert.ok(freshConfig.includes('[agents.code-explorer]'), 'fresh install should include managed [agents.*] entries');
     // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
     // this dir, so count TOML entries only (raw readdir includes the manifest dotfile).
     // #451: 14 base role profiles (the <role>-max effort variants are retired).
@@ -3356,6 +3382,7 @@ function testGiteaPreflight266() {
     assert.strictEqual(trustRequiredJson.project_trust, 'unknown',
       '#266 gt trust guard: expected unknown trust, got ' + trustRequiredJson.project_trust);
     trustCodexProject(emptyHomeGt, root);
+    enableMultiAgentV2(emptyHomeGt);
 
     // --- GREEN: fresh fixture must pass preflight ---
     const freshResult = spawnSync(process.execPath,
@@ -3370,64 +3397,64 @@ function testGiteaPreflight266() {
         // --- Case 1 RED: remove a role from the managed block → config_stale ---
         const configPath = path.join(root, '.codex', 'config.toml');
         const origConfig = fs.readFileSync(configPath, 'utf8');
-        const managedConfigWithoutFeatures = origConfig.replace('[features]\nmulti_agent = true\n\n', '');
-        function configWithFeatures(lines) {
-          return '[features]\n' + lines.join('\n') + '\n\n' + managedConfigWithoutFeatures;
+        // #775: config/agents.toml's managed block no longer opens with [features] — managedBlock()
+        // is the raw bundled template, so there is nothing to strip here. `configWithAgentsEnabled`
+        // PREPENDS a user-owned [agents] table (TOML forbids re-declaring [agents] once the managed
+        // block's [agents.<role>] sub-tables have already opened it).
+        function configWithAgentsEnabled(extraLines) {
+          return '[agents]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
         }
-        function configWithFeatureLine(line) {
-          return configWithFeatures(['multi_agent = true', line]);
-        }
-        const roleSafeV2Inline = 'multi_agent_v2 = { enabled = true, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }';
-        const roleSafeV2Table = '[features.multi_agent_v2]\nenabled = true\ntool_namespace = "agents"\nhide_spawn_agent_metadata = false\nnon_code_mode_only = true';
-        function assertDispatchModeForConfig(body, expectedMode, label, checkDoctor) {
+        // #775: dispatch mode is binary now — the whole 0.142/0.144 transport-mode grammar
+        // (tool_namespace / hide_spawn_agent_metadata / non_code_mode_only, the dotted/quoted/
+        // array-of-table [features.multi_agent_v2] parsing edge cases, the codex_v2_*_transport_unsafe
+        // refusals) is retired along with the [features.multi_agent_v2] table shape; the ONLY
+        // question left is whether the top-level [agents] table's `enabled` is true (v2-task-name,
+        // exit 0) or not (codex_multi_agent_v2_required, exit 7 — there is no v1 fallback).
+        function assertDispatchModeForConfig(body, expectedEnabled, label, checkDoctor) {
           fs.writeFileSync(configPath, body);
           const result = spawnSync(process.execPath,
             [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
             { encoding: 'utf8', env: hEnvGt });
+          if (!expectedEnabled) {
+            assert.strictEqual(result.status, 7,
+              label + ': v2-disabled config must refuse with exit 7, got ' + result.status + '\n' + result.stdout);
+            const json = JSON.parse(result.stdout);
+            assert.strictEqual(json.status, 'codex_multi_agent_v2_required', label + ': status');
+            assert.strictEqual(json.multi_agent_v2_enabled, false, label + ': multi_agent_v2_enabled');
+            assert.strictEqual(json.dispatch_mode, null, label + ': dispatch_mode must be null when v2 is disabled (no v1 fallback)');
+            return;
+          }
           assert.strictEqual(result.status, 0,
-            label + ': preflight must pass, got ' + result.status + '\n' + result.stdout);
+            label + ': v2-enabled config must pass preflight, got ' + result.status + '\n' + result.stdout);
           const json = JSON.parse(result.stdout);
-          assert.strictEqual(json.dispatch_mode, expectedMode,
-            label + ': dispatch_mode');
-          assert.strictEqual(json.multi_agent_v2_enabled, expectedMode === 'v2-task-name',
-            label + ': multi_agent_v2_enabled');
+          assert.strictEqual(json.dispatch_mode, 'v2-task-name', label + ': dispatch_mode');
+          assert.strictEqual(json.multi_agent_v2_enabled, true, label + ': multi_agent_v2_enabled');
           if (checkDoctor) {
             const doctorResult = spawnSync(process.execPath,
               [giteaPreflightScript, '--doctor', '--project-root', root, '--json'],
               { encoding: 'utf8', env: hEnvGt });
             const doctorJson = JSON.parse(doctorResult.stdout);
             const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
-            assert.ok(projectScope && projectScope.dispatch_mode === expectedMode,
-              label + ': doctor project scope expected ' + expectedMode + ', got ' + JSON.stringify(projectScope));
+            assert.ok(projectScope && projectScope.dispatch_mode === 'v2-task-name',
+              label + ': doctor project scope expected v2-task-name, got ' + JSON.stringify(projectScope));
           }
         }
-        assertDispatchModeForConfig(origConfig, 'v1-thread-id', '#584 gt no multi_agent_v2 key', false);
-        assertDispatchModeForConfig(configWithFeatureLine(roleSafeV2Inline), 'v2-task-name', '#650 gt role-safe inline', true);
-        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 gt boolean false', false);
-        assertDispatchModeForConfig(configWithFeatureLine(roleSafeV2Inline), 'v2-task-name', '#650 gt inline role transport ready', true);
-        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 gt inline object enabled false', false);
-        assertDispatchModeForConfig(configWithFeatureLine(roleSafeV2Table), 'v2-task-name', '#650 gt table role transport ready', true);
-        assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 gt table enabled false', false);
-        assertDispatchModeForConfig(configWithFeatureLine('["features.multi_agent_v2"]\nenabled = true'), 'v1-thread-id', '#647 gt basic quoted literal dotted table must not enable v2', false);
-        assertDispatchModeForConfig(configWithFeatureLine('[\'features.multi_agent_v2\']\nenabled = true'), 'v1-thread-id', '#647 gt literal quoted dotted table must not enable v2', false);
-        assertDispatchModeForConfig(configWithFeatureLine('[[features.multi_agent_v2]]\nenabled = true'), 'v1-thread-id', '#647 R2 gt array-of-table dotted v2 table must not enable v2', false);
-        assertDispatchModeForConfig(configWithFeatureLine('[[features."multi_agent_v2"]]\nenabled = true'), 'v1-thread-id', '#647 R2 gt quoted-segment array-of-table v2 table must not enable v2', false);
-        assertDispatchModeForConfig(
-          configWithFeatureLine(roleSafeV2Table + '\n\n[projects."/tmp/kaola-project"]\nenabled = true\n\n[plugins."sample@test"]\nenabled = true'),
-          'v2-task-name', '#647 gt quoted project/plugin tables after dotted v2 table reset parser state', true);
-        assertDispatchModeForConfig(
-          configWithFeatureLine(roleSafeV2Table + '\n\n[[plugins.\'sample@test\'.mcp_servers]]\nenabled = true'),
-          'v2-task-name', '#647 gt array-of-table literal quoted segment after dotted v2 table resets parser state', false);
-        assertDispatchModeForConfig(
-          configWithFeatureLine(roleSafeV2Table + '\n\n[[features.multi_agent_v2]]\nenabled = false'),
-          'v2-task-name', '#647 R2 gt exact array-of-table after dotted v2 table resets parser state', false);
-        assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 gt warning suppression only', false);
-        assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 gt top-level key ignored', false);
-        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 gt inline object missing enabled fails closed', false);
+        // NOTE: this fixture's HOME layer already has [agents].enabled = true seeded (so the
+        // "GREEN: fresh fixture must pass preflight" check above passes) — a project layer that
+        // does NOT set `enabled` inherits HOME's true; only an EXPLICIT project-layer
+        // `enabled = false` can override it back off.
+        assertDispatchModeForConfig(origConfig, true, '#775 gt no project-layer [agents] table -> inherits enabled=true from HOME', false);
+        assertDispatchModeForConfig('[agents]\nenabled = false\n\n' + origConfig, false, '#775 gt project layer explicitly overrides enabled=false', false);
+        assertDispatchModeForConfig(configWithAgentsEnabled(), true, '#775 gt [agents]\\nenabled = true', true);
+        assertDispatchModeForConfig('[agents]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
+          '#775 gt warning suppression alone must not enable v2', false);
+        assertDispatchModeForConfig('[agents]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
+          '#775 gt a retired top-level multi_agent_v2 key is not read (no more [features] grammar)', false);
 
         // #598 AC2 gt: effort-gated MultiAgentMode dispatch-POSTURE (distinct from dispatch_mode
         // above — posture reflects whether the runtime will REFUSE a spawn, not just whether the
-        // tools are exposed). ATTESTATION-STYLE / NON-FATAL: every case must still exit 0.
+        // tools are exposed). #775: 'none' now ALWAYS coincides with the codex_multi_agent_v2_required
+        // refusal, so every case here uses a v2-enabled config and must still exit 0.
         function assertDispatchPostureForConfig(body, expectedPosture, label) {
           fs.writeFileSync(configPath, body);
           const result = spawnSync(process.execPath,
@@ -3441,18 +3468,18 @@ function testGiteaPreflight266() {
           assert.strictEqual(json.dispatch_posture_warning === null, expectedPosture === 'proactive',
             label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
         }
-        assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gt base fixture (multi_agent=true, no effort)');
-        assertDispatchPostureForConfig(configWithFeatures(['multi_agent = false']), 'none',
-          '#598 gt multi_agent=false, no multi_agent_v2 -> none');
+        assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gt base fixture ([agents] enabled via HOME layer, no effort)');
+        // NOTE: a 'none' posture ALWAYS now coincides with codex_multi_agent_v2_required (exit 7) —
+        // there is no longer a passing-preflight case that reports posture 'none'.
         assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
-          '#598 gt effort=ultra with multi_agent=true -> proactive');
+          '#598 gt effort=ultra with [agents] enabled -> proactive');
         assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
           '#598 gt effort=xhigh (below ultra) stays explicitRequestOnly');
-        assertDispatchPostureForConfig(configWithFeatureLine(roleSafeV2Inline), 'explicitRequestOnly',
-          '#598 gt multi_agent_v2=true, no effort -> explicitRequestOnly');
+        assertDispatchPostureForConfig(configWithAgentsEnabled(), 'explicitRequestOnly',
+          '#775 gt [agents] enabled=true at the project layer too, no effort -> explicitRequestOnly');
         assertDispatchPostureForConfig(
-          configWithFeatureLine('model_reasoning_effort = "ultra"'),
-          'explicitRequestOnly', '#598 gt effort AFTER the first [table] is not a valid TOML root key -> ignored');
+          configWithAgentsEnabled('model_reasoning_effort = "ultra"'),
+          'explicitRequestOnly', '#775 gt effort INSIDE the [agents] table is not a valid TOML root key -> ignored');
 
         fs.writeFileSync(configPath, origConfig);
         const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
@@ -3558,28 +3585,31 @@ function testGiteaDispatchPosture598() {
     assert.strictEqual(fresh.status, 0, '#598 gt AC1: fresh install must exit 0: ' + fresh.stderr);
     assert.strictEqual(fresh.stdout.trim().split('\n').pop(), 'status: ok',
       '#598 gt AC1: existing #332 AC3 "stdout ends with status: ok" invariant must be preserved: ' + fresh.stdout);
-    assert.ok(/Kaola-Workflow Codex dispatch posture: explicitRequestOnly/.test(fresh.stdout),
-      '#598 gt AC1: fresh install (multi_agent=true, no effort) must report explicitRequestOnly: ' + fresh.stdout);
-    assert.ok(/model_reasoning_effort = "ultra"/.test(fresh.stdout),
-      '#598 gt AC1: non-proactive posture must print the exact remediation: ' + fresh.stdout);
-    assert.ok(/0\.142\.5/.test(fresh.stdout), '#598 gt AC1/AC2: report must carry the version-guard note: ' + fresh.stdout);
-    // #601: the remediation must LEAD with the always-available, always-documented in-session
-    // ask, before the effort-gated (undocumented/server-gated) ultra clause.
+    assert.ok(/Kaola-Workflow Codex multi_agent_v2: NOT enabled \(see codex_multi_agent_v2_required at preflight\)/.test(fresh.stdout),
+      '#775 gt AC1: a fresh install (no [agents] enabled=true) must report multi_agent_v2 not enabled: ' + fresh.stdout);
+    assert.ok(/Kaola-Workflow Codex dispatch posture: none/.test(fresh.stdout),
+      '#775 gt AC1: a fresh install with no [agents] enabled=true must report posture none: ' + fresh.stdout);
+    assert.ok(/0\.145\.0/.test(fresh.stdout), '#775 gt AC1/AC2: report must carry the version-guard note: ' + fresh.stdout);
+
+    const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
+    const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
+    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[agents]\nenabled = true\n\n' + beforeUltra);
+    const reinstalled = spawnSync(process.execPath, [installProfilesScript, postureProj],
+      { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
+    assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with [agents] enabled + effort=ultra must still exit 0: ' + reinstalled.stderr);
+    assert.ok(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
+      '#775 gt AC1: [agents] enabled=true + effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    assert.ok(/Kaola-Workflow Codex multi_agent_v2: enabled \(\[agents\] enabled = true\)/.test(reinstalled.stdout),
+      '#775 gt AC1: enabled config must report multi_agent_v2 enabled: ' + reinstalled.stdout);
+    assert.ok(!/refuse sub-agent spawns/.test(reinstalled.stdout),
+      '#598 gt AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
+    // #601: the remediation (still printed while posture is non-proactive, i.e. the FIRST fresh
+    // install above) must LEAD with the always-available, always-documented in-session ask,
+    // before the effort-gated (undocumented/server-gated) ultra clause.
     const askIdx601 = fresh.stdout.indexOf('explicitly ask for sub-agents');
     const ultraIdx601 = fresh.stdout.indexOf('model_reasoning_effort = "ultra"');
     assert.ok(askIdx601 !== -1 && ultraIdx601 !== -1 && askIdx601 < ultraIdx601,
       '#601 gt: remediation must lead with the in-session ask before the effort-gated ultra clause: ' + fresh.stdout);
-
-    const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
-    const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
-    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n' + beforeUltra);
-    const reinstalled = spawnSync(process.execPath, [installProfilesScript, postureProj],
-      { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
-    assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with effort=ultra must still exit 0: ' + reinstalled.stderr);
-    assert.ok(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
-      '#598 gt AC1: effort=ultra must report proactive posture: ' + reinstalled.stdout);
-    assert.ok(!/refuse sub-agent spawns/.test(reinstalled.stdout),
-      '#598 gt AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
 
     console.log('testGiteaDispatchPosture598 (#598 AC1 installer report): PASSED');
   } finally {
@@ -3602,6 +3632,7 @@ function testGiteaPreflight571() {
     });
     assert.strictEqual(setupInstall.status, 0,
       '#571 gt test(a): positional-form install to tempHome must exit 0: ' + setupInstall.stderr);
+    enableMultiAgentV2(tempHome571a);
 
     const emptyProject571a = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571a-proj-'));
     try {
@@ -3627,6 +3658,9 @@ function testGiteaPreflight571() {
   const tempHome571b = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571b-home-'));
   const emptyProject571b = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571b-proj-'));
   try {
+    // #775: seed [agents] enabled=true so this test still reaches the profile-availability check
+    // it was designed to prove, rather than short-circuiting on codex_multi_agent_v2_required.
+    enableMultiAgentV2(tempHome571b);
     const r = spawnSync(process.execPath,
       [giteaPreflightScript, '--project-root', emptyProject571b, '--no-autofix', '--json'],
       { encoding: 'utf8', env: { ...process.env, HOME: tempHome571b, USERPROFILE: tempHome571b } });
@@ -3863,6 +3897,7 @@ function testGiteaPreflight332() {
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-doctor-proj-'));
     try {
       runInstallProfiles(home);
+      enableMultiAgentV2(home);
       runInstallProfiles(proj);
       trustCodexProject(home, proj);
       fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),

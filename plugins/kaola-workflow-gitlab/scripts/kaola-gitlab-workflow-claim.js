@@ -105,20 +105,18 @@ const KNOWN_VALUE_FLAGS = new Set([
   'codexDispatchMode',
 ]);
 
-// #603: the closed set of Codex dispatch-mode literals. The startup surface (preflight detection)
-// passes exactly one of these via --codex-dispatch-mode; any other value — or a newline-carrying one
-// (durable-state field injection, the assertNoNewline class) — refuses at claim with zero mutation.
-const CODEX_DISPATCH_MODES = ['v2-task-name', 'v1-thread-id'];
+// #775 (Codex 0.145 re-baseline): --codex-dispatch-mode is now a WARN-AND-IGNORE shim, mirroring
+// #770's --workflow-path policy exactly — v2-task-name is the only legal mode (V1/v1-thread-id is
+// retired with no fallback), so the flag no longer selects or validates anything. One stderr notice,
+// never a refusal, never an unknown_flag — a caller still passing the old flag is not broken.
+const CODEX_DISPATCH_MODE_IGNORED_NOTE = 'note: --codex-dispatch-mode has no effect; v2-task-name is '
+  + 'the only dispatch mode. Ignoring.';
 
-// Validate the optional --codex-dispatch-mode flag. Returns { present:false } when absent (byte-
-// identical behavior), { present:true, mode } when a valid literal, or { present:true, invalid:true,
-// value } for a non-literal / newline-carrying value (the caller emits a typed refusal, no mutation).
+// Returns { present:false } when the flag was absent (byte-identical claim behavior), or
+// { present:true } when it was passed (any value — the caller warns and ignores it; the value is
+// never persisted or validated).
 function resolveCodexDispatchModeFlag(args) {
-  const raw = args.codexDispatchMode;
-  if (raw == null) return { present: false };
-  const v = String(raw);
-  if (/[\n\r]/.test(v) || CODEX_DISPATCH_MODES.indexOf(v) < 0) return { present: true, invalid: true, value: v };
-  return { present: true, mode: v };
+  return { present: args.codexDispatchMode != null };
 }
 
 // #770: module-level latch so the --workflow-path warn-and-ignore notice prints ONCE per process
@@ -749,8 +747,8 @@ function writeState(root, data) {
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
   // #603: persist the Codex dispatch mode so the adaptive dispatch cards read it at open time. Written
-  // ONLY when present (flag absent → field absent → dispatch keeps the v1-thread-id fail-closed default,
-  // so non-codex editions and un-flagged runs are byte-identical to today).
+  // ONLY when present (flag absent → field absent). Post-#775 the persisted value is diagnostic-only — the effective mode is
+  // always v2-task-name (resolveCodexDispatchMode ignores it); non-codex + un-flagged runs stay byte-identical.
   if (data.codex_dispatch_mode) lines.push('codex_dispatch_mode: ' + data.codex_dispatch_mode);
   if (data.worktree_error) {
     // #403.8: collapse the multi-line git error to one safe field + add the classified token.
@@ -1415,15 +1413,12 @@ function cmdStartup() {
     return;
   }
 
-  // #603: value-validate --codex-dispatch-mode BEFORE any claim mutation (both the scalar and bundle
-  // paths below persist it via writeState). A non-literal or newline-carrying value refuses here with
-  // ZERO state mutation — the claim never reaches claimExplicitTarget/claimExplicitBundle.
-  const cdm = resolveCodexDispatchModeFlag(args);
-  if (cdm.invalid) {
-    output({ verdict: 'invalid_codex_dispatch_mode', claim: 'none', project: null, issue: null,
-      reasoning: '--codex-dispatch-mode must be exactly one of ' + CODEX_DISPATCH_MODES.join(' | ') +
-        ' (single line); got ' + JSON.stringify(cdm.value) }, 1);
-    return;
+  // #775: --codex-dispatch-mode is retired to a WARN-AND-IGNORE shim (v2-task-name is the only
+  // mode) — never a refusal, never persisted. Strip it from `args` BEFORE the scalar/bundle claim
+  // paths below so codex_dispatch_mode is never written into durable state from this flag.
+  if (resolveCodexDispatchModeFlag(args).present) {
+    process.stderr.write(CODEX_DISPATCH_MODE_IGNORED_NOTE + '\n');
+    delete args.codexDispatchMode;
   }
 
   // #328: bundle path
@@ -4526,9 +4521,9 @@ module.exports = {
   assertSafeBranchArg,
   assertNoNewline,
   classifyWorktreeError,
-  // #603: Codex dispatch-mode flag validation (value-literal + newline-injection guard).
+  // #775: --codex-dispatch-mode warn-and-ignore shim (v2-task-name is the only mode).
   resolveCodexDispatchModeFlag,
-  CODEX_DISPATCH_MODES,
+  CODEX_DISPATCH_MODE_IGNORED_NOTE,
   removeBranch,
   removeBranchIfMerged,
   closeIssueIdempotent,

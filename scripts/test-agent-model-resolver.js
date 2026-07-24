@@ -478,18 +478,22 @@ try {
   // #610: the floor check normalizes — a plan-authored NEUTRAL `reasoning` tier satisfies the floor
   // exactly as the legacy `opus` alias does; the non-reasoning `standard`/`sonnet` tokens do NOT.
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'reasoning').ok, true, 'neutral reasoning tier satisfies the floor');
+  // #775 (Codex 0.145 re-baseline): the Codex leg that proved the floor by reading the PARENT
+  // session's proof is retired (Codex resolves the child's model/reasoning independently under
+  // multi_agent_v2 — the parent no longer determines the child, so that check was a false signal,
+  // never a real gate). A reasoning-class tier now satisfies the Codex floor exactly like every
+  // other runtime, REGARDLESS of session-proof shape (absent/stale/fresh all pass identically).
   const missingProof = resolver.enforceReasoningFloor('synthesizer', 'reasoning', {
     runtime: 'codex', currentThreadId: 'thread-current', sessionProof: { status: 'absent' }
   });
-  assert.strictEqual(missingProof.ok, false, 'Codex floor role cannot pass on tier metadata alone');
-  assert.strictEqual(missingProof.reason, 'reasoning_floor_proof_missing', 'missing Codex session proof has a typed refusal');
+  assert.strictEqual(missingProof.ok, true, 'an absent Codex session proof no longer refuses the floor');
   const freshProof = {
     status: 'fresh', thread_id: 'thread-current', model: 'gpt-5.6-sol', reasoning_effort: 'xhigh',
     observed_at: '2026-07-15T00:00:00Z', source: 'session_jsonl'
   };
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'reasoning', {
     runtime: 'codex', currentThreadId: 'thread-current', sessionProof: freshProof
-  }).ok, true, 'fresh current-session Sol/xhigh proof satisfies the Codex floor');
+  }).ok, true, 'a reasoning-class tier still satisfies the Codex floor with a fresh proof present (now irrelevant)');
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'standard').ok, false, 'neutral standard tier violates the floor');
   assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'sonnet').ok, false, 'legacy sonnet violates the floor');
   // A non-floor role is NEVER constrained by the floor.

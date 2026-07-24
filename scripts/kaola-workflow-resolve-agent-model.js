@@ -218,6 +218,20 @@ function loadCodexSessionProof({ codexHome, threadId } = {}) {
 // on a violation. ENFORCEMENT is opt-in via resolveAgentModel({enforceFloor:true}) / the CLI
 // --enforce-floor flag, so the back-compat string-return contract is unchanged for existing callers;
 // the step-4 synthesizer dispatch (and the post-G1 intent-verifier) opt in.
+//
+// #775 TIGHTEN-ONLY DERIVATION (CLAUDE.md First Principles — an axiom/change may only make a check
+// STRICTER, never looser; this removal is a loosening on its face, so the derivation is recorded here
+// verbatim): the Codex leg formerly below this comment proved the reasoning floor by reading the
+// PARENT session's last observed model/effort (loadCodexSessionProof) and asserting the CHILD would
+// inherit it. Under Codex 0.145's multi_agent_v2 re-baseline, Codex itself resolves the sub-agent's
+// model/reasoning effort ([agents].default_subagent_model / default_subagent_reasoning_effort, or
+// Codex's own default) — the parent no longer determines the child. The removed check therefore
+// proved a property that no longer holds: it was not a real gate, it was a FALSE correctness signal
+// that could pass or fail independent of the actual dispatched model. Removing a check that asserts
+// a false thing is a tightening in substance (a broken lock is not a lock), even though it is a
+// loosening in the literal code-diff sense — so this satisfies the tighten-only boundary. The
+// non-codex early-return immediately below is UNCHANGED and stays correct (Claude/opencode still
+// resolve the model directly, so isReasoningClass(model) alone is the right and sufficient check).
 function enforceReasoningFloor(role, model, options) {
   const name = String(role || '').trim();
   if (!REASONING_FLOOR_ROLES.has(name)) return { ok: true, role: name, model: model || '', floor: null };
@@ -231,29 +245,7 @@ function enforceReasoningFloor(role, model, options) {
       operator_hint: `Role '${name}' must resolve to a reasoning-class tier; resolved '${model || 'inherit'}'.`
     };
   }
-  if (!options || options.runtime !== 'codex') return { ok: true, role: name, model, floor: 'opus' };
-  const proof = options.sessionProof || {};
-  if (proof.status === 'stale' || (proof.thread_id && proof.thread_id !== options.currentThreadId)) {
-    return { ok: false, reason: 'reasoning_floor_proof_stale', role: name, model,
-      floor: 'gpt-5.6-sol/xhigh', operator_hint: 'Codex reasoning-floor proof is stale for the current parent session.' };
-  }
-  if (proof.status !== 'fresh' || proof.thread_id !== options.currentThreadId || !proof.observed_at
-      || !proof.model || !proof.reasoning_effort) {
-    return { ok: false, reason: 'reasoning_floor_proof_missing', role: name, model,
-      floor: 'gpt-5.6-sol/xhigh', operator_hint: 'Codex reasoning-floor proof is missing for the current parent session.' };
-  }
-  const effortRank = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4, ultra: 5 };
-  if (proof.model === 'gpt-5.6-sol' && effortRank[proof.reasoning_effort] >= effortRank.xhigh) {
-    return { ok: true, role: name, model, floor: 'gpt-5.6-sol/xhigh' };
-  }
-  return {
-    ok: false,
-    reason: 'reasoning_floor_violation',
-    role: name,
-    model,
-    floor: 'gpt-5.6-sol/xhigh',
-    operator_hint: `Codex parent posture '${proof.model}/${proof.reasoning_effort}' is below or unclassified against gpt-5.6-sol/xhigh.`
-  };
+  return { ok: true, role: name, model, floor: options && options.runtime === 'codex' ? 'gpt-5.6-sol/xhigh' : 'opus' };
 }
 
 function homeDir() {

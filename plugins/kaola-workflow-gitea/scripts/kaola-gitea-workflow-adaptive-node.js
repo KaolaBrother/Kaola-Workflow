@@ -2826,17 +2826,14 @@ function codexTaskNameForNode(nodeInfo) {
   return sanitizeCodexTaskName(role ? id + '__' + role : id);
 }
 
-function resolveCodexDispatchMode(context, env) {
-  const ctx = context || {};
-  const explicit = String(ctx.codex_dispatch_mode || '').trim();
-  if (explicit === 'v2-task-name' || explicit === 'v1-thread-id') return explicit;
-  const e = env || process.env || {};
-  const flag = String(e.KAOLA_CODEX_DISPATCH_MODE || e.CODEX_DISPATCH_MODE || '').trim();
-  if (flag === 'v2-task-name' || flag === 'v1-thread-id') return flag;
-  if (String(e.KAOLA_CODEX_MULTI_AGENT_V2 || e.CODEX_MULTI_AGENT_V2 || '').trim() === '1') {
-    return 'v2-task-name';
-  }
-  return 'v1-thread-id';
+// #775 (Codex 0.145 re-baseline): v2-task-name is the ONLY dispatch mode — V1/v1-thread-id is
+// retired with no fallback. A pre-#775 persisted state field, env override, or flag carrying the
+// retired 'v1-thread-id' literal is silently ignored (never honored, never a refusal) — this
+// function has exactly one output now, kept as a function (not an inlined literal) so every
+// dispatch-card call site stays byte-unchanged and the single-legal-value posture is documented
+// in one place.
+function resolveCodexDispatchMode() {
+  return 'v2-task-name';
 }
 
 // #641 (D-641-01): the observation contract pinned onto an `observes: scratch` gate's dispatch card — the
@@ -13880,9 +13877,9 @@ function main() {
   })();
   try { mainRoot = fs.realpathSync(mainRoot); } catch (_) {}
 
-  // #603: the Codex dispatch mode persisted at claim (v2-task-name|v1-thread-id), read ONCE here and
-  // threaded into every dispatch-card builder below. Absent field → null → resolveCodexDispatchMode
-  // falls back to the env override / v1-thread-id fail-closed default (byte-identical to pre-#603).
+  // #603: the Codex dispatch mode persisted at claim, read ONCE here and echoed into every dispatch-card
+  // builder below as a diagnostic field. Post-#775 it no longer selects the mode — resolveCodexDispatchMode
+  // always returns v2-task-name regardless of this value (a stale v1-thread-id is silently ignored).
   let codexDispatchMode = null;
   try {
     const stateContent = fs.readFileSync(statePath, 'utf8');

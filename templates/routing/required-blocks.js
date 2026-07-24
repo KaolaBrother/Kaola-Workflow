@@ -150,6 +150,10 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    // #775: Codex >=0.145.0 owns sub-agent model/reasoning resolution itself
+    // (no guaranteed parent-session equality); codex_tier_unresolved and the
+    // 0.142/0.144 transport-unsafe refusals are retired — Codex resolves the
+    // model/effort pair independently and there is no longer a transport gate.
     block_id: 'pr-codex-dispatch',
     topic: 'plan-run',
     runtime_tag: 'codex-live',
@@ -157,12 +161,9 @@ const REQUIRED_BLOCKS = [
     content_tokens: [
       '<!-- PIN: codex-dispatch -->',
       'on EVERY role dispatch',
-      'the unconditional mandate applies identically to this dispatch mode',
       'fork_turns: "none"',
       'dispatch.codex_profile_mode',
       'Omit both `model`',
-      'codex_tier_unresolved',
-      'current parent session',
       'Codex 0.144 durable-result override',
       'dispatch.evidence_file',
       'record-evidence',
@@ -171,8 +172,6 @@ const REQUIRED_BLOCKS = [
       'transport_error: encrypted_return',
       'direct `agents` namespace',
       'never dispatch through `functions.exec` or Code Mode',
-      'codex_v2_encrypted_transport_unsafe',
-      'codex_v2_role_transport_unsafe',
       'agents.spawn_agent',
     ],
   },
@@ -370,16 +369,16 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    block_id: 'nx-codex-dispatch-mode',
+    // #775: v2-task-name is the only dispatch mode (--codex-dispatch-mode and
+    // the 0.142/0.144 transport-unsafe refusals are retired) — issue-scout
+    // dispatch no longer detects or names a mode.
+    block_id: 'nx-codex-issue-scout-dispatch',
     topic: 'next',
     runtime_tag: 'codex-live',
     surface_type_tag: 'skill',
     content_tokens: [
-      '--codex-dispatch-mode',
       'direct `agents.spawn_agent` tool',
       'never dispatch through `functions.exec` or Code Mode',
-      'codex_v2_encrypted_transport_unsafe',
-      'codex_v2_role_transport_unsafe',
       'agents.spawn_agent',
       'task_name: "issue_scout"',
       'agent_type: "issue-scout"',

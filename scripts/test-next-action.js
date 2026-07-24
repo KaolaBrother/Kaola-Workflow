@@ -825,20 +825,27 @@ const specPlanAuto = (nodes, ledger) => '## Meta\nspeculative_open_policy: auto\
   assert(rOk.result === 'ok', 'FLOOR-2: a reasoning-class synthesizer passes');
   assert(rOk.readySet[0].id === 'synth' && rOk.readySet[0].model === 'opus', 'FLOOR-2: emits the opus synthesizer');
 
+  // #775 (Codex 0.145 re-baseline): enforceReasoningFloor's Codex leg — which proved the floor by
+  // reading the PARENT session's proof and asserting the CHILD would inherit it — is retired (the
+  // parent no longer determines the child's model/reasoning under multi_agent_v2). A reasoning-class
+  // `model` (already 'opus' here) now satisfies the floor on Codex exactly like every other runtime,
+  // REGARDLESS of the session-proof shape (absent/stale/below-floor/fresh-and-current all pass).
   const codexBase = { resolveModel: role => (role === 'synthesizer' ? 'opus' : 'sonnet'),
     runtime: 'codex', currentThreadId: 'thread-current' };
   const rMissing = computeNextAction(content, { ...codexBase, sessionProof: { status: 'absent', source: 'session_jsonl' } });
-  assert(rMissing.reason === 'reasoning_floor_proof_missing', 'FLOOR-2a: absent Codex proof refuses with the missing reason');
+  assert(rMissing.result === 'ok', 'FLOOR-2a (#775): an absent Codex session proof no longer refuses the floor');
   const rStale = computeNextAction(content, { ...codexBase, sessionProof: { status: 'stale', thread_id: 'thread-old',
     model: 'gpt-5.6-sol', reasoning_effort: 'xhigh', observed_at: 'old', source: 'session_jsonl' } });
-  assert(rStale.reason === 'reasoning_floor_proof_stale', 'FLOOR-2b: stale Codex proof refuses with the stale reason');
+  assert(rStale.result === 'ok', 'FLOOR-2b (#775): a stale Codex session proof no longer refuses the floor');
   const rBelow = computeNextAction(content, { ...codexBase, sessionProof: { status: 'fresh', thread_id: 'thread-current',
     model: 'gpt-5.6-sol', reasoning_effort: 'high', observed_at: 'now', source: 'session_jsonl' } });
-  assert(rBelow.reason === 'reasoning_floor_violation', 'FLOOR-2c: sub-floor current Codex posture refuses');
+  assert(rBelow.result === 'ok', 'FLOOR-2c (#775): a sub-floor current Codex posture no longer refuses (model is already reasoning-class)');
   const proof = { status: 'fresh', thread_id: 'thread-current', model: 'gpt-5.6-sol',
     reasoning_effort: 'xhigh', observed_at: 'now', source: 'session_jsonl' };
   const rCodexOk = computeNextAction(content, { ...codexBase, sessionProof: proof });
   assert(rCodexOk.result === 'ok', 'FLOOR-2d: fresh current Sol/xhigh proof passes');
+  // The dispatch card's codex_session_proof is an UNRELATED, purely advisory display mechanism
+  // (never a gate) — still attached via the descriptor, independent of enforceReasoningFloor.
   assert(JSON.stringify(rCodexOk.nextNode.codex_session_proof) === JSON.stringify({
     status: 'fresh', model: 'gpt-5.6-sol', reasoning_effort: 'xhigh'
   }), 'FLOOR-2d: descriptor carries only the minimum verified proof payload to dispatch');

@@ -1830,22 +1830,24 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   try { fs.rmSync(repo579, { recursive: true, force: true }); } catch (_) {}
 }
 
-// --- #603: --codex-dispatch-mode value validation (literal + newline-injection guard) --------------
-// Absent flag → { present:false } (byte-identical claim behavior); the two literals pass; anything else
-// — including a case-variant or a newline-carrying value (durable-state field injection) — is invalid,
-// so cmdStartup refuses the claim with zero mutation.
+// --- #775 (Codex 0.145 re-baseline): --codex-dispatch-mode is a WARN-AND-IGNORE shim -----------------
+// v2-task-name is the only dispatch mode (V1/v1-thread-id is retired with no fallback), so the flag
+// no longer selects or validates a literal — it resolves to { present: boolean } only. Absent → false
+// (byte-identical claim behavior); ANY value (including a stale v1-thread-id, a case-variant, or a
+// newline-carrying value) resolves present:true and the caller warns-and-ignores it, never refuses.
 assert(resolveCodexDispatchModeFlag({}).present === false,
-  '#603: an absent --codex-dispatch-mode flag resolves present:false (no field written)');
-assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name' }).mode === 'v2-task-name',
-  '#603: the v2-task-name literal resolves to its mode');
-assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v1-thread-id' }).mode === 'v1-thread-id',
-  '#603: the v1-thread-id literal resolves to its mode');
-assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v3-bogus' }).invalid === true,
-  '#603: a non-literal value is rejected (invalid:true)');
-assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'V2-TASK-NAME' }).invalid === true,
-  '#603: mode validation is case-sensitive (upper-case variant is rejected)');
-assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: x' }).invalid === true,
-  '#603: a newline-carrying value is rejected (durable-state field-injection guard, the assertNoNewline class)');
+  '#775: an absent --codex-dispatch-mode flag resolves present:false (no field written)');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name' }).present === true,
+  '#775: any --codex-dispatch-mode value resolves present:true');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v1-thread-id' }).present === true,
+  '#775: a stale v1-thread-id value still resolves present:true (warned-and-ignored, never refused)');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v3-bogus' }).present === true,
+  '#775: a non-literal value is no longer rejected — the flag has no vocabulary to validate against');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: x' }).present === true,
+  '#775: a newline-carrying value is no longer rejected — the flag is never persisted or validated');
+assert(resolveCodexDispatchModeFlag({}).invalid === undefined
+  && resolveCodexDispatchModeFlag({ codexDispatchMode: 'v3-bogus' }).invalid === undefined,
+  '#775: the retired invalid:true shape never appears — there is no unknown-literal refusal anymore');
 
 // --- #619: claim.js close-helper — post-probe the SUCCESS path too (exit-0-but-still-open) -----
 // closeIssueIdempotent trusted a `gh issue close` exit 0 unconditionally on the success path; only

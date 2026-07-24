@@ -91,8 +91,9 @@ Run subcommands with `--summary` for one-line output. For an opening call (`open
 `open-ready` / `close-and-open-next`), the summary line already carries the dispatch
 essentials: `summary: ok | opened=<node-id> role=<role> task=<codex_task_name>
 mode=<codex_dispatch_mode> effort=<medium|xhigh|unresolved>` (one `opened=` segment per member on a
-batch open; `effort=unresolved` is a typed `codex_tier_unresolved` refusal, never inheritance; the leg path is NOT in the
-summary line). The full envelope — every field, including `dispatch.leg_path` and the
+batch open; `effort=unresolved` is an informational display sentinel ONLY — Codex resolves the
+sub-agent's own model/reasoning independently, so `unresolved` never blocks or refuses a dispatch;
+the leg path is NOT in the summary line). The full envelope — every field, including `dispatch.leg_path` and the
 complete `dispatch:{...}` object — needs `--json` without `--summary`, or the cached
 `.cache/<op>-envelope.json`. Drill into the full envelope on `result: refuse` (includes
 `operator_hint`), AND — whenever running with `--summary` — before every dispatch: take the
@@ -155,30 +156,21 @@ and must run from the main root, above.)
 
 <!-- PIN: codex-dispatch -->
 Model, reasoning effort, and identity: always delegate to the base `dispatch.agent_type` profile (= the
-node's role). Every named profile omits both runtime-strength keys and therefore inherits
-the current parent session — the profile-freshness preflight above is what enforces that omission, so
-no runtime child probe is needed. The descriptor's `dispatch.codex_profile_mode` is `inherit`; its
-`dispatch.codex_profile_tier` remains declarative role metadata, and its
-`dispatch.codex_model` + `dispatch.codex_reasoning_effort` fields come only from a fresh parent-session
-proof. An unresolved tier refuses as `codex_tier_unresolved`; inheritance never creates a tier/profile
-compatibility conflict.
+node's role). Every named profile omits both runtime-strength keys; Codex >=0.145.0 RUNTIME resolves
+the sub-agent's model/reasoning effort itself (via the `[agents]` table's own defaults, or its own
+built-in default) — this is Codex's decision, NOT a guaranteed parent-session equality, and Kaola never
+writes or overrides it. The descriptor's `dispatch.codex_profile_mode` is `inherit`; its
+`dispatch.codex_profile_tier` remains declarative role metadata. `dispatch.codex_model` /
+`dispatch.codex_reasoning_effort`, when present, are an OPTIONAL parent-session observation for display
+only — informational, never authoritative, and never a dispatch gate; a null/absent value never blocks
+a role spawn.
 
-Codex collaboration transport is a hard pre-dispatch gate. In v2 task-name mode, invoke every
-collaboration operation through the direct `agents` namespace reported by preflight. Never use the
-server-reserved `collaboration` namespace and never dispatch through `functions.exec` or Code Mode. If preflight reports
-`codex_v2_encrypted_transport_unsafe` or `codex_v2_role_transport_unsafe`, refuse before spawning.
-Do not retry an encrypted-output decode or reserved-schema failure and do not fall back to a default
-role: the same transport/schema mismatch is deterministic.
-
-For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the transport gate
-passes, call the direct `agents.spawn_agent` tool with `task_name: dispatch.codex_task_name`, `agent_type:
+Call the direct `agents.spawn_agent` tool with `task_name: dispatch.codex_task_name`, `agent_type:
 dispatch.agent_type`, and `fork_turns: "none"` on EVERY role dispatch — the dispatch card
 is self-contained by contract, so no role spawn ever forks the parent's history. Omit both `model`
-and `reasoning_effort`; the named standalone profile owns the pair. For v1 fallback
-(`"v1-thread-id"`), omit `task_name`, keep
-`agent_type: dispatch.agent_type` and `fork_turns: "none"` — the unconditional mandate applies
-identically to this dispatch mode — again omit `model` and `reasoning_effort`, and prefix the prompt with
-`Node: <id> | Role: <role> | Expected model: <dispatch.codex_model> | Expected effort: <dispatch.codex_reasoning_effort> | Profile mode: <dispatch.codex_profile_mode>`. Pass
+and `reasoning_effort`; the named standalone profile (or Codex's own runtime resolution) owns the pair.
+Invoke every collaboration operation through the direct `agents` namespace; never use the
+server-reserved `collaboration` namespace and never dispatch through `functions.exec` or Code Mode. Pass
 `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation.
 
 ## Codex Join Protocol

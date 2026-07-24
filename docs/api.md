@@ -962,7 +962,7 @@ above, and the contract itself is attached as `dispatch.optimize`. A non-optimiz
 optimize node without a frozen contract, gets neither key — its dispatch card is byte-identical to
 pre-#634. See "`## Meta` field `optimize(<node-id>)`" above for the full contract shape.
 
-**`codex_model` / `codex_reasoning_effort`, `codex_profile_*`, and `model_display` (issues #610 and #687; current-runtime profile adapter).** A non-null normalized tier selects declarative role metadata and the wait budget; it does not select a Codex runtime pair. Every known role profile omits top-level `model` and `model_reasoning_effort`, so `codexProfilePolicy(role, model)` emits `codex_profile_mode:'inherit'`, the role's `standard`/`reasoning` metadata class, and `codex_profile_compatible:true`. `dispatchEffort()` initially returns a null pair with `parent_session` sources; `buildDispatch()` fills the effective pair only from a fresh, current-thread parent `session_jsonl` proof and exposes `codex_session_proof_status`/`codex_session_proof_source`. Plan-run omits transient runtime overrides and then requires the named child profile to bind correctly and the child's persisted model/effort to equal the re-read parent/card pair. Missing or stale proof, binding drift, and child mismatch refuse as typed runtime failures; `codex_tier_unresolved` remains reserved for a tier that did not normalize. A reasoning-floor role additionally requires fresh parent proof at `gpt-5.6-sol`/`xhigh` or an accepted stronger effort, with missing, stale, and below/unclassified states refusing as `reasoning_floor_proof_missing`, `reasoning_floor_proof_stale`, or `reasoning_floor_violation`. `model_display` remains conditionally attached exactly like `goal_line`/`leg_path` — `buildDispatch()` (and every other `dispatch`/`opened`/`first_node` emitter) calls `modelDisplay(model)` and attaches the key only when the node's resolved tier is non-null. `modelDisplay(tier)` first normalizes legacy aliases, then returns a runtime-native string per key: `claude` is the `Agent(model=…)` alias; `codex` is `"parent session (<tier> tier metadata)"`; and `opencode` is `"<rank> effort variant"`. The raw plan-tier `model` field remains unchanged.
+**`codex_model` / `codex_reasoning_effort`, `codex_profile_*`, and `model_display` (issues #610 and #687; #775 re-baseline).** A non-null normalized tier selects declarative role metadata and the wait budget; it does not select a Codex runtime pair. Every known role profile omits top-level `model` and `model_reasoning_effort`, so `codexProfilePolicy(role, model)` emits `codex_profile_mode:'inherit'`, the role's `standard`/`reasoning` metadata class, and `codex_profile_compatible:true` — purely declarative, informational metadata, never a dispatch gate. `dispatchEffort()` initially returns a null pair with `parent_session` sources; `buildDispatch()` fills the effective pair only from a fresh, current-thread parent `session_jsonl` proof (`loadCodexSessionProof`) and exposes `codex_session_proof_status`/`codex_session_proof_source`. This proof is **advisory display data only** — Codex >=0.145.0 resolves the sub-agent's own model/reasoning effort independently (via `[agents].default_subagent_model`/`default_subagent_reasoning_effort`, or its own built-in default, neither of which Kaola writes or overrides), so there is no guaranteed parent-equals-child equality and Kaola no longer verifies or gates on one: the retired "child mismatch"/"binding drift" runtime-failure checks are gone (#775). `codex_tier_unresolved` remains reserved for a plan tier that did not normalize (the unrelated #610 tier-vocabulary gate). A reasoning-floor role (`synthesizer`) requires only that its own resolved model tier be reasoning-class (`isReasoningClass(model)`), refusing as `reasoning_floor_violation` otherwise — identically across every runtime including Codex; the former Codex-only leg that additionally required a fresh parent-session proof, and its `reasoning_floor_proof_missing`/`reasoning_floor_proof_stale` refusals, are retired (a tighten-only removal recorded in `kaola-workflow-resolve-agent-model.js`, since the proof it enforced no longer holds under independent Codex-side resolution). `model_display` remains conditionally attached exactly like `goal_line`/`leg_path` — `buildDispatch()` (and every other `dispatch`/`opened`/`first_node` emitter) calls `modelDisplay(model)` and attaches the key only when the node's resolved tier is non-null. `modelDisplay(tier)` first normalizes legacy aliases, then returns a runtime-native string per key: `claude` is the `Agent(model=…)` alias; `codex` is `"parent session (<tier> tier metadata)"` (an informational label only — see above); and `opencode` is `"<rank> effort variant"`. The raw plan-tier `model` field remains unchanged.
 
 **`leg_path` / `leg_branch` (issue #591 / D-591-01).** Conditionally attached exactly like `goal_line` — `buildDispatch()` sets them only when the caller supplies non-null, non-blank values. `runOpenReady()`'s `opened[]` map is the only caller that ever supplies them, and only for a member co-opened into a write lane group (`legs[n.id]` from the Phase-1 leg provisioning); `open-next`, `close-and-open-next`'s fused advance, and every serial/read-only `open-ready` call pass neither, so `dispatch` there is byte-identical to pre-#591 (no `leg_path`/`leg_branch` key at all). Dispatch each co-opened write leg directly from its own `dispatch.leg_path`/`dispatch.leg_branch` — no need to cross-reference the separate top-level `laneGroup` descriptor (which remains present for group-level observability only; see "`open-ready` response — `laneGroup` field" below).
 
@@ -1353,7 +1353,7 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
   - **`glob_in_path` (issue #587, freeze-only).** `validatePlan`'s per-token write-set shape loop refuses a token containing a **glob metacharacter** (`* ? [ ] { }`) — checked in the same per-token pass as the #388 shape checks (after `backslash_in_path`, before the trailing-`/` directory-shaped and `..` arms), so `**/*.md` or `src/*.js` is reported as `glob_in_path` rather than silently accepted. A glob token parses in-grammar today (`areaForPath` degenerates it to a bogus area like `**`, which can look disjoint from a sibling leg's write set at freeze) but never matches at the **exact-path barrier**, so it dies late at runtime as `write_set_overflow` — the same "mechanical authoring artifact escalates to a maximally-expensive consent halt" failure mode the #381/#388 shape checks close. Refusal: `node <id> declared_write_set token "<tok>" contains a glob metacharacter (glob_in_path) — declare exact file paths (a glob never matches at the exact-path barrier; expand it to the concrete files)`. Freeze-only, same as its sibling shape checks. Rationale: D-587-01.
   - **`parallel_allowband_collision` (issue #587, freeze-only; made file-granular in #702).** The `.md` allowband (`docs/**`, `CHANGELOG.md`, `README.md` — see "`.md` files as production surfaces" above) is barrier-**invisible** for attribution: the per-node barrier never flags a write inside it, and `git merge` silently both-applies two legs' edits to it. `validatePlan` guards a parallel group (a declared `fanout(<group>)` group OR an inferred antichain-sibling pair) against a **collision it could not otherwise see**, but as of #702 the guard is **file-granular**, not surface-granular. A **HARD** allowband surface — a shared aggregation index (`CHANGELOG.md` / `README.md`) or a glob/dir-shaped `docs/` token (unattributable to one leg) — on **2 or more legs** still refuses, even DIFFERENT hard surfaces (`CHANGELOG.md` on one leg, `README.md` on another). A **SOFT** surface — an exact-file `docs/**` token — is per-leg-attributable, so exact-file-disjoint docs siblings under a post-dominating `code-reviewer` are **ADMITTED**: a pure-docs `fanout()` group relaxes its coarse-RED verdict via the same `writeOverlapRelaxable` net the runtime `--parallel-safe` uses (NET-1 gate over the group's own legs + NET-2 no-PROTECTED — `README.md` is now PROTECTED — + `hasUnresolvableEntry` resolvability + exact-never-relaxes), and an inferred antichain docs pair is admitted per-pair when exact-file-disjoint + gate-covered. A gate-less, glob/dir, same-file, or PROTECTED docs collision still refuses; a NON-docs coarse fan-out (`api/`, `crates/`) keeps today's freeze refusal (freeze stays stricter than runtime for code). The runtime half: the per-leg barrier (`--leg-barrier`, `opts.legScoped`) now makes the docs allowband **visible in leg scope**, so an out-of-declared-set docs write inside a leg refuses `write_set_overflow` (no silent both-apply); the group/union and whole-plan barriers are byte-identical (docs still exempt). Excludes `kaola-workflow/{project}/**` (per-node `.cache` evidence legitimately differs per leg — exempt even in leg scope). Serial runs are unaffected — this is a parallel-group-only freeze check. Refusal shapes: `fan-out group "<g>" declares a hard allowband surface (aggregation index or glob/dir docs) on <n> legs (<id>:"<path>", ...) (parallel_allowband_collision) — ...`, `concurrent siblings <A> and <B> both declare a hard allowband surface ("<p1>", "<p2>") (parallel_allowband_collision) — ...`, and (inferred antichain, not proven disjoint+gated) `concurrent siblings <A> and <B> both declare an allowband docs surface ("<p1>", "<p2>") not proven exact-file-disjoint + code-reviewer-gate-covered (parallel_allowband_collision) — ...`. Rationale: D-587-01, D-702-01.
   - **Cross-node case-fold (issue #587).** The two cross-node exact-path/coarse-area disjointness comparisons above — the declared fan-out group's `classifier.disjointWriteSets` call and the #232 antichain-sibling exact-clobber check — now lowercase the path (and, for the coarse arm, the `areaForPath` result) before comparing across nodes/legs, so `Src/x.js` on one leg and `src/x.js` on another are recognized as the same physical file and refuse at freeze on a case-insensitive filesystem. This is additive to the EXISTING reasons (`fan-out group "<g>" write sets not pairwise disjoint (...)`, `concurrent siblings <A> and <B> both write "<path>" (parallel non-fanout write overlap)`) — no new reason code, no relaxation of an existing one. `classifier.normalizeRepoPath` and the same-node sibling `case_collision` check (#388) are unaffected. The `--parallel-safe` runtime co-open check retains its own separate exact-file-overlap loop, which this change does NOT touch (its coarse/shared-infra arm is case-folded incidentally, since it also calls `classifier.disjointWriteSets`). Rationale: D-587-01.
-  - **Per-node model tier (issue #382; renamed to neutral tier tokens by issue #610).** `## Nodes` carries an optional **`model`** column with the closed two-tier vocabulary `NODE_MODEL_TIERS = {reasoning, standard}` (defined in `kaola-workflow-adaptive-schema.js`); `—`/absent ⇒ today's role-static resolution (back-compat, hash-stable). **Legacy aliases:** the pre-#610 tokens `opus`/`sonnet` remain permanently accepted and normalize to `reasoning`/`standard` respectively via `normalizeTier(token)` — every tier consumer (`TIER_RANK`, `dispatchEffort`, `mapTier`, `dispatchEffortOpencode`, `dispatchModelClaude`, `dispatchModelCodex`, the synthesizer reasoning-floor check) routes through this one normalizer, so a legacy cell resolves identically to its neutral counterpart everywhere. Frozen/archived plans keep their bytes — an alias validates at parse with no rewrite, `plan_hash` and `--resume-check` are unaffected, and legacy aliases continue to dispatch identically to their neutral counterparts; only newly authored plans are expected to write the neutral tokens. The planner assigns the tier per node (it is the only component that sees the task; #44); `next-action.computeNextAction` resolves `node.model || resolveModel(node.role)`, so an absent cell uses the static role default. The tier threads through every dispatch surface (serial `open-next`, the `open-ready` running-set scheduler — whose `running-set.json` members persist `model` for crash/reconcile re-dispatch — and the batch path). **Freeze-time refusals:** a non-empty cell outside the vocabulary (neutral token or legacy alias) → `node <id> model "<tok>" is not a valid tier (model_invalid)`; a `main-session-gate` carrying a model → refusal (it is never dispatched as a subagent). **Per-edition dispatch mapping:** on Claude editions the tier maps to the `Agent(model=…)` param via `dispatchModelClaude` (`reasoning`→`"opus"`, `standard`→`"sonnet"`). On current Codex, every standalone role profile omits both runtime keys and inherits the parent session; the role's standard/reasoning class remains declarative metadata and determines the 20/40-minute default wait budget. Dispatch cards carry `codex_profile_mode:'inherit'`, `codex_profile_tier`, and `codex_profile_compatible` with `parent_session` sources. On opencode, `mapTier` resolves the tier to a `TIER_RANK` (`reasoning`→`top`, `standard`→`second`) and then to a provider-contract effort variant (see `docs/opencode-edition.md`). Codex plan-run omits transient `model`/`reasoning_effort` arguments in both V2 and V1 and loads a bounded thread-bound parent JSONL proof for display and the reasoning-floor check; profile omission plus the profile-freshness preflight guarantee child inheritance structurally, so no child-JSONL equality probe is dispatched. A genuinely unresolved declarative tier remains `codex_tier_unresolved`. Both modes use `fork_turns: "none"`. Each Codex DAG node role writes its full nonce-bound result directly to `dispatch.evidence_file`, returns only a compact summary, and plan-run runs `record-evidence --verify` before exposing the file through `dispatch.upstream_evidence`; an encrypted summary failure may continue only with a terminal child and a verified cache artifact. The out-of-ledger `workflow-planner` and `contractor` roles keep their complete canonical workflow artifacts as the durable full result, return a compact summary, and mirror into a seeded cache when supplied. `plan_hash` covers `## Meta` + `## Nodes`, so model assignments seal at freeze and survive `--resume-check`. **`model_display` envelope field:** every dispatch/handoff emission that carries a non-null `model` additionally attaches a `model_display` object via `modelDisplay(tier)` — see the "`opened` payload — `dispatch` sub-object" section above for the field shape and per-runtime string formats.
+  - **Per-node model tier (issue #382; renamed to neutral tier tokens by issue #610).** `## Nodes` carries an optional **`model`** column with the closed two-tier vocabulary `NODE_MODEL_TIERS = {reasoning, standard}` (defined in `kaola-workflow-adaptive-schema.js`); `—`/absent ⇒ today's role-static resolution (back-compat, hash-stable). **Legacy aliases:** the pre-#610 tokens `opus`/`sonnet` remain permanently accepted and normalize to `reasoning`/`standard` respectively via `normalizeTier(token)` — every tier consumer (`TIER_RANK`, `dispatchEffort`, `mapTier`, `dispatchEffortOpencode`, `dispatchModelClaude`, `dispatchModelCodex`, the synthesizer reasoning-floor check) routes through this one normalizer, so a legacy cell resolves identically to its neutral counterpart everywhere. Frozen/archived plans keep their bytes — an alias validates at parse with no rewrite, `plan_hash` and `--resume-check` are unaffected, and legacy aliases continue to dispatch identically to their neutral counterparts; only newly authored plans are expected to write the neutral tokens. The planner assigns the tier per node (it is the only component that sees the task; #44); `next-action.computeNextAction` resolves `node.model || resolveModel(node.role)`, so an absent cell uses the static role default. The tier threads through every dispatch surface (serial `open-next`, the `open-ready` running-set scheduler — whose `running-set.json` members persist `model` for crash/reconcile re-dispatch — and the batch path). **Freeze-time refusals:** a non-empty cell outside the vocabulary (neutral token or legacy alias) → `node <id> model "<tok>" is not a valid tier (model_invalid)`; a `main-session-gate` carrying a model → refusal (it is never dispatched as a subagent). **Per-edition dispatch mapping:** on Claude editions the tier maps to the `Agent(model=…)` param via `dispatchModelClaude` (`reasoning`→`"opus"`, `standard`→`"sonnet"`). On Codex (>=0.145.0, the only supported floor as of #775), every standalone role profile omits both runtime keys; the role's standard/reasoning class remains declarative metadata and determines the 20/40-minute default wait budget. Dispatch cards carry `codex_profile_mode:'inherit'`, `codex_profile_tier`, and `codex_profile_compatible` — informational only, never a dispatch gate, since Codex resolves the sub-agent's own model/reasoning effort independently (not a guaranteed parent-session equality), and Kaola neither writes nor overrides `[agents].default_subagent_model`/`default_subagent_reasoning_effort`. On opencode, `mapTier` resolves the tier to a `TIER_RANK` (`reasoning`→`top`, `standard`→`second`) and then to a provider-contract effort variant (see `docs/opencode-edition.md`). Codex plan-run omits transient `model`/`reasoning_effort` arguments (`v2-task-name` is the only dispatch mode; there is no V1) and loads a bounded thread-bound parent JSONL proof for advisory display only — the reasoning-floor check no longer depends on it (retired as a tighten-only removal in `kaola-workflow-resolve-agent-model.js`; a reasoning-floor role now just requires its own resolved tier be reasoning-class, identically across every runtime). A genuinely unresolved declarative plan tier remains `codex_tier_unresolved` (the unrelated #610 tier-vocabulary gate). Dispatch cards use `fork_turns: "none"`. Each Codex DAG node role writes its full nonce-bound result directly to `dispatch.evidence_file`, returns only a compact summary, and plan-run runs `record-evidence --verify` before exposing the file through `dispatch.upstream_evidence`; an encrypted summary failure may continue only with a terminal child and a verified cache artifact. The out-of-ledger `workflow-planner` and `contractor` roles keep their complete canonical workflow artifacts as the durable full result, return a compact summary, and mirror into a seeded cache when supplied. `plan_hash` covers `## Meta` + `## Nodes`, so model assignments seal at freeze and survive `--resume-check`. **`model_display` envelope field:** every dispatch/handoff emission that carries a non-null `model` additionally attaches a `model_display` object via `modelDisplay(tier)` — see the "`opened` payload — `dispatch` sub-object" section above for the field shape and per-runtime string formats.
 
   - **Per-node join-floor override.** `## Nodes` may carry an optional
     `wait_budget_minutes` column. Absent, blank, `-`, and `—` cells project no override key, so
@@ -2297,9 +2297,18 @@ Hard-gates Codex role-profile/config freshness before any `subagent-invoked` com
 **CLI:**
 
 ```bash
-node scripts/kaola-workflow-codex-preflight.js --project-root <dir> [--plan <plan-path>] [--no-autofix] [--json]
-node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [--home <dir>] [--json]
+node scripts/kaola-workflow-codex-preflight.js --project-root <dir> [--plan <plan-path>] [--no-autofix] [--json] [--codex-version <v>]
+node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [--home <dir>] [--json] [--codex-version <v>]
 ```
+
+**Codex version floor (issue #775).** `CODEX_MIN_VERSION = '0.145.0'` — the first version to unify
+multi-agent settings under a top-level `[agents]` config table and stabilize MultiAgentV2 as the
+only dispatch path. The normal gate resolves the installed version with this precedence: the
+`--codex-version <v>` flag, then the `KAOLA_CODEX_VERSION` env var, then a live `codex --version`
+probe; an installed version below the floor (or an undetected version with no override) refuses
+`codex_version_unsupported` at exit 7, before any other check runs. The flag/env override is
+non-optional infrastructure, not a debug escape hatch — no sandbox running the test suites has a
+`codex` binary on `PATH`, so every chain sets `KAOLA_CODEX_VERSION` to stay above the floor.
 
 **Behavior (normal gate):**
 
@@ -2315,13 +2324,13 @@ is surfaced to the skill as `profile_preflight_refused`.
 
 **Persisted precedence and profile authority:** Reads `~/.codex/config.toml` and inspects every
 `.codex/config.toml` path from the detected Git repository root through `--project-root` (or
-`process.cwd()`). When global project trust says those layers are loadable, the transport/posture
+`process.cwd()`). When global project trust says those layers are loadable, the `[agents]`/posture
 fields owned by this gate overlay key-by-key in that order; an absent higher field does not erase a
-lower value. Unsafe
-transport output identifies the persisted config path that supplied the winning bad field through
-`config_path`/`transport_config_path`, and doctor output lists `effective_config_paths`. This proof
-does not include ephemeral Codex launch overrides such as `--profile` or `-c`; callers must not
-present a persisted-filesystem pass as attestation of per-process CLI configuration.
+lower value. `codex_multi_agent_v2_required` identifies the winning `config_path` (the effective
+merged layer stack has no single "supplying" file, so this is the managed-block target path), and
+doctor output lists `effective_config_paths`. This proof does not include ephemeral Codex launch
+overrides such as `--profile` or `-c`; callers must not present a persisted-filesystem pass as
+attestation of per-process CLI configuration.
 
 A fresh global profile authority returns exit 0 with `scope: 'global'` only when no loaded project
 layer has a Kaola agent directory, managed block, or conflicting `agents` declaration. Otherwise
@@ -2329,10 +2338,9 @@ the most-specific absolute `[projects."..."]` entry covering `--project-root` in
 declare `trust_level = "trusted"`; unknown/untrusted project footprints refuse as
 `project_trust_required` because Codex ignores their `.codex` layers. Every trusted
 repository-root-to-cwd project layer is then inspected and the active project authority must be
-fresh; a lower stale/conflicting layer cannot be hidden by a higher clean layer. An enabled V2
-overlay with unsafe nested collaboration exposure refuses as
-`codex_v2_encrypted_transport_unsafe`; a reserved or hidden effective role schema refuses as
-`codex_v2_role_transport_unsafe`. Neither is an autofixable profile-staleness case.
+fresh; a lower stale/conflicting layer cannot be hidden by a higher clean layer. `[agents].enabled`
+absent-or-false refuses `codex_multi_agent_v2_required` (see below) before profile staleness is
+even considered.
 
 1. Checks the selected `.codex/agents/kaola-workflow/` authority for per-role `.toml` files,
    **schema-validating** each required profile. The canonical grammar has exactly four top-level
@@ -2352,51 +2360,54 @@ overlay with unsafe nested collaboration exposure refuses as
 3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied — with one exemption (issue #716): the built-in, intentionally non-delegable roles `main-session-gate` and `finalize` (`PLAN_BUILTIN_NON_DELEGABLE_ROLES`) carry no `agents.toml` entry and no profile file BY DESIGN, so they are filtered out of the plan-role half before every availability check (the template filter, this required-role union, and `checkProfiles`). Every other (delegated) plan role stays fail-closed: an unknown delegated role refuses `role_not_in_template`, and a missing delegated profile refuses `profiles_missing`.
 4. Stale Kaola `.toml` files left in the target dir (listed in the local `.kaola-managed-profiles.json` manifest, or in the stale-files list `docs-lookup.toml`) are detected; unknown user-owned TOMLs are **reported, never deleted** (the `extra_unmanaged` field).
 5. **Auto-install when safe**: if the only problem is a stale/missing/malformed managed block, profile file, or stale Kaola file, runs `install-codex-agent-profiles.js`, then re-verifies ALL checks. On success, returns exit 0 with `autofixed: true`.
-6. **Typed refusal when unsafe**: if any persisted config path is a symlink/wrong type/unreadable,
-   a project Kaola footprint is not covered by a trusted global project entry,
-   an enabled effective MultiAgentV2 overlay permits nested Code Mode collaboration, the effective
-   direct transport uses the reserved `collaboration` namespace or hides Kaola role fields, an
+6. **Typed refusal when unsafe**: if the detected/attested Codex version is below the supported
+   floor, `[agents].enabled` is absent-or-false, any persisted config path is a symlink/wrong
+   type/unreadable, a project Kaola footprint is not covered by a trusted global project entry, an
    outside-marker `agents` declaration exists in any loaded project layer, the local manifest
    declares an unsupported future `schema_version`, the installer is unavailable/errors, or the
    plan names a delegated role absent from the template, exits non-zero with a typed-refusal JSON.
    `--no-autofix` forces the refusal path (useful in tests).
 7. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller.
 
-**MultiAgentV2 role-transport gate (correctness-fatal; Codex 0.144.1):** every live-scope result
-carries `codex_v2_transport_mode` (`"direct-only"|"nested-allowed"|"unknown"|"not_applicable"`),
-`codex_v2_direct_transport_ready`, `codex_v2_tool_namespace`,
-`codex_v2_role_metadata_visible`, `codex_v2_role_transport_ready`, and
-`codex_v2_transport_warning`. `non_code_mode_only = false` exposes plaintext through the nested
-Code Mode adapter even though V2 expects a Responses-encrypted task, so it refuses as
-`codex_v2_encrypted_transport_unsafe`. A second boundary applies to direct tools: the server reserves
-`collaboration.spawn_agent` for the hidden-metadata schema. Setting
-`hide_spawn_agent_metadata = false` under that name adds `agent_type`/model fields and rejects the
-first request with HTTP 400; leaving metadata hidden removes Kaola role selection. The proven
-role-aware posture is `tool_namespace = "agents"`, `hide_spawn_agent_metadata = false`, and
-`non_code_mode_only = true`; any reserved, hidden, or ambiguous role schema refuses as
-`codex_v2_role_transport_unsafe`. Both refusals return exit 7 before any spawn or autofix and require
-a fresh session after repair. The `plugin_cache` doctor scope has no live config and reports
-namespace/mode `"n/a"`, readiness `null`, and warning `null`.
+**`codex_version_unsupported` (issue #775):** returned before any other check when the resolved
+Codex version (`--codex-version` > `KAOLA_CODEX_VERSION` > live `codex --version` probe) is below
+`CODEX_MIN_VERSION` (`0.145.0`), or undetermined with no override. The JSON payload carries
+`detected_version`, `detected_version_source` (`"flag"|"env"|"probe"|"unavailable"`),
+`required_version`, and `repair` (an upgrade instruction naming the `--codex-version`/
+`KAOLA_CODEX_VERSION` attestation escape hatch for a sandbox with no `codex` binary on `PATH`).
 
-**Dispatch-posture report (additive, non-fatal — issue #598):** every live-scope result after the
-persisted config paths are readable, success or profile/transport refusal, additionally carries
-`dispatch_posture`
+**`codex_multi_agent_v2_required` (issue #775, owner decision D2):** returned when the version
+floor is met but the effective `[agents].enabled` (overlaying HOME then every trusted project
+layer) is absent or `false` — MultiAgentV2 is Codex >=0.145.0's only dispatch path, and there is
+no V1 fallback. Kaola-Workflow deliberately does **not** write `[agents]\nenabled = true` into the
+user's `config.toml` itself (a fresh install therefore always needs this one manual step) —
+the `repair` string carries the exact minimal paste-able diff, instructs placing it ABOVE the
+`# BEGIN kaola-workflow agents` managed block (TOML forbids re-declaring a bare `[agents]` header
+once an `[agents.<role>]` sub-table inside that block has already opened it), and notes that the
+legacy `[features.multi_agent_v2]` table, a top-level `[features] multi_agent` flag, and the
+retired `non_code_mode_only`/`hide_spawn_agent_metadata`/`tool_namespace` sub-fields have no effect
+under Codex >=0.145.0. Both new refusals return exit 7 — the code freed by retiring the 0.142/0.144
+V2 transport-safety gate (`codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe`),
+which Codex >=0.145.0's stabilized MultiAgentV2 no longer needs.
+
+**Dispatch-posture report (additive, non-fatal — issue #598; #775 re-baseline):** every live-scope
+result after the persisted config paths are readable and `[agents].enabled` is on, success or
+profile refusal, additionally carries `dispatch_posture`
 (`"none"|"explicitRequestOnly"|"proactive"`), `model_reasoning_effort` (the raw root-level
-TOML value, or `null` when unset), `multi_agent_enabled` (the base `[features] multi_agent`
-boolean), and `dispatch_posture_warning` (the exact remediation string, or `null` when the
-posture is already `proactive`). This is the effort-gated Codex runtime MultiAgentMode —
-distinct from the pre-existing `dispatch_mode`/`multi_agent_v2_enabled` fields (#332/#571),
-which only report whether the spawn *tools* are exposed, not whether the runtime will
-actually accept a spawn: `[features] multi_agent`/`multi_agent_v2` both absent-or-false →
-`"none"`; otherwise a root-level `model_reasoning_effort = "ultra"` → `"proactive"`, any
-other value or absent → `"explicitRequestOnly"`. **ATTESTATION-STYLE / NON-FATAL by
-construction** — these four fields never change `status` or the exit code, on either the
-normal gate or `--doctor`. On the normal gate's plain-text (non-`--json`) success output,
-a `warn: <dispatch_posture_warning>` line follows the `ok: N roles verified` line whenever
-the posture is non-`proactive`; the exit code stays `0`. **Version-guarded:** the
-effort→mode coupling is Codex CLI runtime behavior verified on codex-tui 0.142.5 and may
-change in a future release; the installer prints this caveat verbatim as its final
-dispatch-posture line.
+TOML value, or `null` when unset), `multi_agent_enabled` (mirrors `multi_agent_v2_enabled` — the
+`[agents].enabled` boolean), and `dispatch_posture_warning` (the exact remediation string, or
+`null` when the posture is already `proactive`). This is the effort-gated Codex runtime
+MultiAgentMode — distinct from `dispatch_mode`/`multi_agent_v2_enabled` (#332/#571/#775), which
+only report whether the spawn *tools* are exposed, not whether the runtime will actually accept a
+spawn: `[agents].enabled` absent-or-false → `"none"`; otherwise a root-level
+`model_reasoning_effort = "ultra"` → `"proactive"`, any other value or absent →
+`"explicitRequestOnly"`. **ATTESTATION-STYLE / NON-FATAL by construction** — these four fields
+never change `status` or the exit code, on either the normal gate or `--doctor`. On the normal
+gate's plain-text (non-`--json`) success output, a `warn: <dispatch_posture_warning>` line follows
+the `ok: N roles verified` line whenever the posture is non-`proactive`; the exit code stays `0`.
+**Version-guarded:** the effort→mode coupling is Codex CLI runtime behavior verified on
+Codex >=0.145.0 (rust-v0.145.0) and may change in a future release; the installer prints this
+caveat verbatim as its final dispatch-posture line.
 
 **MultiAgentV2 bounds report (additive, non-fatal — issue #611, D-611-01):** the same readable
 live-scope success/refusal branches that carry `dispatch_posture*` additionally carry six
@@ -2412,18 +2423,22 @@ default_wait_timeout_ms:                   number | null,
 ```
 
 All six are gated on `multi_agent_v2_enabled` (the same boolean `dispatch_mode`/`multi_agent_v2_enabled`
-detection already derives, #332/#571): when v2 is not active, every field reports `null` (source
-`'not_applicable'`), mirroring how `dispatch_posture` itself collapses to `"none"` when the features
-are off. When v2 IS active: `max_concurrent_threads_per_session` reports the configured
-`[features.multi_agent_v2] max_concurrent_threads_per_session` verbatim (`source: 'config'`) when it
-is a positive integer; when absent or non-positive/non-integer, it falls back to the OBSERVED default
-of **4** (`source: 'observed_default'`) — this number comes from the issue's own controlled probe on
-codex-tui 0.142.5 ("4 available concurrency slots, including you"), NOT from published Codex
-documentation, so it is labeled observed rather than a guaranteed default. `effective_subagent_width`
-is `max(threads - 1, 0)` — the budget INCLUDES the orchestrator thread. `min_wait_timeout_ms` /
+detection already derives, #332/#571/#775): when v2 is not active, every field reports `null` (source
+`'not_applicable'`), mirroring how `dispatch_posture` itself collapses to `"none"` when the feature
+is off. When v2 IS active: `max_concurrent_threads_per_session` reports the configured
+`[agents] max_concurrent_threads_per_session` verbatim (`source: 'config'`) when it is a positive
+integer — `max_threads` is accepted as a back-compat alias for the same field, first occurrence of
+either name winning; when both are absent or non-positive/non-integer, it falls back to the
+OBSERVED default of **4** (`source: 'observed_default'`) — this number comes from the issue's own
+controlled probe ("4 available concurrency slots, including you"), NOT from published Codex
+documentation, so it is labeled observed rather than a guaranteed default. This arithmetic is
+UNCHANGED by #775 (only the config table it reads moved from `[features.multi_agent_v2]` to
+`[agents]`) — confirmed against rust-v0.145.0 source (`effective_agent_max_threads` uses
+`saturating_sub(1)`) and upstream PR #19792: the cap is **inclusive of the root/orchestrator
+thread**, so `effective_subagent_width` is `max(threads - 1, 0)`. `min_wait_timeout_ms` /
 `max_wait_timeout_ms` / `default_wait_timeout_ms` are read ONLY when explicitly present in
-`[features.multi_agent_v2]` (either the inline-object or dotted-table TOML syntax); there is
-deliberately NO fabricated numeric fallback for these three, so they report `null` when absent. On
+`[agents]` (either the inline-object or dotted-table TOML syntax); there is deliberately NO
+fabricated numeric fallback for these three, so they report `null` when absent. On
 the `--doctor` `plugin_cache` scope (a cached source tree, no live runtime config to derive bounds
 from) all six fields mirror the `dispatch_posture: 'n/a'` convention: every numeric field is `null`
 and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
@@ -2440,31 +2455,31 @@ and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
 | `4` | `autofix_unsafe` / `config_layer_unsafe` / `project_trust_required` | outside-marker `agents` declaration; linked/unreadable/wrong-type persisted config; or a project Kaola footprint Codex is not configured to trust |
 | `5` | `installer_failed` | installer missing / errored / still stale after re-verify |
 | `6` | `profile_schema_version_unsupported` | local manifest `schema_version` is newer than this installer supports — upgrade kaola-workflow |
-| `7` | `codex_v2_encrypted_transport_unsafe` / `codex_v2_role_transport_unsafe` | effective V2 exposes nested Code Mode, uses the reserved namespace, hides role metadata, or is ambiguous |
+| `7` | `codex_version_unsupported` / `codex_multi_agent_v2_required` | detected Codex version below the supported floor; or `[agents].enabled` is absent-or-false (issue #775 — retired the 0.142/0.144 `codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe` transport gate and reused its exit code) |
 
 **JSON output (`--json`):**
 
 Success:
 ```json
-{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "codex_v2_transport_mode": "direct-only", "codex_v2_direct_transport_ready": true, "codex_v2_tool_namespace": "agents", "codex_v2_role_metadata_visible": true, "codex_v2_role_transport_ready": true, "codex_v2_transport_warning": null, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": true, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.", "max_concurrent_threads_per_session": 4, "max_concurrent_threads_per_session_source": "observed_default", "effective_subagent_width": 3, "min_wait_timeout_ms": null, "max_wait_timeout_ms": null, "default_wait_timeout_ms": null }
+{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": true, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.", "max_concurrent_threads_per_session": 4, "max_concurrent_threads_per_session_source": "observed_default", "effective_subagent_width": 3, "min_wait_timeout_ms": null, "max_wait_timeout_ms": null, "default_wait_timeout_ms": null }
 ```
 
 The `scope` field is `"global"` when global profiles satisfy the gate without a project Kaola
-footprint and `"project"` when a project authority satisfies it (with or without autofix). Transport
-refusals use `scope: "effective"` because their result comes from the merged persisted layer stack,
-not from whichever scope supplied profiles. `effective_config_paths` lists the evaluated persisted
-config files and `transport_config_path`/`config_path` identifies the winning unsafe field where one
-can be isolated. The three `codex_v2_transport*` fields, four `dispatch_posture*` fields (#598), and
-six `multi_agent_v2` bounds fields (#611) are present on live-scope results.
+footprint and `"project"` when a project authority satisfies it (with or without autofix).
+`codex_multi_agent_v2_required` uses `scope: "effective"` because its result comes from the merged
+persisted layer stack, not from whichever scope supplied profiles. `effective_config_paths` lists
+the evaluated persisted config files. The four `dispatch_posture*` fields (#598) and six
+`multi_agent_v2` bounds fields (#611) are present on live-scope results.
 
 Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`,
 `extra_unmanaged` where applicable, plus a status-specific payload: `malformed: [{role, file,
 reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`),
 `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]`
 (`profiles_missing`/`config_stale`), `conflicting_roles_outside_markers: [...]`
-(`autofix_unsafe`), `config_path` + `error` (`config_layer_unsafe`), or `project_root` +
-`project_trust` (`project_trust_required`). Transport refusals carry the effective transport,
-dispatch-posture, bounds, and winning persisted path.
+(`autofix_unsafe`), `config_path` + `error` (`config_layer_unsafe`), `project_root` +
+`project_trust` (`project_trust_required`), or `detected_version`/`detected_version_source`/
+`required_version` (`codex_version_unsupported`). `codex_multi_agent_v2_required` additionally
+carries the dispatch-posture and bounds fields alongside its diff-bearing `repair`.
 
 Outside-marker role reporting distinguishes all discovered declarations from the gate-affecting
 subset: `conflicting_roles_outside` reports every outside role, while
@@ -2479,24 +2494,28 @@ managed Kaola role. Unrelated user roles remain valid.
 - `project` — the requested cwd's `.codex` layer;
 - `plugin_cache` — the invoking plugin's exact name/version cache under each `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/` match. Its marketplace/name/version path, plugin manifest, `config/agents.toml`, and complete role-profile set are non-symlink authority- and exact-source-byte-checked; unrelated plugins and old versions are ignored. These scopes are `read_only: true`.
 
-`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists,
+`--json` emits `{ status: 'ok'|'stale', project_trust, project_trust_required, codex_version:
+{detected_version, detected_version_source, required_version, supported}, scopes: [{scope,
+codex_dir, exists,
 managed_block, managed_block_drift, profiles, missing_roles, missing_from_block, malformed,
 stale_profiles, profile_byte_drift, stale_files, stale_roles_in_block,
 conflicting_roles_outside, managed_role_conflicts_outside, extra_unmanaged, manifest,
 kaola_footprint, kaola_state,
-codex_v2_transport_mode, codex_v2_direct_transport_ready, codex_v2_tool_namespace,
-codex_v2_role_metadata_visible, codex_v2_role_transport_ready, codex_v2_transport_warning,
 dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning,
 max_concurrent_threads_per_session, max_concurrent_threads_per_session_source,
 effective_subagent_width, min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms,
-effective_config_paths, transport_config_path, project_trust, read_only, repair}, ...] }`. Exit code is 0 only
+project_trust, read_only, repair}, ...] }`. The top-level `codex_version` block (issue #775)
+reports the same version-floor attestation the normal gate refuses on (`--codex-version` >
+`KAOLA_CODEX_VERSION` > live probe); `supported: false` folds into the overall `stale` verdict
+even though doctor never hard-refuses. Exit code is 0 only
 when repository source, every installed persisted layer, and every selected exact-name/version plugin cache are
-clean-or-absent. It is 1 for malformed source, linked/unreadable config, an untrusted project Kaola
-footprint, stale managed blocks or profiles, unsafe effective V2 transport, or plugin-cache drift. Plugin caches remain read-only; their
+clean-or-absent AND the version is supported. It is 1 for malformed source, linked/unreadable config, an untrusted project Kaola
+footprint, stale managed blocks or profiles, a footprint scope with `[agents].enabled` off,
+an unsupported Codex version, or plugin-cache drift. Plugin caches remain read-only; their
 repair is the exact `codex plugin remove <plugin>@<marketplace> && codex plugin add
 <plugin>@<marketplace>` refresh. Every stale scope carries a concrete repair.
 
-The six transport/role fields are present on every live or cache scope; for `plugin_cache`, mode/namespace read `'n/a'`, readiness/metadata read `null`, and warning reads `null`. The four `dispatch_posture*` fields (#598, non-fatal — see above) are also present on every live or cache scope; for `plugin_cache`, they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` because a cached source tree has no live runtime config. The six `multi_agent_v2` bounds fields (#611, non-fatal — see above) likewise use `null` numeric values and `'n/a'` as the source for `plugin_cache`. Repository output is source-contract evidence rather than a live transport/config report. Without `--json`, each scope line is followed by its exact `repair` when stale, a `transport` line for unsafe V2, and a `warn` line whenever that scope's posture is non-`proactive`.
+The four `dispatch_posture*` fields (#598, non-fatal — see above) are present on every live or cache scope; for `plugin_cache`, they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` because a cached source tree has no live runtime config. The six `multi_agent_v2` bounds fields (#611, non-fatal — see above) likewise use `null` numeric values and `'n/a'` as the source for `plugin_cache`. Repository output is source-contract evidence rather than a live transport/config report. Without `--json`, each scope line is followed by its exact `repair` when stale, and a `warn` line whenever that scope's posture is non-`proactive`.
 
 ---
 
@@ -2515,24 +2534,29 @@ Default-on validate → authority check → install → prune → manifest → p
    manifest. A symlink, escaping path, or wrong-type component prints `install_target_unsafe: ...`
    and exits 1 without following it. Parent path components above the explicit authority are not
    reclassified, so a legitimate mounted workspace remains supported.
-3. **V2 role-transport wall** — reads the target `config.toml` before any write.
-   Nested/ambiguous encrypted transport prints `codex_v2_encrypted_transport_unsafe: ...`; a
-   reserved/hidden role schema prints `codex_v2_role_transport_unsafe: ...`. Both exit 1, and the
-   installer does not silently change user-owned feature settings.
-4. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported,
+3. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported,
    prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
-5. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the
+   (Issue #775 retired the prior step-3 "V2 role-transport wall" — the 0.142/0.144
+   `codex_v2_encrypted_transport_unsafe`/`codex_v2_role_transport_unsafe` pre-install gate — since
+   Codex >=0.145.0's stabilized MultiAgentV2 no longer needs it. The installer never gates on
+   `[agents].enabled` either — owner decision D2 keeps that a preflight-time refusal, not an
+   install-time one, since Kaola does not write the flag for the user; `multi_agent_v2_enabled` is
+   only ever *reported*, never blocked, via `deriveDispatchPosture`/`detectCodexDispatchMode`.)
+4. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the
    exact bundled `[agents.*]` block (all `config_file`/description/nickname metadata, no extras),
    copies hook scripts into the global stable home, and merges the managed entries into
    `~/.codex/hooks.json` (#325/#447 semantics).
-6. **Prune** — removes a non-current target `.toml` only when its current regular-file bytes still match the valid `sha256:` recorded by the previous manifest (`stale-managed`), or when the unchanged stale-name rule applies to `docs-lookup.toml` with no conflicting manifest ownership. A modified, unreadable, wrong-type, or unverifiable prior entry is retained and reported as `unmanaged extra`; a forged/stale manifest cannot delete custom bytes. Unknown user TOMLs are likewise retained.
-7. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, reviewer `profile_contracts` carrying `behavior_contract_version`, `behavior_contract_hash`, and `resolved_profile_hash`, and `retired_files_removed`).
-8. **Post-verify** — re-reads every installed profile, requires exact bundled-source bytes, revalidates reviewer profile identities, and requires the exact canonical managed block; on failure prints `post_verify_failed: ...` and exits 1.
-9. Prints `Kaola-Workflow Codex multi_agent_v2 transport: <mode>` plus the effective role namespace/metadata readiness with the posture/bounds report, then `status: ok` as the machine-checkable final sentinel.
+5. **Prune** — removes a non-current target `.toml` only when its current regular-file bytes still match the valid `sha256:` recorded by the previous manifest (`stale-managed`), or when the unchanged stale-name rule applies to `docs-lookup.toml` with no conflicting manifest ownership. A modified, unreadable, wrong-type, or unverifiable prior entry is retained and reported as `unmanaged extra`; a forged/stale manifest cannot delete custom bytes. Unknown user TOMLs are likewise retained.
+6. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, reviewer `profile_contracts` carrying `behavior_contract_version`, `behavior_contract_hash`, and `resolved_profile_hash`, and `retired_files_removed`).
+7. **Post-verify** — re-reads every installed profile, requires exact bundled-source bytes, revalidates reviewer profile identities, and requires the exact canonical managed block; on failure prints `post_verify_failed: ...` and exits 1.
+8. Prints `Kaola-Workflow Codex dispatch posture: <posture>` (+ warning + version-guard caveat) and
+   `Kaola-Workflow Codex multi_agent_v2: enabled ([agents] enabled = true)` or `NOT enabled (see
+   codex_multi_agent_v2_required at preflight)` plus the concurrency/wait-timeout bounds report,
+   then `status: ok` as the machine-checkable final sentinel.
 
 These checks prove repository, installed, and selected exact-name/version plugin-cache **filesystem bytes and embedded identities**. They do not attest that a proprietary runtime loaded those bytes into a prompt, and deterministic profile identity does not imply identical stochastic model output.
 
-Exported helpers (require-safe; `require.main` guard means `require()` never runs the installer): `validateProfileText`, `validateSourceProfiles`, `pruneStaleProfiles`, `readManifest`, `writeManifest`, `buildManagedHooks`, `mergeHooks`, `updateHooks`, `detectCodexDispatchMode`, plus the constants `RETIRED_PROFILE_FILES`, `MANIFEST_BASENAME`, `EFFORT_VALUES`, `CODEX_V2_TRANSPORT_UNSAFE_STATUS`, `CODEX_V2_DIRECT_TRANSPORT_NOTE`, `CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS`, `CODEX_V2_ROLE_TOOL_NAMESPACE`, and `CODEX_V2_ROLE_TRANSPORT_NOTE`.
+Exported helpers (require-safe; `require.main` guard means `require()` never runs the installer): `validateProfileText`, `validateSourceProfiles`, `pruneStaleProfiles`, `readManifest`, `writeManifest`, `buildManagedHooks`, `mergeHooks`, `updateHooks`, `detectCodexDispatchMode`, `deriveDispatchPosture`, `parseMultiAgentV2NumericFields`, `deriveMultiAgentV2Bounds`, plus the constants `RETIRED_PROFILE_FILES`, `MANIFEST_BASENAME`, `EFFORT_VALUES`, `OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION`, `MULTI_AGENT_V2_BOUNDS_NOTE`, and `MULTI_AGENT_V2_MAX_THREADS_ALIAS` (issue #775 retired the 0.142/0.144 transport-mode exports `CODEX_V2_TRANSPORT_UNSAFE_STATUS`/`CODEX_V2_DIRECT_TRANSPORT_NOTE`/`CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS`/`CODEX_V2_ROLE_TOOL_NAMESPACE`/`CODEX_V2_ROLE_TRANSPORT_NOTE`).
 
 ---
 

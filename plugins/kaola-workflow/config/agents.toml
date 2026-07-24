@@ -1,6 +1,3 @@
-[features]
-multi_agent = true
-
 [agents.code-explorer]
 description = "Kaola-Workflow for Codex Phase 1 codebase researcher: maps affected files, patterns, tests, and config without editing."
 config_file = "./agents/kaola-workflow/code-explorer.toml"

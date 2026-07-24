@@ -20866,8 +20866,8 @@ function testSummaryDispatchSegments602() {
       const line = r.stdout.trim();
       assert(/^summary: ok/.test(line), '#602 (a): summary must start with "summary: ok", got: ' + JSON.stringify(line));
       assert(SUMMARY_SEG.test(line), '#602 (a): summary must carry a dispatch segment opened=/role=/task=/mode=/effort=, got: ' + JSON.stringify(line));
-      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v1-thread-id effort=inherit/.test(line),
-        '#602 (a): summary segment must reflect parent-session inheritance, got: ' + JSON.stringify(line));
+      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v2-task-name effort=inherit/.test(line),
+        '#775: v2-task-name is the only dispatch mode, got: ' + JSON.stringify(line));
     } finally {
       fs.rmSync(grepo, { recursive: true, force: true });
       try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
@@ -21077,11 +21077,11 @@ function testReadOnlyLaneEmptyWriteSet752() {
   console.log('testReadOnlyLaneEmptyWriteSet752: PASSED');
 }
 
-// #603: the Codex dispatch mode detected at startup must thread into the runtime dispatch cards.
-// cmdStartup persists `codex_dispatch_mode: <mode>` (value-validated + anti-injection) in
-// workflow-state.md; open-next reads it and threads it into the dispatch card. Absent flag -> field
-// absent -> v1-thread-id fail-closed default. An invalid or newline-carrying value refuses at claim
-// with a typed verdict and ZERO state mutation.
+// #775 (Codex 0.145 re-baseline, supersedes #603): v2-task-name is the ONLY dispatch mode — V1/
+// v1-thread-id is retired with no fallback. --codex-dispatch-mode is now a WARN-AND-IGNORE shim
+// (mirrors --workflow-path's policy): one stderr notice, never a refusal, never persisted into
+// workflow-state.md. Every dispatch card reads v2-task-name unconditionally, whether the flag was
+// passed, absent, or carries a stale/invalid/newline-carrying value.
 function testCodexDispatchModeThreading603() {
   const NODE_PLAN = (n) => [
     '# Workflow Plan — issue #' + n, '', '## Meta', 'plan_form: spine', 'labels: enhancement', '',
@@ -21094,18 +21094,20 @@ function testCodexDispatchModeThreading603() {
     '## Node Ledger', '', '| id | status |', '|---|---|',
     '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
 
-  // (a) startup --codex-dispatch-mode v2-task-name -> state persists the field AND open-next's
-  //     dispatch card reads it (mode v2-task-name + the role-bearing codex_task_name).
+  // (a) startup --codex-dispatch-mode v2-task-name -> WARN-AND-IGNORE (stderr notice, never
+  //     persisted); open-next's dispatch card still reads v2-task-name (the only mode).
   {
-    const grepo = adaptiveTmp('dispatch-mode-603-v2');
+    const grepo = adaptiveTmp('dispatch-mode-775-v2');
     initGitRepo(grepo);
     plantRoadmapIssue(grepo, 6031, '');
     const s = runNode(claimScript, ['startup', '--target-issue', '6031', '--runtime', 'codex', '--codex-dispatch-mode', 'v2-task-name'], grepo);
-    assert(s.status === 0, '#603 (a): startup should exit 0, got ' + s.status + '\nstderr: ' + s.stderr + '\nstdout: ' + s.stdout);
-    assert(JSON.parse(s.stdout).claim === 'acquired', '#603 (a): startup should acquire, got ' + s.stdout);
+    assert(s.status === 0, '#775 (a): startup should exit 0, got ' + s.status + '\nstderr: ' + s.stderr + '\nstdout: ' + s.stdout);
+    assert(JSON.parse(s.stdout).claim === 'acquired', '#775 (a): startup should acquire, got ' + s.stdout);
+    assert(/--codex-dispatch-mode has no effect/.test(s.stderr),
+      '#775 (a): a passed --codex-dispatch-mode must print the warn-and-ignore notice, got stderr: ' + s.stderr);
     const state = read(statePath(grepo, 'issue-6031'));
-    assert(/^codex_dispatch_mode: v2-task-name$/m.test(state),
-      '#603 (a): state must persist codex_dispatch_mode: v2-task-name, got:\n' + state);
+    assert(!/codex_dispatch_mode:/.test(state),
+      '#775 (a): the flag must never be persisted into workflow-state.md, got:\n' + state);
     const planPath = path.join(grepo, 'kaola-workflow', 'issue-6031', 'workflow-plan.md');
     fs.writeFileSync(planPath, NODE_PLAN('6031'));
     runLegacyFreeze(planValidatorScript, planPath, grepo);
@@ -21113,25 +21115,26 @@ function testCodexDispatchModeThreading603() {
     spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-6031', '--json'], grepo);
-      assert(on.status === 0, '#603 (a): open-next should exit 0, got ' + on.status + '\nstderr: ' + on.stderr);
+      assert(on.status === 0, '#775 (a): open-next should exit 0, got ' + on.status + '\nstderr: ' + on.stderr);
       const d = JSON.parse(on.stdout).opened.dispatch;
       assert(d.codex_dispatch_mode === 'v2-task-name',
-        '#603 (a): dispatch card must read the state field (v2-task-name), got: ' + JSON.stringify(d.codex_dispatch_mode));
+        '#775 (a): dispatch card always resolves v2-task-name, got: ' + JSON.stringify(d.codex_dispatch_mode));
       assert(d.codex_task_name === 'n1_tdd_guide',
-        '#603 (a): dispatch card must carry the role-bearing codex_task_name, got: ' + JSON.stringify(d.codex_task_name));
+        '#775 (a): dispatch card must carry the role-bearing codex_task_name, got: ' + JSON.stringify(d.codex_task_name));
     } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
   }
 
-  // (b) startup WITHOUT the flag -> no state field -> open-next dispatch defaults to v1-thread-id.
+  // (b) startup WITHOUT the flag -> no state field -> open-next dispatch still resolves
+  //     v2-task-name (there is no v1 fallback to default to).
   {
-    const grepo = adaptiveTmp('dispatch-mode-603-absent');
+    const grepo = adaptiveTmp('dispatch-mode-775-absent');
     initGitRepo(grepo);
     plantRoadmapIssue(grepo, 6032, '');
     const s = runNode(claimScript, ['startup', '--target-issue', '6032', '--runtime', 'codex'], grepo);
-    assert(s.status === 0, '#603 (b): startup should exit 0, got ' + s.stderr);
+    assert(s.status === 0, '#775 (b): startup should exit 0, got ' + s.stderr);
     const state = read(statePath(grepo, 'issue-6032'));
     assert(!/codex_dispatch_mode:/.test(state),
-      '#603 (b): absent flag -> state must NOT carry a codex_dispatch_mode field, got:\n' + state);
+      '#775 (b): absent flag -> state must NOT carry a codex_dispatch_mode field, got:\n' + state);
     const planPath = path.join(grepo, 'kaola-workflow', 'issue-6032', 'workflow-plan.md');
     fs.writeFileSync(planPath, NODE_PLAN('6032'));
     runLegacyFreeze(planValidatorScript, planPath, grepo);
@@ -21139,25 +21142,29 @@ function testCodexDispatchModeThreading603() {
     spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
     try {
       const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-6032', '--json'], grepo);
-      assert(on.status === 0, '#603 (b): open-next should exit 0, got ' + on.stderr);
+      assert(on.status === 0, '#775 (b): open-next should exit 0, got ' + on.stderr);
       const d = JSON.parse(on.stdout).opened.dispatch;
-      assert(d.codex_dispatch_mode === 'v1-thread-id',
-        '#603 (b): absent field -> dispatch must default to v1-thread-id, got: ' + JSON.stringify(d.codex_dispatch_mode));
+      assert(d.codex_dispatch_mode === 'v2-task-name',
+        '#775 (b): absent field -> dispatch still resolves v2-task-name (no v1 fallback), got: ' + JSON.stringify(d.codex_dispatch_mode));
     } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
   }
 
-  // (c) invalid + newline-carrying values refuse at claim with the typed verdict and ZERO mutation.
-  for (const bad of ['v3-bogus', 'V2-TASK-NAME', 'v2-task-name\nforged_field: x']) {
-    const grepo = adaptiveTmp('dispatch-mode-603-refuse');
+  // (c) a stale, invalid, or newline-carrying --codex-dispatch-mode value is silently WARNED AND
+  //     IGNORED — never a refusal, never a state mutation of the (nonexistent) field, and the
+  //     claim still succeeds normally.
+  for (const bad of ['v1-thread-id', 'v3-bogus', 'V2-TASK-NAME', 'v2-task-name\nforged_field: x']) {
+    const grepo = adaptiveTmp('dispatch-mode-775-ignored');
     initGitRepo(grepo);
     plantRoadmapIssue(grepo, 6033, '');
     try {
       const s = runNode(claimScript, ['startup', '--target-issue', '6033', '--runtime', 'codex', '--codex-dispatch-mode', bad], grepo);
-      assert(s.status !== 0, '#603 (c): invalid --codex-dispatch-mode must refuse (nonzero) for ' + JSON.stringify(bad) + ', got ' + s.status + '\n' + s.stdout);
-      assert(JSON.parse(s.stdout).verdict === 'invalid_codex_dispatch_mode',
-        '#603 (c): refusal verdict must be invalid_codex_dispatch_mode for ' + JSON.stringify(bad) + ', got: ' + s.stdout);
-      assert(!fs.existsSync(statePath(grepo, 'issue-6033')),
-        '#603 (c): a refused claim must leave ZERO state mutation for ' + JSON.stringify(bad));
+      assert(s.status === 0, '#775 (c): --codex-dispatch-mode is warned-and-ignored, never a refusal, for ' + JSON.stringify(bad) + ', got ' + s.status + '\n' + s.stdout + '\n' + s.stderr);
+      assert(JSON.parse(s.stdout).claim === 'acquired', '#775 (c): claim still succeeds for ' + JSON.stringify(bad) + ', got: ' + s.stdout);
+      assert(/--codex-dispatch-mode has no effect/.test(s.stderr),
+        '#775 (c): the warn-and-ignore notice prints for ' + JSON.stringify(bad) + ', got stderr: ' + s.stderr);
+      const state = read(statePath(grepo, 'issue-6033'));
+      assert(!/codex_dispatch_mode:/.test(state),
+        '#775 (c): the retired field is never persisted, even for ' + JSON.stringify(bad) + ', got:\n' + state);
     } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
   }
 

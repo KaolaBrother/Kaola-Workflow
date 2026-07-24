@@ -536,18 +536,19 @@ The `workflow-state.md` file contains several key blocks:
     age exceeds the threshold is classified `stale` (safe to resume as a leftover); a `claim_ts`
     within the threshold is `ambiguous` (prompt before overwriting a potential active co-tenant).
 
-  A fourth field in the same block, **`codex_dispatch_mode`** (issue #603), is **optional** —
-  written only when the startup surface (`cmdStartup`) receives `--codex-dispatch-mode`,
-  immediately after the three claim-time session fields above. The flag is value-validated
-  BEFORE any claim mutation via `resolveCodexDispatchModeFlag` (`kaola-workflow-claim.js`): the
-  legal set is exactly two literals, `v2-task-name` or `v1-thread-id`; any other value, or one
-  carrying a newline, refuses the claim with `invalid_codex_dispatch_mode` and zero mutation
-  (the same newline-injection fence as `worktree_path`/`branch`, via `assertNoNewline`). When
-  absent, the field is omitted entirely (byte-identical to pre-#603 state files) and the
-  adaptive dispatch-card builder (`resolveCodexDispatchMode` in `kaola-workflow-adaptive-node.js`)
-  falls back to the `KAOLA_CODEX_DISPATCH_MODE`/`CODEX_DISPATCH_MODE` environment override, then
-  to the `v1-thread-id` fail-closed default. Like the three fields above, it is written once at
-  claim time and never refreshed.
+  A fourth field, **`codex_dispatch_mode`** (issue #603), is **retired as of issue #775**:
+  `v2-task-name` is the only dispatch mode Codex >=0.145.0 supports (there is no V1/`v1-thread-id`
+  fallback to select between), so the field is **never written** into `## Lease`, regardless of
+  whether `--codex-dispatch-mode` was passed to the startup surface (`cmdStartup`). The flag is
+  now a WARN-AND-IGNORE shim (`resolveCodexDispatchModeFlag` in `kaola-workflow-claim.js`) —
+  mirroring issue #770's `--workflow-path` policy exactly: passing it (any value, including a
+  newline-carrying or previously-invalid one) prints one stderr notice and the claim proceeds
+  unmutated; it is never a refusal and the value is never persisted. Every state file is
+  therefore byte-identical whether the flag was passed, absent, or carried a legacy/bogus value.
+  The adaptive dispatch-card builder (`resolveCodexDispatchMode` in
+  `kaola-workflow-adaptive-node.js`) takes no arguments and unconditionally resolves
+  `'v2-task-name'` for every dispatch card — it no longer reads this state field, an env override,
+  or any flag.
 
   `cmdStatus` annotates each active-folder item with a `lane_bucket` field (output of
   `classifyLane` from `kaola-workflow-classifier.js`). Four possible values, applied via a

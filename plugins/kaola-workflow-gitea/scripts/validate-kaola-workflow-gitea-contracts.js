@@ -836,26 +836,32 @@ assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'never inflate a bu
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', "spawn each node's role agent as a NAMED teammate");
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'send EXACTLY ONE request for the deliverable, then wait');
 // #611: fork_turns:"none" unconditional mandate — Codex-dispatch block, SKILL surface only.
+// #775: v2-task-name is the only dispatch mode, so the "applies identically to this dispatch
+// mode" qualifier (a v1/v2 distinction) is itself retired prose.
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'on EVERY role dispatch');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'the unconditional mandate applies identically to this dispatch mode');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'the unconditional mandate applies identically to this dispatch mode');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'not a valid path for tiered nodes');
 
-// #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
-// dispatch mode via the preflight doctor and thread it into the claim as an explicit flag.
-assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispatch Mode Detection');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
-// Current Codex adapter: all known role profiles inherit the parent-session runtime pair.
-// Omission plus the profile-freshness preflight are the structural guarantee, so the surface
-// documents parent-session inheritance without a runtime child probe.
+// #775: v2-task-name is the only dispatch mode — the preflight-doctor detection step and the
+// --codex-dispatch-mode flag it used to thread into the claim are retired (warn-and-ignore shim
+// only; see kaola-workflow-claim.js).
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispatch Mode Detection');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
+// #775 Codex 0.145 re-baseline: Codex >=0.145.0 resolves the sub-agent's own model/reasoning
+// effort itself (not a guaranteed parent-session equality) — the retired "child inherits the
+// current parent session" claim and the codex_tier_unresolved refusal are both gone; Kaola never
+// writes or overrides agents.default_subagent_model / agents.default_subagent_reasoning_effort.
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'current parent session');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'current parent session');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', "the sub-agent's model/reasoning effort itself");
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'parent-session equality');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Codex 0.144 durable-result override');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'dispatch.codex_profile_mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'Omit both `model`');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model: dispatch.codex_model');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_tier_unresolved');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_profile_tier_mismatch');
 // Retirement lock: the runtime parent-equals-child child-JSONL probe is retired; a reintroduced
 // probe must fail closed here.
@@ -864,9 +870,10 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'pare
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'installed profile path');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'declarative reasoning/wait-budget metadata');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'child inherits the current parent session');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'child inherits the current parent session');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'declarative tier metadata');
-assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'child inherits the current parent session');
+assertNotIncludes(pluginRoot + '/agents/workflow-planner.toml', 'child inherits the current parent session');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'resolves the sub-agent\'s own model/reasoning effort independently');
 assertNotIncludes(pluginRoot + '/agents/workflow-planner.toml', 'codex_profile_tier_mismatch');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch

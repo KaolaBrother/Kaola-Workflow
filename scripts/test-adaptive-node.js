@@ -9961,15 +9961,20 @@ function rtHarness(initialFiles, opts) {
   assert(Array.isArray(d.required_tokens), 'D444-DISPATCH-PARITY: dispatch.required_tokens is array');
   assert(d.forge_rider === null, 'D444-DISPATCH-PARITY: dispatch.forge_rider is null');
   assert(Array.isArray(d.guards), 'D444-DISPATCH-PARITY: dispatch.guards is array');
-  assert(d.codex_dispatch_mode === 'v1-thread-id', 'D444-DISPATCH-PARITY: dispatch defaults to v1 thread-id mode');
+  // #775 (Codex 0.145 re-baseline): v2-task-name is the ONLY dispatch mode now — V1/v1-thread-id is
+  // retired with no fallback, so resolveCodexDispatchMode ignores its (legacy) context/env inputs and
+  // ALWAYS resolves v2-task-name, regardless of a stale persisted state field or env override.
+  assert(d.codex_dispatch_mode === 'v2-task-name', 'D444-DISPATCH-PARITY (#775): dispatch always resolves v2-task-name mode');
   assert(d.codex_task_name === 'n1_impl_tdd_guide', 'D444-DISPATCH-PARITY: dispatch.codex_task_name is sanitized from node id + role');
   assert(typeof sanitizeCodexTaskName === 'function', 'D444-DISPATCH-PARITY: sanitizeCodexTaskName exported');
   assert(sanitizeCodexTaskName('Probe/D50203 Scope') === 'probe_d50203_scope', 'D444-DISPATCH-PARITY: task-name sanitizer handles slash/uppercase/space');
   assert(sanitizeCodexTaskName('---') === 'node', 'D444-DISPATCH-PARITY: task-name sanitizer falls back to node');
   assert(codexTaskNameForNode({ id: 'Probe/D50203 Scope', role: 'code-explorer' }) === 'probe_d50203_scope_code_explorer',
     'D444-DISPATCH-PARITY: codexTaskNameForNode includes role identity');
-  assert(resolveCodexDispatchMode({}, { KAOLA_CODEX_MULTI_AGENT_V2: '1' }) === 'v2-task-name',
-    'D444-DISPATCH-PARITY: v2 env flag resolves to task-name mode');
+  assert(resolveCodexDispatchMode() === 'v2-task-name',
+    'D444-DISPATCH-PARITY (#775): resolveCodexDispatchMode takes no params and always resolves task-name mode');
+  assert(resolveCodexDispatchMode({ codex_dispatch_mode: 'v1-thread-id' }, { KAOLA_CODEX_DISPATCH_MODE: 'v1-thread-id' }) === 'v2-task-name',
+    'D444-DISPATCH-PARITY (#775): a stale v1-thread-id context/env is silently ignored, never honored');
   const dV2 = buildDispatch(nodeInfo, Object.assign({}, context, { codex_dispatch_mode: 'v2-task-name' }));
   assert(dV2.codex_dispatch_mode === 'v2-task-name', 'D444-DISPATCH-PARITY: context can select v2 task-name mode');
   assert(dV2.codex_task_name === 'n1_impl_tdd_guide', 'D444-DISPATCH-PARITY: v2 dispatch still carries stable task name');

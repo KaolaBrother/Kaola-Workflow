@@ -597,29 +597,35 @@ to configure this machine or explicitly approves the change.
 
 The audit must keep these facts separate:
 
-- `codex features list` should report `multi_agent` and `multi_agent_v2` as
-  enabled for V2 task-name dispatch.
-- Codex itself accepts `multi_agent_v2 = true`, an inline object, or a dotted
-  table. Kaola's role-aware gate requires the inline/dotted form because the
-  namespace and metadata settings must be explicit.
-- On Codex 0.144.1, Kaola's role-aware V2 tools must use
-  `tool_namespace = "agents"`, `hide_spawn_agent_metadata = false`, and
-  `non_code_mode_only = true`. The default `collaboration.spawn_agent` name is
-  server-reserved for the hidden-metadata schema: adding `agent_type`/model
-  fields there fails the first request with HTTP 400, while hiding those fields
-  removes Kaola role selection. Setting `non_code_mode_only = false` separately
-  exposes the encrypted task through the incompatible nested Code Mode adapter.
+- `codex features list` should report `multi_agent_v2` as enabled.
+- Codex >=0.145.0 unified multi-agent settings under a top-level `[agents]`
+  table and stabilized MultiAgentV2 as the only supported dispatch path. The
+  legacy `[features.multi_agent_v2]` table, a top-level `[features] multi_agent`
+  flag, and the retired `tool_namespace` / `hide_spawn_agent_metadata` /
+  `non_code_mode_only` sub-fields have no effect and are not read by this gate.
+- `[agents].enabled = true` is the only flag Kaola's gate reads. Kaola-Workflow
+  does **not** write it for you (owner decision D2) — a fresh install refuses
+  at preflight (`codex_multi_agent_v2_required`) until you add it by hand,
+  ABOVE the `# BEGIN kaola-workflow agents` managed block (TOML forbids
+  re-declaring `[agents]` once an `[agents.<role>]` sub-table inside that block
+  has already opened it).
 - `[notice].suppress_unstable_features_warning = true` only suppresses the
   under-development warning; it is not evidence that V2 is enabled.
-- `[agents].max_threads` and `[agents].max_depth`, when present, must be high
-  enough for Kaola fan-out and root-to-subagent dispatch.
+- `[agents].max_concurrent_threads_per_session` (or its back-compat alias
+  `[agents].max_threads`), when present, must be high enough for Kaola fan-out
+  plus the root session — the cap is INCLUSIVE of the root thread, so
+  sub-agent width is the configured cap minus one.
 - The installed plugin cache, generated role profiles, and global hooks must be
   fresh relative to the plugin source Codex is actually loading.
 - Runtime profile integrity comes from omission plus preflight: every generated
   role profile omits both runtime-strength keys, and the profile-freshness
-  preflight migrates or refuses any profile that pins them, so a named child
-  cannot fail to inherit the parent pair. A reasoning-floor role additionally
-  requires the parent proof to meet the classified `gpt-5.6-sol`/`xhigh` floor.
+  preflight migrates or refuses any profile that pins them. Codex >=0.145.0
+  resolves the sub-agent's own model/reasoning effort itself (via
+  `[agents].default_subagent_model` / `default_subagent_reasoning_effort`, or
+  its own built-in default) — this is Codex's decision, not a guaranteed
+  parent-session equality, and Kaola never writes or overrides it. A
+  reasoning-floor role additionally requires the resolved model to classify at
+  `gpt-5.6-sol`/`xhigh` or higher.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -645,9 +651,11 @@ an update.
 [notice]
 suppress_unstable_features_warning = true
 
-[features]
-multi_agent = true
-multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 5, default_wait_timeout_ms = 3600000, max_wait_timeout_ms = 3600000, tool_namespace = "agents", hide_spawn_agent_metadata = false, non_code_mode_only = true }
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 5
+default_wait_timeout_ms = 3600000
+max_wait_timeout_ms = 3600000
 ```
 
 Codex currently caps one `wait_agent` call at one hour. Setting both values to
@@ -659,14 +667,13 @@ completion or another update. This is a user-owned global setting; the installer
 reports the effective values but does not overwrite them.
 
 After changing these settings, start a fresh Codex session so the tool surface
-and injected instructions are rebuilt. The preflight and doctor report `codex_v2_transport_mode`,
-`codex_v2_direct_transport_ready`, `codex_v2_tool_namespace`,
-`codex_v2_role_metadata_visible`, `codex_v2_role_transport_ready`, and
-`codex_v2_transport_warning`. Nested collaboration refuses with
-`codex_v2_encrypted_transport_unsafe`; a reserved/hidden role schema refuses
-with `codex_v2_role_transport_unsafe`. Routing skills call the direct `agents`
-namespace, never the reserved `collaboration` name, `functions.exec`, or Code
-Mode.
+and injected instructions are rebuilt. The preflight and doctor report
+`multi_agent_v2_enabled`, `max_concurrent_threads_per_session[_source]`,
+`effective_subagent_width`, and the wait-timeout bounds. Absent or false
+`[agents].enabled` refuses with the typed `codex_multi_agent_v2_required`
+status (repair: the exact `[agents]\nenabled = true` diff, never written by
+Kaola itself). Routing skills call the direct `agents` namespace, never the
+server-reserved `collaboration` name, `functions.exec`, or Code Mode.
 
 If the audit finds a missing required setting and the user has not authorized
 config changes, stop with the minimal diff and reason. Do not claim Codex is
@@ -674,30 +681,36 @@ ready from repo source alone, from warning suppression alone, or from a stale
 plugin cache.
 
 Every install/upgrade also prints the effective dispatch **posture** automatically
-(no separate command needed). After writing/refreshing the managed config block, the
-installer re-reads the config it just wrote and reports the effort-gated MultiAgentMode
-the Codex runtime will actually enforce — features enabled is not the same as
-dispatch-ready:
+(no separate command needed). Profile installation always succeeds — the installer
+never refuses on `[agents].enabled` (that gate lives at the later, dispatch-time
+preflight, per D2) — but it re-reads the config it just wrote and reports the
+effort-gated MultiAgentMode the Codex runtime will actually enforce, plus whether
+`[agents].enabled` is set at all:
 
 ```text
-Kaola-Workflow Codex multi_agent_v2 transport: direct-only
-Kaola-Workflow Codex dispatch posture: explicitRequestOnly (model_reasoning_effort unset)
-Kaola-Workflow Codex dispatch posture: Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
-Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on codex-tui 0.142.5; it may change in a future Codex release.
+Kaola-Workflow Codex multi_agent_v2: NOT enabled (see codex_multi_agent_v2_required at preflight)
+Kaola-Workflow Codex dispatch posture: none (model_reasoning_effort unset)
+Kaola-Workflow Codex dispatch posture: Codex sub-agent spawn tools are not exposed ([agents] enabled absent-or-false). Enable them, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
+Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.
 status: ok
 ```
 
-This report is REPORT-ONLY and never fails the install: `model_reasoning_effort` is a
-user-owned cost/latency choice, so the installer never writes it. An install that prints
-`status: ok` while the posture reads `explicitRequestOnly` or `none` still needs one of
-the remediations above before a role agent can actually be dispatched: explicitly ask
-for sub-agents / delegation / parallel work in that session (always available and always
-documented), or — if your Codex exposes an `ultra` reasoning effort for your model/plan
-(undocumented as of codex-tui 0.142.5; check the `/model` picker) — set
-`model_reasoning_effort = "ultra"` in `~/.codex/config.toml`, or pass it per-session
-(`codex -c model_reasoning_effort=ultra`). `kaola-workflow-codex-preflight.js` (both the normal gate
-and `--doctor`) reports the same posture non-fatally — a `warn:` line, never a red
-preflight. See `docs/api.md` § Codex Harness Scripts for the JSON field names.
+This report is REPORT-ONLY and never fails the install: `[agents].enabled` and
+`model_reasoning_effort` are both user-owned choices, so the installer never writes
+them. An install that prints `status: ok` while `multi_agent_v2` reads NOT enabled
+still needs the operator to add `[agents]\nenabled = true` by hand (ABOVE the
+managed block — see `codex_multi_agent_v2_required`'s repair diff) before any role
+agent can actually be dispatched; once enabled, a non-proactive posture still needs
+one of the remediations above: explicitly ask for sub-agents / delegation / parallel
+work in that session (always available and always documented), or — if your Codex
+exposes an `ultra` reasoning effort for your model/plan (undocumented as of Codex
+>=0.145.0; check the `/model` picker) — set `model_reasoning_effort = "ultra"` in
+`~/.codex/config.toml`, or pass it per-session (`codex -c model_reasoning_effort=ultra`).
+`kaola-workflow-codex-preflight.js` (both the normal gate and `--doctor`) reports the
+same posture non-fatally once enabled — a `warn:` line, never a red preflight — but
+refuses outright (`codex_multi_agent_v2_required`, exit 7) while `[agents].enabled`
+itself is absent-or-false. See `docs/api.md` § Codex Harness Scripts for the JSON
+field names.
 
 Updating the Codex CLI itself never repairs Kaola-generated `.codex/` state — the
 runtime and the generated role profiles / managed config block are separate
@@ -794,10 +807,10 @@ separate from the user-owned root `model_reasoning_effort` setting, which contro
 the parent session's dispatch posture and is never rewritten by profile migration.
 
 The adaptive planner writes portable `reasoning`/`standard` tier tokens.
-Codex dispatch cards expose `codex_profile_mode: "inherit"`, retain the role's
-default tier as metadata, and source the effective model/effort pair from a fresh
-parent-session JSONL proof. `codex_tier_unresolved` remains the refusal for invalid
-or absent tier metadata.
+Codex dispatch cards expose `codex_profile_mode: "inherit"` and retain the role's
+default tier as declarative metadata only — Codex >=0.145.0 resolves the
+sub-agent's own model/reasoning effort itself, not a guaranteed parent-session
+equality, and Kaola never writes or overrides it.
 
 Every Codex DAG node role writes its full nonce-bound deliverable directly to the seeded
 `dispatch.evidence_file` under `kaola-workflow/{project}/.cache/` before returning. Its final message
@@ -812,14 +825,12 @@ plan, phase, and finalization artifacts are the authoritative durable full resul
 compact summary to the orchestrator and also mirror the full packet into `dispatch.evidence_file`
 when their dispatch supplies a seeded cache file.
 
-Codex preflight and doctor output report the dispatch identity mode. The stable
-default is `v1-thread-id`, where wait/close rows may still show runtime thread IDs
-and the prompt/evidence carry the node mapping. When the operator explicitly enables
-Codex v2 multi-agent support, the descriptor reports `v2-task-name` and plan-run
-passes `task_name: dispatch.codex_task_name`, a sanitized value derived from the
-workflow node id and role. Both modes use `fork_turns: "none"` and omit transient
-model/effort overrides, so the named standalone profile inherits the parent
-session's pair by construction.
+Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
+is the only mode — there is no v1/thread-id fallback. Once `[agents].enabled = true`
+is set, plan-run passes `task_name: dispatch.codex_task_name`, a sanitized value
+derived from the workflow node id and role, with `fork_turns: "none"` and no
+transient model/effort overrides; the named standalone profile (or Codex's own
+runtime resolution) owns the model/reasoning pair.
 
 ## Usage
 

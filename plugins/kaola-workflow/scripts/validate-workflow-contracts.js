@@ -1000,8 +1000,10 @@ for (const file of planRunSurfacesGateFence607) {
 
 // #611: the Codex dispatch prose mandates fork_turns:"none" for EVERY role dispatch (not only
 // tiered nodes) — the "only for tiered nodes" qualifier is retired. Pin the unconditional mandate
-// (both v2 and v1 dispatch modes) and ban the retired qualifier phrasing across the 3 Codex SKILL
-// plan-run surfaces (Codex-runtime-only) so a partial drop reds this chain.
+// and ban the retired qualifier phrasing across the 3 Codex SKILL plan-run surfaces
+// (Codex-runtime-only) so a partial drop reds this chain.
+// #775: v2-task-name is the only dispatch mode, so the "applies identically to this dispatch
+// mode" qualifier (a v1/v2 distinction) is itself retired prose.
 const planRunSurfaces611ForkTurns = [
   'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
   'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
@@ -1009,7 +1011,7 @@ const planRunSurfaces611ForkTurns = [
 ];
 for (const file of planRunSurfaces611ForkTurns) {
   assertIncludes(file, 'on EVERY role dispatch');
-  assertIncludes(file, 'the unconditional mandate applies identically to this dispatch mode');
+  assertNotIncludes(file, 'the unconditional mandate applies identically to this dispatch mode');
   assertNotIncludes(file, 'not a valid path for tiered nodes');
 }
 

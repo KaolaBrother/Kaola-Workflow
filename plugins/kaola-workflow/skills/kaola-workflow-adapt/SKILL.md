@@ -169,13 +169,14 @@ Each node is one row of the `## Nodes` table:
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
   an unknown role.
 - **model** (optional) — declarative reasoning/wait-budget metadata from `{reasoning|standard}`.
-  Every named Codex role profile omits model and effort so the child inherits the current parent
-  session; this cell never selects child strength and never conflicts with a role's historical/default
+  Every named Codex role profile omits model and effort; Codex >=0.145.0 resolves the sub-agent's
+  own model/reasoning effort (via the `[agents]` table's own defaults, or its own built-in default) —
+  this cell never selects child strength and never conflicts with a role's historical/default
   metadata class. The legacy
   `opus`/`sonnet` aliases remain accepted as `reasoning`/`standard`; new plans author neutral tokens.
   An out-of-vocab cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a
-  model; absent/`—` resolves through the same role-static tier, and an unresolved card refuses as
-  `codex_tier_unresolved`.
+  model; absent/`—` resolves through the same role-static tier — informational metadata only, never
+  a dispatch gate, since Codex owns the actual model/reasoning-effort resolution independently.
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
   instances of one role over pairwise-disjoint declared write sets — author N as wide as the
   subtasks are genuinely independent; `FANOUT_CAP` caps only *runtime concurrency*, not authored
@@ -332,10 +333,8 @@ label is created until git is clean** (the front end claims here at repo-root �
 Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-workflow-claim.js startup --runtime <runtime>
 --target-issue <issue> --attest-planner-spawn` (`--attest-planner-spawn` is REQUIRED on every planner-run startup — it back-fills the
 planner's own dispatch marker into .cache/dispatch-log.jsonl for closure attestation; only the
-dispatched workflow-planner passes it; add `--sink pr` only for a requested PR sink; on Codex, first run the same preflight
-doctor detection as `kaola-workflow-next`'s Codex Dispatch Mode Detection step and append
-`--codex-dispatch-mode <detected>` when a mode was found — absent detection leaves the claim on
-its fail-closed `v1-thread-id` default), authors the `## Meta` + `## Nodes` DAG +
+dispatched workflow-planner passes it; add `--sink pr` only for a requested PR sink), authors the
+`## Meta` + `## Nodes` DAG +
 empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
 as a self-check (NOT `--freeze`, NOT `authoring-allowed`), then RUNS `kaola-workflow-adaptive-handoff.js --project {project} --json` (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate), and RETURNS the handoff packet. It never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches. If the project already has a
 `workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). <!-- PIN: claim-escalate -->
@@ -360,7 +359,7 @@ agents.spawn_agent:
   fork_turns: "none"
   message: "Repository root: <absolute-root>. Selected issue/set/project: <target>. Apply the kaola-workflow-adapt skill and workflow-planner profile contract. Return only the bounded durable handoff packet."
 ```
-Sanitize the stable task suffix to lowercase letters, digits, and underscores. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Codex v1 keeps `fork_turns: "none"` and the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
+Sanitize the stable task suffix to lowercase letters, digits, and underscores. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
 
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
@@ -391,17 +390,13 @@ stated by the main orchestrator; the planner validates and claims it.
 ### Bundle startup call
 
 The planner passes `--target-issues A,B,C` (sorted ascending, comma-separated)
-instead of `--target-issue N`. On Codex, detect `KAOLA_CODEX_DISPATCH_MODE` first (the same
-preflight doctor detection as the single-issue claim above), then pass it through:
+instead of `--target-issue N`:
 
 ```bash
-KAOLA_DISPATCH_MODE_FLAG=""
-[ -n "${KAOLA_CODEX_DISPATCH_MODE:-}" ] && KAOLA_DISPATCH_MODE_FLAG="--codex-dispatch-mode $KAOLA_CODEX_DISPATCH_MODE"
 node "$claim_script" startup \
   --runtime codex \
   --target-issues 42,47,53 \
-  --attest-planner-spawn \
-  $KAOLA_DISPATCH_MODE_FLAG
+  --attest-planner-spawn
 ```
 
 Compatibility rule: `--target-issue` / `KAOLA_TARGET_ISSUE` keep current one-issue

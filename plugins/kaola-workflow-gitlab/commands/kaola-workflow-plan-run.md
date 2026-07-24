@@ -16,8 +16,9 @@ Run subcommands with `--summary` for one-line output. For an opening call (`open
 `open-ready` / `close-and-open-next`), the summary line already carries the dispatch
 essentials: `summary: ok | opened=<node-id> role=<role> task=<codex_task_name>
 mode=<codex_dispatch_mode> effort=<medium|xhigh|unresolved>` (one `opened=` segment per member on a
-batch open; `effort=unresolved` is a typed `codex_tier_unresolved` refusal, never inheritance; the leg path is NOT in the
-summary line). The full envelope — every field, including `dispatch.leg_path` and the
+batch open; `effort=unresolved` is an informational display sentinel ONLY — Codex resolves the
+sub-agent's own model/reasoning independently, so `unresolved` never blocks or refuses a dispatch;
+the leg path is NOT in the summary line). The full envelope — every field, including `dispatch.leg_path` and the
 complete `dispatch:{...}` object — needs `--json` without `--summary`, or the cached
 `.cache/<op>-envelope.json`. Drill into the full envelope on `result: refuse` (includes
 `operator_hint`), AND — whenever running with `--summary` — before every dispatch: take the

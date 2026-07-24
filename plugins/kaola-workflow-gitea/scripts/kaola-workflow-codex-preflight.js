@@ -54,6 +54,11 @@ const crypto = require('crypto');
 const BEGIN_MARKER = '# BEGIN kaola-workflow agents';
 const END_MARKER = '# END kaola-workflow agents';
 
+// #775: the Codex 0.145 multi_agent_v2 re-baseline version floor. MIRROR of
+// install-codex-agent-profiles.js (same #332-style duplication convention). Net-new — no version
+// comparison existed anywhere in this repository before this gate.
+const CODEX_MIN_VERSION = '0.145.0';
+
 // #332 schema constants — MIRROR of install-codex-agent-profiles.js. Keep in sync.
 const MANIFEST_BASENAME = '.kaola-managed-profiles.json';
 const RETIRED_PROFILE_FILES = [
@@ -718,178 +723,21 @@ function splitInlineTomlFields(body) {
   return fields.filter(Boolean);
 }
 
-function parseInlineTomlTableAssignments(value) {
-  const trimmed = String(value || '').trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
-  const body = trimmed.slice(1, -1).trim();
-  if (!body) return [];
-  const assignments = [];
-  for (const field of splitInlineTomlFields(body)) {
-    const assignment = parseTomlAssignment(field);
-    if (!assignment || assignment.key.length !== 1) return null;
-    assignments.push(assignment);
-  }
-  return assignments;
-}
-
-function parseMultiAgentV2Value(value) {
-  const trimmed = String(value || '').trim();
-  const bool = parseTomlBoolean(trimmed);
-  if (bool !== null) return {
-    valid: true,
-    enabled: bool,
-    non_code_mode_only: null,
-    hide_spawn_agent_metadata: null,
-    tool_namespace: null,
-  };
-
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
-    return { valid: false, enabled: false, non_code_mode_only: null };
-  }
-
-  let enabledFound = false;
-  let enabled = false;
-  let transportFound = false;
-  let transportAmbiguous = false;
-  let nonCodeModeOnly = null;
-  let metadataFound = false;
-  let metadataAmbiguous = false;
-  let hideSpawnAgentMetadata = null;
-  let namespaceFound = false;
-  let namespaceAmbiguous = false;
-  let toolNamespace = null;
-  for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
-    const assignment = parseTomlAssignment(field);
-    if (!assignment || assignment.key.length !== 1) continue;
-    const key = assignment.key[0].value;
-    if (key === 'enabled') {
-      if (enabledFound) return { valid: false, enabled: false, non_code_mode_only: null };
-      const fieldBool = parseTomlBoolean(assignment.value);
-      if (fieldBool === null) return { valid: false, enabled: false, non_code_mode_only: null };
-      enabledFound = true;
-      enabled = fieldBool;
-      continue;
-    }
-    if (key === 'non_code_mode_only') {
-      if (transportFound) {
-        transportAmbiguous = true;
-        continue;
-      }
-      const fieldBool = parseTomlBoolean(assignment.value);
-      transportFound = true;
-      if (fieldBool === null) transportAmbiguous = true;
-      else nonCodeModeOnly = fieldBool;
-      continue;
-    }
-    if (key === 'hide_spawn_agent_metadata') {
-      if (metadataFound) {
-        metadataAmbiguous = true;
-        continue;
-      }
-      const fieldBool = parseTomlBoolean(assignment.value);
-      metadataFound = true;
-      if (fieldBool === null) metadataAmbiguous = true;
-      else hideSpawnAgentMetadata = fieldBool;
-      continue;
-    }
-    if (key === 'tool_namespace') {
-      if (namespaceFound) {
-        namespaceAmbiguous = true;
-        continue;
-      }
-      const fieldString = parseTomlString(assignment.value);
-      namespaceFound = true;
-      if (fieldString === null) namespaceAmbiguous = true;
-      else toolNamespace = fieldString;
-    }
-  }
-
-  return enabledFound
-    ? {
-      valid: true,
-      enabled,
-      non_code_mode_only: nonCodeModeOnly,
-      transport_ambiguous: transportAmbiguous,
-      hide_spawn_agent_metadata: hideSpawnAgentMetadata,
-      metadata_ambiguous: metadataAmbiguous,
-      tool_namespace: toolNamespace,
-      namespace_ambiguous: namespaceAmbiguous,
-    }
-    : { valid: false, enabled: false, non_code_mode_only: null };
-}
-
+// #775 (Codex 0.145 re-baseline): multi_agent_v2 settings moved from [features.multi_agent_v2]
+// (0.142/0.144) to the unified top-level [agents] table, and V1 (the [features] multi_agent flag,
+// the scalar/inline-object multi_agent_v2 shapes, and the non_code_mode_only / hide_spawn_agent_metadata
+// / tool_namespace transport sub-grammar) is retired — there is no V1 fallback and no transport-mode
+// gate anymore. [agents] is a genuine top-level TOML table (never a [features] scalar/inline-object),
+// so this is a plain table/assignment scan with none of the old dual-shape ambiguity tracking.
+// Reads ONLY the `enabled` flag; parseMultiAgentV2NumericFields below reads the concurrency/
+// wait-timeout fields from the same table. multi_agent_v2 stays a CHECKED required engine feature
+// (codex_multi_agent_v2_required refuses when it is absent/false) — see runPreflight.
 function detectCodexDispatchMode(configContent) {
   const lines = tomlStructuralLines(configContent);
   let table = null;
   let seen = false;
   let enabled = false;
   let ambiguous = false;
-  let transportSeen = false;
-  let transportAmbiguous = false;
-  let nonCodeModeOnly = null;
-  let metadataSeen = false;
-  let metadataAmbiguous = false;
-  let hideSpawnAgentMetadata = null;
-  let namespaceSeen = false;
-  let namespaceAmbiguous = false;
-  let toolNamespace = null;
-  let forcedUnsafe = false;
-
-  function forceUnsafe() {
-    forcedUnsafe = true;
-    transportAmbiguous = true;
-    metadataAmbiguous = true;
-    namespaceAmbiguous = true;
-  }
-
-  function recordTransport(value) {
-    if (value === null || value === undefined) return;
-    if (transportSeen || typeof value !== 'boolean') {
-      transportAmbiguous = true;
-      nonCodeModeOnly = null;
-      return;
-    }
-    transportSeen = true;
-    nonCodeModeOnly = value;
-  }
-
-  function record(parsed) {
-    if (!parsed.valid || seen) {
-      ambiguous = true;
-      enabled = false;
-      return;
-    }
-    seen = true;
-    enabled = parsed.enabled;
-    recordTransport(parsed.non_code_mode_only);
-    if (parsed.transport_ambiguous) transportAmbiguous = true;
-    recordMetadata(parsed.hide_spawn_agent_metadata);
-    if (parsed.metadata_ambiguous) metadataAmbiguous = true;
-    recordNamespace(parsed.tool_namespace);
-    if (parsed.namespace_ambiguous) namespaceAmbiguous = true;
-  }
-
-  function recordMetadata(value) {
-    if (value === null || value === undefined) return;
-    if (metadataSeen || typeof value !== 'boolean') {
-      metadataAmbiguous = true;
-      hideSpawnAgentMetadata = null;
-      return;
-    }
-    metadataSeen = true;
-    hideSpawnAgentMetadata = value;
-  }
-
-  function recordNamespace(value) {
-    if (value === null || value === undefined) return;
-    if (namespaceSeen || typeof value !== 'string' || value.length === 0) {
-      namespaceAmbiguous = true;
-      toolNamespace = null;
-      return;
-    }
-    namespaceSeen = true;
-    toolNamespace = value;
-  }
 
   for (const rawLine of lines) {
     const line = stripTomlComment(rawLine).trim();
@@ -902,92 +750,26 @@ function detectCodexDispatchMode(configContent) {
     }
 
     const assignment = parseTomlAssignment(line);
-    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
-      const featureFields = parseInlineTomlTableAssignments(assignment.value);
-      if (featureFields === null) {
-        forceUnsafe();
-        continue;
-      }
-      const v2Fields = featureFields.filter(field => field.key[0].value === 'multi_agent_v2');
-      if (v2Fields.length > 1) {
-        forceUnsafe();
-        continue;
-      }
-      if (v2Fields.length === 1) {
-        const parsed = parseMultiAgentV2Value(v2Fields[0].value);
-        if (parsed.valid) record(parsed);
-        else forceUnsafe();
-      }
-    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
-      record(parseMultiAgentV2Value(assignment.value));
-    } else if (tomlAssignmentPathMatches(
-      table, assignment, ['features', 'multi_agent_v2', 'enabled'])) {
-        record({
-          valid: parseTomlBoolean(assignment.value) !== null,
-          enabled: parseTomlBoolean(assignment.value) === true,
-          non_code_mode_only: null,
-          hide_spawn_agent_metadata: null,
-          tool_namespace: null,
-        });
-    } else if (tomlAssignmentPathMatches(
-      table, assignment, ['features', 'multi_agent_v2', 'non_code_mode_only'])) {
-        const transportValue = parseTomlBoolean(assignment.value);
-        if (transportValue === null) transportAmbiguous = true;
-        else recordTransport(transportValue);
-    } else if (tomlAssignmentPathMatches(
-      table, assignment, ['features', 'multi_agent_v2', 'hide_spawn_agent_metadata'])) {
-        const metadataValue = parseTomlBoolean(assignment.value);
-        if (metadataValue === null) metadataAmbiguous = true;
-        else recordMetadata(metadataValue);
-    } else if (tomlAssignmentPathMatches(
-      table, assignment, ['features', 'multi_agent_v2', 'tool_namespace'])) {
-        const namespaceValue = parseTomlString(assignment.value);
-        if (namespaceValue === null) namespaceAmbiguous = true;
-        else recordNamespace(namespaceValue);
+    if (!tomlAssignmentPathMatches(table, assignment, ['agents', 'enabled'])) continue;
+    const value = parseTomlBoolean(assignment.value);
+    if (value === null || seen) {
+      ambiguous = true;
+      enabled = false;
+    } else {
+      seen = true;
+      enabled = value;
     }
   }
 
-  enabled = forcedUnsafe || (seen && !ambiguous && enabled);
-  const transportMode = !enabled
-    ? 'not_applicable'
-    : (transportAmbiguous
-      ? 'unknown'
-      : (nonCodeModeOnly === false ? 'nested-allowed' : 'direct-only'));
-  const directTransportReady = enabled ? transportMode === 'direct-only' : null;
-  const effectiveNamespace = !enabled
-    ? null
-    : (namespaceAmbiguous ? null : (toolNamespace || 'collaboration'));
-  const roleMetadataVisible = !enabled
-    ? null
-    : (metadataAmbiguous ? null : hideSpawnAgentMetadata === false);
-  const roleTransportReady = enabled
-    ? directTransportReady === true
-      && effectiveNamespace === CODEX_V2_ROLE_TOOL_NAMESPACE
-      && roleMetadataVisible === true
-    : null;
-  let transportWarning = null;
-  if (enabled && directTransportReady !== true) {
-    transportWarning = CODEX_V2_DIRECT_TRANSPORT_NOTE;
-  } else if (enabled && roleTransportReady !== true) {
-    transportWarning = CODEX_V2_ROLE_TRANSPORT_NOTE;
-  }
+  const v2Enabled = seen && !ambiguous && enabled;
   return {
-    dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
-    multi_agent_v2_enabled: enabled,
-    codex_v2_transport_mode: transportMode,
-    codex_v2_direct_transport_ready: directTransportReady,
-    codex_v2_tool_namespace: effectiveNamespace,
-    codex_v2_role_metadata_visible: roleMetadataVisible,
-    codex_v2_role_transport_ready: roleTransportReady,
-    codex_v2_transport_warning: transportWarning,
+    // #775: the single legal dispatch mode once V2 is enabled — no more v1-thread-id fallback.
+    // null (not a fabricated 'v1-thread-id') when V2 is not enabled; runPreflight refuses
+    // codex_multi_agent_v2_required in that case rather than silently exiting ok.
+    dispatch_mode: v2Enabled ? 'v2-task-name' : null,
+    multi_agent_v2_enabled: v2Enabled,
   };
 }
-
-const CODEX_V2_TRANSPORT_UNSAFE_STATUS = 'codex_v2_encrypted_transport_unsafe';
-const CODEX_V2_DIRECT_TRANSPORT_NOTE = 'Codex MultiAgentV2 encrypted task messages require direct-only collaboration tools. Set non_code_mode_only = true in the enabled [features] multi_agent_v2 inline object or [features.multi_agent_v2] table (or omit that field to use the Codex 0.144.1 direct-only default), then start a fresh Codex session; never dispatch spawn_agent, send_message, or followup_task through functions.exec or Code Mode.';
-const CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS = 'codex_v2_role_transport_unsafe';
-const CODEX_V2_ROLE_TOOL_NAMESPACE = 'agents';
-const CODEX_V2_ROLE_TRANSPORT_NOTE = 'Kaola-Workflow role-aware MultiAgentV2 on Codex 0.144.1 requires tool_namespace = "agents", hide_spawn_agent_metadata = false, and non_code_mode_only = true. The default collaboration.spawn_agent name is server-reserved: exposing agent_type/model/reasoning fields there fails the first request with HTTP 400, while hiding them removes Kaola role selection. Apply the settings in the enabled [features] multi_agent_v2 object or [features.multi_agent_v2] table, then start a fresh Codex session and call the direct agents namespace, never functions.exec or Code Mode.';
 
 // ---------------------------------------------------------------------------
 // #598: MultiAgentMode dispatch-POSTURE derivation. This is DIFFERENT from
@@ -1007,58 +789,11 @@ const CODEX_V2_ROLE_TRANSPORT_NOTE = 'Kaola-Workflow role-aware MultiAgentV2 on 
 // informs a REPORT/WARN. Duplicated byte-identically alongside the #332 schema
 // helpers above (installer <-> preflight, x7 files total); keep in lock-step.
 // ---------------------------------------------------------------------------
-const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on codex-tui 0.142.5; it may change in a future Codex release.';
+const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.';
 
-// `[features] multi_agent = <bool>` — the base (v1) tool-exposure flag, distinct from
-// multi_agent_v2 (already parsed by detectCodexDispatchMode above). Same strict
-// first-match/ambiguous-fails-closed strategy: a repeated key or malformed boolean
-// short-circuits to false rather than guessing.
-function parseFeaturesMultiAgentEnabled(configContent) {
-  const lines = tomlStructuralLines(configContent);
-  let table = null;
-  let seen = false;
-  let enabled = false;
-  let ambiguous = false;
-
-  for (const rawLine of lines) {
-    const line = stripTomlComment(rawLine).trim();
-    if (!line) continue;
-
-    const tableName = parseTomlTableName(line);
-    if (tableName !== null) {
-      table = tableName;
-      continue;
-    }
-
-    const assignment = parseTomlAssignment(line);
-    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
-      const featureFields = parseInlineTomlTableAssignments(assignment.value);
-      if (featureFields === null) continue;
-      for (const field of featureFields) {
-        if (field.key[0].value !== 'multi_agent') continue;
-        const b = parseTomlBoolean(field.value);
-        if (b === null || seen) {
-          ambiguous = true;
-          enabled = false;
-        } else {
-          seen = true;
-          enabled = b;
-        }
-      }
-    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent'])) {
-        const b = parseTomlBoolean(assignment.value);
-        if (b === null || seen) {
-          ambiguous = true;
-          enabled = false;
-        } else {
-          seen = true;
-          enabled = b;
-        }
-    }
-  }
-
-  return seen && !ambiguous && enabled;
-}
+// #775: the legacy `[features] multi_agent` (v1) flag and the V1/V2 dual-feature OR-join are
+// retired — multi_agent_v2 (now the [agents] table) is the ONLY dispatch contract, so
+// deriveDispatchPosture below gates on detectCodexDispatchMode's `multi_agent_v2_enabled` alone.
 
 // Root-level `model_reasoning_effort` (NOT the per-profile agents/*.toml field of the
 // same name) — the effort setting that gates MultiAgentMode. TOML root keys must
@@ -1094,43 +829,47 @@ function parseTopLevelModelReasoningEffort(configContent) {
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Codex sub-agent spawn tools are not exposed ([features] multi_agent / multi_agent_v2 absent-or-false). '
+    return 'Codex sub-agent spawn tools are not exposed ([agents] enabled absent-or-false). '
       + 'Enable them, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex '
-      + 'exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the '
+      + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
       + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
       + 'model_reasoning_effort=ultra) for proactive delegation.';
   }
   return 'Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). '
     + 'To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes '
-    + 'an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), '
+    + 'an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), '
     + 'set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
     + 'for proactive delegation.';
 }
 
+// #775: gates ONLY on multi_agent_v2_enabled (the [agents] table) — v1 is retired, so there is no
+// more OR-join with a legacy feature flag. `multi_agent_enabled` mirrors multi_agent_v2_enabled
+// (kept as a distinct output field for back-compat shape; there is only one feature now).
 function deriveDispatchPosture(configContent) {
   const dispatchMode = detectCodexDispatchMode(configContent);
-  const multiAgentEnabled = parseFeaturesMultiAgentEnabled(configContent);
-  const featuresEnabled = multiAgentEnabled || dispatchMode.multi_agent_v2_enabled;
   const effort = parseTopLevelModelReasoningEffort(configContent);
-  const posture = !featuresEnabled ? 'none' : (effort === 'ultra' ? 'proactive' : 'explicitRequestOnly');
+  const posture = !dispatchMode.multi_agent_v2_enabled ? 'none' : (effort === 'ultra' ? 'proactive' : 'explicitRequestOnly');
   return {
     dispatch_posture: posture,
     model_reasoning_effort: effort,
-    multi_agent_enabled: multiAgentEnabled,
+    multi_agent_enabled: dispatchMode.multi_agent_v2_enabled,
     dispatch_posture_warning: dispatchPostureRemediation(posture),
   };
 }
 
 // ---------------------------------------------------------------------------
 // MultiAgentV2 concurrency + wait-timeout bounds — extends the dispatch-posture report
-// above with the effective v2 slot budget and wait-timeout knobs, version-guarded the
-// same way. `max_concurrent_threads_per_session` INCLUDES the root/orchestrator thread,
-// so effective subagent width = threads - 1. A controlled probe on codex-tui 0.142.5
-// observed a default budget of 4 (width 3) when the key is absent; that default is NOT
-// published in official Codex docs, so it is surfaced as an OBSERVED fallback (source:
-// 'observed_default'), never asserted as guaranteed Codex behavior. The three
-// *_wait_timeout_ms bounds have no independently verified default — read ONLY when
-// explicitly present in config; null when absent (no fabricated fallback for those three).
+// above with the effective v2 slot budget and wait-timeout knobs. `max_concurrent_threads_per_session`
+// INCLUDES the root/orchestrator thread, so effective subagent width = threads - 1 — CONFIRMED
+// against rust-v0.145.0 source (`effective_agent_max_threads` = `saturating_sub(1)`,
+// codex-rs/core/src/config/mod.rs) and upstream PR #19792 ("it counts the root thread and all open
+// subagent threads... default 4... derive the existing internal subagent slot limit as
+// max_concurrent_threads_per_session - 1"). This arithmetic is UNCHANGED by #775 — only the config
+// TABLE moved (see detectCodexDispatchMode / parseMultiAgentV2NumericFields). The default of 4 when
+// the key is absent is now a documented upstream default (not merely 'observed'); the constant name
+// and the 'observed_default' source tag are kept for output-shape back-compat. The three
+// *_wait_timeout_ms bounds have no independently verified default — read ONLY when explicitly
+// present in config; null when absent (no fabricated fallback for those three).
 //
 // Bounds are only meaningful when v2 dispatch is actually active (dispatch_mode ===
 // 'v2-task-name'); when v2 is not enabled, every field reports not_applicable/null —
@@ -1142,14 +881,20 @@ function deriveDispatchPosture(configContent) {
 // ---------------------------------------------------------------------------
 const OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION = 4;
 
-const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config for Kaola-Workflow dispatch: set '
-  + 'max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 (the budget INCLUDES '
-  + 'the orchestrator thread) and max_wait_timeout_ms near the longest expected node runtime so long-poll joins '
-  + 'are not capped short. Example:\n[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 5\n'
-  + 'max_wait_timeout_ms = 1800000\nNote: [agents].max_threads (the v1 concurrency knob) cannot be set once '
-  + 'features.multi_agent_v2 is enabled — codex-tui 0.142.5 rejects it. Effective subagent width, the observed '
-  + 'default budget of 4 (width 3) when max_concurrent_threads_per_session is absent, and the wait-timeout bounds '
-  + 'are Codex CLI runtime behavior verified on codex-tui 0.142.5; they may change in a future Codex release.';
+const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [agents] config for Kaola-Workflow dispatch: set '
+  + 'max_concurrent_threads_per_session (or its back-compat alias max_threads) high enough for the '
+  + 'intended fan-out width plus 1 (the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms '
+  + 'near the longest expected node runtime so long-poll joins are not capped short. Example:\n'
+  + '[agents]\nenabled = true\nmax_concurrent_threads_per_session = 5\nmax_wait_timeout_ms = 1800000\n'
+  + 'Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session '
+  + 'is absent are documented Codex >=0.145.0 behavior (rust-v0.145.0, PR #19792); the wait-timeout bounds '
+  + 'have no independently verified default and are read only when explicitly configured.';
+
+// #775: max_threads is a back-compat alias for the canonical max_concurrent_threads_per_session —
+// both resolve to the SAME numeric field under the unified [agents] table. The FIRST occurrence of
+// either name (in document order) wins; a later occurrence of either name is ignored (mirrors the
+// existing first-match convention for these fields).
+const MULTI_AGENT_V2_MAX_THREADS_ALIAS = 'max_threads';
 
 const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'max_concurrent_threads_per_session',
@@ -1158,12 +903,12 @@ const MULTI_AGENT_V2_NUMERIC_FIELDS = [
   'default_wait_timeout_ms',
 ];
 
-// Parses the four MultiAgentV2ConfigToml numeric fields from either syntax: the
-// inline-object form (`multi_agent_v2 = { max_concurrent_threads_per_session = N, ... }`)
-// or the dotted-table form (`[features.multi_agent_v2]` with the fields as separate
-// lines) — the same two representations detectCodexDispatchMode already parses for
-// `enabled`. Same first-match/fail-to-absent discipline as the rest of this file: a
-// non-integer or repeated value is treated as not-configured rather than guessed at.
+// #775: parses the four MultiAgentV2ConfigToml numeric fields from the unified top-level
+// [agents] table (moved from [features.multi_agent_v2] pre-0.145). [agents] is a genuine TOML
+// table — no more inline-object/scalar dual-shape grammar. `max_threads` is a back-compat alias
+// for `max_concurrent_threads_per_session` (same field); first occurrence of either name wins.
+// Same first-match/fail-to-absent discipline as the rest of this file: a non-integer or repeated
+// value is treated as not-configured rather than guessed at.
 function parseMultiAgentV2NumericFields(configContent) {
   const fields = {
     max_concurrent_threads_per_session: null,
@@ -1172,20 +917,13 @@ function parseMultiAgentV2NumericFields(configContent) {
     default_wait_timeout_ms: null,
   };
 
-  function recordField(key, rawValue) {
+  function recordField(rawKey, rawValue) {
+    const key = rawKey === MULTI_AGENT_V2_MAX_THREADS_ALIAS
+      ? 'max_concurrent_threads_per_session' : rawKey;
     if (!MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key) || fields[key] !== null) return;
     const m = String(rawValue).trim().match(/^-?\d+$/);
     if (!m) return;
     fields[key] = parseInt(m[0], 10);
-  }
-
-  function recordFromInlineObject(body) {
-    for (const field of splitInlineTomlFields(body)) {
-      const assignment = parseTomlAssignment(field);
-      if (assignment && assignment.key.length === 1) {
-        recordField(assignment.key[0].value, assignment.value);
-      }
-    }
   }
 
   const lines = tomlStructuralLines(configContent);
@@ -1199,28 +937,11 @@ function parseMultiAgentV2NumericFields(configContent) {
       table = tableName;
       continue;
     }
+    if (!tomlTableNameMatches(table, 'agents')) continue;
 
     const assignment = parseTomlAssignment(line);
-    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
-      const featureFields = parseInlineTomlTableAssignments(assignment.value);
-      if (featureFields === null) continue;
-      for (const field of featureFields) {
-        if (field.key[0].value !== 'multi_agent_v2') continue;
-        const value = field.value.trim();
-        if (value.startsWith('{') && value.endsWith('}')) {
-          recordFromInlineObject(value.slice(1, -1));
-        }
-      }
-    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
-        const v = assignment.value.trim();
-        if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
-    } else {
-      const prefix = ['features', 'multi_agent_v2'];
-      const fullPath = tomlAssignmentPath(table, assignment);
-      if (fullPath && fullPath.length === 3
-          && fullPath[0] === prefix[0] && fullPath[1] === prefix[1]) {
-        recordField(fullPath[2], assignment.value);
-      }
+    if (assignment && assignment.key.length === 1) {
+      recordField(assignment.key[0].value, assignment.value);
     }
   }
 
@@ -1255,14 +976,14 @@ function deriveMultiAgentV2Bounds(configContent, v2Enabled) {
 }
 
 // Codex overlays config keys from ~/.codex, then project .codex directories from
-// repository root to cwd. Parse only the transport/posture fields this gate owns,
+// repository root to cwd. Parse only the [agents]/posture fields this gate owns,
 // retain whether each field was explicitly present, and overlay high layers over
-// low layers without treating an absent project field as a reset.
+// low layers without treating an absent project field as a reset. #775: [agents] is
+// a genuine top-level table (never a [features] scalar/inline-object), so there is no
+// more v2-shape merge-compatibility tracking — each field just overlays independently.
 function parseRuntimeLayerOverrides(configContent) {
   const overrides = {};
   let table = null;
-  let v2Shape = null;
-  let v2ShapeSource = null;
 
   function record(key, value, valid = true) {
     if (overrides[key] && overrides[key].present) {
@@ -1282,119 +1003,29 @@ function parseRuntimeLayerOverrides(configContent) {
     record(key, match ? parseInt(match[0], 10) : null, !!match);
   }
 
-  function recordV2Shape(kind, source) {
-    if (v2Shape === null) {
-      v2Shape = kind;
-      v2ShapeSource = source;
-      return;
-    }
-    const recursivelyMergeable = v2Shape === 'table' && kind === 'table'
-      && v2ShapeSource !== 'inline' && source !== 'inline';
-    if (!recursivelyMergeable) {
-      v2Shape = 'invalid';
-      v2ShapeSource = 'invalid';
-    }
-  }
-
-  function recordV2Object(body) {
-    for (const field of splitInlineTomlFields(body)) {
-      const assignment = parseTomlAssignment(field);
-      if (!assignment || assignment.key.length !== 1) continue;
-      const key = assignment.key[0].value;
-      const raw = assignment.value;
-      if (key === 'enabled') recordBoolean('v2_enabled', raw);
-      else if (key === 'non_code_mode_only') recordBoolean('v2_non_code_mode_only', raw);
-      else if (key === 'hide_spawn_agent_metadata') recordBoolean('v2_hide_spawn_agent_metadata', raw);
-      else if (key === 'tool_namespace') {
-        const value = parseTomlString(raw);
-        record('v2_tool_namespace', value, value !== null && value.length > 0);
-      } else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) {
-        recordInteger(`v2_${key}`, raw);
-      }
-    }
-  }
-
-  function recordV2Value(rawValue) {
-    const value = String(rawValue).trim();
-    const bool = parseTomlBoolean(value);
-    if (bool !== null) {
-      recordV2Shape('scalar', 'scalar');
-      record('v2_enabled', bool, true);
-    } else if (value.startsWith('{') && value.endsWith('}')) {
-      recordV2Shape('table', 'inline');
-      recordV2Object(value.slice(1, -1));
-    } else {
-      recordV2Shape('invalid', 'invalid');
-      record('v2_enabled', null, false);
-    }
-  }
-
-  function recordFeaturesValue(rawValue) {
-    const featureFields = parseInlineTomlTableAssignments(rawValue);
-    if (featureFields === null) {
-      recordV2Shape('invalid', 'invalid');
-      record('v2_enabled', null, false);
-      return;
-    }
-    for (const field of featureFields) {
-      const key = field.key[0].value;
-      if (key === 'multi_agent') recordBoolean('multi_agent', field.value);
-      else if (key === 'multi_agent_v2') recordV2Value(field.value);
-    }
-  }
-
   for (const rawLine of tomlStructuralLines(configContent)) {
     const line = stripTomlComment(rawLine).trim();
     if (!line) continue;
     const tableName = parseTomlTableName(line);
     if (tableName !== null) {
       table = tableName;
-      if (tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-        recordV2Shape('table', 'structural');
-      }
       continue;
     }
 
     const assignment = parseTomlAssignment(line);
     if (tomlAssignmentPathMatches(table, assignment, ['model_reasoning_effort'])) {
-        const value = parseTomlString(assignment.value);
-        record('model_reasoning_effort', value, value !== null);
+      const value = parseTomlString(assignment.value);
+      record('model_reasoning_effort', value, value !== null);
+      continue;
     }
-
-    if (tomlAssignmentPathMatches(table, assignment, ['features'])) {
-      recordFeaturesValue(assignment.value);
-    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent'])) {
-      recordBoolean('multi_agent', assignment.value);
-    } else if (tomlAssignmentPathMatches(table, assignment, ['features', 'multi_agent_v2'])) {
-      recordV2Value(assignment.value);
-    } else {
-      const fullPath = tomlAssignmentPath(table, assignment);
-      if (!fullPath || fullPath.length !== 3
-          || fullPath[0] !== 'features' || fullPath[1] !== 'multi_agent_v2') continue;
-      if (!tomlTableNameMatches(table, 'features.multi_agent_v2')) {
-        recordV2Shape('table', 'structural');
-      }
-      const key = fullPath[2];
-      const raw = assignment.value;
-      if (key === 'enabled') recordBoolean('v2_enabled', raw);
-      else if (key === 'non_code_mode_only') recordBoolean('v2_non_code_mode_only', raw);
-      else if (key === 'hide_spawn_agent_metadata') recordBoolean('v2_hide_spawn_agent_metadata', raw);
-      else if (key === 'tool_namespace') {
-        const value = parseTomlString(raw);
-        record('v2_tool_namespace', value, value !== null && value.length > 0);
-      } else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) {
-        recordInteger(`v2_${key}`, raw);
-      }
-    }
-  }
-  if (v2Shape !== null) {
-    overrides._v2_shape = {
-      present: true,
-      valid: v2Shape !== 'invalid',
-      value: v2Shape === 'invalid' ? null : v2Shape,
-    };
-    if (v2Shape === 'invalid') {
-      overrides.v2_enabled = { present: true, valid: false, value: null };
+    if (!assignment || assignment.key.length !== 1 || !tomlTableNameMatches(table, 'agents')) continue;
+    const key = assignment.key[0].value;
+    const raw = assignment.value;
+    if (key === 'enabled') recordBoolean('v2_enabled', raw);
+    else if (key === MULTI_AGENT_V2_MAX_THREADS_ALIAS) {
+      recordInteger('v2_max_concurrent_threads_per_session', raw);
+    } else if (MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key)) {
+      recordInteger(`v2_${key}`, raw);
     }
   }
   return overrides;
@@ -1408,20 +1039,7 @@ function deriveEffectiveRuntime(configLayers) {
     const configPath = input && typeof input === 'object' ? input.configPath || null : null;
     if (configPath) configPaths.push(configPath);
     const layer = parseRuntimeLayerOverrides(content);
-    const nextShape = layer._v2_shape;
-    if (nextShape && nextShape.present) {
-      const previousShape = effective._v2_shape;
-      const previousKind = previousShape && previousShape.valid ? previousShape.value : 'invalid';
-      const nextKind = nextShape.valid ? nextShape.value : 'invalid';
-      if (nextKind !== 'table' || (previousShape && previousKind !== 'table')) {
-        for (const key of Object.keys(effective)) {
-          if (key.startsWith('v2_')) delete effective[key];
-        }
-      }
-      effective._v2_shape = { ...nextShape, configPath };
-    }
     for (const [key, field] of Object.entries(layer)) {
-      if (key === '_v2_shape') continue;
       effective[key] = { ...field, configPath };
     }
   }
@@ -1431,35 +1049,13 @@ function deriveEffectiveRuntime(configLayers) {
   if (effort && effort.present && effort.valid) {
     lines.push(`model_reasoning_effort = ${JSON.stringify(effort.value)}`, '');
   }
-  lines.push('[features]');
-  if (effective.multi_agent && effective.multi_agent.present) {
-    lines.push(`multi_agent = ${effective.multi_agent.valid ? effective.multi_agent.value : 'false'}`);
-  }
 
   const v2Keys = Object.keys(effective).filter(key => key.startsWith('v2_'));
   if (v2Keys.length > 0) {
-    lines.push('', '[features.multi_agent_v2]');
+    lines.push('[agents]');
     const enabled = effective.v2_enabled;
-    const forceUnknown = !!(enabled && enabled.present && !enabled.valid);
     if (enabled && enabled.present) {
       lines.push(`enabled = ${enabled.valid ? enabled.value : 'true'}`);
-    }
-    const booleans = [
-      ['v2_non_code_mode_only', 'non_code_mode_only'],
-      ['v2_hide_spawn_agent_metadata', 'hide_spawn_agent_metadata'],
-    ];
-    for (const [stateKey, outputKey] of booleans) {
-      const field = effective[stateKey];
-      if (field && field.present) {
-        lines.push(`${outputKey} = ${field.valid ? field.value : '"invalid"'}`);
-      }
-    }
-    if (forceUnknown && !effective.v2_non_code_mode_only) {
-      lines.push('non_code_mode_only = "invalid"');
-    }
-    const namespace = effective.v2_tool_namespace;
-    if (namespace && namespace.present) {
-      lines.push(`tool_namespace = ${namespace.valid ? JSON.stringify(namespace.value) : '123'}`);
     }
     for (const key of MULTI_AGENT_V2_NUMERIC_FIELDS) {
       const field = effective[`v2_${key}`];
@@ -1471,24 +1067,12 @@ function deriveEffectiveRuntime(configLayers) {
   const dispatch = detectCodexDispatchMode(effectiveContent);
   const posture = deriveDispatchPosture(effectiveContent);
   const bounds = deriveMultiAgentV2Bounds(effectiveContent, dispatch.multi_agent_v2_enabled);
-  let transportConfigPath = null;
-  if (dispatch.codex_v2_direct_transport_ready === false) {
-    transportConfigPath = (effective.v2_non_code_mode_only || effective.v2_enabled || {}).configPath || null;
-  } else if (dispatch.codex_v2_role_transport_ready === false) {
-    const namespaceBad = dispatch.codex_v2_tool_namespace !== CODEX_V2_ROLE_TOOL_NAMESPACE;
-    const metadataBad = dispatch.codex_v2_role_metadata_visible !== true;
-    transportConfigPath = (namespaceBad ? effective.v2_tool_namespace : null)?.configPath
-      || (metadataBad ? effective.v2_hide_spawn_agent_metadata : null)?.configPath
-      || (effective.v2_enabled || {}).configPath
-      || null;
-  }
   return {
     ...dispatch,
     ...posture,
     ...bounds,
     effective_config: effectiveContent,
     effective_config_paths: [...new Set(configPaths)],
-    transport_config_path: transportConfigPath,
   };
 }
 
@@ -1894,6 +1478,7 @@ function parseArgs(argv) {
   let json = false;
   let doctor = false;
   let home = null;
+  let codexVersion = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--project-root' && args[i + 1]) {
@@ -1908,10 +1493,14 @@ function parseArgs(argv) {
       doctor = true;
     } else if (args[i] === '--home' && args[i + 1]) {
       home = args[++i];
+    } else if (args[i] === '--codex-version' && args[i + 1]) {
+      // #775: non-optional version-floor override — precedence flag > KAOLA_CODEX_VERSION env >
+      // live `codex --version` probe. See resolveCodexVersion.
+      codexVersion = args[++i];
     }
   }
 
-  return { projectRoot, planPath, noAutofix, json, doctor, home };
+  return { projectRoot, planPath, noAutofix, json, doctor, home, codexVersion };
 }
 
 // ---------------------------------------------------------------------------
@@ -2250,6 +1839,11 @@ function checkProfiles(agentsDir, requiredRoles) {
 //     conflictingRolesOutside: string[]  // [agents.*] entries outside the markers
 //   }
 // ---------------------------------------------------------------------------
+// #775 (owner decision D2): the template (config/agents.toml) carries ONLY [agents.<role>]
+// role registrations now — no [features] enablement header — so `full` and `agentOnly` are the
+// SAME bytes (the historical split at the first `[agents.` line, kept for output-shape
+// back-compat, is now a no-op: firstAgent is always 0). Kaola never writes the [agents] enabled
+// flag itself; see codexMultiAgentV2RequiredResult / CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION.
 function canonicalManagedBlockBodies(templateContent) {
   const template = String(templateContent || '').trim();
   if (!template) return { full: '', agentOnly: '' };
@@ -2298,6 +1892,19 @@ function containsExternalFeaturesTable(content) {
   return false;
 }
 
+// #775: legitimate top-level [agents] SCALAR settings a user may own directly (Kaola never writes
+// these itself — see the D2 config posture / CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION, and the
+// "Kaola never writes or overrides agents.default_subagent_model / ...reasoning_effort" non-goal).
+// None of these collide with a Kaola role name, so a bare [agents] table carrying ONLY these keys
+// is not a wildcard override — only a MANAGED ROLE NAME (or an inline-table-valued key under one)
+// still counts as a conflict, exactly as before #775. Without this allowlist the remediation this
+// gate itself prints ([agents]\nenabled = true) would immediately trip its OWN conflict check.
+const AGENTS_TABLE_SCALAR_SETTING_KEYS = new Set([
+  'enabled', 'max_concurrent_threads_per_session', 'max_threads',
+  'min_wait_timeout_ms', 'max_wait_timeout_ms', 'default_wait_timeout_ms',
+  'default_subagent_model', 'default_subagent_reasoning_effort',
+]);
+
 function outsideAgentDeclarations(outsideContent) {
   const declarations = [];
   let currentTable = null;
@@ -2308,15 +1915,30 @@ function outsideAgentDeclarations(outsideContent) {
     if (tableName) {
       currentTable = tableName;
       if (Array.isArray(tableName.segments)
-          && tableName.segments[0] && tableName.segments[0].value === 'agents') {
+          && tableName.segments[0] && tableName.segments[0].value === 'agents'
+          && tableName.segments.length > 1) {
         const role = tableName.segments.slice(1).map(segment => segment.value).join('.');
-        declarations.push(role || '*');
+        declarations.push(role);
       }
       continue;
     }
-    const assignmentKey = currentTable === null ? parseTomlAssignmentKey(line) : null;
+    if (currentTable !== null) {
+      // Inside a bare [agents] table: only a key that is NOT a sanctioned scalar setting is a
+      // candidate role-name declaration (filtered against templateRoles by the caller, same as
+      // every other declaration this function emits).
+      if (Array.isArray(currentTable.segments) && currentTable.segments.length === 1
+          && currentTable.segments[0].value === 'agents') {
+        const assignmentKey = parseTomlAssignmentKey(line);
+        const key = assignmentKey && assignmentKey[0] && assignmentKey[0].value;
+        if (key && !AGENTS_TABLE_SCALAR_SETTING_KEYS.has(key)) declarations.push(key);
+      }
+      continue;
+    }
+    const assignmentKey = parseTomlAssignmentKey(line);
     if (assignmentKey && assignmentKey[0] && assignmentKey[0].value === 'agents') {
-      declarations.push('*');
+      // Root-level inline form (`agents = {...}`), not the table-header form this gate's own
+      // remediation instructs — stays conservative (unconditional wildcard) as before #775.
+      declarations.push(assignmentKey[1] ? assignmentKey[1].value : '*');
     }
   }
   return [...new Set(declarations)];
@@ -2526,12 +2148,6 @@ function inspectScope({
     manifest: manifestStatus,
     dispatch_mode: dispatchMode.dispatch_mode,
     multi_agent_v2_enabled: dispatchMode.multi_agent_v2_enabled,
-    codex_v2_transport_mode: dispatchMode.codex_v2_transport_mode,
-    codex_v2_direct_transport_ready: dispatchMode.codex_v2_direct_transport_ready,
-    codex_v2_tool_namespace: dispatchMode.codex_v2_tool_namespace,
-    codex_v2_role_metadata_visible: dispatchMode.codex_v2_role_metadata_visible,
-    codex_v2_role_transport_ready: dispatchMode.codex_v2_role_transport_ready,
-    codex_v2_transport_warning: dispatchMode.codex_v2_transport_warning,
     dispatch_posture: posture.dispatch_posture,
     model_reasoning_effort: posture.model_reasoning_effort,
     multi_agent_enabled: posture.multi_agent_enabled,
@@ -2635,33 +2251,102 @@ function runInstaller(installerPath, projectRoot, globalInstall = false, home = 
   }
 }
 
-function codexV2TransportEnvelope(scope) {
-  return {
-    codex_v2_transport_mode: scope.codex_v2_transport_mode,
-    codex_v2_direct_transport_ready: scope.codex_v2_direct_transport_ready,
-    codex_v2_tool_namespace: scope.codex_v2_tool_namespace,
-    codex_v2_role_metadata_visible: scope.codex_v2_role_metadata_visible,
-    codex_v2_role_transport_ready: scope.codex_v2_role_transport_ready,
-    codex_v2_transport_warning: scope.codex_v2_transport_warning,
-  };
+// ---------------------------------------------------------------------------
+// #775: Codex 0.145 version floor. Net-new — no version comparison existed anywhere in this
+// repository before this gate; 0.142.5/0.144.1 previously appeared only as prose inside note
+// strings. Pure numeric-triplet compare; tolerant of the `codex-cli 0.145.1 (rust-v0.145.1)`
+// --version output shape (extracts the FIRST X.Y.Z triplet from whatever string it is given).
+// ---------------------------------------------------------------------------
+function compareCodexVersion(a, b) {
+  const pa = String(a || '').trim().split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').trim().split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da !== db) return da > db ? 1 : -1;
+  }
+  return 0;
 }
 
-function unsafeCodexV2Transport(scope, scopeName, codexDir, configPath = null) {
-  const directUnsafe = scope.codex_v2_direct_transport_ready === false;
+function parseCodexVersionOutput(raw) {
+  const m = String(raw || '').match(/(\d+\.\d+\.\d+)/);
+  return m ? m[1] : null;
+}
+
+function codexVersionSupported(version) {
+  return typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version.trim())
+    && compareCodexVersion(version, CODEX_MIN_VERSION) >= 0;
+}
+
+// Same inline require('child_process') idiom as runInstaller above (this file's #332 duplication
+// convention — no top-level require of child_process anywhere in this script).
+function probeCodexVersionFromBinary() {
+  try {
+    const { spawnSync } = require('child_process');
+    const result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 });
+    if (!result || result.error || result.status !== 0) return null;
+    return parseCodexVersionOutput(result.stdout);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Precedence: --codex-version flag > KAOLA_CODEX_VERSION env > live `codex --version` probe. The
+// override is NON-OPTIONAL (not a debug escape hatch): no sandbox in test-install-model-rendering.js,
+// the four walkthroughs, or the two forge test suites has a codex binary on PATH — without an
+// override, EVERY preflight invocation in all four chains would return codex_version_unsupported
+// simultaneously the moment this gate lands.
+function resolveCodexVersion({ override, env } = {}) {
+  const flagVersion = parseCodexVersionOutput(override);
+  if (flagVersion) return { version: flagVersion, source: 'flag' };
+  const envVersion = parseCodexVersionOutput((env || process.env || {}).KAOLA_CODEX_VERSION);
+  if (envVersion) return { version: envVersion, source: 'env' };
+  const probed = probeCodexVersionFromBinary();
+  return probed ? { version: probed, source: 'probe' } : { version: null, source: 'unavailable' };
+}
+
+function codexVersionUnsupportedRemediation(detected) {
+  return `Codex ${detected || '(version undetermined — no --codex-version/KAOLA_CODEX_VERSION override and no codex binary on PATH)'} `
+    + `is below the supported floor ${CODEX_MIN_VERSION}. Upgrade the Codex CLI to >=${CODEX_MIN_VERSION} `
+    + '(ships multi_agent_v2 as the stable, only dispatch path under the unified [agents] config table), '
+    + 'then re-run this preflight. On a sandbox/CI host with no codex binary on PATH, pass '
+    + '--codex-version <installed-version> or set KAOLA_CODEX_VERSION=<installed-version> to attest the '
+    + 'version explicitly.';
+}
+
+// #775 (owner decision D2): the exact minimal paste-able config diff + migration report for the
+// codex_multi_agent_v2_required refusal. Kaola does NOT write [agents] enabled = true into the
+// user's config.toml itself (canonicalManagedBlockBodies splits the managed-block template at a bare
+// [agents] header, and a user-owned top-level [agents] table would otherwise TOML-duplicate-table
+// error) — a fresh install now refuses until the user edits config.toml by hand; this remediation
+// string is what makes that acceptable.
+const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Codex MultiAgentV2 is required and not enabled. '
+  + 'Kaola-Workflow does not write this flag for you (see docs/decisions for the D2 config posture) — '
+  + 'add it to ~/.codex/config.toml (or a trusted project .codex/config.toml) by hand, ABOVE the '
+  + '"# BEGIN kaola-workflow agents" managed block (TOML forbids re-declaring [agents] once an '
+  + '[agents.<role>] sub-table inside that block has already opened it), then start a fresh Codex '
+  + 'session:\n\n[agents]\nenabled = true\n\n'
+  + 'Migration note: Codex >=0.145.0 unified multi-agent settings under the top-level [agents] table and '
+  + 'stabilized MultiAgentV2 as the only supported dispatch path. A legacy [features.multi_agent_v2] table, '
+  + 'a top-level [features] multi_agent flag, or the retired non_code_mode_only / hide_spawn_agent_metadata / '
+  + 'tool_namespace sub-fields have no effect under Codex >=0.145.0 and are not read by this gate — remove '
+  + 'them at your convenience. Kaola never writes or overrides agents.default_subagent_model / '
+  + 'agents.default_subagent_reasoning_effort; Codex resolves the sub-agent model/reasoning independently.';
+
+const CODEX_MULTI_AGENT_V2_REQUIRED_STATUS = 'codex_multi_agent_v2_required';
+
+function codexMultiAgentV2RequiredResult(scope, scopeName, codexDir, configPath = null) {
   return {
     exitCode: 7,
     result: {
-      status: directUnsafe
-        ? CODEX_V2_TRANSPORT_UNSAFE_STATUS
-        : CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS,
+      status: CODEX_MULTI_AGENT_V2_REQUIRED_STATUS,
       scope: scopeName,
       stale: true,
       safe_autofix: false,
-      repair: directUnsafe ? CODEX_V2_DIRECT_TRANSPORT_NOTE : CODEX_V2_ROLE_TRANSPORT_NOTE,
+      repair: CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION,
       extra_unmanaged: scope.extraUnmanaged,
       dispatch_mode: scope.dispatch_mode,
       multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-      ...codexV2TransportEnvelope(scope),
       dispatch_posture: scope.dispatch_posture,
       model_reasoning_effort: scope.model_reasoning_effort,
       multi_agent_enabled: scope.multi_agent_enabled,
@@ -2677,6 +2362,27 @@ function unsafeCodexV2Transport(scope, scopeName, codexDir, configPath = null) {
     },
   };
 }
+
+function codexVersionUnsupportedResult(versionInfo) {
+  return {
+    exitCode: 7,
+    result: {
+      status: 'codex_version_unsupported',
+      stale: true,
+      safe_autofix: false,
+      detected_version: versionInfo.version,
+      detected_version_source: versionInfo.source,
+      required_version: CODEX_MIN_VERSION,
+      repair: codexVersionUnsupportedRemediation(versionInfo.version),
+    },
+  };
+}
+
+// #775: the 0.142/0.144 transport-mode grammar + gate (non_code_mode_only / hide_spawn_agent_metadata
+// / tool_namespace + codex_v2_encrypted_transport_unsafe / codex_v2_role_transport_unsafe) is retired
+// — Codex >=0.145.0's stabilized MultiAgentV2 no longer needs Kaola's transport-safety check. This
+// frees exit code 7, reused above by codexVersionUnsupportedResult / codexMultiAgentV2RequiredResult
+// so no caller's exit-code map shifts.
 
 function unsupportedManifestResult({
   scope,
@@ -2698,7 +2404,6 @@ function unsupportedManifestResult({
       safe_autofix: false,
       dispatch_mode: scope.dispatch_mode,
       multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-      ...codexV2TransportEnvelope(scope),
       dispatch_posture: scope.dispatch_posture,
       model_reasoning_effort: scope.model_reasoning_effort,
       multi_agent_enabled: scope.multi_agent_enabled,
@@ -2723,9 +2428,17 @@ function runPreflight(opts) {
     noAutofix,
     scriptDir,
     home,
+    codexVersion,
   } = opts;
   const homeDir = home || os.homedir();
   const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, homeDir);
+
+  // --- #775: Codex version floor, checked before anything else — nothing downstream matters if
+  // the installed Codex predates the multi_agent_v2 re-baseline. ---
+  const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
+  if (!codexVersionSupported(versionInfo.version)) {
+    return codexVersionUnsupportedResult(versionInfo);
+  }
 
   let activeProjectRoot = path.resolve(projectRoot);
   let codexDir = path.join(activeProjectRoot, '.codex');
@@ -2908,10 +2621,10 @@ function runPreflight(opts) {
   };
   const globalScope = { ...rawGlobalScope, ...effectiveRuntime };
 
-  if (effectiveRuntime.codex_v2_role_transport_ready === false) {
-    return unsafeCodexV2Transport(
-      scope, 'effective', codexDir, effectiveRuntime.transport_config_path,
-    );
+  // #775: multi_agent_v2 is a required engine feature (the [agents] table) — NO V1 fallback.
+  // Retired transport-mode gate previously sat here; freed exit code 7 is reused below.
+  if (!effectiveRuntime.multi_agent_v2_enabled) {
+    return codexMultiAgentV2RequiredResult(scope, 'effective', codexDir, null);
   }
 
   // Any managed-role collision in a loaded project layer is unsafe; a higher
@@ -2932,7 +2645,6 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: conflictScope.dispatch_mode,
         multi_agent_v2_enabled: conflictScope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(conflictScope),
         dispatch_posture: conflictScope.dispatch_posture,
         model_reasoning_effort: conflictScope.model_reasoning_effort,
         multi_agent_enabled: conflictScope.multi_agent_enabled,
@@ -2964,7 +2676,6 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: globalScope.dispatch_mode,
         multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(globalScope),
         dispatch_posture: globalScope.dispatch_posture,
         model_reasoning_effort: globalScope.model_reasoning_effort,
         multi_agent_enabled: globalScope.multi_agent_enabled,
@@ -2990,7 +2701,6 @@ function runPreflight(opts) {
         autofixed: false,
         dispatch_mode: globalScope.dispatch_mode,
         multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(globalScope),
         dispatch_posture: globalScope.dispatch_posture,
         model_reasoning_effort: globalScope.model_reasoning_effort,
         multi_agent_enabled: globalScope.multi_agent_enabled,
@@ -3052,7 +2762,6 @@ function runPreflight(opts) {
         autofixed: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3078,7 +2787,6 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3101,7 +2809,6 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3125,7 +2832,6 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3148,7 +2854,6 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3171,7 +2876,6 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3194,7 +2898,6 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3217,7 +2920,6 @@ function runPreflight(opts) {
       safe_autofix: true,
       dispatch_mode: scope.dispatch_mode,
       multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-      ...codexV2TransportEnvelope(scope),
       dispatch_posture: scope.dispatch_posture,
       model_reasoning_effort: scope.model_reasoning_effort,
       multi_agent_enabled: scope.multi_agent_enabled,
@@ -3251,7 +2953,6 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(scope),
         dispatch_posture: scope.dispatch_posture,
         model_reasoning_effort: scope.model_reasoning_effort,
         multi_agent_enabled: scope.multi_agent_enabled,
@@ -3336,7 +3037,6 @@ function runPreflight(opts) {
         repair: `Repair the ambiguous kaola-workflow managed block markers in ${path.join(ambiguousTarget.codexDir, 'config.toml')} before reinstalling any loaded layer.`,
         dispatch_mode: targetScope.dispatch_mode,
         multi_agent_v2_enabled: targetScope.multi_agent_v2_enabled,
-        ...codexV2TransportEnvelope(targetScope),
         dispatch_posture: targetScope.dispatch_posture,
         model_reasoning_effort: targetScope.model_reasoning_effort,
         multi_agent_enabled: targetScope.multi_agent_enabled,
@@ -3366,7 +3066,6 @@ function runPreflight(opts) {
           safe_autofix: false,
           dispatch_mode: scope.dispatch_mode,
           multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-          ...codexV2TransportEnvelope(scope),
           dispatch_posture: scope.dispatch_posture,
           model_reasoning_effort: scope.model_reasoning_effort,
           multi_agent_enabled: scope.multi_agent_enabled,
@@ -3428,7 +3127,7 @@ function scopeIsStale(s) {
     s.staleRolesInBlock.length > 0 ||
     s.managedRoleConflictsOutside.length > 0 ||
     s.manifest !== 'present' ||
-    s.codex_v2_role_transport_ready === false
+    s.multi_agent_v2_enabled === false
   );
 }
 
@@ -3479,7 +3178,6 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     manifest: scope.manifest,
     dispatch_mode: scope.dispatch_mode,
     multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
-    ...codexV2TransportEnvelope(scope),
     dispatch_posture: scope.dispatch_posture,
     model_reasoning_effort: scope.model_reasoning_effort,
     multi_agent_enabled: scope.multi_agent_enabled,
@@ -3491,13 +3189,8 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     max_wait_timeout_ms: scope.max_wait_timeout_ms,
     default_wait_timeout_ms: scope.default_wait_timeout_ms,
     effective_config_paths: scope.effective_config_paths || [],
-    transport_config_path: scope.transport_config_path || null,
     read_only: !!readOnly,
-    repair: scope.codex_v2_role_transport_ready === false
-      ? (scope.codex_v2_direct_transport_ready === false
-        ? CODEX_V2_DIRECT_TRANSPORT_NOTE
-        : CODEX_V2_ROLE_TRANSPORT_NOTE)
-      : repair,
+    repair,
   };
 }
 
@@ -3778,8 +3471,18 @@ function findPluginCacheAgentDirs(home, identity) {
 }
 
 function runDoctor(opts) {
-  const { projectRoot, home, scriptDir } = opts;
+  const { projectRoot, home, scriptDir, codexVersion } = opts;
   const sourceScriptDir = resolvePreflightSourceScriptDir(scriptDir, home);
+  // #775: doctor is read-only, so it REPORTS the version floor rather than hard-refusing at exit 7
+  // (that typed refusal is runPreflight's job); an unsupported version still folds into `gating`
+  // below so `--doctor` surfaces it rather than silently reporting "ok".
+  const versionInfo = resolveCodexVersion({ override: codexVersion, env: process.env });
+  const codexVersionReport = {
+    detected_version: versionInfo.version,
+    detected_version_source: versionInfo.source,
+    required_version: CODEX_MIN_VERSION,
+    supported: codexVersionSupported(versionInfo.version),
+  };
   const pluginIdentityRead = readPluginIdentity(sourceScriptDir, home);
   if (pluginIdentityRead.error) {
     return {
@@ -4088,12 +3791,6 @@ function runDoctor(opts) {
       manifest: c.reasons.length === 0 ? 'present' : 'invalid',
       dispatch_mode: 'n/a',
       multi_agent_v2_enabled: false,
-      codex_v2_transport_mode: 'n/a',
-      codex_v2_direct_transport_ready: null,
-      codex_v2_tool_namespace: 'n/a',
-      codex_v2_role_metadata_visible: null,
-      codex_v2_role_transport_ready: null,
-      codex_v2_transport_warning: null,
       dispatch_posture: 'n/a',
       model_reasoning_effort: null,
       multi_agent_enabled: false,
@@ -4114,7 +3811,10 @@ function runDoctor(opts) {
   const pluginCacheStale = scopes.some(scope => scope.scope === 'plugin_cache'
     && (scope.malformed.length > 0 || scope.stale_profiles.length > 0
       || scope.missing_roles.length > 0 || scope.stale_files.length > 0));
-  const effectiveTransportUnsafe = effectiveRuntime.codex_v2_role_transport_ready === false;
+  // #775: multi_agent_v2 (the [agents] table) is a required engine feature; an installed-but-
+  // not-enabled scope is exactly what scopeIsStale's `multi_agent_v2_enabled === false` branch
+  // already reports (kaola_footprint-gated), same as effectiveTransportUnsafe did pre-#775.
+  const effectiveV2Unavailable = userReport.kaola_footprint && !effectiveRuntime.multi_agent_v2_enabled;
   const projectStale = projectScopes.some(item =>
     item.trust === 'trusted' && item.footprint && scopeIsStale(item.scope));
   const projectTrustRequired = projectScopes.some(item =>
@@ -4124,14 +3824,16 @@ function runDoctor(opts) {
     || (userReport.kaola_footprint && scopeIsStale(userScope))
     || projectStale
     || projectTrustRequired
-    || effectiveTransportUnsafe
-    || pluginCacheStale;
+    || effectiveV2Unavailable
+    || pluginCacheStale
+    || !codexVersionReport.supported;
   return {
     exitCode: gating ? 1 : 0,
     result: {
       status: gating ? 'stale' : 'ok',
       project_trust: projectTrust,
       project_trust_required: projectTrustRequired,
+      codex_version: codexVersionReport,
       scopes,
     },
   };
@@ -4141,7 +3843,7 @@ function runDoctor(opts) {
 // CLI entry point
 // ---------------------------------------------------------------------------
 if (require.main === module) {
-  const { projectRoot: rawRoot, planPath, noAutofix, json, doctor, home: rawHome } = parseArgs(process.argv);
+  const { projectRoot: rawRoot, planPath, noAutofix, json, doctor, home: rawHome, codexVersion } = parseArgs(process.argv);
   const resolvedRoot = rawRoot ? path.resolve(rawRoot) : process.cwd();
   const resolvedHome = rawHome ? path.resolve(rawHome) : os.homedir();
   const scriptDir = __dirname;
@@ -4151,11 +3853,15 @@ if (require.main === module) {
       projectRoot: resolvedRoot,
       home: resolvedHome,
       scriptDir,
+      codexVersion,
     });
 
     if (json || exitCode !== 0) {
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     } else {
+      if (result.codex_version && !result.codex_version.supported) {
+        process.stdout.write(`codex_version: unsupported (detected=${result.codex_version.detected_version || 'unknown'} required=${result.codex_version.required_version})\n`);
+      }
       for (const s of (result.scopes || [])) {
         const stale = s.kaola_footprint === false
           ? false
@@ -4164,13 +3870,15 @@ if (require.main === module) {
           : (s.scope === 'plugin_cache'
             ? (s.malformed.length > 0 || s.stale_profiles.length > 0
               || s.missing_roles.length > 0 || s.stale_files.length > 0)
-            : (s.exists && (s.malformed.length || s.profile_byte_drift.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.managed_block_drift || s.missing_from_block.length || s.stale_roles_in_block.length || (s.managed_role_conflicts_outside || []).length || s.manifest !== 'present' || s.codex_v2_role_transport_ready === false)));
+            : (s.exists && (s.malformed.length || s.profile_byte_drift.length || s.stale_files.length || s.missing_roles.length || s.managed_block === 'absent' || s.managed_block_drift || s.missing_from_block.length || s.stale_roles_in_block.length || (s.managed_role_conflicts_outside || []).length || s.manifest !== 'present' || s.multi_agent_v2_enabled === false)));
         const state = s.kaola_footprint === false
           ? 'not-installed'
           : (!s.exists ? 'absent' : (stale ? 'stale' : 'ok'));
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
         if (stale) process.stdout.write(`  repair: ${s.repair}\n`);
-        if (s.codex_v2_transport_warning) process.stdout.write(`  transport: ${s.codex_v2_transport_warning}\n`);
+        if (stale && s.multi_agent_v2_enabled === false) {
+          process.stdout.write(`  repair: ${CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION}\n`);
+        }
         // #598: ATTESTATION-STYLE / NON-FATAL — dispatch-posture WARN never affects exitCode.
         if (s.dispatch_posture_warning) process.stdout.write(`  warn: ${s.dispatch_posture_warning}\n`);
         // MultiAgentV2 bounds: report-only, never affects exitCode. null when v2 not active.
@@ -4192,6 +3900,7 @@ if (require.main === module) {
     noAutofix,
     scriptDir,
     home: resolvedHome,
+    codexVersion,
   });
 
   if (json || exitCode !== 0) {
@@ -4247,14 +3956,7 @@ module.exports = {
   REVIEWER_SOURCE_REPAIR,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
-  codexV2TransportEnvelope,
-  CODEX_V2_TRANSPORT_UNSAFE_STATUS,
-  CODEX_V2_DIRECT_TRANSPORT_NOTE,
-  CODEX_V2_ROLE_TRANSPORT_UNSAFE_STATUS,
-  CODEX_V2_ROLE_TOOL_NAMESPACE,
-  CODEX_V2_ROLE_TRANSPORT_NOTE,
   deriveDispatchPosture,
-  parseFeaturesMultiAgentEnabled,
   parseTopLevelModelReasoningEffort,
   dispatchPostureRemediation,
   DISPATCH_POSTURE_VERSION_NOTE,
@@ -4265,4 +3967,14 @@ module.exports = {
   deriveEffectiveRuntime,
   OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION,
   MULTI_AGENT_V2_BOUNDS_NOTE,
+  // #775: Codex 0.145 version floor + the two new typed refusals (pure; exported for unit tests).
+  CODEX_MIN_VERSION,
+  compareCodexVersion,
+  parseCodexVersionOutput,
+  codexVersionSupported,
+  resolveCodexVersion,
+  codexVersionUnsupportedRemediation,
+  CODEX_MULTI_AGENT_V2_REQUIRED_STATUS,
+  CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION,
+  MULTI_AGENT_V2_MAX_THREADS_ALIAS,
 };

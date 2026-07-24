@@ -251,11 +251,8 @@ startup.** Scripts validate but never select or substitute issues.
 issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
 
-On Codex v2, use the direct `agents.spawn_agent` tool for issue-scout; never use the server-reserved
-`collaboration.spawn_agent` name and never dispatch through `functions.exec` or Code Mode. If preflight reports
-`codex_v2_encrypted_transport_unsafe` or `codex_v2_role_transport_unsafe`, refuse before the scout
-spawn. Do not retry an encrypted-output decode or reserved-schema failure and do not fall back to a
-default role: the same transport/schema mismatch will fail deterministically again.
+Use the direct `agents.spawn_agent` tool for issue-scout; never use the server-reserved
+`collaboration.spawn_agent` name and never dispatch through `functions.exec` or Code Mode.
 
 Use this literal v2 argument shape (with the repository and request values filled in); omit transient
 `model` and `reasoning_effort` fields:
@@ -270,7 +267,6 @@ agents.spawn_agent:
 
 This is an isolated, self-contained control-plane brief: it includes repository root, selected
 issue/set/project context, the required skill/profile contract, and the expected durable return.
-Codex v1 likewise uses `fork_turns: "none"` and preserves the established identity/header convention.
 No control-plane dispatch uses `fork_turns: "all"`.
 
 The rejection `Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.` is an
@@ -364,29 +360,6 @@ branch, which claims and writes nothing):
    `--target-issues $KAOLA_TARGET_ISSUES` instead of `--target-issue N`. See
    the Bundle Lane sections (above and in `kaola-workflow-adapt`) for the planner's claim contract.
 
-## Codex Dispatch Mode Detection
-
-Before the Startup transaction, detect the Codex spawn-tooling shape so the claim can persist
-it for later dispatch cards. Reuse the preflight doctor (the same script the Delegation
-Contract's tool-availability check above already relies on) rather than re-deriving the config
-parse:
-
-```bash
-preflight_script="plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js"
-if [ ! -f "$preflight_script" ]; then
-  preflight_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-workflow-codex-preflight.js' -print -quit 2>/dev/null)"
-fi
-KAOLA_CODEX_DISPATCH_MODE=""
-if [ -f "$preflight_script" ]; then
-  DOCTOR_OUT="$(node "$preflight_script" --doctor --project-root "$PWD" --json 2>/dev/null)" || true
-  KAOLA_CODEX_DISPATCH_MODE="$(node -e "try{const j=JSON.parse(process.argv[1]);const byScope=(j.scopes||[]).reduce((m,s)=>{m[s.scope]=s;return m;},{});const s=(byScope.project&&byScope.project.exists)?byScope.project:byScope.user;process.stdout.write(s&&s.dispatch_mode&&s.dispatch_mode!=='n/a'?s.dispatch_mode:'')}catch(e){}" "$DOCTOR_OUT" 2>/dev/null)" || true
-fi
-```
-
-An absent or failed detection leaves `KAOLA_CODEX_DISPATCH_MODE` empty — the Startup call below
-omits `--codex-dispatch-mode` and the claim keeps its fail-closed `v1-thread-id` default. Never
-fabricate a mode; only pass a value the doctor actually reported.
-
 ## Startup
 
 **Skip this transaction** — the adaptive front end (above) always claims via the
@@ -409,13 +382,10 @@ if [ -f "$claim_script" ]; then
   [ -n "${KAOLA_SINK:-}" ] && KAOLA_SINK_FLAG="--sink $KAOLA_SINK"
   KAOLA_TARGET_FLAG=""
   [ -n "${KAOLA_TARGET_ISSUE:-}" ] && KAOLA_TARGET_FLAG="--target-issue $KAOLA_TARGET_ISSUE"
-  KAOLA_DISPATCH_MODE_FLAG=""
-  [ -n "${KAOLA_CODEX_DISPATCH_MODE:-}" ] && KAOLA_DISPATCH_MODE_FLAG="--codex-dispatch-mode $KAOLA_CODEX_DISPATCH_MODE"
   STARTUP_OUT=$(node "$claim_script" startup \
     --runtime codex \
     $KAOLA_SINK_FLAG \
-    $KAOLA_TARGET_FLAG \
-    $KAOLA_DISPATCH_MODE_FLAG 2>/dev/null) || true
+    $KAOLA_TARGET_FLAG 2>/dev/null) || true
   KAOLA_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_CLAIM="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).claim||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_WORKTREE_PATH="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).worktree_path||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true

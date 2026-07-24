@@ -692,11 +692,12 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ run
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');
 
-// #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
-// dispatch mode via the preflight doctor and thread it into the claim as an explicit flag.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--codex-dispatch-mode');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--codex-dispatch-mode');
+// #775: v2-task-name is the only dispatch mode — the preflight-doctor detection step and the
+// --codex-dispatch-mode flag it used to thread into the claim are retired (warn-and-ignore shim
+// only; see kaola-workflow-claim.js).
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--codex-dispatch-mode');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--codex-dispatch-mode');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');
@@ -863,17 +864,19 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     '#451: config/agents.toml must not register any [agents.<role>-max] table: ' + maxTables.join(', '));
 }
 
-// Current Codex compatibility: all known role profiles inherit the parent-session runtime pair.
-// Transient per-spawn pair overrides are deliberately omitted because Codex 0.144 reloads the named
-// role profile after applying them. Omission plus the profile-freshness preflight are the structural
-// guarantee, so the surface documents parent-session inheritance without a runtime child probe.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'current parent session');
+// #775 Codex 0.145 re-baseline: Codex >=0.145.0 resolves the sub-agent's own model/reasoning
+// effort itself (not a guaranteed parent-session equality) — the retired "child inherits the
+// current parent session" claim and the codex_tier_unresolved refusal are both gone; Kaola never
+// writes or overrides agents.default_subagent_model / agents.default_subagent_reasoning_effort.
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'current parent session');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "the sub-agent's model/reasoning effort itself");
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'parent-session equality');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Codex 0.144 durable-result override');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fork_turns: "none"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Omit both `model`');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model: dispatch.codex_model');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort: dispatch.codex_reasoning_effort');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_tier_unresolved');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_tier_unresolved');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_profile_tier_mismatch');
 // Retirement lock: the runtime parent-equals-child child-JSONL probe is retired. Inherit-by-omission
 // plus the profile-freshness preflight already guarantee the pair structurally, so re-proving it at
@@ -883,9 +886,10 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'pare
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'installed profile path');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`sonnet`/absent');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'declarative reasoning/wait-budget metadata');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'child inherits the current parent session');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'child inherits the current parent session');
 assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'declarative tier metadata');
-assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'child inherits the current parent session');
+assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'child inherits the current parent session');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'resolves the sub-agent\'s own model/reasoning effort independently');
 assertNotIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'codex_profile_tier_mismatch');
 
 // #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
@@ -905,11 +909,13 @@ for (const planRunSurface of [
 // #611: fork_turns:"none" is now mandated for EVERY role dispatch (not only tiered nodes) — pin
 // the unconditional mandate and ban the retired tiered-only qualifier on the Codex SKILL surface
 // (Codex-runtime-only; this validator's Claude command surface never carries this dispatch mode).
+// #775: v2-task-name is the only dispatch mode, so the "applies identically to this dispatch
+// mode" qualifier (a v1/v2 distinction) is itself retired prose.
 for (const planRunSurface of [
   `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`
 ]) {
   assertIncludes(planRunSurface, 'on EVERY role dispatch');
-  assertIncludes(planRunSurface, 'the unconditional mandate applies identically to this dispatch mode');
+  assertNotIncludes(planRunSurface, 'the unconditional mandate applies identically to this dispatch mode');
   assertNotIncludes(planRunSurface, 'not a valid path for tiered nodes');
 }
 

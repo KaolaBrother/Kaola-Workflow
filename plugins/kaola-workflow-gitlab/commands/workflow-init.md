@@ -182,23 +182,23 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > agent profiles **globally** into `~/.codex` (one install, all repos) AND refreshes the
 > global hooks. Trust hooks once via `/hooks`. If a project-local `.codex/hooks.json`
 > already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
-> Audit Codex config before claiming role dispatch readiness: `codex features list`
-> must show `multi_agent` and `multi_agent_v2` enabled, and
-> `kaola-workflow-codex-preflight.js --doctor --json` must agree with the active
-> config form (`multi_agent_v2 = true`, inline `{ enabled = true, ... }`, or
-> `[features.multi_agent_v2] enabled = true`). Warning suppression under `[notice]`
-> is not feature enablement. Features enabled is NOT the same as dispatch-ready:
-> read the doctor JSON's additive `dispatch_posture` field too — `proactive`
-> (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
-> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns
-> unless this session explicitly asks for sub-agents/delegation/parallel work —
-> always available and always documented — or, only if your Codex exposes an
-> `ultra` reasoning effort for your model/plan (undocumented as of codex-tui
-> 0.142.5; check the `/model` picker), the operator sets
-> `model_reasoning_effort = "ultra"`. Report the doctor's
-> `dispatch_posture_warning` remediation verbatim; do not claim readiness from
-> feature flags alone. Never silently edit `~/.codex/config.toml`; show the
-> minimal diff and apply it only with user authorization.
+> Audit Codex config before claiming role dispatch readiness: Codex >=0.145.0 is required
+> (`kaola-workflow-codex-preflight.js` refuses `codex_version_unsupported` below that floor), and
+> `kaola-workflow-codex-preflight.js --doctor --json` must show the top-level `[agents]` table's
+> `enabled = true` — the sole supported form (the legacy `[features.multi_agent_v2]`
+> table and a top-level `[features] multi_agent` flag have no effect and are not read by this
+> gate). Kaola never writes this flag for you; if absent, preflight refuses
+> `codex_multi_agent_v2_required` and its diff must be applied by hand with user authorization —
+> never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone
+> is NOT the same as dispatch-ready: read the doctor JSON's additive `dispatch_posture` field too
+> — `proactive` (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
+> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns unless this session
+> explicitly asks for sub-agents/delegation/parallel work — always available and always documented
+> — or, only if your Codex exposes an `ultra` reasoning effort for your model/plan (undocumented as
+> of Codex >=0.145.0; check the `/model` picker), the operator sets
+> `model_reasoning_effort = "ultra"`. Report the doctor's `dispatch_posture_warning` remediation
+> verbatim; do not claim readiness from the enabled flag alone. Never silently edit
+> `~/.codex/config.toml`; show the minimal diff and apply it only with user authorization.
 
 > **Claude dispatch posture note:** Audit dispatch posture for this session before claiming
 > role-dispatch readiness: probe the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable

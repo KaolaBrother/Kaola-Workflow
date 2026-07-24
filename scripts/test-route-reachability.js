@@ -208,12 +208,15 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T5b: Codex inherited-model-and-effort dispatch prose must stay effective across the 3
-// Codex SKILL plan-run surfaces (Codex-runtime-only; the Claude commands never
-// carry this dispatch mode). Current Codex role profiles omit the executable pair and inherit it
-// from the parent session; role classes remain declarative tier and wait-budget metadata.
-// Both v2 and v1 omit transient overrides; omission plus the profile-freshness preflight are the
-// structural inheritance guarantee, so no runtime parent-equals-child child-JSONL probe is required.
+// T5b (#775 Codex 0.145 re-baseline): Codex dispatch prose must stay effective across the 3
+// Codex SKILL plan-run surfaces (Codex-runtime-only; the Claude commands never carry this
+// dispatch mode). Codex >=0.145.0 RUNTIME resolves the sub-agent model/reasoning itself — this is
+// NOT a guaranteed parent-session equality, so the descriptor's codex_model/codex_reasoning_effort
+// are informational-only and NEVER a dispatch gate (codex_tier_unresolved is retired — there is no
+// "unresolved tier refuses" instruction anymore). The 0.142/0.144 transport-mode gate
+// (codex_v2_encrypted_transport_unsafe / codex_v2_role_transport_unsafe) is also retired — Codex
+// >=0.145.0's stabilized MultiAgentV2 no longer needs it — while the underlying "use the direct
+// agents namespace, never functions.exec/Code Mode" instruction stays as plain guidance.
 // ---------------------------------------------------------------------------
 {
   const planRunSurfaces = [
@@ -230,8 +233,8 @@ for (const ed of codexEditions) {
     assert(!content.includes('model: dispatch.codex_model')
       && !content.includes('reasoning_effort: dispatch.codex_reasoning_effort'),
       `T5b: ${f} must not pass the descriptor pair as transient overrides`);
-    assert(content.includes('codex_tier_unresolved'),
-      `T5b: ${f} must refuse rather than spawn an untiered Codex role`);
+    assert(!content.includes('codex_tier_unresolved'),
+      `T5b (#775): ${f} must retire the codex_tier_unresolved refusal — Codex resolves the model itself, never a gate`);
     assert(!content.includes('codex_profile_tier_mismatch'),
       `T5b: ${f} must retire the static plan/profile tier-conflict refusal`);
     assert(!content.includes('parent-equals-child'),
@@ -241,9 +244,9 @@ for (const ed of codexEditions) {
     assert(content.includes('direct `agents` namespace')
       && content.includes('never dispatch through `functions.exec` or Code Mode'),
       `T5b: ${f} must require role-safe direct Codex collaboration transport`);
-    assert(content.includes('codex_v2_encrypted_transport_unsafe')
-      && content.includes('codex_v2_role_transport_unsafe'),
-      `T5b: ${f} must fail closed on nested or reserved-schema Codex collaboration`);
+    assert(!content.includes('codex_v2_encrypted_transport_unsafe')
+      && !content.includes('codex_v2_role_transport_unsafe'),
+      `T5b (#775): ${f} must retire the 0.142/0.144 transport-mode gate — Codex >=0.145.0 no longer needs it`);
     assert(!content.includes('`sonnet`/absent') && !content.includes('sonnet`/absent') && !content.includes('sonnet/absent'),
       `T5b: ${f} must not describe sonnet as an inherited role_default tier`);
   }
@@ -271,9 +274,9 @@ for (const ed of codexEditions) {
     assert(content.includes('direct `agents.spawn_agent` tool')
       && content.includes('never dispatch through `functions.exec` or Code Mode'),
       `T5b: ${f} must require role-safe direct issue-scout dispatch`);
-    assert(content.includes('codex_v2_encrypted_transport_unsafe')
-      && content.includes('codex_v2_role_transport_unsafe'),
-      `T5b: ${f} must fail closed instead of retrying nested or reserved-schema issue-scout dispatch`);
+    assert(!content.includes('codex_v2_encrypted_transport_unsafe')
+      && !content.includes('codex_v2_role_transport_unsafe'),
+      `T5b (#775): ${f} must retire the 0.142/0.144 transport-mode gate — Codex >=0.145.0 no longer needs it`);
     for (const token of ['task_name: "issue_scout"', 'agent_type: "issue-scout"', 'fork_turns: "none"',
       'argument-shape refusal', 'exactly once', 'repository root', 'durable return']) {
       assert(content.includes(token), `T5b: ${f} must pin isolated issue-scout control-plane token ${token}`);
@@ -309,12 +312,17 @@ for (const ed of codexEditions) {
     assert(content.includes('never use `fork_turns: "all"`'), `T5b: ${f} must prohibit full-history control-plane forks`);
   }
 
-  // Current-runtime adapter: assert parent-session inheritance and declarative role metadata.
+  // Runtime-owned model resolution (#775): Codex >=0.145.0 resolves the sub-agent's
+  // own model/reasoning effort — NOT a guaranteed parent-session equality — while
+  // declarative role metadata still routes by the descriptor profile mode.
   const codexSkillSurfaces = planRunSurfaces.filter(f => f.includes('/skills/'));
   for (const f of codexSkillSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(content.includes('current parent session'),
-      `T5b: ${f} must document parent-session inheritance`);
+    assert(!content.includes('current parent session'),
+      `T5b (#775): ${f} must retire the parent-session-inheritance claim — Codex resolves the sub-agent's own model/reasoning effort`);
+    assert(content.includes("the sub-agent's model/reasoning effort itself")
+      && content.includes('parent-session equality'),
+      `T5b (#775): ${f} must document Codex-owned sub-agent model/reasoning resolution`);
     assert(!content.includes('installed profile path'),
       `T5b: ${f} must not bind a retired runtime probe to the installed profile path`);
     assert(content.includes('dispatch.codex_profile_mode'),
@@ -475,9 +483,11 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T13: #603 Codex Dispatch Mode Detection must appear in the 6 Codex startup SKILL surfaces
-// (kaola-workflow-next + kaola-workflow-adapt, 3 editions each) — Codex-only, no Claude command
-// counterpart (Claude dispatch has no task-name/dispatch-mode distinction). Fail-closed.
+// T13 (#775 Codex 0.145 re-baseline): --codex-dispatch-mode detection/threading is retired from the
+// 6 Codex startup SKILL surfaces (kaola-workflow-next + kaola-workflow-adapt, 3 editions each) —
+// v2-task-name is the only dispatch mode now, so there is nothing left to detect or thread. The
+// CLI flag itself survives as a warn-and-ignore shim (claim.js), but authoring surfaces no longer
+// emit it. Fail-closed the OTHER way: assert its absence, so a re-introduction reds this test.
 // ---------------------------------------------------------------------------
 {
   const codexDispatchModeSurfaces = [
@@ -490,8 +500,8 @@ for (const ed of codexEditions) {
   ];
   for (const f of codexDispatchModeSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(content.includes('--codex-dispatch-mode'),
-      `T13: ${f} must thread the detected dispatch mode into the claim via --codex-dispatch-mode (#603)`);
+    assert(!content.includes('--codex-dispatch-mode') && !content.includes('v1-thread-id'),
+      `T13 (#775): ${f} must not author --codex-dispatch-mode detection/threading — v2-task-name is the only mode`);
   }
 }
 
@@ -1369,14 +1379,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     // T5b — plan-run skills × 3 (codex-live)
     { token: 'fork_turns: "none"', surfaces: prSkill },
     { token: 'dispatch.codex_profile_mode', surfaces: prSkill },
-    { token: 'codex_tier_unresolved', surfaces: prSkill },
-    { token: 'current parent session', surfaces: prSkill },
     { token: 'Codex 0.144 durable-result override', surfaces: prSkill },
     { token: 'transport_error: encrypted_return', surfaces: prSkill },
     { token: 'direct `agents` namespace', surfaces: prSkill },
     { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: prSkill },
-    { token: 'codex_v2_encrypted_transport_unsafe', surfaces: prSkill },
-    { token: 'codex_v2_role_transport_unsafe', surfaces: prSkill },
     // T14 — plan-run commands × 3 (claude-live)
     { token: "spawn each node's role agent as a NAMED teammate", surfaces: prCmd },
     { token: 'send EXACTLY ONE request for the deliverable, then wait', surfaces: prCmd },
@@ -1397,11 +1403,8 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'kaola-workflow-plan-run', surfaces: NX6 },
     { token: 'auto-bundle', surfaces: NX6 },
     // T13-half — next skills × 3 (codex-live)
-    { token: '--codex-dispatch-mode', surfaces: nxSkill },
     { token: 'direct `agents.spawn_agent` tool', surfaces: nxSkill },
     { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: nxSkill },
-    { token: 'codex_v2_encrypted_transport_unsafe', surfaces: nxSkill },
-    { token: 'codex_v2_role_transport_unsafe', surfaces: nxSkill },
     // router prose — next commands × 3 (claude-live)
     { token: 'thin router', surfaces: nxCmd },
     { token: 'active folders', surfaces: nxCmd },
