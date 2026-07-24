@@ -963,7 +963,11 @@ function claimProject(root, args) {
       worktree_path: worktreePath,
       worktree_error: worktreeError,
       base_branch: baseBranch,
-      workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
+      // Adaptive is the ONLY workflow path. The retired KAOLA_PATH env var and --workflow-path
+      // flag are warn-and-ignore shims, so neither may reach durable state: persisting a stale
+      // value made resume routing branch on it (the workflow_path/phase adaptive test) in the
+      // crash-before-plan-authored window, contradicting the documented "silently ignored".
+      workflow_path: 'adaptive',
       runtime: args.runtime || 'claude',
       // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
       // was absent → writeState omits the field).
