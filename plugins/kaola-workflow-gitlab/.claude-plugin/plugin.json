@@ -1,7 +1,7 @@
 {
   "name": "kaola-workflow-gitlab",
   "version": "6.24.0",
-  "description": "GitLab edition of the 6-phase Kaola-Workflow Claude Code plugin, using GitLab issues, merge requests, and glab.",
+  "description": "GitLab edition of the adaptive Kaola-Workflow Claude Code plugin: a planner authors and freezes a task-shaped DAG of role nodes in workflow-plan.md, then the executor runs it node-by-node via the running-set scheduler, using GitLab issues, merge requests, and glab.",
   "author": {
     "name": "KaolaBrother",
     "url": "https://github.com/KaolaBrother"

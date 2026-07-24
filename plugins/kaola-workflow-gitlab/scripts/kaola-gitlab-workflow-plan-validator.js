@@ -2393,13 +2393,33 @@ function verifyGateExecution(content, opts) {
   const ledger = parseLedger(content);
   const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
   const done = id => ledger.get(id) === 'complete';
+  // #773: the G1/G2/G3 post-dominance checks below are EXECUTION-time checks, so — exactly like
+  // barrierCheck — they range over the EXECUTION node view (spine + every recorded expansion unit),
+  // not the FREEZE view. The freeze view sees an expansion point as read-only and NOT producesCode
+  // BY CONSTRUCTION (that is what defers its interior), so on a spine whose writers all live inside
+  // composed frontiers G1/G2 had ZERO targets: a review-wall ledger row hand-flipped to `n/a` — the
+  // ledger lives outside plan_hash — raised no unsatisfied gate, while the same tamper on a
+  // pre-cutover full-DAG plan WAS caught because its writers were freeze-view targets. That is the
+  // exact n/a-evasion the G3 fence below names. Widening restores the symmetry: a completed composed
+  // writer is a gate target, so its post-dominating wall must have COMPLETED too.
+  //
+  // Safe by construction: planNodesWithExpansions returns the identical parseNodes array BY REFERENCE
+  // when there are no expansion records (every legacy plan and every all-concrete spine keeps a
+  // byte-identical verdict); every unit's only forward path runs through its own expansion point (the
+  // point depends on all of its units), so a discharged milestone whose wall completed stays covered;
+  // and a non-complete unit is not a target at all (done(n.id)), so a frontier mid-flight raises
+  // nothing. The FREEZE view stays the input to the sink derivation, the MAIN_SESSION_GATE
+  // presence/n-a sweep, and the G4 epoch/certifier block below — a certifier is a NAMED frozen node
+  // and a gate role can never be composed into a frontier (expansion_unit_role_gate_unsupported), so
+  // widening those would only re-derive the same answer.
+  const execNodes = planNodesWithExpansions(content);
   function checkGate(isTarget, gateRole, gid) {
     // RELABEL (not remove) non-complete gate nodes so the topology stays intact: gateUncovered
     // removes only nodes whose role === gateRole, i.e. only the COMPLETE gates. A pending/n-a gate
     // stays a pass-through, so a complete target that can still reach the sink through it (without
     // crossing a COMPLETE gate) is an uncovered leak. (Filtering the node out instead would
     // disconnect the target from the sink and silently MASK the leak — the n/a-gate evasion.)
-    const relabeled = nodes.map(n => (n.role === gateRole && !done(n.id))
+    const relabeled = execNodes.map(n => (n.role === gateRole && !done(n.id))
       ? Object.assign({}, n, { role: gateRole + 'pending' })
       : n);
     const leak = gateUncovered(relabeled, n => isTarget(n) && done(n.id), gateRole, sink);
@@ -2407,7 +2427,7 @@ function verifyGateExecution(content, opts) {
   }
   checkGate(producesCode, 'code-reviewer', 'G1');
   const sensitiveByLabel = labelsAreSensitive(labels);
-  const sensitiveNodes = nodes.filter(nodeIsSensitive);
+  const sensitiveNodes = execNodes.filter(nodeIsSensitive);
   if (sensitiveByLabel || sensitiveNodes.length) {
     checkGate(n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n), 'security-reviewer', 'G2');
   }

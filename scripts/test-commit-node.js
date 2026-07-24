@@ -1284,6 +1284,154 @@ function assert(condition, message) {
   }
 }
 
+// ===========================================================================
+// T-GATEVERIFY-EXEC-VIEW (#773): --gate-verify ranges over the EXECUTION node
+// view, so a composed expansion unit is a G1/G2/G3 target.
+//
+// The regression: verifyGateExecution parsed the FREEZE view while barrierCheck
+// parsed the EXECUTION view. An expansion point is read-only and NOT
+// producesCode by construction, so on a spine whose writers ALL live inside
+// composed frontiers the G1/G2 execution checks had ZERO targets — and the
+// `## Node Ledger` lives OUTSIDE plan_hash, so a review-wall row hand-flipped to
+// `n/a` raised no unsatisfied gate. The byte-equivalent pre-cutover full-DAG
+// plan CAUGHT that exact tamper (its writer was a freeze-view target).
+//
+// Coverage below: (a) the discharged milestone still passes; (b) the hand-flipped
+// `n/a` wall now RAISES, naming the composed unit; (c) a pending wall raises the
+// same way (no special-casing of `n/a`); (d) a frontier still MID-FLIGHT raises
+// nothing (a non-complete unit is not a target); (e) a LEGITIMATE `n/a` — a
+// losing select arm, the only legal n/a route — still passes; (f) a plan with no
+// expansion records (all-concrete spine / legacy resume shape) keeps its exact
+// prior verdicts in both directions.
+// ===========================================================================
+{
+  const SPINE_META = ['## Meta', '', 'plan_schema_version: 2', 'plan_form: spine',
+    'validation_command: node scripts/simulate-workflow-walkthrough.js', 'validation_timeout_minutes: 20',
+    'code_certifier: wall', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none', ''];
+  const EXPANSION = ['expansion(m1):', '  milestone_goal: land the seam',
+    '  expected_surfaces: scripts/', '  join_constraints: none', '  review_class: code-reviewer', ''];
+  const NODE_HEADER = [
+    '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
+  const RECORD = ['## Expansion Records', '',
+    'record(m1#1):', '  point: m1', '  grain: one implementer unit', '  path: critical path',
+    '  join: mechanical', '  probe: no', '  serializer: none present — co-open',
+    '  unit: impl | tdd-guide | opus | scripts/seam.js | co_open | —', '',
+    'open(m1#1):', '', 'discharge(m1):', ''];
+
+  // An ALL-COMPOSED spine: the ONLY code producer in the run is the composed unit
+  // `m1-r1-impl`. Nothing in the FROZEN node table produces code, so the freeze
+  // view has zero G1 targets — the exact shape the regression left unfenced.
+  const allComposed = (unitStatus, wallStatus) => ['# Plan — gate-verify exec view', '', ...SPINE_META, ...EXPANSION,
+    '## Nodes', '', ...NODE_HEADER,
+    '| m1 | expansion-point | — | — | 1 | sequence | — | — | — | — | — |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence | — | c | s | sequence | — |',
+    '| done | finalize | wall | — | 1 | sequence | — | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| m1 | ' + (unitStatus === 'complete' ? 'complete' : 'in_progress') + ' |',
+    '| m1-r1-impl | ' + unitStatus + ' |',
+    '| wall | ' + wallStatus + ' |', '| done | pending |', '',
+    ...RECORD].join('\n');
+
+  // (a) the LEGAL, discharged milestone: composed unit complete + its review wall
+  //     complete => no unsatisfied gate. The widening must not false-refuse this.
+  {
+    const r = planValidator.verifyGateExecution(allComposed('complete', 'complete'));
+    assert(r.ok === true && r.unsatisfied.length === 0,
+      'T-GATEVERIFY-EXEC-VIEW-a: a discharged all-composed milestone with a COMPLETE wall raises no gate, got '
+      + JSON.stringify(r.unsatisfied));
+  }
+
+  // (b) THE REGRESSION: the review-wall ledger row hand-flipped to `n/a` (the
+  //     outside-plan_hash tamper channel) must RAISE, naming the composed writer.
+  {
+    const r = planValidator.verifyGateExecution(allComposed('complete', 'n/a'));
+    assert(r.ok === false && r.result === 'refuse' && r.reasonCode === 'gate_unsatisfied',
+      'T-GATEVERIFY-EXEC-VIEW-b: a hand-flipped n/a review wall on an all-composed spine must refuse, got '
+      + JSON.stringify(r));
+    assert(r.unsatisfied.length === 1 && r.unsatisfied[0].requirement === 'G1 gate execution'
+      && /\bm1-r1-impl\b/.test(r.unsatisfied[0].reason)
+      && /no completed code-reviewer post-dominates it/.test(r.unsatisfied[0].reason),
+      'T-GATEVERIFY-EXEC-VIEW-b: the unsatisfied gate names the COMPOSED unit, got '
+      + JSON.stringify(r.unsatisfied));
+  }
+
+  // (c) the same wall left PENDING raises identically — `n/a` gets no special
+  //     treatment; the rule is "a completed writer needs a COMPLETED wall".
+  {
+    const r = planValidator.verifyGateExecution(allComposed('complete', 'pending'));
+    assert(r.ok === false && r.unsatisfied.length === 1 && /\bm1-r1-impl\b/.test(r.unsatisfied[0].reason),
+      'T-GATEVERIFY-EXEC-VIEW-c: a PENDING wall over a completed composed writer raises the same gate, got '
+      + JSON.stringify(r.unsatisfied));
+  }
+
+  // (d) NO FALSE REFUSAL mid-expansion: the frontier is still running (its unit is
+  //     not complete), so there is no completed writer to cover and nothing raises.
+  for (const live of ['pending', 'in_progress']) {
+    const r = planValidator.verifyGateExecution(allComposed(live, 'pending'));
+    assert(r.ok === true && r.unsatisfied.length === 0,
+      'T-GATEVERIFY-EXEC-VIEW-d: a frontier mid-flight (unit ' + live + ') raises no gate, got '
+      + JSON.stringify(r.unsatisfied));
+  }
+
+  // (e) a LEGITIMATE `n/a` still passes: `armB` is the losing arm of a select group
+  //     (the only legal n/a route — G-SEL-2 bars gate roles from being arms), and the
+  //     wall completed. Neither the losing arm nor the widened composed-unit view may
+  //     raise anything here.
+  {
+    const withSelect = (wallStatus) => ['# Plan — gate-verify exec view (select)', '', ...SPINE_META, ...EXPANSION,
+      '## Nodes', '', ...NODE_HEADER,
+      '| triage | code-explorer | — | — | 1 | sequence | — | — | — | — | — |',
+      '| armA | tdd-guide | triage | scripts/arm-a.js | 1 | select(fix) | triage | — | — | — | — |',
+      '| armB | tdd-guide | triage | scripts/arm-b.js | 1 | select(fix) | triage | — | — | — | — |',
+      '| m1 | expansion-point | triage | — | 1 | sequence | — | — | — | — | — |',
+      '| wall | code-reviewer | armA, armB, m1 | — | 1 | sequence | — | c | s | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| triage | complete |', '| armA | complete |', '| armB | n/a |',
+      '| m1 | complete |', '| m1-r1-impl | complete |', '| wall | ' + wallStatus + ' |', '| done | pending |', '',
+      ...RECORD].join('\n');
+    const ok = planValidator.verifyGateExecution(withSelect('complete'));
+    assert(ok.ok === true && ok.unsatisfied.length === 0,
+      'T-GATEVERIFY-EXEC-VIEW-e: a LEGITIMATE n/a (losing select arm) still passes, got '
+      + JSON.stringify(ok.unsatisfied));
+    // …and the tamper on the SAME plan still raises for BOTH the concrete arm and
+    // the composed unit — the widening is additive, not a replacement.
+    const bad = planValidator.verifyGateExecution(withSelect('n/a'));
+    assert(bad.ok === false && bad.unsatisfied.length === 2
+      && bad.unsatisfied.some(u => /\barmA\b/.test(u.reason))
+      && bad.unsatisfied.some(u => /\bm1-r1-impl\b/.test(u.reason)),
+      'T-GATEVERIFY-EXEC-VIEW-e: the widened check is ADDITIVE — concrete AND composed writers both raise, got '
+      + JSON.stringify(bad.unsatisfied));
+  }
+
+  // (f) INVARIANCE: a plan with NO `## Expansion Records` (an all-concrete spine —
+  //     which is also the shape every legacy/resume plan takes) keeps its exact prior
+  //     verdicts in both directions. planNodesWithExpansions returns the identical
+  //     parseNodes array there, so this arm is byte-unchanged by the widening.
+  {
+    const concrete = (wallStatus) => ['# Plan — all-concrete spine', '', ...SPINE_META,
+      '## Nodes', '', ...NODE_HEADER,
+      '| impl | tdd-guide | — | scripts/a.js | 1 | sequence | — | — | — | — | — |',
+      '| wall | code-reviewer | impl | — | 1 | sequence | — | c | s | sequence | — |',
+      '| done | finalize | wall | — | 1 | sequence | — | — | — | — | — |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| impl | complete |', '| wall | ' + wallStatus + ' |', '| done | pending |', ''].join('\n');
+    const good = planValidator.verifyGateExecution(concrete('complete'));
+    assert(good.ok === true && good.unsatisfied.length === 0,
+      'T-GATEVERIFY-EXEC-VIEW-f: a record-free plan with a COMPLETE wall still passes, got '
+      + JSON.stringify(good.unsatisfied));
+    const tampered = planValidator.verifyGateExecution(concrete('n/a'));
+    assert(tampered.ok === false && tampered.unsatisfied.length === 1
+      && /\bimpl\b/.test(tampered.unsatisfied[0].reason),
+      'T-GATEVERIFY-EXEC-VIEW-f: a record-free plan still catches the n/a tamper on its concrete writer, got '
+      + JSON.stringify(tampered.unsatisfied));
+    assert(planValidator.planNodesWithExpansions(concrete('complete')).length === 3,
+      'T-GATEVERIFY-EXEC-VIEW-f: a record-free plan yields the unwidened node view');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

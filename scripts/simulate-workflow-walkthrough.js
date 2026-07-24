@@ -20123,6 +20123,38 @@ function testAdaptiveLedgerHeaderInvalid425() {
       '#425: rewritten plan must have canonical `| id | status |` ledger header, got: ' + rewritten.slice(rewritten.indexOf('## Node Ledger'), rewritten.indexOf('## Node Ledger') + 60));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 
+  // (3) #774 — the diagnostic's hint must name a remedy that is REACHABLE. `--freeze --repair` routes
+  // through the full freeze wall, which refuses a legacy dag plan outright — and a pre-cutover dag
+  // plan is exactly the population that can still carry a non-canonical header, so the hint may not
+  // present --repair as the only route.
+  {
+    const adaptiveNode = require(adaptiveNodeScript);
+    const d = adaptiveNode.spliceLedgerNode(planBody, 'impl', 'in_progress', { allowFrom: ['pending'] }).diagnostic;
+    assert(d && d.ledger_present === true && JSON.stringify(d.required_columns) === '["id","status"]',
+      '#774: a non-canonical ledger header must still emit the structured diagnostic, got ' + JSON.stringify(d));
+    assert(/\|\s*id\s*\|\s*status\s*\|/.test(d.hint) && /outside plan_hash/.test(d.hint),
+      '#774: the hint must name the in-place header rewrite (the remedy that works on every frozen plan), got ' + d.hint);
+    assert(/plan_form_dag_retired/.test(d.hint),
+      '#774: the hint must say the --repair route is refused on a legacy dag plan, got ' + d.hint);
+
+    // …and that is not a guess: --freeze --repair really is a dead end on a legacy dag plan. It
+    // normalizes the header in memory (header_normalized:true) and then refuses at the freeze wall,
+    // writing nothing (frozen:false) — so an operator following a --repair-only hint gets nowhere.
+    const dagTmp = adaptiveTmp('774-dag-repair');
+    try {
+      const dagPath = path.join(dagTmp, 'plan.md');
+      const dagBody = planBody.replace('plan_form: spine', 'plan_form: dag');
+      fs.writeFileSync(dagPath, '<!-- plan_hash: ' + pv.computePlanHash(dagBody) + ' -->\n\n' + dagBody);
+      const dr = runNode(planValidatorScript, [dagPath, '--freeze', '--repair', '--json'], dagTmp);
+      const dout = JSON.parse(dr.stdout);
+      assert(dr.status !== 0 && dout.result === 'refuse' && dout.frozen === false
+        && (dout.errors || []).some(e => /plan_form: dag is retired/.test(e)),
+        '#774: --freeze --repair on a legacy dag plan must refuse at the freeze wall, got ' + dr.status + ' ' + dr.stdout + dr.stderr);
+      assert(fs.readFileSync(dagPath, 'utf8').indexOf('| node | status |') >= 0,
+        '#774: the refused --repair must leave the non-canonical header untouched on disk');
+    } finally { fs.rmSync(dagTmp, { recursive: true, force: true }); }
+  }
+
   console.log('testAdaptiveLedgerHeaderInvalid425: PASSED');
 }
 
@@ -21307,6 +21339,64 @@ function testDeclaredNotWalled762() {
     '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
     '## Node Ledger', '', '| id | status |', '|---|---|', '| m1 | pending |', '| wall | pending |', '| done | pending |', ''].join('\n');
 
+  const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
+  const fixerComp = (writeSet) => ({ derivation: DERIV,
+    units: [{ name: 'fx', role: 'code-explorer', model: 'standard', write_set: writeSet || '', mode: 'co_open' }] });
+
+  // The END-TO-END harness, project-parameterized so every end-to-end case below drives the SAME
+  // production CLIs against its OWN throwaway repo.
+  const mkHarness = (name) => {
+    const repo = adaptiveTmp(name);
+    initGitRepoWithBareRemote(repo);
+    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/' + name], { encoding: 'utf8' });
+    const proj = path.join(repo, 'kaola-workflow', name);
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    // A branch pointer whose origin ref does NOT exist => derived sink-progress reads PRISTINE.
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: ' + name + '\nbranch: workflow/' + name + '\n');
+    const ledgerOf = () => {
+      const out = {};
+      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
+        const c = l.split('|'); out[c[1].trim()] = c[2].trim();
+      }
+      return out;
+    };
+    const nodeSub = (sub, id, comp, extra) => runNode(adaptiveNodeScript,
+      [sub, '--project', name, ...(id ? ['--node-id', id] : []), '--json', ...(comp ? ['--stdin'] : []), ...(extra || [])],
+      repo, null, comp ? { input: JSON.stringify(comp) } : undefined);
+    const driveMilestone = (id) => {
+      const e = nodeSub('expand-open', id, fixerComp(''));
+      assert(e.status === 0, '#762 ' + name + ' expand-open ' + id + ': ' + e.stdout + e.stderr);
+      for (const u of (JSON.parse(e.stdout).opened || []).map(n => n.id)) {
+        fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
+        const c = runNode(adaptiveNodeScript, ['close-node', '--project', name, '--node-id', u, '--json'], repo);
+        assert(c.status === 0, '#762 ' + name + ' close-node ' + u + ': ' + c.stderr);
+      }
+      const d = runNode(adaptiveNodeScript, ['expand-close', '--project', name, '--node-id', id, '--json'], repo);
+      assert(d.status === 0, '#762 ' + name + ' expand-close ' + id + ': ' + d.stderr);
+    };
+    const driveWall = (id) => {
+      const o = runNode(adaptiveNodeScript, ['open-next', '--project', name, '--json'], repo);
+      const op = JSON.parse(o.stdout);
+      assert(op.opened && op.opened.id === id, '#762 ' + name + ' open wall ' + id + ': ' + o.stdout + o.stderr);
+      const wd = op.opened.dispatch;
+      const ev = ['evidence-binding: ' + id + ' ' + op.nonce, 'contract_version: 2',
+        'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
+        'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
+        'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
+        'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', ''].join('\n');
+      const r = runNode(adaptiveNodeScript, ['record-evidence', '--project', name, '--node-id', id, '--stdin', '--json'], repo, null, { input: ev });
+      assert(r.status === 0, '#762 ' + name + ' record wall ' + id + ': ' + r.stderr);
+      const c = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', name, '--node-id', id, '--json'], repo);
+      assert(c.status === 0, '#762 ' + name + ' close wall ' + id + ': ' + c.stdout + c.stderr);
+    };
+    const cleanup = () => {
+      fs.rmSync(repo, { recursive: true, force: true });
+      try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    };
+    return { repo, proj, planPath, ledgerOf, nodeSub, driveMilestone, driveWall, cleanup };
+  };
+
   // ---- (a) PURE barrier attribution + hard anchors. ----
   {
     const AMEND = 'amend(m1):\n  files: scripts/companion.js, glob/*.js, dir/, ../evil.js';
@@ -21344,53 +21434,7 @@ function testDeclaredNotWalled762() {
 
   // ---- (b) END-TO-END acceptance through the production CLIs. ----
   {
-    const repo = adaptiveTmp('issue-762b');
-    initGitRepoWithBareRemote(repo);
-    spawnSync('git', ['-C', repo, 'checkout', '-b', 'workflow/issue-762b'], { encoding: 'utf8' });
-    const proj = path.join(repo, 'kaola-workflow', 'issue-762b');
-    fs.mkdirSync(proj, { recursive: true });
-    const planPath = path.join(proj, 'workflow-plan.md');
-    // A branch pointer whose origin ref does NOT exist => derived sink-progress reads PRISTINE.
-    fs.writeFileSync(path.join(proj, 'workflow-state.md'), 'project: issue-762b\nbranch: workflow/issue-762b\n');
-    const DERIV = { grain: 'one fixer unit', path: 'critical path', join: 'mechanical', probe: 'no', serializer: 'none present — co-open' };
-    const fixerComp = (writeSet) => ({ derivation: DERIV,
-      units: [{ name: 'fx', role: 'code-explorer', model: 'standard', write_set: writeSet || '', mode: 'co_open' }] });
-    const ledgerOf = () => {
-      const out = {};
-      for (const l of (fs.readFileSync(planPath, 'utf8').match(/^\| ([A-Za-z0-9_.#-]+) \| (pending|in_progress|complete|n\/a) \|$/gm) || [])) {
-        const c = l.split('|'); out[c[1].trim()] = c[2].trim();
-      }
-      return out;
-    };
-    const nodeSub = (sub, id, comp, extra) => runNode(adaptiveNodeScript,
-      [sub, '--project', 'issue-762b', ...(id ? ['--node-id', id] : []), '--json', ...(comp ? ['--stdin'] : []), ...(extra || [])],
-      repo, null, comp ? { input: JSON.stringify(comp) } : undefined);
-    const driveMilestone = (id) => {
-      const e = nodeSub('expand-open', id, fixerComp(''));
-      assert(e.status === 0, '#762 (b) expand-open ' + id + ': ' + e.stdout + e.stderr);
-      for (const u of (JSON.parse(e.stdout).opened || []).map(n => n.id)) {
-        fs.appendFileSync(path.join(proj, '.cache', u + '.md'), '\nfindings: none\n');
-        const c = runNode(adaptiveNodeScript, ['close-node', '--project', 'issue-762b', '--node-id', u, '--json'], repo);
-        assert(c.status === 0, '#762 (b) close-node ' + u + ': ' + c.stderr);
-      }
-      const d = runNode(adaptiveNodeScript, ['expand-close', '--project', 'issue-762b', '--node-id', id, '--json'], repo);
-      assert(d.status === 0, '#762 (b) expand-close ' + id + ': ' + d.stderr);
-    };
-    const driveWall = (id) => {
-      const o = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-762b', '--json'], repo);
-      const op = JSON.parse(o.stdout);
-      assert(op.opened && op.opened.id === id, '#762 (b) open wall ' + id + ': ' + o.stdout + o.stderr);
-      const wd = op.opened.dispatch;
-      const ev = ['evidence-binding: ' + id + ' ' + op.nonce, 'contract_version: 2',
-        'review_context_hash: ' + wd.review_context_hash, 'behavior_contract_hash: ' + wd.behavior_contract_hash,
-        'resolved_profile_hash: ' + wd.resolved_profile_hash, 'candidate_digest: ' + wd.candidate_digest,
-        'domain_outcome: approved', 'gate_claim: ' + wd.gate_claim, 'gate_surface: ' + wd.gate_surface,
-        'gate_aggregation: ' + wd.gate_aggregation, 'findings_none: true', ''].join('\n');
-      const r = runNode(adaptiveNodeScript, ['record-evidence', '--project', 'issue-762b', '--node-id', id, '--stdin', '--json'], repo, null, { input: ev });
-      assert(r.status === 0, '#762 (b) record wall ' + id + ': ' + r.stderr);
-      const c = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', 'issue-762b', '--node-id', id, '--json'], repo);
-      assert(c.status === 0, '#762 (b) close wall ' + id + ': ' + c.stdout + c.stderr);
-    };
+    const { repo, proj, planPath, ledgerOf, nodeSub, driveMilestone, driveWall, cleanup } = mkHarness('issue-762b');
     try {
       fs.writeFileSync(planPath, mkRunPlan());
       const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
@@ -21460,7 +21504,7 @@ function testDeclaredNotWalled762() {
       const bStill = validator.barrierCheck(content1, ['lib/companion.js', 'lib/tamper.js'], { project: 'issue-762b' });
       assert(bStill.result === 'refuse' && bStill.reason === 'write_set_overflow' && bStill.outOfAllow.join() === 'lib/tamper.js',
         '#762 (b): an UNAMENDED tamper write STILL refuses after a legitimate amendment, got ' + bStill.reason + ' ' + JSON.stringify(bStill.outOfAllow));
-    } finally { fs.rmSync(repo, { recursive: true, force: true }); try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+    } finally { cleanup(); }
   }
 
   // ---- (c) exact-file-paths-only granularity — a dir/glob amend token is refused, no write. ----
@@ -21484,6 +21528,97 @@ function testDeclaredNotWalled762() {
       }
       assert(fs.readFileSync(planPath, 'utf8') === before, '#762 (c): a refused amend must NOT write the plan');
     } finally { fs.rmSync(repo, { recursive: true, force: true }); try { fs.rmSync(repo + '-remote', { recursive: true, force: true }); } catch (_) {} }
+  }
+
+  // ---- (#771) THE AMEND TRANSACTION IS ATOMIC — an amend whose RE-REVIEW re-open REFUSES leaves NO
+  //      durable amend block. The re-review re-open is what flips the point OFF its original
+  //      discharge; the barrier attributes an amended file only while its point is `complete`. So a
+  //      block persisted BEFORE that re-open would sit against a still-`complete` point (the ORIGINAL
+  //      discharge — never re-reviewed), and the whole-plan barrier would attribute an out-of-surface
+  //      write that no wall ever saw: a hole straight through reviewed-before-sink. The amend block
+  //      must therefore land in the SAME atomic write as the re-open's ledger flips, or not at all.
+  {
+    const { repo, proj, planPath, ledgerOf, nodeSub, driveMilestone, driveWall, cleanup } = mkHarness('issue-762e');
+    try {
+      fs.writeFileSync(planPath, mkRunPlan());
+      const fz = runNode(planValidatorScript, [planPath, '--freeze', '--json'], repo);
+      assert(fz.status === 0, '#771: spine must freeze green, got ' + fz.status + '\n' + fz.stdout + fz.stderr);
+      spawnSync('git', ['add', '-A'], { cwd: repo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'frozen'], { cwd: repo, encoding: 'utf8' });
+
+      driveMilestone('m1');
+      driveWall('wall');
+      assert(ledgerOf().m1 === 'complete' && ledgerOf().wall === 'complete',
+        '#771: passed-review run — m1 + wall discharged, got ' + JSON.stringify(ledgerOf()));
+
+      // ARM a deterministic Step-3 refusal: a durable `consent_halt: pending` marker in the
+      // ## Node Ledger (the exact marker write-halt persists). The layered guard prologue runs INSIDE
+      // the delegated re-open, so this fires AFTER every amend-surface validation gate has passed —
+      // precisely the amend-then-refuse window. The marker is a ledger-section line, so the frozen
+      // spine identity (plan_hash) is untouched and the integrity layer still passes.
+      {
+        const t = fs.readFileSync(planPath, 'utf8');
+        const head = t.indexOf('## Node Ledger');
+        const nl = t.indexOf('\n', head + 1);
+        fs.writeFileSync(planPath, t.slice(0, nl + 1) + 'consent_halt: pending\n' + t.slice(nl + 1));
+      }
+      const beforeAmend = fs.readFileSync(planPath, 'utf8');
+
+      const am = nodeSub('amend-surface', 'm1', fixerComp('lib/companion.js'), ['--files', 'lib/companion.js']);
+      const ap = JSON.parse(am.stdout);
+      // (1) the amend refuses with the Step-3 reason (the halt fence inside the re-open).
+      assert(am.status !== 0 && ap.result === 'refuse' && ap.reason === 'halt_pending',
+        '#771: amend-surface must surface the re-open refusal, got ' + am.status + ' ' + am.stdout + am.stderr);
+
+      const after = fs.readFileSync(planPath, 'utf8');
+      // (2) NO orphaned amend block — the durable attribution never landed.
+      assert(!validator.parseSurfaceAmendments(after).has('m1'),
+        '#771: a REFUSED amend must leave NO durable amend block, got '
+          + JSON.stringify(Array.from(validator.parseSurfaceAmendments(after))));
+      // (3) the point never left its ORIGINAL discharge (it was never re-opened).
+      assert(ledgerOf().m1 === 'complete',
+        '#771: the refused amend must not flip the ledger, got ' + JSON.stringify(ledgerOf()));
+      // (4) THE ANCHOR — the out-of-surface write is NOT attributed: no re-review, no attribution.
+      const bHold = validator.barrierCheck(after, ['lib/companion.js'], { project: 'issue-762e' });
+      assert(bHold.result === 'refuse' && bHold.reason === 'write_set_overflow' && bHold.outOfAllow.join() === 'lib/companion.js',
+        '#771: an amendment whose re-review never ran must NOT attribute at the barrier, got '
+          + bHold.result + ' ' + bHold.reason + ' ' + JSON.stringify(bHold.outOfAllow));
+      // The refused transaction is a NO-OP on the plan, exactly like the (c) pre-validation refusals.
+      assert(after === beforeAmend, '#771: a refused amend transaction must not mutate the plan at all');
+
+      // (5) CRASH WINDOW — the roll-forward arm must not resurrect attribution either: there is no
+      // half-written amend for reconcile to roll forward.
+      const rr = runNode(adaptiveNodeScript, ['reconcile-running-set', '--project', 'issue-762e', '--json'], repo);
+      const afterRec = fs.readFileSync(planPath, 'utf8');
+      assert(!validator.parseSurfaceAmendments(afterRec).has('m1'),
+        '#771: reconcile must not resurrect an orphaned amend block, got ' + rr.stdout + rr.stderr);
+      const bHold2 = validator.barrierCheck(afterRec, ['lib/companion.js'], { project: 'issue-762e' });
+      assert(bHold2.result === 'refuse' && bHold2.reason === 'write_set_overflow',
+        '#771: after reconcile the out-of-surface write STILL refuses, got ' + bHold2.result + ' ' + bHold2.reason);
+
+      // CLEAR the halt and retry: the SAME amend now lands its block AND its re-review re-open in one
+      // transaction — the atomic fold is not a functional regression, it is only a fold.
+      {
+        const t = fs.readFileSync(planPath, 'utf8');
+        fs.writeFileSync(planPath, t.replace(/^consent_halt: pending\n/m, ''));
+      }
+      const am2 = nodeSub('amend-surface', 'm1', fixerComp('lib/companion.js'), ['--files', 'lib/companion.js']);
+      assert(am2.status === 0, '#771: amend-surface must succeed once the halt clears, got ' + am2.stdout + am2.stderr);
+      const ap2 = JSON.parse(am2.stdout);
+      assert(ap2.amended === true && ap2.reopened === true,
+        '#771: the retried amend attributes + re-opens, got ' + JSON.stringify({ a: ap2.amended, r: ap2.reopened }));
+      const done = fs.readFileSync(planPath, 'utf8');
+      assert(validator.parseSurfaceAmendments(done).get('m1').join() === 'lib/companion.js',
+        '#771: the durable amend block lands with the successful re-open');
+      assert(ledgerOf().m1 === 'pending' && ledgerOf().wall === 'pending',
+        '#771: the successful amend routes the owner + its wall to RE-REVIEW, got ' + JSON.stringify(ledgerOf()));
+      // …and while that re-review is in flight the file is STILL not cleared (the re-opened point is
+      // pending, so the amendment does not attribute and the fixer unit has not discharged either).
+      const bInFlight = validator.barrierCheck(done, ['lib/companion.js'], { project: 'issue-762e' });
+      assert(bInFlight.result === 'refuse' && ['write_set_overflow', 'unattributed_write'].includes(bInFlight.reason),
+        '#771: a re-review in flight does not clear the write yet, got ' + bInFlight.result + ' ' + bInFlight.reason);
+      assert(fs.existsSync(path.join(proj, '.cache')), '#771: the re-open opened its fixer frontier');
+    } finally { cleanup(); }
   }
 
   console.log('testDeclaredNotWalled762: PASSED');

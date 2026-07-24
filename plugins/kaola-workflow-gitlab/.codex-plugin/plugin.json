@@ -1,7 +1,7 @@
 {
   "name": "kaola-workflow-gitlab",
   "version": "4.24.0",
-  "description": "GitLab edition of Kaola-Workflow for Codex, using GitLab issues, merge requests, glab, and repo-backed workflow artifacts.",
+  "description": "GitLab edition of Kaola-Workflow for Codex, an adaptive, resumable DAG of role nodes using GitLab issues, merge requests, glab, and repo-backed workflow artifacts.",
   "author": {
     "name": "KaolaBrother",
     "url": "https://github.com/KaolaBrother"
@@ -24,8 +24,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Kaola-Workflow GitLab for Codex",
-    "shortDescription": "Six-phase Kaola-Workflow for GitLab projects",
-    "longDescription": "Kaola-Workflow GitLab for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow routing, research, ideation, planning, TDD execution, review, documentation docking, and finalization against GitLab issues and merge requests.",
+    "shortDescription": "Adaptive DAG-of-roles Kaola-Workflow for GitLab projects",
+    "longDescription": "Kaola-Workflow GitLab for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow-init, and adaptive, resumable execution: a planner authors and freezes a task-shaped DAG of role nodes in workflow-plan.md, then the executor runs it node-by-node via the running-set scheduler through research, planning, TDD execution, review, documentation docking, and finalization against GitLab issues and merge requests.",
     "developerName": "KaolaBrother",
     "category": "Coding",
     "capabilities": [

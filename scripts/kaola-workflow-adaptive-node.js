@@ -2119,11 +2119,19 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
     // #425: emit a structured diagnostic when the ledger is present but non-canonical.
     // The caller (open-next) surfaces this to the orchestrator so it knows exactly why the
     // node was not found — not just "found:false" with no context.
+    // #774: the hint names a remedy that is actually REACHABLE. `--freeze --repair` routes through the
+    // full freeze wall, which refuses a legacy dag plan outright (plan_form_dag_retired) — and a
+    // pre-cutover dag plan is exactly the population that can still carry a non-canonical header. The
+    // ledger sits OUTSIDE plan_hash, so rewriting that one header line in place is the remedy that
+    // works on every frozen plan; --freeze --repair stays the mechanical route where it is admissible.
     const diagnostic = {
       ledger_present: true,
       detected_columns: header,
       required_columns: ['id', 'status'],
-      hint: "Run --repair to normalize the ledger header, or author with '| id | status |'",
+      hint: "Rewrite the ledger header as '| id | status |' — the ## Node Ledger is outside plan_hash, "
+        + "so editing that line in place does not break the frozen plan. On a plan_form: spine plan "
+        + "`--freeze --repair` normalizes it mechanically; on a legacy dag plan that route refuses "
+        + "(plan_form_dag_retired), so edit the header directly.",
     };
     return { content, changed: false, found: false, alreadyAtTarget: false, diagnostic };
   }
@@ -13108,6 +13116,13 @@ function runReExpandOpen(opts) {
   const reactivationLog = { owner: nodeId, walls_reactivated: [], downstream_reverified: [], downstream_untouched: [] };
   const _reactivate = (planContent) => {
     let c = planContent;
+    // The DURABLE surface amendment (when this re-open is the re-review half of an amend-surface
+    // transaction) is folded into THIS SAME atomic Phase-1 write. The block is what makes the barrier
+    // attribute the amended file, and it attributes while the owning point reads `complete` — so
+    // persisting it before the ledger flips below would leave, on any refusal or crash, an attributed
+    // file against the point's ORIGINAL (pre-amend) discharge: an out-of-surface write reaching the
+    // sink with no re-review. One write, or none.
+    if (opts._amendBlockText) c = appendExpansionBlock(c, opts._amendBlockText);
     const flipToPending = (id) => {
       const r = spliceLedgerNode(c, id, 'pending', { allowFrom: ['complete'] });
       if (r.found) { c = r.content; return r.changed; }
@@ -13184,19 +13199,28 @@ function isExactFileToken(tok) {
 // its declared surface) is handled by ATTRIBUTION + RE-REVIEW, not a hard barrier refusal:
 //   1. VALIDATE — the point is a DISCHARGED spine expansion point; every `--files` token is an EXACT
 //      file path (no directory, no glob — the whole granularity contract).
-//   2. AMEND — append an `amend(<point>):` block to `## Expansion Records` (append-only, OUTSIDE the
+//   2. AMEND — the `amend(<point>):` block for `## Expansion Records` (append-only, OUTSIDE the
 //      plan_hash body, so the frozen spine identity is untouched). This is the durable attribution.
 //   3. RE-REVIEW — delegate to runReExpandOpen on the SAME point, which re-opens it with a fresh
 //      monotonic record + fixer unit, re-activates its post-dominating review wall, resets the sink,
 //      and SELECTIVELY re-verifies only the downstream milestones whose surface intersects the fix.
-// The ordering is load-bearing: the amend block is written FIRST so runReExpandOpen's
-// mergedAmendedSurfaces sees the widened surface. The flow is amend-then-re-review, NEVER a silent
+// ATOMICITY is load-bearing: the amend block is NOT written on its own. It rides INSIDE the re-open's
+// single Phase-1 write (via `_amendBlockText`), landing in the same instant the point flips OFF its
+// discharge — while the surface it declares is handed to the re-open up front (`amendedSurfaces`) so
+// the selective re-verify still scopes against the widened surface. So the block NEVER exists against
+// a `complete` point it has not re-opened: a refusal or crash BEFORE that write leaves no block at
+// all, and after it the block exists only next to the point's own pending flip. Written earlier it
+// would attribute against the point's ORIGINAL, pre-amend discharge — the barrier reads a bare
+// `complete` — and an out-of-surface write would reach the sink unreviewed, which is precisely the
+// invariant this whole command exists to uphold. The flow is amend-then-re-review, NEVER a silent
 // widen — the barrier attributes the amended file ONLY after its point re-discharges (its wall
 // re-passes), so a write can never reach the sink attributed-but-unreviewed. Amendment loosens
 // ATTRIBUTION only; a consent-gated (S2) surface still halts at the consent valve inside the re-run
 // fixer unit, and the UNAMENDED out-of-surface write stays a fail-closed tamper refusal at the barrier.
 function runAmendSurface(opts) {
-  const { planPath, nodeId, readFile, writeFile } = opts;
+  // No writeFile here by design: this command validates and composes, then hands the whole mutation —
+  // amend block INCLUDED — to the single atomic re-open transaction below.
+  const { planPath, nodeId, readFile } = opts;
   if (!nodeId) return refuse('node_id_required', { detail: '--node-id names the expansion point whose surface to amend' });
   const rawFiles = Array.isArray(opts.files) ? opts.files : [];
   const files = Array.from(new Set(rawFiles.map(f => String(f || '').trim()).filter(Boolean)));
@@ -13231,16 +13255,18 @@ function runAmendSurface(opts) {
         model: opts.model,
       });
 
-  // Step 2: append the durable amend block FIRST (append-only, non-hash), so the delegated re-open
-  // scopes its selective re-verify against the widened surface.
-  writeFile(planPath, appendExpansionBlock(content, renderSurfaceAmendment(nodeId, exactFiles)));
-
-  // Step 3: route the amended surface to RE-REVIEW via the proven #761 re-open cascade.
-  const reopen = runReExpandOpen({ ...opts, composition });
+  // Steps 2+3 are ONE transaction: route the amended surface to RE-REVIEW via the proven #761 re-open
+  // cascade, handing it BOTH the widened surface (so its selective re-verify scopes against
+  // declared+amended, exactly as if the block were already persisted) and the block text itself, which
+  // it folds into its single atomic Phase-1 write alongside the ledger flips. Nothing is written here.
+  const reopen = runReExpandOpen({ ...opts, composition,
+    amendedSurfaces: { ...(opts.amendedSurfaces && typeof opts.amendedSurfaces === 'object' ? opts.amendedSurfaces : {}), [nodeId]: exactFiles },
+    _amendBlockText: renderSurfaceAmendment(nodeId, exactFiles) });
   if (reopen && reopen.result === 'refuse') {
     return { ...reopen, amended_surface: exactFiles, amend_point: nodeId,
-      note: 'the amend block was recorded (append-only), but the re-review re-open refused — resolve the '
-        + 'refusal and retry; the durable amendment does not attribute at the barrier until the point re-discharges' };
+      note: 'the re-review re-open refused — an amendment is never persisted ahead of the re-open that '
+        + 'reviews it, so the amended file does NOT attribute at the barrier; resolve the refusal and '
+        + 'retry the amend' };
   }
   return { ...reopen, amended: true, amend_point: nodeId, amended_surface: exactFiles };
 }

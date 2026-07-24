@@ -30,6 +30,74 @@ with a typed `path_not_installed` (scripts validate, never auto-pick — #44). T
   intra-issue write-set disjointness, and the durable
   `workflow-plan.md` + `## Node Ledger` + `plan_hash` resume contract.
 
+  **Progressive elaboration — a frozen milestone spine, expanded just in time (epic #757;
+  `docs/decisions/D-765-01.md`).** What a run freezes is a **spine**: an ordered sequence of
+  milestone nodes plus the unique `finalize` sink, declared by the hash-covered `## Meta` field
+  `plan_form: spine`. That is the only authorable plan form — the legacy full-DAG grammar is
+  retired at the freeze wall with a typed `plan_form_dag_retired`, freeze-only, so a plan frozen
+  before the cutover still resumes. A spine node is either a **concrete single-role node**
+  (identical semantics to everything above — every harness-owned rule applies to it verbatim) or a
+  typed **expansion point**: a milestone whose interior frontier cannot be proven at freeze. A
+  spine carrying *no* expansion point is legal and is how a fully-known task is planned; it is the
+  whole-DAG freeze under one name. Progressive elaboration is therefore not a second lane — it is
+  one plan form whose freeze-time resolution varies per milestone.
+
+  An expansion point defers *shape*, never *obligation*. At freeze it carries only a `## Meta`
+  contract — milestone goal, advisory expected surfaces, join constraints, and the review class it
+  must discharge — and the spine-level proofs still range over it: the unique sink, post-dominance
+  of its review wall before that sink, the closed role library, the caps, risk governance, and the
+  fail-closed validation policy (an expansion point counts as a code producer, because its
+  open-time frontier may compose any writer role and freeze cannot prove it will not). The
+  *interior* proofs — fan-out disjointness, the antichain write sweep, G1/G2/G3 over interior
+  writers — are not relaxed; they are simply inapplicable to members that do not exist yet, and
+  attach when the members do.
+
+  ```text
+  FROZEN SPINE (covered by plan_hash)
+      m1 (expansion point) ─────────────────► review wall ─────► finalize sink
+          │                                        ▲
+          │ expand-open   record(m1#1), open(m1#1) │ expand-close  discharge(m1)
+          ▼                                        │
+  COMPOSED AT OPEN TIME (## Expansion Records — append-only, outside plan_hash)
+      m1-r1-a  ┐
+      m1-r1-b  ┘── ordinary open / barrier / close cycle ─────────┘
+  ```
+
+  **The durable channel is append-only and outside the frozen identity.** Composition is recorded
+  in a `## Expansion Records` section of `workflow-plan.md`. `plan_hash` covers `## Meta` +
+  `## Nodes` + `## Node Briefs` only, so no record can perturb the frozen spine — the resume
+  contract keeps meaning exactly what it meant. Every mutation appends ONE block at the tail and
+  rewrites, re-orders, and removes nothing: `record(<point>#<n>)` (the composed units plus the
+  recorded derivation — grain, path, join, probe, serializer), `open(<point>#<n>)` (the positive
+  proof the frontier was opened), and `discharge(<point>)` (the milestone is finished). A unit's
+  plan node id is derived, never authored (`<point>-r<n>-<name>`), so records on the same point
+  cannot collide. A crash between phases leaves a record with no proof block; `reconcile-running-set`
+  rolls it FORWARD rather than leaving a half-open expansion.
+
+  **Two node views, deliberately separate.** `parseNodes` is the FREEZE view — the spine and only
+  the spine — and is what `computePlanHash` and every freeze wall range over.
+  `planNodesWithExpansions` is the EXECUTION view: the spine plus every recorded unit, with each
+  expansion point's `depends_on` widened to cover its own units. Everything that runs at execution
+  time (ready-set derivation, the executor's node reader, the Codex task mirror) reads the
+  execution view; nothing at freeze does. Widening the freeze view instead would re-apply at every
+  resume exactly the interior proofs the spine exists to defer.
+
+  **Lifecycle, and re-expansion as the same transaction.** The executor reaches an expansion point
+  through the ordinary running set: `next-action` surfaces it as `expansionPending` (it is never
+  dispatched as a subagent — it has no agent profile), the orchestrator composes the milestone
+  frontier under the same faithful-decomposition and evidence-backed-serialization rules as any
+  other frontier, `expand-open` reserves and records it, the composed units run the ordinary
+  open/close cycle with their own baselines and barriers, and `expand-close` discharges the
+  milestone once every unit of every record is terminal. A **second** record on the same point is
+  the same append-only transaction and the same phases, not a second mechanism: when review
+  surfaces a defect owned by a writer inside an already-discharged expansion, `reexpand-open`
+  re-opens that point and re-composes just its own frontier instead of escalating to a full
+  re-plan epoch, and the re-opened point must be reviewed again before it can retire. An
+  out-of-surface companion file is handled the same way — attributed by an append-only
+  `amend(<point>)` block in the same channel and routed to re-review, rather than widening a
+  frozen write grant. See `docs/api.md` § Plan form / Expansion transaction for the grammar,
+  block formats, and typed refusals.
+
   **Authoritative review transaction boundary (D-682-01).** Review evidence is not interpreted
   independently by each close path. The shared schema layer computes one effective verdict, derives
   a canonical logical-gate identity from gate kind plus sorted origin/member sets, and validates the

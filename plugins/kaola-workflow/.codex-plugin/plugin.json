@@ -1,7 +1,7 @@
 {
   "name": "kaola-workflow",
   "version": "4.24.0",
-  "description": "Kaola-Workflow for Codex, a public repo-backed workflow pack with resumable phase artifacts, automated Codex agent profiles, roadmap mirroring, TDD execution, review, and finalization gates.",
+  "description": "Kaola-Workflow for Codex, a public repo-backed workflow pack with an adaptive, resumable DAG of role nodes, automated Codex agent profiles, roadmap mirroring, TDD execution, review, and finalization gates.",
   "author": {
     "name": "KaolaBrother",
     "url": "https://github.com/KaolaBrother"
@@ -22,8 +22,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Kaola-Workflow for Codex",
-    "shortDescription": "Six-phase Kaola-Workflow for Codex",
-    "longDescription": "Kaola-Workflow for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow-init, resumable phase routing, research, ideation, planning, TDD execution, review, documentation docking, and finalization.",
+    "shortDescription": "Adaptive DAG-of-roles Kaola-Workflow for Codex",
+    "longDescription": "Kaola-Workflow for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow-init, and adaptive, resumable execution: a planner authors and freezes a task-shaped DAG of role nodes in workflow-plan.md, then the executor runs it node-by-node via the running-set scheduler through research, planning, TDD execution, review, documentation docking, and finalization.",
     "developerName": "KaolaBrother",
     "category": "Coding",
     "capabilities": [

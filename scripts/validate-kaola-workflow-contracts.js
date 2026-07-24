@@ -463,6 +463,41 @@ for (const file of initFiles) {
     file + ': injected ## Kaola-Workflow template must not use "phase file/artifact" durable-state framing (#572)');
 }
 
+// #769: the two bans above are scoped to the injected consumer CLAUDE.md region, so the SHIPPED
+// marketplace manifests were never inspected and carried retired six-phase copy past #538 / #572 /
+// #573 / #725 / #765 unchallenged. Manifest text is the listing a user reads before installing, so
+// it must describe the model the plugin actually runs: a planner authors and freezes a task-shaped
+// DAG of role nodes in workflow-plan.md, then the executor runs it node-by-node via the running-set
+// scheduler. Ban the retired grammar over every shipped plugin.json (Codex + forge Claude, all
+// editions) and pin a positive adaptive anchor so blanked copy cannot pass the ban vacuously.
+const MANIFEST_GRAMMAR_BANS = [
+  [/\b(?:six|6)[-\s]?phase\b/i, 'six-phase / 6-phase'],
+  [PHASE_FILE_BAN, 'phase file / phase artifact'],
+  [/phase routing/i, 'phase routing'],
+  [PHASE_NUMBER_BAN, 'numbered Phase <n>']
+];
+// listed explicitly (not globbed) so a manifest that stops shipping is a visible edit here;
+// the canonical Claude edition ships commands from the repo root and has no manifest of its own.
+const shippedManifests = [
+  `${pluginRoot}/.codex-plugin/plugin.json`,
+  'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json',
+  'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json',
+  `${pluginRoot}/.claude-plugin/plugin.json`,
+  'plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json',
+  'plugins/kaola-workflow-gitea/.claude-plugin/plugin.json'
+].filter(exists);
+assert(shippedManifests.length >= 5,
+  '#769: expected at least 5 shipped plugin manifests to scan, found ' + shippedManifests.length);
+for (const file of shippedManifests) {
+  const manifestText = read(file);
+  for (const [ban, label] of MANIFEST_GRAMMAR_BANS) {
+    assert(!ban.test(manifestText),
+      file + ': shipped plugin manifest must not advertise retired workflow grammar (' + label +
+      ') — the workflow is adaptive-only (#769)');
+  }
+  assertConcept(file, 'the adaptive DAG-of-roles model', ['adaptive', 'DAG of role nodes']);
+}
+
 // #609: the injected ## Kaola-Workflow template must FORBID vendor-model embellishment of the
 // role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md
 // files; a consumer block is read by EVERY runtime (Codex reads CLAUDE.md too), so a Claude model
