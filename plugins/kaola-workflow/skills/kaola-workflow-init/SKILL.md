@@ -179,9 +179,8 @@ already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 Adaptive is the workflow path; every install ships it and there is nothing to
 select or configure.
 
-At runtime, a `KAOLA_PATH` (or `--workflow-path`) naming a non-adaptive path
-returns a typed `path_not_installed` refusal — never a silent adaptive
-substitution.
+A stale `KAOLA_PATH` / `--workflow-path` request from an old session or script is silently
+ignored — the claim always runs adaptive.
 
 6. Create only missing scaffold files:
 

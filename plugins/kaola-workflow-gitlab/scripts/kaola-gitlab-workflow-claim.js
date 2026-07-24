@@ -121,6 +121,11 @@ function resolveCodexDispatchModeFlag(args) {
   return { present: true, mode: v };
 }
 
+// #770: module-level latch so the --workflow-path warn-and-ignore notice prints ONCE per process
+// even though parseArgs runs twice per invocation (once in main() for the top-level unknown-flag
+// check, once again inside the dispatched subcommand handler).
+let workflowPathRetiredWarned = false;
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -154,6 +159,14 @@ function parseArgs(argv) {
     if (key.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       if (KNOWN_VALUE_FLAGS.has(name)) {
+        // issue #770: --workflow-path is RETIRED — adaptive is the only path. Warn-and-ignore
+        // shim (the --enable-adaptive precedent): stays a KNOWN flag so a caller passing it is
+        // never hit with an unknown_flag refusal; print a one-line stderr notice and keep
+        // parsing (the captured value, if any, is no longer read by any selection logic).
+        if (name === 'workflowPath' && !workflowPathRetiredWarned) {
+          workflowPathRetiredWarned = true;
+          process.stderr.write('--workflow-path is retired; running adaptive\n');
+        }
         // A known value flag consumes the next token iff it exists and is not itself a flag (mirrors
         // the historical generic-branch rule; a missing value leaves the flag undefined, not "unknown").
         if (val !== undefined && !val.startsWith('--')) { args[name] = val; i++; }
@@ -671,10 +684,11 @@ function writeState(root, data) {
   // failure before workflow-state.md is written; missing-schema compatibility
   // belongs exclusively to the verified legacy re-plan import path.
   const claimAnchors = buildClaimAnchors(root, data);
-  // issue #227: adaptive is the ONLY workflow path — a fresh claim always scaffolds an
+  // issue #227/#770: adaptive is the ONLY workflow path — a fresh claim always scaffolds an
   // adaptive run that resumes via the plan-run executor (the fast/full paths and the phaseN
-  // ladder were retired). A stale non-adaptive workflow_path is tolerated on read but never
-  // scaffolded here — the #538 selection gate refuses a non-adaptive path before writeState.
+  // ladder were retired, and the path selector itself was retired by #770). A stale
+  // non-adaptive workflow_path is tolerated on read but never scaffolded here — this field
+  // is now a constant record, not a selection.
   const workflowPath = data.workflow_path || adaptiveSchema.ADAPTIVE_PATH;
   const adaptiveCommand = adaptiveSchema.PLAN_RUN_COMMAND + ' ' + data.project;
   const adaptiveSkill = adaptiveSchema.PLAN_RUN_SKILL + ' ' + data.project;
@@ -860,27 +874,9 @@ function claimProject(root, args) {
   const existing = issueIid != null ? activeByIssue(root, issueIid) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_iid, project: existing.project, folder: existing };
 
-  // issue #538: the single path-legality gate for NEW claims (covers cmdClaim and
-  // cmdStartup -> claimExplicitTarget). Adaptive is the unconditional default and is
-  // the ONLY legal workflow path — the fast/full paths were retired. A KAOLA_PATH/
-  // --workflow-path naming any non-adaptive path is a TYPED `path_not_installed` refusal
-  // (#44/#538) — never a silent substitution to adaptive, never a crash. A stale
-  // `installed_paths` config field is tolerated on read but no longer confers legality.
-  // Resume of a frozen plan does not pass here (the `existing` early-return handles
-  // re-claims), so this gates SELECTION only.
-  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'adaptive';
-  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath)) {
-    return {
-      status: 'path_not_installed',
-      result: 'refuse',
-      claim: 'none',
-      issue: issueIid,
-      project,
-      reasoning: 'workflow_path "' + requestedPath + '" is not a legal path. Adaptive is the only ' +
-        'workflow path (the fast/full paths were retired). Refusing to silently substitute adaptive (#538/#44).'
-    };
-  }
-
+  // issue #770: the path selector is retired — adaptive is the only workflow path and there
+  // is no legality gate left to run here. A stale KAOLA_PATH / --workflow-path request is
+  // never refused; it silently runs adaptive (the claim's scaffolding is adaptive-only anyway).
   if (issueIid != null) {
     const probe = probeIssueState(issueIid);
     if (probe.state === 'closed') {
@@ -1271,14 +1267,8 @@ function claimExplicitBundle(root, args) {
     return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
       reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
   }
-  // Step 3: bundle lane is adaptive-only (adaptive is the only workflow path). #538: this is
-  // a lane constraint, not an installed-path legality question — adaptive is always legal, so the
-  // only refusal here is "this lane only accepts adaptive."
-  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'adaptive';
-  if (requestedPath !== adaptiveSchema.ADAPTIVE_PATH) {
-    return { status: 'bundle_requires_adaptive', result: 'refuse', claim: 'none', project: null, issue: null,
-      reasoning: 'the bundle lane is adaptive-only; got workflow_path "' + requestedPath + '"' };
-  }
+  // issue #770: the path selector is retired — the bundle lane always runs adaptive now, so
+  // there is no separate "adaptive-only" legality question left to gate here.
   // Step 4: per-issue validation loop (NO mutation yet)
   for (const n of targets) {
     // 4a: check active folders (bundle-aware activeByIssue)
@@ -4481,7 +4471,7 @@ function cmdLegacyWorktreeCleanup() {
 
 const USAGE = 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|watch-mr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels|barrier-ref-sweep>\n'
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--mr-iid N]\n'
-  + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr] [--workflow-path adaptive|full|fast]\n'
+  + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr] [--workflow-path VALUE (retired, ignored)]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
   + '         [--attest-planner-spawn] [--attest-contractor-spawn]\n'
   + '  --help, -h   print this usage and exit (no side effects).';

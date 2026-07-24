@@ -1698,8 +1698,10 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
-// #725: the Issue #101 KAOLA_PATH=fast startup test is retired — fast is not an installed path,
-// so KAOLA_PATH=fast is refused (path_not_installed), never a fast-state startup.
+// #725/#770: the Issue #101 KAOLA_PATH=fast startup test is retired — first (#725) because fast
+// was never an installed path (refused path_not_installed), and now (#770) because the path
+// SELECTOR itself is retired: a stale KAOLA_PATH=fast is silently ignored and the claim ACQUIRES
+// via adaptive (never a fast-state startup, never a refusal).
 
 // #725: the Issue #107 phase4-progress → Finalization reconstruction tests are retired with the
 // numbered full path — repair-state no longer forward-reconstructs numbered phases (it reconstructs

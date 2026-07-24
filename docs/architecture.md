@@ -8,8 +8,9 @@ safe to leave running.
 ## Workflow Path
 
 Kaola-Workflow runs every issue through **adaptive** planning. There is no macro-shape
-selection step in `workflow-next.md` Step 0a-1, and a non-adaptive `KAOLA_PATH` is refused
-with a typed `path_not_installed` (scripts validate, never auto-pick — #44). The agent
+selection step in `workflow-next.md` Step 0a-1 — adaptive is the only workflow path, and the
+path SELECTOR itself (`KAOLA_PATH` / `--workflow-path`) is retired: a stale request is silently
+ignored, never refused (scripts validate, never auto-pick — #44). The agent
 **freely composes a task-shaped DAG** of role nodes inside a fixed lifecycle frame:
 
   ```text

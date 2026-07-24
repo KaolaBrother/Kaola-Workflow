@@ -133,7 +133,7 @@ role/identity/brief exactly once; never author inline.
 
 <!-- PIN: claim-escalate -->
 - **Refusal — any `claim_verdict` NOT `acquired` or `owned`**: NO `workflow-state.md` was written.
-  Surface `claim_reasoning` and classify by `result`: `result: refuse` (e.g. `workflow_path_refused`,
+  Surface `claim_reasoning` and classify by `result`: `result: refuse` (e.g.
   `target_occupied`, `target_unverified`, `claim: none`) → **HARD STOP**, fail closed (do not retry a
   different issue, do not blind-read a missing state file); `result: escalate`
   (`target_indeterminate` / `target_set_indeterminate`) → **PAUSE and ASK THE USER** (retry, pick
@@ -193,18 +193,18 @@ runs the bundle claim (the set was already selected by the orchestrator): pass `
 A,B,C` (sorted ascending, comma-separated) instead of `--target-issue N`.
 
 ```bash
-node "$CLAIM_JS" startup --runtime claude --workflow-path adaptive --target-issues 42,47,53
+node "$CLAIM_JS" startup --runtime claude --target-issues 42,47,53
 ```
 
 `--target-issue` / `KAOLA_TARGET_ISSUE` keep one-issue behavior; `--target-issues` /
 `KAOLA_TARGET_ISSUES` are the only multi-issue path — setting both refuses with `target_ambiguity`.
 Shape: active folder + branch `bundle-42-47-53` (sorted, deduplicated); `workflow-state.md` records
 `issue_number: 42` + `issue_numbers: 42,47,53`, `bundle_id`, `closure_policy: all_or_nothing`. The
-bundle lane requires `workflow_path: adaptive` (else `bundle_requires_adaptive`; the set may exceed
+bundle lane always runs `workflow_path: adaptive` (the set may exceed
 `KAOLA_BUNDLE_MAX_ISSUES`, default 4). The planner authors ONE implementation-lane DAG (not
 one-node-per-issue); `## Meta` carries a conservative union of labels. A bundle run ends at ONE
 finalization that closes every issue in `issue_numbers` (all-or-nothing), removes each
 `.roadmap/issue-N.md`, regenerates `ROADMAP.md` once, archives one bundle folder, and writes one
-closure receipt. On any typed bundle claim refusal (the `target_set_*` / `target_ambiguity` /
-`bundle_requires_adaptive` codes claim.js emits), surface the code and STOP; do not retry with a
+closure receipt. On any typed bundle claim refusal (the `target_set_*` / `target_ambiguity`
+codes claim.js emits), surface the code and STOP; do not retry with a
 different set.

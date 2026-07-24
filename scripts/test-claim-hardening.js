@@ -877,19 +877,23 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(repo503, { recursive: true, force: true });
 }
 
-// --- #538: path-legality gate (adaptive is the only path) -----------------------
-// Under #538 there is no on/off switch: adaptive is the unconditional default and the ONLY legal
-// workflow path — the fast/full paths were retired. A KAOLA_PATH/--workflow-path naming any
-// non-adaptive path is a TYPED `path_not_installed` refusal (NEVER a silent adaptive substitution),
-// and the retired `--with-fast`/`--with-full` install flags are unknown flags at the claim surface.
-// A stale `installed_paths` config field is tolerated on read but no longer confers legality.
+// --- #770: the path SELECTOR is retired (adaptive is the only path, no legality gate) ----------
+// #538 established the path-legality gate (adaptive unconditional default + a typed
+// `path_not_installed` refusal for any other requested path); #770 retires the gate ITSELF —
+// KAOLA_PATH / --workflow-path no longer select or refuse anything. A stale/bogus request is
+// silently ignored and the claim ACQUIRES via adaptive regardless; the persisted `workflow_path`
+// state field still echoes whatever raw value was requested (a diagnostic record only — never a
+// selection), while `next_command`/`next_skill`/`phase` route unconditionally to adaptive. The
+// `--workflow-path` flag stays a KNOWN, accepted flag (a warn-and-ignore shim, one stderr notice),
+// never an `unknown_flag` refusal. The retired `--with-fast`/`--with-full` INSTALL flags are a
+// separate, still-live unknown-flag surface (unaffected by #770 — they were never a runtime path
+// selector).
 //
-// Legality is schema-driven (claimProject calls adaptiveSchema.isLegalWorkflowPath), not config- or
-// env-driven; the hermetic HOME (seeded parallel_mode:'auto' at the top of this file) only feeds the
-// classifier. KAOLA_ENABLE_ADAPTIVE is retired — no env lever survives. Distinct target-issue numbers
-// avoid the `owned` early-return false-green.
+// The hermetic HOME (seeded parallel_mode:'auto' at the top of this file) only feeds the
+// classifier. KAOLA_ENABLE_ADAPTIVE is retired — no env lever survives. Distinct target-issue
+// numbers avoid the `owned` early-return false-green.
 {
-  const { execFileSync: execFS538 } = require('child_process');
+  const { spawnSync: spawnS538 } = require('child_process');
   const CLAIM538 = path.join(__dirname, 'kaola-workflow-claim.js');
 
   function runClaim538(argv, extraEnv, cwd) {
@@ -901,24 +905,22 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     }, extraEnv || {});
     // KAOLA_PATH defaults to undefined so the claim's `|| 'adaptive'` default fires unless overridden.
     if (!('KAOLA_PATH' in (extraEnv || {}))) delete e.KAOLA_PATH;
-    try {
-      const out = execFS538('node', [CLAIM538, ...argv], { cwd, encoding: 'utf8', env: e });
-      const lines = out.trim().split('\n').filter(l => l.trim());
-      const last = lines[lines.length - 1];
-      return { code: 0, json: last ? JSON.parse(last) : null };
-    } catch (err) {
-      const out = String(err.stdout || '') + String(err.stderr || '');
-      const lines = out.trim().split('\n').filter(l => l.trim());
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try { return { code: err.status || 1, json: JSON.parse(lines[i]) }; } catch (_) {}
-      }
-      return { code: err.status || 1, json: null, raw: out };
+    // spawnSync (not execFileSync) so stderr is captured uniformly on BOTH success and failure —
+    // needed to assert the --workflow-path warn-and-ignore notice even on an acquiring (exit 0) run.
+    const res = spawnS538('node', [CLAIM538, ...argv], { cwd, encoding: 'utf8', env: e });
+    const stdout = String(res.stdout || '');
+    const stderr = String(res.stderr || '');
+    const lines = stdout.trim().split('\n').filter(l => l.trim());
+    let json = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try { json = JSON.parse(lines[i]); break; } catch (_) {}
     }
+    return { code: res.status == null ? 1 : res.status, json, stderr, raw: stdout + stderr };
   }
 
   // Minimal git repo so worktree provisioning doesn't error on the legal-path (acquired) cases.
   const repo538 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-538-repo-')));
-  const g538 = (a) => { try { execFS538('git', ['-C', repo538, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
+  const g538 = (a) => { try { spawnS538('git', ['-C', repo538, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
   g538(['init']); g538(['config', 'user.email', 't@t']); g538(['config', 'user.name', 't']); g538(['config', 'commit.gpgsign', 'false']);
   fs.writeFileSync(path.join(repo538, '.gitignore'), '.kw/\n'); g538(['add', '-A']); g538(['commit', '-m', 'init']);
 
@@ -933,6 +935,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   function rmProj538(issueN) {
     try { fs.rmSync(path.join(repo538, 'kaola-workflow', 'issue-' + issueN), { recursive: true, force: true }); } catch (_) {}
   }
+  function stateOf538(issueN) {
+    const p = path.join(repo538, 'kaola-workflow', 'issue-' + issueN, 'workflow-state.md');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  }
 
   // (a) DEFAULT (no --workflow-path, no KAOLA_PATH) → ACQUIRED (adaptive default).
   {
@@ -941,35 +947,51 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
       repo538
     );
+    const state5380 = stateOf538('5380');
     rmProj538('5380');
     assert(r.json && r.json.status === 'acquired',
       '#538(a): default (no path) must be acquired via adaptive (got ' + JSON.stringify(r.json) + ')');
+    assert(/^workflow_path: adaptive$/m.test(state5380),
+      '#538(a): the default (no requested path) must persist workflow_path: adaptive, got:\n' + state5380);
   }
 
-  // (b) KAOLA_PATH=fast → REFUSE path_not_installed (fast was retired; never legal).
+  // (b) #770: KAOLA_PATH=fast (a retired path name) is silently IGNORED for selection — the claim
+  // ACQUIRES via adaptive regardless. The persisted workflow_path field still echoes the raw
+  // requested value ('fast') as a diagnostic record only; next_command routes unconditionally
+  // to the adaptive executor.
   {
     const r = runClaim538(
       ['startup', '--target-issue', '5381'],
       { KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
       repo538
     );
-    rmProj538('5381'); // guard REFUSES so no project dir is created; rmProj is defensive
-    assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
-      '#538(b): retired fast path must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
-    assert(r.json && r.json.claim === 'none',
-      '#538(b): path_not_installed must have claim:none (got ' + JSON.stringify(r.json) + ')');
+    const state5381 = stateOf538('5381');
+    rmProj538('5381');
+    assert(r.json && r.json.status === 'acquired',
+      '#770(b): a stale KAOLA_PATH=fast request must silently acquire via adaptive, no refusal (got ' + JSON.stringify(r.json) + ')');
+    assert(/^workflow_path: fast$/m.test(state5381),
+      '#770(b): the persisted workflow_path field must echo the raw stale request as a diagnostic record (never a selection), got:\n' + state5381);
+    assert(/^next_command: \/kaola-workflow-plan-run issue-5381$/m.test(state5381),
+      '#770(b): routing must be unconditionally adaptive despite the stale KAOLA_PATH value, got:\n' + state5381);
   }
 
-  // (d) --workflow-path full → REFUSE path_not_installed (full was retired; never legal).
+  // (d) #770: --workflow-path full (a retired path name) is silently ignored — ACQUIRES via
+  // adaptive, and the warn-and-ignore shim prints its one-line stderr notice (never an
+  // unknown_flag refusal — the flag stays KNOWN).
   {
     const r = runClaim538(
       ['startup', '--target-issue', '5383', '--workflow-path', 'full'],
       { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
       repo538
     );
+    const state5383 = stateOf538('5383');
     rmProj538('5383');
-    assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
-      '#538(d): retired full path must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
+    assert(r.json && r.json.status === 'acquired',
+      '#770(d): a stale --workflow-path full request must silently acquire via adaptive, no refusal (got ' + JSON.stringify(r.json) + ')');
+    assert(r.stderr.includes('--workflow-path is retired; running adaptive'),
+      '#770(d): the retired flag must print its one-line warn-and-ignore stderr notice, got stderr:\n' + r.stderr);
+    assert(/^workflow_path: full$/m.test(state5383),
+      '#770(d): the persisted workflow_path field must echo the raw stale request as a diagnostic record, got:\n' + state5383);
   }
 
   // (f) explicit KAOLA_PATH=adaptive → ACQUIRED (adaptive is the only legal path).
@@ -997,7 +1019,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 
   // (retirement) the retired install opt-in flags are UNKNOWN flags at the claim surface — a claim
   // that receives `--with-fast`/`--with-full` refuses with a typed unknown_flag (never silently
-  // accepted as a path opt-in), proving the flags no longer confer any fast/full behavior.
+  // accepted as a path opt-in), proving the flags no longer confer any fast/full behavior. Distinct
+  // from `--workflow-path` (#770), which stays a KNOWN warn-and-ignore flag, never unknown_flag.
   for (const retiredFlag of ['--with-fast', '--with-full']) {
     const r = runClaim538(
       ['startup', '--target-issue', '5388', retiredFlag, '--json'],
@@ -1009,34 +1032,36 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#725: retired ' + retiredFlag + ' must refuse unknown_flag at the claim surface (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (h) #550 OFFLINE-DETERMINISM REGRESSION GUARD — the path_not_installed refusal must make ZERO gh
-  // invocations. The path-legality gate (claim.js claimProject) returns path_not_installed BEFORE
-  // probeIssueState (the only gh-touching call in this flow), so a retired path never reaches gh.
-  // This guard runs the #538(b) scenario WITHOUT KAOLA_WORKFLOW_OFFLINE (so ghExec would actually
-  // shell the mock if the probe were reached) and points KAOLA_GH_MOCK_SCRIPT at a mock that DROPS
-  // A SENTINEL FILE + EXITS NON-ZERO IF INVOKED. We assert (1) the result is still path_not_installed/
-  // refuse and (2) the sentinel was never written — proving zero gh round-trips. A regression that
-  // reorders the gate to probe-before-legality would fire the mock and fail here.
+  // (h) #770 ONLINE-PROBE REGRESSION GUARD — a stale/retired KAOLA_PATH must NOT skip the normal
+  // ONLINE probeIssueState call. Before #770 this guard proved the OPPOSITE (the path-legality gate
+  // short-circuited BEFORE reaching gh at all); now there is no such gate, so the correct invariant
+  // is that a stale KAOLA_PATH changes NOTHING about the online flow — the real gh probe still
+  // fires, and with a genuinely open issue the claim still acquires via adaptive. Runs the (b)
+  // scenario WITHOUT KAOLA_WORKFLOW_OFFLINE (so ghExec actually shells the mock) and points
+  // KAOLA_GH_MOCK_SCRIPT at a mock that reports the issue OPEN (never a boom/refusing mock) and
+  // drops a sentinel file so invocation is provable. A regression that reintroduces an early-return
+  // keyed on a non-adaptive KAOLA_PATH — one that ALSO happens to skip the online probe — fails here
+  // (sentinel absent).
   {
     const sentinel538 = path.join(tmpDir538, 'gh-invoked.sentinel');
     try { fs.rmSync(sentinel538, { force: true }); } catch (_) {}
-    const ghBoomMock538 = path.join(tmpDir538, 'gh-boom.js');
-    fs.writeFileSync(ghBoomMock538,
+    const ghOpenMock538 = path.join(tmpDir538, 'gh-open.js');
+    fs.writeFileSync(ghOpenMock538,
       'require(\'fs\').writeFileSync(' + JSON.stringify(sentinel538) + ', \'gh was invoked\');\n' +
-      'process.stderr.write(\'gh mock invoked — path-legality gate did NOT short-circuit\\n\');\n' +
-      'process.exit(1);\n'
+      'process.stdout.write(JSON.stringify({ state: "OPEN" }) + "\\n");\n' +
+      'process.exit(0);\n'
     );
     const r = runClaim538(
       ['startup', '--target-issue', '5387'],
-      // NOTE: KAOLA_WORKFLOW_OFFLINE explicitly EMPTIED so ghExec would shell the mock if reached.
-      { KAOLA_WORKFLOW_OFFLINE: '', KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538, KAOLA_GH_MOCK_SCRIPT: ghBoomMock538 },
+      // NOTE: KAOLA_WORKFLOW_OFFLINE explicitly EMPTIED so ghExec actually shells the mock.
+      { KAOLA_WORKFLOW_OFFLINE: '', KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538, KAOLA_GH_MOCK_SCRIPT: ghOpenMock538 },
       repo538
     );
-    rmProj538('5387'); // guard REFUSES so no project dir is created; rmProj is defensive
-    assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
-      '#550(h): a retired path still refuses path_not_installed even with no OFFLINE flag (got ' + JSON.stringify(r.json) + ')');
-    assert(!fs.existsSync(sentinel538),
-      '#550(h): ZERO gh invocations — the gh mock (exits non-zero if called) was never invoked; path-legality short-circuits before probeIssueState');
+    rmProj538('5387');
+    assert(fs.existsSync(sentinel538),
+      '#770(h): the online gh probe must actually fire — a stale KAOLA_PATH must not secretly skip it (no sentinel found; raw=' + r.raw.trim() + ')');
+    assert(r.json && r.json.status === 'acquired',
+      '#770(h): with a genuinely open issue online, a stale KAOLA_PATH must still acquire via adaptive (got ' + JSON.stringify(r.json) + ')');
     try { fs.rmSync(sentinel538, { force: true }); } catch (_) {}
   }
 

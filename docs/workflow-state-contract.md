@@ -511,7 +511,7 @@ here for the full contract.
 The `workflow-state.md` file contains several key blocks:
 
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
-  - **workflow_path** — Workflow execution path. `adaptive` is the only legal value; persisted from the `KAOLA_PATH` environment variable or the `--workflow-path` startup flag when supplied, defaulting to `adaptive` when absent. `claimProject` validates the persisted value against `WORKFLOW_PATHS` (`['adaptive']`): any non-adaptive request is a **typed `path_not_installed` refusal**, never a silent downgrade.
+  - **workflow_path** — Adaptive is the only workflow path; this field is now a **constant diagnostic record, not a selection** — `claimProject` no longer validates or refuses it (the path SELECTOR itself, and its `path_not_installed` refusal, were retired). On the single-issue claim path it is still persisted from the `KAOLA_PATH` environment variable or the `--workflow-path` startup flag when supplied (echoing the raw requested value verbatim, even a retired one), defaulting to `adaptive` when absent — routing (`next_command`/`next_skill`/`phase`) is unconditionally adaptive regardless of this field's value. On the bundle claim path it is hardcoded to `adaptive` unconditionally (predates and is unaffected by the retirement).
   - **runtime** — The runtime that claimed the folder (`claude`, `codex`, or `opencode`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value. An optional `issue_action: close | comment_keep_open` line (default `close` when absent, issue #336) marks a keep-open partial-close terminal: the main session writes `comment_keep_open` at the Closure Decision Gate to keep the issue OPEN — `finalize`/`sink-merge` then preserve the roadmap source, comment instead of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
   Three **claim-time session fields** are written by `writeState` (in `kaola-workflow-claim.js`)
@@ -809,21 +809,29 @@ This invariant is enforced at three independent points:
 
 The numbers in the bundle identifier are always in ascending sorted order, matching the order in `issue_numbers`.
 
-## Adaptive Workflow Path (#227)
+## Adaptive Workflow Path (#227; path SELECTOR retired by #770)
 
-The adaptive path (issue #227) is the workflow path — nothing to configure for a standard install.
+The adaptive path (issue #227) is the ONLY workflow path — nothing to configure or select for a
+standard install, and (since #770) no selector machinery left at all.
 
-- **Selection semantics.** `isLegalWorkflowPath(value, installedPaths)` (from the schema, a two-arg
-  function for callers) is the single legality gate: with `WORKFLOW_PATHS` `['adaptive']`, only
-  `value === 'adaptive'` passes, regardless of the `installedPaths` argument a caller supplies. It is
-  **not** read by `repair-state.js`/`routeAdaptive`, by `kaola-workflow-plan-validator.js`, or by the
-  two `claim.js` resume surfaces.
+- **No selection gate.** `isLegalWorkflowPath`/`WORKFLOW_PATHS` were removed from
+  `kaola-workflow-adaptive-schema.js` (their only caller, `claimProject`'s legality gate, was
+  retired along with them). `KAOLA_PATH`/`--workflow-path` no longer select or refuse a path; a
+  stale request naming any value is silently ignored and the claim acquires via adaptive
+  regardless. This was already **not** read by `repair-state.js`/`routeAdaptive`, by
+  `kaola-workflow-plan-validator.js`, or by the two `claim.js` resume surfaces — those all key on
+  the persisted `workflow_path` field's literal string value, or (for `reconstruct()`/`routeAdaptive`)
+  on `workflow-plan.md`'s mere existence, never on the schema's legality helper.
 - **Finish-in-flight.** An already-frozen adaptive project (a `workflow-plan.md` exists) resumes
-  to completion regardless of any config change. Both `claim.js` resume surfaces (`writeState`
-  next_command default and `resumeFallbackCommand`) and `routeAdaptive` recognize
-  `workflow_path: adaptive` and emit `/kaola-workflow-plan-run {project}`. A project carrying a
-  non-adaptive `workflow_path` is refused at claim time with `path_not_installed`, not silently
-  resumed or downgraded.
+  to completion regardless of any config change. `reconstruct()`/`routeAdaptive` route on
+  `workflow-plan.md` existing at all — never on the `workflow_path` field's value. The two
+  `claim.js` resume surfaces (`writeState` next_command default and `resumeFallbackCommand`) and
+  `repair-state.js`'s `isAdaptiveWorkflowState` fast-path check DO key on the field being literally
+  `adaptive`; a project whose persisted `workflow_path` echoes a stale non-adaptive request (see
+  above) still resumes correctly, but `isAdaptiveWorkflowState` reports false for it, so
+  `repair-state.js` takes the reconstruct-and-rewrite path (which self-heals the field to
+  `adaptive`) instead of the "existing state already valid" fast path — never a refusal or a
+  downgrade, just one extra rewrite the first time repair runs against it.
 
 ## Codex Task Mirror (issue #266, AC-C + AC-D)
 

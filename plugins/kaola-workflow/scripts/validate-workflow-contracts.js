@@ -165,6 +165,14 @@ const phaseCommands = [
   'commands/kaola-workflow-plan-run.md'
 ];
 
+// #770: the retired path SELECTOR vocabulary — KAOLA_PATH/--workflow-path no longer select or
+// refuse anything, and the reason codes they used to feed are gone. Scoped to these agent-facing
+// prose surfaces ONLY (never the shared `retired` array): claim.js legitimately still reads
+// `KAOLA_PATH` for the persisted diagnostic field and documents `--workflow-path` as an accepted
+// no-op flag, and CLAUDE.md:71 still carries the pre-#770 principle text (rewritten separately).
+const retiredPathSelector = ['KAOLA_PATH', ['--workflow', 'path'].join('-'), 'path_not_installed',
+  'workflow_path_refused', 'bundle_requires_adaptive'];
+
 for (const file of phaseCommands) {
   assert(exists(file), file + ' is missing');
   assertIncludes(file, 'workflow-state.md');
@@ -175,6 +183,7 @@ for (const file of phaseCommands) {
   assertNotIncludes(file, 'Agent Model Badge Contract');
   assertNotIncludes(file, 'kaola_agent_model');
   for (const token of retired) assertNotIncludes(file, token);
+  for (const token of retiredPathSelector) assertNotIncludes(file, token);
 }
 
 // #486: the question-shaped / bug-shaped authoring hint must propagate to ALL SIX adapt routing
@@ -228,9 +237,11 @@ assertIncludes('commands/workflow-next.md', 'Branch first on whether the user na
 assertIncludes('commands/workflow-next.md', 'issue-scout');
 assertIncludes('commands/workflow-next.md', 'Output → env wiring');
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
+for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-next.md', token);
 // #372: sweep the retired advisor-gate vocabulary over workflow-init.md too (the consult-mandate
 // bullet lived here, inside the byte-locked KW-CLAUDE-TEMPLATE region).
 for (const token of retired) assertNotIncludes('commands/workflow-init.md', token);
+for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-init.md', token);
 
 // issue #207: fast-overlap parity — trap-2 tolerant keep. The fast/full command surfaces are
 // retired, but the classifier RETAINS its defensive fast-summary.md `## Scope` reader (readers
@@ -746,19 +757,18 @@ assertManifestScript('kaola-workflow-codex-preflight.js');
 assertManifestScript('kaola-workflow-task-mirror.js');
 assertManifestScript('kaola-gitlab-workflow-task-mirror.js');
 assertManifestScript('kaola-gitea-workflow-task-mirror.js');
-// #538: adaptive is the UNCONDITIONAL default — there is no switch. The router honors an explicit
-// `KAOLA_PATH` and the path-name verbal escapes (fast/full), else defaults to adaptive. A named-but-
-// not-installed path is the claim's typed `path_not_installed` refusal (the router does not read
-// installed_paths — the claim front door owns that, per R2). Pin the new model's tokens.
-assertConcept('commands/workflow-next.md', 'adaptive path selection', [
-  'KAOLA_PATH', 'adaptive', 'default', 'path_not_installed', 'fast', 'full'
+// #770: adaptive is the ONLY workflow path — the path SELECTOR (KAOLA_PATH / --workflow-path /
+// path_not_installed / the fast/full path names) is retired. There is nothing left to select; a
+// stale request just runs adaptive. Pin the surviving vocabulary only.
+assertConcept('commands/workflow-next.md', 'adaptive is the only path', [
+  'adaptive', 'default'
 ]);
 assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
 // v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and
 // routes a fresh adaptive run to the workflow-planner front end (commands/kaola-workflow-adapt.md).
 // This surface was unlocked before, which let forge-edition router drift ship green on all 4 lanes.
 assertIncludes('commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
-assertIncludes('commands/workflow-next.md', 'Skip this entire step when `KAOLA_PATH=adaptive`');
+assertIncludes('commands/workflow-next.md', 'Skip this entire step');
 // #646: the issue-scout is dispatched PRE-CLAIM via router prose (Step 0, no-issue-named branch), not a
 // fenced Agent() block — and commands/workflow-next.md is NOT in phaseCommands, so
 // assertEveryDispatchHasModel never scans it. Pin the governed scout dispatch here explicitly: the
@@ -818,10 +828,10 @@ assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + gover
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'disjointWriteSets');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'readPlanNodes');
-// #725: adaptive is the ONLY installed path — the `installed_paths` union / `resolveInstalledPaths`
-// resolver are retired. The claim legality guard still refuses a named-but-not-adaptive path with
-// the typed `path_not_installed` refusal, and both resume surfaces emit the adaptive executor.
-assertIncludes('scripts/kaola-workflow-claim.js', 'path_not_installed');
+// #725/#770: adaptive is the ONLY installed path — the `installed_paths` union /
+// `resolveInstalledPaths` resolver are retired, and (#770) so is the path SELECTOR itself: the
+// claim no longer gates on a requested path at all, and both resume surfaces emit the adaptive
+// executor unconditionally.
 assertIncludes('scripts/kaola-workflow-claim.js', 'PLAN_RUN_COMMAND');
 // the adaptive executor command literal lives in the shared schema anchor
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', '/kaola-workflow-plan-run');

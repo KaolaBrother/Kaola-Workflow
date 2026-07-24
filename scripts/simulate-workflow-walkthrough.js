@@ -1156,18 +1156,21 @@ function testAdaptiveOffClaimRefusal() {
   console.log('testAdaptiveOffClaimRefusal: PASSED');
 }
 
-// (c) #538: fast is not installed (installed_paths:[]) -> path_not_installed; bogus -> path_not_installed.
-// Under #538 legality = {adaptive} ∪ installed_paths; fast/full are install-time opt-ins.
+// (c) #770: the path selector is retired — a stale --workflow-path naming a retired path (fast) or
+// a bogus value (wizard) is no longer refused. The claim silently ignores it and acquires (adaptive
+// is the only path; there is nothing left to refuse on this axis). Needs a real git repo now — the
+// old path-legality gate used to refuse BEFORE any git-touching code ran; now the claim proceeds
+// all the way to writeState (buildClaimAnchors reads git HEAD), so the fixture must init one.
 function testAdaptiveOffPreservesTwoWay() {
   const tmp = adaptiveTmp('off-twoway');
   try {
-    // fast is not installed (hermetic HOME has installed_paths:[]) -> typed path_not_installed refusal
-    const fastRefused = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-903', '--workflowPath', 'fast'], tmp).stdout);
-    assert(fastRefused.status === 'path_not_installed' && fastRefused.result === 'refuse',
-      '#538: fast not installed must refuse with path_not_installed, got: ' + JSON.stringify(fastRefused));
+    initGitRepo(tmp);
+    const staleFast = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-903', '--workflowPath', 'fast'], tmp).stdout);
+    assert(staleFast.status === 'acquired',
+      '#770: a stale --workflow-path fast request must silently acquire (no path_not_installed refusal), got: ' + JSON.stringify(staleFast));
     const bogus = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-904', '--workflowPath', 'wizard'], tmp).stdout);
-    assert(bogus.status === 'path_not_installed' && bogus.result === 'refuse',
-      '#538: bogus workflow_path must be refused (path_not_installed), got: ' + JSON.stringify(bogus));
+    assert(bogus.status === 'acquired',
+      '#770: a bogus --workflow-path value must silently acquire (no path_not_installed refusal), got: ' + JSON.stringify(bogus));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveOffPreservesTwoWay: PASSED');
 }
@@ -4577,15 +4580,14 @@ function testAdaptiveCheapWinFixes() {
 function testAdaptiveAuditCoverage() {
   const tmp = adaptiveTmp('audit-coverage');
   try {
-    // I4: adaptive is the ONLY legal workflow path (the fast/full opt-ins were retired).
-    // WORKFLOW_PATHS collapses to ['adaptive']; isLegalWorkflowPath accepts adaptive
-    // unconditionally and rejects every other token.
+    // I4 RETIRED (#770): the path SELECTOR itself is gone — `WORKFLOW_PATHS` /
+    // `isLegalWorkflowPath` were removed from the schema (their last caller, the claim's
+    // legality gate, was retired). Adaptive is the only workflow path and there is nothing
+    // left to select or refuse; see testAdaptiveOffPreservesTwoWay above for the new
+    // silent-adaptive behavior of a stale/bogus --workflow-path request.
     const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-    assert(JSON.stringify(schema.WORKFLOW_PATHS) === JSON.stringify(['adaptive']),
-      'I4: WORKFLOW_PATHS must be adaptive-only after retirement, got: ' + JSON.stringify(schema.WORKFLOW_PATHS));
-    assert(schema.isLegalWorkflowPath('adaptive', []), 'I4: adaptive always legal');
-    assert(!schema.isLegalWorkflowPath('fast'), 'I4: fast is a retired path — illegal');
-    assert(!schema.isLegalWorkflowPath('wizard', []), 'I4: bogus path always illegal');
+    assert(schema.WORKFLOW_PATHS === undefined, 'I4: WORKFLOW_PATHS must be removed (#770 retirement)');
+    assert(schema.isLegalWorkflowPath === undefined, 'I4: isLegalWorkflowPath must be removed (#770 retirement)');
 
     // I5: the --resume-check CLI flag end-to-end (not just the library).
     const resumePlan = path.join(tmp, 'resume-plan.md');

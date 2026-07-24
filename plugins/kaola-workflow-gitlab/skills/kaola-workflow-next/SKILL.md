@@ -231,7 +231,7 @@ several issues or when auto-bundle mode identifies a high-confidence same-scope 
 ### Explicit-bundle entry
 
 When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
-and pass `--target-issues 42,47,53 --workflow-path adaptive` (project/branch `bundle-42-47-53`, sorted
+and pass `--target-issues 42,47,53` (project/branch `bundle-42-47-53`, sorted
 + deduplicated; the script validates the exact set, never reorders). The bundle lane runs on `workflow_path: adaptive`.
 `--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
 
@@ -331,20 +331,17 @@ agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-`export KAOLA_PATH=adaptive` and
-proceed to the Adaptive front-end entry (this makes the Startup transaction skip and the front end
-fire). Hand an already-set non-adaptive `KAOLA_PATH` through verbatim to the claim — its
-`path_not_installed` typed refusal is the single authority, never a silent router-side substitution.
-State the path:
+Adaptive is the only workflow path — there is nothing to select. Proceed directly to the
+Adaptive front-end entry. State the path:
 
 ```text
 Path: adaptive
 ```
 
-## Startup — Adaptive front-end entry (path = adaptive only)
+## Startup — Adaptive front-end entry
 
-If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
-the Startup transaction below for this path. The `workflow-planner` agent role — delegated by
+The starting contract always moves into the adaptive front end: do NOT run
+the Startup transaction below. The `workflow-planner` agent role — delegated by
 `kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
 validates the issue, then hands off (keeping the router free of phase-agent and claim dispatch — the
 only router-side dispatch is the pre-claim, read-only `issue-scout` survey in the no-issue-named
@@ -356,8 +353,8 @@ branch, which claims and writes nothing):
    kaola-workflow-plan-run` rule as resume reconstruction). The front end is for FRESH adaptive
    work only.
 2. **Fresh adaptive.** Run `watch-mr` once, then route to `kaola-workflow-adapt $KAOLA_TARGET_ISSUE`.
-   The adapt skill's `workflow-planner` runs `kaola-gitlab-workflow-claim.js startup --workflow-path
-   adaptive --target-issue $KAOLA_TARGET_ISSUE` (the claim + worktree + `workflow-state.md`);
+   The adapt skill's `workflow-planner` runs `kaola-gitlab-workflow-claim.js startup
+   --target-issue $KAOLA_TARGET_ISSUE` (the claim + worktree + `workflow-state.md`);
    git-freshness runs inside adapt against MAIN **before** the planner claims (so a dirty/behind main
    never orphans a worktree); the roadmap check runs in adapt too. Do NOT run
    the Startup transaction / git-freshness / roadmap steps in the router for this path.
@@ -392,9 +389,9 @@ fabricate a mode; only pass a value the doctor actually reported.
 
 ## Startup
 
-**Skip this transaction when `KAOLA_PATH=adaptive`** — the adaptive front end (above) claims via the
-`workflow-planner`, not here. It runs only when a residual non-adaptive `KAOLA_PATH` was handed
-through, so the claim can refuse it.
+**Skip this transaction** — the adaptive front end (above) always claims via the
+`workflow-planner`, not here. This transaction never runs; it is retained only for the shared
+typed-refusal classification below.
 
 Run the startup transaction with the agent-selected target. Startup validates
 the explicit issue, refreshes MR-backed folders with `watch-mr`, and atomically
@@ -521,7 +518,7 @@ Current phase: {phase or unknown}
 Current step: {step}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
+Workflow path: {adaptive}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next skill: {next_skill}
 ```

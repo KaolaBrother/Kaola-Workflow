@@ -237,20 +237,29 @@ candidate-bound local transaction tests, all relevant edition validators/walkthr
 reviews, or frozen falsification nodes. The workflow owns its verdict locally even when a hosted
 pipeline also exists.
 
-## Adaptive Workflow Path (issue #227)
+## Adaptive Workflow Path (issue #227; path SELECTOR retired by #770)
 
-Adaptive is the workflow path. `KAOLA_PATH=adaptive` is the only legal value; there is no
-path-selection step.
+Adaptive is the ONLY workflow path — there is no path-selection step, and (since #770) no path
+SELECTOR machinery left to select or refuse anything.
 
-**Path legality.** `claimProject` validates the requested `workflow_path` against `WORKFLOW_PATHS`
-(`kaola-workflow-adaptive-schema.js`, `['adaptive']`) via `isLegalWorkflowPath(requestedPath,
-installedPaths)`. Only `adaptive` passes. A `KAOLA_PATH` naming any other value returns a typed
-`path_not_installed` refusal (`result: refuse`) — never a silent substitution and never a crash (#44).
+**No legality gate.** `claimProject` no longer validates a requested `workflow_path` against
+anything — the `WORKFLOW_PATHS` const and `isLegalWorkflowPath` helper were removed from
+`kaola-workflow-adaptive-schema.js` once their last caller (this gate) was retired. `KAOLA_PATH`
+and `--workflow-path` no longer select or refuse a path; a stale request naming any value is
+silently ignored and the claim ACQUIRES via adaptive regardless — never a `path_not_installed`
+refusal (that reason code is retired), never a crash. The single-issue claim path still persists
+whatever raw value was requested into the `workflow_path` state field as a diagnostic record only
+(never a selection); the bundle claim path hardcodes `workflow_path: adaptive` in state regardless
+of what was requested.
 
-**Router.** The router (`workflow-next.md` Step 0a-1) exports `KAOLA_PATH=adaptive` and proceeds.
-If a non-adaptive `KAOLA_PATH` is already exported from residual environment state, the router hands
-it through verbatim and lets the claim's `path_not_installed` refusal be the authority — never a
-silent router-side substitution.
+**`--workflow-path` shim.** The flag stays a KNOWN, accepted flag (never an `unknown_flag`
+refusal) — a warn-and-ignore shim (the `--enable-adaptive` precedent): it prints one stderr notice
+(`--workflow-path is retired; running adaptive`) and is otherwise a no-op. `KAOLA_PATH` is
+silently ignored with no warning at all.
+
+**Router.** The router (`workflow-next.md` Step 0a-1) always proceeds directly into the adaptive
+front end — there is no residual non-adaptive branch left to hand through, since any requested
+path (or none) now means the same thing.
 
 **`authoring-allowed` always allows.** `cmdAuthoringAllowed` (the #235 guard called by
 `/kaola-workflow-adapt` before authoring a plan) unconditionally returns
@@ -263,8 +272,8 @@ survive, and only `workflow-planner` authors a child. Automatic review-driven re
 claim-budgeted; budget exhaustion consent-halts. There is no hidden discard/restart and no
 main-authored DAG repair.
 
-**Bundle lane.** The bundle lane runs on the adaptive path; a bundle claim on any other path returns
-`bundle_requires_adaptive` (`result: refuse`).
+**Bundle lane.** The bundle lane always runs on the adaptive path — there is no other path to
+request, so the retired `bundle_requires_adaptive` refusal no longer fires.
 
 ## Bundle Lane — Cross-Edition Requirement (issue #328)
 

@@ -17,11 +17,11 @@
 // reject cross-edition leaks and parent-dir requires).
 // ---------------------------------------------------------------------------
 
-// The legal workflow path NAMES (the closed universe). Adaptive is the unconditional
-// default and the ONLY legal path — `claimProject` admits a path iff it is `adaptive`.
-// A stale `installed_paths` field from a pre-retirement config is tolerated on read
-// (ignored) and never written.
-const WORKFLOW_PATHS = Object.freeze(['adaptive']);
+// issue #770: the path SELECTOR is retired — adaptive is the only workflow path and there
+// is no legality gate left to run anywhere, so the `WORKFLOW_PATHS` closed-universe const
+// and `isLegalWorkflowPath` helper were removed (dead after the last caller was retired). A
+// stale `installed_paths` field from a pre-retirement config is tolerated on read (ignored)
+// and never written.
 const ADAPTIVE_PATH = 'adaptive';
 
 // The adaptive executor command + skill the two resume surfaces emit (never
@@ -3744,10 +3744,6 @@ function spliceComplianceSection(content, row) {
   return content.trimEnd() + newSection;
 }
 
-function isLegalWorkflowPath(value, installedPaths) {
-  return value === ADAPTIVE_PATH || (Array.isArray(installedPaths) && installedPaths.includes(value));
-}
-
 // ---------------------------------------------------------------------------
 // #355: unified emit / refuse protocol — the shared refusal envelope + framed-output
 // constructor for the adaptive scripts.
@@ -3783,7 +3779,6 @@ module.exports = {
   getCoordRoot,
   mainRootFromCoord,
   resolveMainRoot,
-  WORKFLOW_PATHS,
   ADAPTIVE_PATH,
   PLAN_RUN_COMMAND,
   PLAN_RUN_SKILL,
@@ -3955,7 +3950,6 @@ module.exports = {
   writeFileAtomicReplace,
   locateSection,
   spliceComplianceSection,
-  isLegalWorkflowPath,
   emit,
   refuse,
 };

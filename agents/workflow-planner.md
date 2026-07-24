@@ -243,8 +243,7 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
 `| tail`). This is a standing invariant — a dispatch that omits it does not relax it.
 
 1. **Claim / starting contract.**
-   `node <claim.js> startup --runtime claude --workflow-path adaptive [--sink <sink>] --target-issue <N> --attest-planner-spawn`.
-   `--workflow-path adaptive` is required (a subagent shell does not inherit `KAOLA_PATH`);
+   `node <claim.js> startup --runtime claude [--sink <sink>] --target-issue <N> --attest-planner-spawn`.
    `--attest-planner-spawn` back-fills the planner's own dispatch marker. Writes `workflow-state.md`
    at repo-root and provisions the worktree; you author/freeze at repo-root and never cd into it.
    - **Overwrite guard:** a `workflow-plan.md` carrying a `<!-- plan_hash: <64-hex> -->` marker is
@@ -252,7 +251,7 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
      be overwritten ONLY in the validator-repair loop.
    - **Refusal:** any `claim_verdict` NOT `acquired`/`owned` writes no state — STOP and return the
      verdict verbatim; do not retry a different issue. Classify by `result`: `refuse`
-     (`workflow_path_refused`, `target_occupied`, `user_target_blocked`, `target_set_mismatch`, …) is
+     (`target_occupied`, `user_target_blocked`, `target_set_mismatch`, …) is
      a determinate fail-closed fact; `escalate` (`target_indeterminate`/`target_set_indeterminate`)
      is an indeterminate verdict the orchestrator pauses on.
 2. **Author the plan.** Write `kaola-workflow/{project}/workflow-plan.md` — `## Meta` `labels:` (so

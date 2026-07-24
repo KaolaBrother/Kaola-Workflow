@@ -15,7 +15,8 @@
 //   (4) target_set_too_large above the cap (default 4).
 //   (5) Single-issue --target-issue N still works unchanged (AC#1 regression).
 //   (6) target_set_empty when --target-issues is missing/empty.
-//   (7) bundle_requires_adaptive when workflow_path is not adaptive (#538 rename).
+//   (7) #770: a stale --workflow-path (e.g. full) on the bundle lane silently acquires (no
+//       refusal) — bundle_requires_adaptive is retired along with the path SELECTOR itself.
 //   (8) Rollback path: when postAdvisoryClaim for a member fails mid-provision, the folder
 //       and previously applied labels are torn down.
 //
@@ -32,13 +33,13 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// #531/#538: hermetic HOME. The classifier reads parallel_mode from
-// ~/.config/kaola-workflow/config.json (os.homedir()), and the claim's path-legality gate keys on
-// the schema (adaptive is the only legal path — the fast/full paths were retired). Pin a sandbox
-// HOME seeded with the DEFAULT-install shape (parallel_mode:'auto') so a dev-local config can't
-// change verdict and turn these assertions spurious. The bundle lane is adaptive-only and adaptive
-// is always legal; a non-adaptive workflow_path is a bundle_requires_adaptive refusal (the intended
-// default). A stale installed_paths field is tolerated on read but is no longer written.
+// #531/#770: hermetic HOME. The classifier reads parallel_mode from
+// ~/.config/kaola-workflow/config.json (os.homedir()). Pin a sandbox HOME seeded with the
+// DEFAULT-install shape (parallel_mode:'auto') so a dev-local config can't change verdict and turn
+// these assertions spurious. Adaptive is the ONLY workflow path — the bundle lane always runs it
+// unconditionally, and the retired path SELECTOR (KAOLA_PATH/--workflow-path) no longer gates or
+// refuses anything (a stale request is silently ignored). A stale installed_paths field is
+// tolerated on read but is no longer written.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
@@ -202,9 +203,9 @@ function runClaim(args, cwd, binDir, extraEnv) {
     env: Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '0',
       KAOLA_WORKTREE_NATIVE: '1',  // use worktrees (git repos initialised in $TMPDIR)
-      // #538: adaptive is the unconditional default and the only legal path — the bundle lane needs
-      // no switch. The lane-only-accepts-adaptive guard fires on workflow_path != adaptive, before
-      // any config read, so no config/switch env is required here.
+      // #770: adaptive is the ONLY workflow path — the bundle lane always runs it unconditionally,
+      // and the path SELECTOR (KAOLA_PATH/--workflow-path) no longer gates or refuses anything, so
+      // no config/switch env is required here.
     }, mockEnv, extraEnv || {})
   });
   return result;
@@ -475,32 +476,45 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (7): bundle_requires_adaptive when workflow_path != adaptive (#538 rename)
+// Test (7): #770 — a stale --workflow-path on the bundle lane no longer refuses
+// (bundle_requires_adaptive is retired along with the path SELECTOR itself)
 // ---------------------------------------------------------------------------
 
 (function testBundleRequiresAdaptive() {
-  console.log('Test (7): bundle_requires_adaptive when --workflow-path is not adaptive');
+  console.log('Test (7): #770 a stale --workflow-path (e.g. full) on the bundle lane silently acquires — no refusal');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   try {
     initGitRepo(tmpRoot);
+    writeRoadmapFile(tmpRoot, 42);
+    writeRoadmapFile(tmpRoot, 47);
     writeGhMockScript(binDir, { openIssues: [42, 47] });
 
-    // #538: the bundle lane is adaptive-only (adaptive is the only workflow path). A non-adaptive
-    // workflow_path — here the retired `full` — is refused by the lane guard BEFORE any config read,
-    // so no config/switch env is needed to exercise it.
+    // #770: the bundle lane's own path-legality check (bundle_requires_adaptive) is retired along
+    // with the path SELECTOR — the bundle lane always runs adaptive now, so a stale/retired
+    // --workflow-path value (here the retired `full`) is silently ignored and the bundle ACQUIRES,
+    // same as `adaptive` would. Unlike the single-issue claim path (which echoes the raw requested
+    // value into the persisted `workflow_path` field as a diagnostic-only record), the bundle path
+    // has always hardcoded `workflow_path: adaptive` in state regardless of what was requested —
+    // that hardcode predates and is unaffected by #770, so it still reads `adaptive` here.
     const result = runClaim(
       ['startup', '--target-issues', '42,47', '--workflow-path', 'full'],
       tmpRoot, binDir
     );
 
     const out = parseClaim(result);
-    assert(result.status === 1, 'bundle_requires_adaptive exits 1, got ' + result.status);
-    assert(out !== null, 'emits JSON');
-    assert(out.status === 'bundle_requires_adaptive',
-      'status is bundle_requires_adaptive, got ' + JSON.stringify(out && out.status));
-    assert(out.result === 'refuse',
-      'result is refuse, got ' + JSON.stringify(out && out.result));
+    assert(result.status === 0, 'bundle startup exits 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out !== null, 'bundle startup emits JSON');
+    assert(out.claim === 'acquired', 'claim is acquired, got ' + JSON.stringify(out && out.claim));
+    assert(out.status === 'acquired', 'status is acquired, got ' + JSON.stringify(out && out.status));
+    assert(out.bundle_id === 'bundle-42-47', 'bundle_id is bundle-42-47, got ' + JSON.stringify(out && out.bundle_id));
+    assert((result.stderr || '').includes('--workflow-path is retired; running adaptive'),
+      'the retired flag must print its one-line warn-and-ignore stderr notice, got stderr: ' + result.stderr);
+
+    const state = readState(tmpRoot, 'bundle-42-47');
+    assert(state !== null, 'state file was created at bundle-42-47/workflow-state.md');
+    assert(/^workflow_path:\s*adaptive\s*$/m.test(state),
+      'state has workflow_path: adaptive (the bundle path hardcodes this regardless of the requested value), got:\n' + state);
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });

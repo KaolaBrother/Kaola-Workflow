@@ -435,9 +435,9 @@ for (const ed of codexEditions) {
 // on the finalize surfaces was also retired (#725 Phase D): the deleted fast
 // path left no project for it to fire against, so its `fn-fast-compliance-backstop`
 // manifest block + SUPERSET-PROOF entry are gone with it.
-// `path_not_installed` remains a live typed refusal (see the next-surface
-// SUPERSET-PROOF entry below) — only the dedicated fast/full-entry pin's own
-// surface set is gone.
+// `path_not_installed` is ALSO retired (#770): the path SELECTOR itself (KAOLA_PATH /
+// --workflow-path / WORKFLOW_PATHS / isLegalWorkflowPath) is gone, so there is no more
+// typed refusal to check against — its SUPERSET-PROOF entry is removed with it.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -1407,8 +1407,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'active folders', surfaces: nxCmd },
     { token: '--target-issue', surfaces: nxCmd },
     { token: 'issue-scout', surfaces: nxCmd },
-    { token: 'Skip this entire step when `KAOLA_PATH=adaptive`', surfaces: nxCmd },
-    { token: 'path_not_installed', surfaces: nxCmd },
     // forge-renamed noun (gitlab: watch-mr) — residual
     { token: 'watch-pr', surfaces: nxCmd },
   ];

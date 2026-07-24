@@ -271,7 +271,7 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. See [docs/kimi-edition.md](docs/kimi-edition.md).
 
-**Adaptive planning runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only. The runtime gate accepts `KAOLA_PATH=adaptive` and refuses any other path request with a typed `path_not_installed`. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
+**Adaptive planning runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. `install.sh` seeds the shared `~/.config/kaola-workflow/config.json` with `parallel_mode` only. Adaptive is the only workflow path; there is nothing to select. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -844,8 +844,7 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 For every issue — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the agent **freely composes a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. `./install.sh` installs it and nothing else; there is nothing to configure.
 
 ```
-/workflow-next                       # routes to the adaptive workflow
-KAOLA_PATH=adaptive /workflow-next   # name the path explicitly
+/workflow-next                       # routes to the adaptive workflow (the only path)
 ```
 
 `/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes the legal schema-2 **planless** epoch-1 state, and when online/native provisions a worktree at `.kw/worktrees/<project>/`; offline mode provisions neither a worktree nor an in-place feature branch), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG, per-node `## Node Briefs`, plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and atomically publishes the legal **planned** state by replacing `active_plan_hash` plus the complete `## Planning Evidence` tuple (`plan_hash`, governance decision/risk, first-node id/role). As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and hands off to Finalization on an all-complete ledger.
@@ -976,8 +975,7 @@ Active work is tracked under `{project-root}/kaola-workflow/{project-name}/` whi
 archived to `{project-root}/kaola-workflow/archive/`; unfinished work is tracked in
 `{project-root}/kaola-workflow/ROADMAP.md`. The adaptive planner composes role nodes into a
 `workflow-plan.md` DAG (frozen `plan_hash` + `## Node Ledger`) and runs them dynamically, landing in
-the Finalization sink. `KAOLA_PATH=adaptive` is the accepted path; any other value returns a typed
-`path_not_installed` refusal.
+the Finalization sink. Adaptive is the only workflow path; there is nothing to select.
 
 ## Automation scripts
 
@@ -1034,7 +1032,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
-| `KAOLA_PATH` | (unset) | `adaptive` is the only legal value and the default when unset. Any other value returns a typed `path_not_installed` refusal — never a silent substitution |
+| `KAOLA_PATH` | (unset) | Retired. Adaptive is the only workflow path; the claim silently ignores this variable (any value, or unset) and always runs adaptive. The `--workflow-path` flag is likewise accepted-but-ignored (a stderr notice, never a refusal) |
 | `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
 | `KAOLA_PARALLEL_WRITES` | `1` (ON) | Default-ON master switch for default-on disjoint write parallelism (D-542-01). When ON, write frontiers the planner proves **disjoint** (`parallel_safe`) co-open as isolated parallel legs — per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net. Set to `0` (also `false`/`no`) to force every write frontier serial. Overlapping (non-disjoint) writes stay serial/consent-gated regardless, and a host without worktree support degrades to serial regardless |
 | `--write-overlap-consent` / `write_overlap_policy` | (overlap only) | The overlap-only consent gate. `--write-overlap-consent` plus a plan `write_overlap_policy: coarse` (anything other than `off`) is what permits a **genuinely-overlapping** (non-disjoint) write frontier to co-open under a coarse shared lane; it does NOT gate disjoint co-open (that is default-on, above). With the policy `off` or consent absent, an overlapping frontier stays serial |
@@ -1304,7 +1302,6 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 | `target_ambiguity` | Both scalar and multi-target provided simultaneously |
 | `target_set_empty` | Resolved issue list is empty after dedup |
 | `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `bundle_requires_adaptive` | Bundle requested but `workflow_path` is not adaptive |
 | `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | One or more targets are already closed on the forge |
 | `target_set_red` | One or more targets are red (conflict) per the classifier |
@@ -1318,7 +1315,7 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 
 ### Adaptive path only
 
-The bundle lane requires `workflow_path: adaptive`. Attempting a bundle claim on any other path returns `bundle_requires_adaptive`.
+Adaptive is the only workflow path, so the bundle lane always runs `workflow_path: adaptive` — there is nothing else it could run.
 
 ## Parallel active work
 

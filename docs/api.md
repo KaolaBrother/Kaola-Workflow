@@ -52,7 +52,6 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 | `target_ambiguity` | — | Both scalar and multi-target provided simultaneously |
 | `target_set_empty` | — | Resolved issue list is empty after sort+dedup |
 | `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `bundle_requires_adaptive` | `refuse` | Bundle requested but `workflow_path` is not `adaptive` |
 | `target_set_conflicts_active_work` | `refuse` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | `refuse` | One or more targets are already closed on the forge |
 | `target_set_red` | `refuse` | One or more targets are red per the overlap classifier |
@@ -173,7 +172,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
 ### Bundle Lane
 
-- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Refused with `bundle_requires_adaptive` on fast/full paths. Numbers are sorted and deduped before validation.
+- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Adaptive is the only workflow path, so the bundle lane always runs it — there is no `bundle_requires_adaptive` refusal (retired). Numbers are sorted and deduped before validation.
 
 - **`KAOLA_BUNDLE_MAX_ISSUES`** (default `4`) — Maximum number of issues allowed in a single bundle. Bundles whose resolved size exceeds this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles.
 
@@ -2146,13 +2145,13 @@ self-check.
 
 The agent runs these steps in order, then returns:
 
-1. **Claim** — `node kaola-workflow-claim.js startup --workflow-path adaptive --target-issue <N>`,
+1. **Claim** — `node kaola-workflow-claim.js startup --target-issue <N>`,
    which writes `workflow-state.md`, stamps `workflow_path: adaptive`, and provisions a worktree at
    `.kw/worktrees/<project>/` (worktree provisioning is unified across every claim; see Worktree Provisioning above). The planner
    authors the plan at repo-root; the executor (`/kaola-workflow-plan-run`) operates inside the
    provisioned worktree so implementation lands on `workflow/issue-N`.
-   (`claim.js` needs no code change: `--workflow-path` is parsed by the generic kebab→camel handler,
-   so a subagent shell that does not inherit the orchestrator's `KAOLA_PATH` still records the path.)
+   (Adaptive is the only workflow path — there is nothing to select. A retired `KAOLA_PATH` /
+   `--workflow-path` request from an old session or script is silently ignored.)
 2. **Author** — write the `## Meta` + `## Nodes` DAG + an **empty** `## Node Ledger` into
    `workflow-plan.md` via `Write`.
 3. **Self-check** — run the plan-validator `--json` for orientation only (`kaola-workflow-plan-validator.js <plan> --json`).

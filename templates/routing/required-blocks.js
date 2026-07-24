@@ -402,8 +402,8 @@ const REQUIRED_BLOCKS = [
       'active folders',
       '--target-issue',
       'issue-scout',
-      'Skip this entire step when `KAOLA_PATH=adaptive`',
-      'path_not_installed',
+      'This step never runs; it is retained only for the shared',
+      'typed-refusal classification below',
       // #646: the governed issue-scout model placeholder — command-only (install.sh
       // renders {X_MODEL} placeholders in COMMANDS; no SKILL.md may carry one), so it
       // rides this claude-live/command block, not the both/both blocks above.

@@ -150,7 +150,7 @@ set (see below).
 ### Explicit-bundle entry
 
 When the user names several issues, set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces)
-and pass `--target-issues 42,47,53 --workflow-path adaptive` (project/branch `bundle-42-47-53`, sorted
+and pass `--target-issues 42,47,53` (project/branch `bundle-42-47-53`, sorted
 + deduplicated; the script validates the exact set, never reorders). The bundle lane runs on `workflow_path: adaptive`.
 `--target-issue` keeps single-issue behavior; never set both (`target_ambiguity`).
 
@@ -225,19 +225,17 @@ Keyword matching is agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-`export KAOLA_PATH=adaptive` and
-proceed to Step 0a-2 (this makes Step 0b skip and the adaptive front end fire). Hand an already-set
-non-adaptive `KAOLA_PATH` through verbatim to the claim — its `path_not_installed` typed refusal
-is the single authority, never a silent router-side substitution. State the path:
+Adaptive is the only workflow path — there is nothing to select. Proceed directly to Step 0a-2.
+State the path:
 
 ```text
 Path: adaptive
 ```
 
-## Startup Step 0a-2 — Adaptive front-end entry (path = adaptive only)
+## Startup Step 0a-2 — Adaptive front-end entry
 
-If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
-the Step 0b inline startup for this path. The `workflow-planner` subagent — dispatched by
+The starting contract always moves into the adaptive front end: do NOT run
+the Step 0b inline startup. The `workflow-planner` subagent — dispatched by
 `/kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
 validates the issue (Step 0), then hands off. This keeps the router free of *phase-agent* and
 *claim* dispatch (Router Rules) — the only router-side dispatch is the pre-claim, read-only
@@ -250,7 +248,7 @@ Opus front end owns the claim + the DAG authoring:
    /kaola-workflow-plan-run` rule as Resume Detection. The front end is for FRESH adaptive work only.
 2. **Fresh adaptive.** Run `watch-pr` once for global PR-folder reconciliation, then route to
    `/kaola-workflow-adapt $KAOLA_TARGET_ISSUE`. The adapt command's `workflow-planner` runs
-   `kaola-workflow-claim.js startup --workflow-path adaptive --target-issue $KAOLA_TARGET_ISSUE`
+   `kaola-workflow-claim.js startup --target-issue $KAOLA_TARGET_ISSUE`
    (the claim + worktree + `workflow-state.md`); git-freshness (Startup Step 1) runs INSIDE adapt against MAIN **before** the planner claims
    (so a dirty/behind main never orphans a worktree); the roadmap check (Startup Step 2) runs in adapt too.
    Do NOT run Startup Step 0b / 1 / 2 in the router for this path.
@@ -263,9 +261,9 @@ Opus front end owns the claim + the DAG authoring:
 
 ## Startup Step 0b - Startup Transaction
 
-**Skip this entire step when `KAOLA_PATH=adaptive`** — the adaptive front end (Step 0a-2) claims via
-the `workflow-planner`, not here. Step 0b runs only when a residual non-adaptive `KAOLA_PATH` was
-handed through, so the claim can refuse it.
+**Skip this entire step** — the adaptive front end (Step 0a-2) always claims via the
+`workflow-planner`, not here. This step never runs; it is retained only for the shared
+typed-refusal classification below.
 
 Run `node "$CLAIM_JS" startup --runtime claude` with the agent-selected
 `--target-issue` (and `--sink` when set); it atomically creates
@@ -289,8 +287,6 @@ If startup returns a typed refusal, read the `reasoning` field and classify by `
 If startup is unavailable or malformed, stop for repair.
 On startup, also run `watch-pr` to archive PR folders for merged or closed PRs
 before selecting new work.
-A non-adaptive `KAOLA_PATH` is never silently recorded — the claim refuses it
-with the typed `path_not_installed` refusal.
 
 ## Startup Step 1 - Git Freshness
 
@@ -388,7 +384,7 @@ Current phase: {phase or unknown}
 Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {adaptive; a non-adaptive KAOLA_PATH is refused by the claim's path_not_installed}
+Workflow path: {adaptive}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```
