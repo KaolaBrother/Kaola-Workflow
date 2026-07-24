@@ -22898,6 +22898,98 @@ function rtHarness(initialFiles, opts) {
 }
 
 
+// ===========================================================================
+// #783 — freeze-view vs execution-view family, the two review-lifecycle sites. Post-#765 the planner
+// authors plan_form: spine always; a milestone that opens writes its production files through EXPANSION
+// UNITS, which live in `## Expansion Records` + `## Node Ledger` but NEVER `## Nodes`.
+//   :1837 (validateSchema2ReviewEvidence) — a GENUINE execution-state defect: the review candidate
+//         partition + anchor producer cone are recorded at ONE review event over the CURRENT accumulated
+//         write set, so a composed unit's legitimate write must not read as undeclared residue. Fixed to
+//         the EXECUTION view (parseNodesFromContent), pinned so a mutation reverting it reddens the pin.
+//   :4706 (reviewJournalV2MatchesPlan) — VERIFIED NOT A DEFECT (stays the FREEZE view). This matcher
+//         re-validates a HISTORICAL journal attempt against the plan; its producer re-derivation must be
+//         INVARIANT across execution-time growth or a settled attempt stops matching once a milestone
+//         re-expands. The shipped #756 re-expansion epoch-transition wedge
+//         (simulate-workflow-walkthrough testReExpansionEpochTransition756) proves it: an
+//         execution-view swap there makes a discovery attempt's producer_bindings=[] mismatch the
+//         re-derived ["m1-r2-fx"] (a fixer unit that POSTDATES the attempt), spuriously refusing
+//         review_journal_repair_identity_mismatch and short-circuiting the sanctioned epoch-transition
+//         escalation. So :4706 is pinned to STAY parseNodes, a fourth refuted sibling.
+// The build below carries a REAL `## Expansion Records` block (renderExpansionRecord output) so the two
+// node views genuinely disagree — a `## Nodes`-only spine would prove nothing.
+{
+  const { renderExpansionRecord } = require('./kaola-workflow-adaptive-node');
+  const NODE_ROWS_783 = [
+    '| probe | code-explorer | — | — | 1 | sequence |',
+    '| m1 | expansion-point | probe | — | 1 | sequence |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence |',
+    '| done | finalize | wall | CHANGELOG.md | 1 | sequence |',
+  ];
+  const LEDGER_783 = ['| probe | complete | |', '| m1 | in_progress | |',
+    '| wall | pending | |', '| done | pending | |'];
+  const spinePlan = makePlan(LEDGER_783, NODE_ROWS_783);
+  // A REAL record block: one composed writer unit u1 on m1 declaring lib/composed.js.
+  const record = renderExpansionRecord('m1#1', 'm1', 'a'.repeat(64),
+    { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none present — co-open' },
+    [{ name: 'u1', role: 'implementer', model: 'standard', write_set: 'lib/composed.js', mode: 'co_open',
+      depends_on: [] }]);
+  const recordsPlan = spinePlan + '\n## Expansion Records\n\n' + record + 'open(m1#1):\n  at: 2026-07-24T00:00:00.000Z\n';
+
+  // The two node views genuinely disagree: the composed unit and its declared write live ONLY in the
+  // EXECUTION view. This is the exact input that :1837 records IMMUTABLY as the candidate residue digest
+  // and that :4706 re-derives producer bindings over — misread by the freeze view, the unit's legitimate
+  // write is misclassified as review residue / its producer cone is under-derived.
+  const freezeNodes = planValidator.parseNodes(recordsPlan);
+  const execNodes = planValidator.planNodesWithExpansions(recordsPlan);
+  assert(!freezeNodes.some(n => n.id === 'm1-r1-u1'),
+    '#783 review-fixture: the FREEZE view (parseNodes) misses the composed unit');
+  const execUnit = execNodes.find(n => n.id === 'm1-r1-u1');
+  assert(execUnit && Array.from(execUnit.writeSet || []).includes('lib/composed.js'),
+    '#783 review-fixture: the EXECUTION view carries the composed unit with its declared write lib/composed.js');
+  const freezeUnion = new Set();
+  for (const n of freezeNodes) for (const p of (n.writeSet || [])) freezeUnion.add(p);
+  const execUnion = new Set();
+  for (const n of execNodes) for (const p of (n.writeSet || [])) execUnion.add(p);
+  assert(!freezeUnion.has('lib/composed.js') && execUnion.has('lib/composed.js'),
+    '#783 :1837: the declared-write UNION the review candidate partition ranges over includes the unit '
+    + 'write only on the execution view (freeze=' + JSON.stringify([...freezeUnion]) + ' exec='
+    + JSON.stringify([...execUnion]) + ') — read by the freeze view it becomes false residue');
+
+  // :4706 — reviewJournalV2MatchesPlan's producer re-derivation MUST stay invariant across execution-time
+  // growth. Demonstrate the growth that breaks an execution-view read: re-expanding m1 (ordinal 2) appends
+  // a SECOND fixer unit the wall now post-dominates, so the execution-view producer set GROWS while a
+  // historical journal attempt's recorded bindings do not.
+  const record2 = renderExpansionRecord('m1#2', 'm1', 'a'.repeat(64),
+    { grain: 'g', path: 'p', join: 'j', probe: 'pr', serializer: 'none present — co-open' },
+    [{ name: 'u2', role: 'implementer', model: 'standard', write_set: 'lib/companion.js', mode: 'co_open',
+      depends_on: [] }]);
+  const reExpandedPlan = recordsPlan + record2 + 'open(m1#2):\n  at: 2026-07-24T01:00:00.000Z\n';
+  const execIdsBefore = planValidator.planNodesWithExpansions(recordsPlan).map(n => n.id);
+  const execIdsAfter = planValidator.planNodesWithExpansions(reExpandedPlan).map(n => n.id);
+  assert(execIdsAfter.includes('m1-r2-u2') && !execIdsBefore.includes('m1-r2-u2'),
+    '#783 :4706: a re-expansion GROWS the execution view (m1-r2-u2 appears) — so an execution-view '
+    + 'producer re-derivation of a HISTORICAL journal attempt would spuriously grow and mismatch, which '
+    + 'is why :4706 must stay the FREEZE view (the spine is invariant across re-expansion)');
+  assert(planValidator.parseNodes(reExpandedPlan).map(n => n.id).join(',') === 'probe,m1,wall,done',
+    '#783 :4706: the FREEZE view stays invariant across the re-expansion — the stable identity a settled '
+    + 'journal attempt is matched against');
+
+  // Source pins.
+  const nodeSrc = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-node.js'), 'utf8');
+  const v2Fn = nodeSrc.slice(nodeSrc.indexOf('function validateSchema2ReviewEvidence('),
+    nodeSrc.indexOf('function validateSchema2ReviewEvidence(') + 6000);
+  assert(/const reviewNodes = parseNodesFromContent\(planContent\);/.test(v2Fn),
+    '#783 :1837 pin: the review candidate partition + anchor cone range over the EXECUTION view '
+    + '(parseNodesFromContent) — reverting to validator.parseNodes reddens this');
+  const journalFn = nodeSrc.slice(nodeSrc.indexOf('function reviewJournalV2MatchesPlan('),
+    nodeSrc.indexOf('const byId = new Map(nodes.map(node => [node.id, node]));',
+      nodeSrc.indexOf('function reviewJournalV2MatchesPlan(')));
+  assert(/const nodes = validator\.parseNodes\(planContent\);/.test(journalFn),
+    '#783 :4706 pin (VERIFIED NOT A DEFECT): reviewJournalV2MatchesPlan STAYS the FREEZE view '
+    + '(validator.parseNodes) — an execution-view swap regresses the shipped #756 re-expansion '
+    + 'epoch-transition wedge (testReExpansionEpochTransition756)');
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

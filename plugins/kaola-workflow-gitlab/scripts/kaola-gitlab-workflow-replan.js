@@ -975,7 +975,17 @@ function verifyCaseBProof(paths, parentPlan, source, transitionReason, lineageIn
   if (meta.contract_version !== '2' || meta.planned_transition !== 'diagnosis_to_build') {
     return { ok: false, reason: 'case_b_parent_meta_invalid' };
   }
-  const nodes = validator.parseNodes(parentPlan);
+  // #783: the diagnosis-parent completeness gate and the writer-surface whitelist loop below both
+  // reason about the EXECUTED parent graph — what it actually WROTE and who its producers were — so
+  // they range over the EXECUTION node view (spine + every recorded expansion unit). Post-#765 a
+  // diagnosis parent is authored as a spine; an expansion-unit writer gets a ## Node Ledger + a
+  // ## Expansion Records row but never a ## Nodes row, so the freeze view (parseNodes) structurally
+  // misses it and a unit writing to a non-artifact path would escape the writer-surface whitelist. A
+  // parent with no expansion records returns the identical parseNodes array by reference. (MASKED:
+  // reachable only under transitionReason==='diagnosis_to_build', the question/bug-shaped shape that is
+  // not yet shipped — no on-disk diagnosis artifacts are authored today — so this widens the correct
+  // view now, ahead of that shape shipping.)
+  const nodes = validator.planNodesWithExpansions(parentPlan);
   const ledger = validator.parseLedger(parentPlan);
   if (!nodes.length || nodes.some(node => node.role !== 'finalize' && ledger.get(node.id) !== 'complete')) {
     return { ok: false, reason: 'case_b_parent_incomplete' };
@@ -3519,7 +3529,14 @@ function promotedState(paths, transaction, fenced) {
 function cleanupAllowed(rel, transaction) {
   if (rel === schema.REPLAN_PLAN_NEXT_NAME) return true;
   if (/^\.cache\/(?:running-set\.json|active-batch\.json|barrier-(?:base|open|ref)-)/.test(rel)) return true;
-  const parentNodes = new Set(validator.parseNodes(Buffer.from(transaction.parent.plan_bytes_base64, 'base64').toString('utf8')).map(node => node.id));
+  // #783: the parent-node id-set gates which `.cache/<node>.md` evidence files an epoch replan may
+  // clean up. The subject is the parent's EXECUTED graph — a replan fires only AFTER reviewer nodes
+  // ran, i.e. after any milestone that opened executed its units, and record-evidence wrote each unit a
+  // top-level .cache/<point>-r<ord>-<name>.md. Those unit ids live in the parent's ## Node Ledger +
+  // ## Expansion Records but never its ## Nodes, so the freeze view (parseNodes) leaves every unit
+  // evidence file un-cleanable residue. Range over the EXECUTION view so unit evidence is cleanup-
+  // eligible; a parent with no expansion records returns the identical parseNodes array by reference.
+  const parentNodes = new Set(validator.planNodesWithExpansions(Buffer.from(transaction.parent.plan_bytes_base64, 'base64').toString('utf8')).map(node => node.id));
   if (/^\.cache\/[^/]+\.md$/.test(rel) && parentNodes.has(path.basename(rel, '.md'))) return true;
   return /^\.cache\/(?:review-contexts|review-receipts|review-certifiers|validation-vectors|review-findings|epoch-projections)\//.test(rel);
 }
@@ -4248,4 +4265,7 @@ module.exports = {
   verifyCurrentEpochAuthority,
   // #730 AC-9: the replan-child feedback-delivery brief mirror — exported for direct unit coverage.
   replanWriterBriefs,
+  // #783: the epoch-replan cache-cleanup eligibility predicate — exported so its execution-view
+  // parent-node id-set (spine + recorded expansion units) can be driven directly.
+  cleanupAllowed,
 };

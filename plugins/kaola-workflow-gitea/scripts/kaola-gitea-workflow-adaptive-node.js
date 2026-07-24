@@ -1835,7 +1835,15 @@ function validateSchema2ReviewEvidence(opts, planContent, nodeInfo, evidenceCont
   };
   const bound = reviewSchema.validateReviewEvidenceBinding(evidenceContent, dispatch, context);
   if (!bound.ok) return bound;
-  const reviewNodes = validator.parseNodes(planContent);
+  // #783: the review candidate partition (declaredUnionPaths -> candidate_residue_digest, recorded
+  // IMMUTABLY into the attempt) and buildReviewAnchorIndex's producer cone both reason about the
+  // EXECUTED tree, so they range over the EXECUTION node view (parseNodesFromContent ->
+  // planNodesWithExpansions), matching the RECORD side (beginReviewAttempt's ctx.nodes) and
+  // proveRebindAdmissible (already execution view). Read by the FREEZE view (validator.parseNodes),
+  // a composed expansion unit's legitimate write is misclassified as undeclared review RESIDUE and its
+  // producer cone under-derived. A plan with no expansion records returns the identical parseNodes
+  // array by reference, so a non-expanded review is byte-unchanged.
+  const reviewNodes = parseNodesFromContent(planContent);
   const candidatePartition = currentReviewCandidatePartition(opts, reviewNodes, candidateDigest);
   if (!candidatePartition.ok) return candidatePartition;
   const validationVectors = readCurrentValidationVectors(opts, candidateDigest);
@@ -4704,6 +4712,21 @@ function loadCommittedLegacyImport(opts, planHash, suppliedPointer) {
 
 function reviewJournalV2MatchesPlan(journal, planContent) {
   const validator = require('./kaola-gitea-workflow-plan-validator');
+  // #783 (verified NOT a defect — stays the FREEZE view): this matcher re-validates a HISTORICAL
+  // journal attempt (recorded once) against the plan. Its producer-binding re-derivation
+  // (uniqueMaximalReviewProducer over the gate members) must range over a node view that is INVARIANT
+  // across execution-time growth, or a settled attempt stops matching the moment the plan grows. The
+  // FREEZE view (parseNodes — spine only) is that invariant; the EXECUTION view (planNodesWithExpansions)
+  // is NOT — a re-expansion appends new fixer units to the milestone. Empirically (the #756 re-expansion
+  // epoch-transition wedge, testReExpansionEpochTransition756): a settled DISCOVERY attempt records
+  // producer_bindings=[]; after m1 re-expands with fixer unit m1-r2-fx, the execution-view re-derivation
+  // yields ["m1-r2-fx"] (a producer that POSTDATES the recorded attempt), spuriously refusing
+  // review_journal_repair_identity_mismatch and short-circuiting the sanctioned
+  // review_reexpansion_requires_epoch_transition escalation. Review-gate repair producers are ALWAYS
+  // spine writers (a milestone-internal repair routes through RE-EXPANSION, never a gate-bound composed
+  // unit), so the freeze view never misses a legitimate producer here. Sibling of the three refuted
+  // sites; the #783 audit's execution-state classification of this site is contradicted by that shipped
+  // invariant.
   const nodes = validator.parseNodes(planContent);
   const byId = new Map(nodes.map(node => [node.id, node]));
   const planView = validator.buildPlanView(planContent);
@@ -12487,7 +12510,26 @@ function runExpandOpen(opts) {
   const withRecord = appendExpansionBlock(baseForRecord, block);
   const led = appendLedgerRows(withRecord, unitIds);
   if (!led.ok) return refuse(led.reason, { node_id: nodeId, detail: 'cannot append unit rows to ## Node Ledger' });
-  writeFile(planPath, led.content);
+  // #780: pre-seed a `pending` ## Required Agent Compliance row for every unit in the SAME atomic
+  // Phase-1 write as its ledger row, so the compliance table tracks the EXECUTION node view
+  // (planNodesWithExpansions — spine + units) from the moment a unit EXISTS, not only from its close.
+  // Without this, a live expansion frontier has one compliance row per SPINE node while the execution
+  // view has spine + units, so validateRequiredAgentCompliance's exact-one-row-per-node rule refuses
+  // `state_compliance_authority_invalid` for the whole live window. addCloseCompliance then FLIPS the
+  // pending row in place (its canonical `role (id)` match) instead of inserting a second one.
+  // Guarded by section presence (a plan under no compliance authority stays byte-identical) and
+  // complianceRowExists (idempotent — a roll-forward re-entry never doubles a row). This rides the ONE
+  // existing crash-atomic writeFile below; it introduces no second window.
+  let seeded = led.content;
+  if (locateSection(seeded, 'Required Agent Compliance').start >= 0) {
+    composed.units.forEach((u, i) => {
+      const requirementCell = u.role + ' (' + unitIds[i] + ')';
+      if (!complianceRowExists(seeded, requirementCell, unitIds[i])) {
+        seeded = spliceComplianceRow(seeded, '| ' + requirementCell + ' | pending | | |');
+      }
+    });
+  }
+  writeFile(planPath, seeded);
 
   // ---- Phase 2 + 3: open the frontier, then append the positive proof. ----
   const rolled = openExpansionFrontier(opts, recordId);

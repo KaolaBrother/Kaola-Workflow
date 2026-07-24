@@ -5316,4 +5316,289 @@ function initExpandedSpineFixture() {
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// ===========================================================================
+// #783 / #780 — freeze-view vs execution-view family. Post-#765 the planner authors
+// plan_form: spine always; a milestone that opens writes its production files through
+// EXPANSION UNITS, which live in `## Expansion Records` + `## Node Ledger` but NEVER `## Nodes`.
+// Every fixture below carries a REAL `## Expansion Records` section driven through the PRODUCTION
+// CLIs (`--freeze`-equivalent frozen bytes → `expand-open` → `close-node`), exactly the #779
+// discipline: `planNodesWithExpansions` DERIVES its units from the records section, so a
+// hand-authored `## Nodes`-only spine would prove nothing (it is why this family went undetected).
+// A consumer reasoning about the EXECUTED graph's STATE but reading the FREEZE view (`parseNodes`)
+// is wrong on an expanded spine.
+// ===========================================================================
+function initExpandedFamilyFixture(opts) {
+  opts = opts || {};
+  const epochActive = opts.epochActive !== false;     // PLAN Meta carries epoch_schema_version (site :4564 gate)
+  const unitWriteSet = opts.unitWriteSet || '';       // '' → read-only unit; 'lib/feature.js' → writer unit
+  const unitRole = opts.unitRole || 'code-explorer';
+  const project = 'issue-783';
+  const meta = [
+    'project: ' + project, 'labels: enhancement', 'plan_schema_version: 2', 'plan_form: spine',
+    'validation_command: node scripts/test-replan.js', 'validation_timeout_minutes: 20',
+    'code_certifier: wall', 'security_certifier: none',
+    'inherited_frontier_digest: none', 'inherited_frontier_classes: none',
+  ];
+  if (epochActive) meta.push('epoch_schema_version: 2');
+  const body = [
+    '# Workflow Plan — ' + project, '', '## Meta', '', ...meta, '',
+    'expansion(m1):', '  milestone_goal: land the feature seam', '  expected_surfaces: lib/',
+    '  join_constraints: none', '  review_class: code-reviewer', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+    '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+    '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+    '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+    '## Node Ledger', '', '| id | status |', '| --- | --- |',
+    '| probe | complete |', '| m1 | pending |', '| wall | pending |', '| done | pending |', '',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
+    '| --- | --- | --- | --- |',
+    '| code-explorer (probe) | invoked | .cache/probe.md | |',
+    '| expansion-point (m1) | pending | | |',
+    '| code-reviewer (wall) | pending | | |',
+    '| finalize (done) | pending | | |', '',
+  ].join('\n');
+  const planHash = validator.computePlanHash(body);
+  const planText = body.replace(/^# Workflow Plan[^\n]*\n/, m => m + '\n<!-- plan_hash: ' + planHash + ' -->\n');
+
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-783-')));
+  git(root, ['init', '-b', 'main']);
+  git(root, ['config', 'user.name', 'Test']);
+  git(root, ['config', 'user.email', 't@example.com']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
+  git(root, ['add', '-A']); git(root, ['commit', '-m', 'root']);
+  git(root, ['checkout', '-b', 'workflow/issue-783']);
+  const commit = git(root, ['rev-parse', 'HEAD']);
+  const tree = git(root, ['rev-parse', 'HEAD^{tree}']);
+  const projectDir = path.join(root, 'kaola-workflow', project);
+  const cacheDir = path.join(projectDir, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(projectDir, 'workflow-plan.md');
+  fs.writeFileSync(planPath, planText);
+
+  const identity = schema.buildClaimIdentity({
+    schema_version: 2, repository_id: 'local:' + root, issue_numbers: [783], primary_issue: 783,
+    bundle_id: null, closure_policy: 'all_or_nothing', branch: 'workflow/issue-783', worktree_path: root,
+    claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
+  });
+  const rootBase = schema.buildClaimRootBase({ schema_version: 2,
+    object_format: commit.length === 64 ? 'sha256' : 'sha1', commit, tree, branch: 'workflow/issue-783' });
+  const lineage = schema.buildEpochLineage(identity, rootBase);
+  const baseState = stateText(project, 'workflow/issue-783', root, planHash)
+    .replace(/^first_node_id:.*$/m, 'first_node_id: probe')
+    .replace(/^first_node_role:.*$/m, 'first_node_role: code-explorer')
+    .replace(/^issue_number:.*$/m, 'issue_number: 783');
+  fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), schema.writeEpochStateBlock(baseState, {
+    epoch_schema_version: 2, claim_repository_id: identity.repository_id,
+    claim_identity_digest: lineage.claim_identity_digest, claim_root_object_format: rootBase.object_format,
+    claim_root_base_commit: rootBase.commit, claim_root_base_tree: rootBase.tree,
+    claim_root_base_digest: lineage.claim_root_base_digest, epoch_lineage_id: lineage.epoch_lineage_id,
+    plan_epoch: 1, active_plan_hash: planHash, inherited_frontier_digest: 'none', inherited_frontier_classes: 'none',
+    automatic_review_replans: 0, authorized_epoch_ceiling: 2, case_b_exemption_consumed: false,
+    replan_status: 'none', replan_transaction_id: 'none', replan_phase: 'none', active_snapshot_manifest_digest: 'none',
+  }));
+  fs.writeFileSync(path.join(cacheDir, 'probe.md'), 'evidence-binding: probe abc123\nfindings: none\n');
+  git(root, ['add', '-A']); git(root, ['commit', '-m', 'frozen']);
+
+  const runScript = (script, args, input) => spawnSync(process.execPath, [path.join(__dirname, script), ...args],
+    { cwd: root, encoding: 'utf8', timeout: 180000, killSignal: 'SIGKILL',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, ...(input ? { input } : {}) });
+
+  const fx = { root, project, projectDir, cacheDir, planPath, planHash, commit, runScript,
+    planText: () => fs.readFileSync(planPath, 'utf8'),
+    installedRoles: validator.installedRoles('/nonexistent-agents-dir') };
+
+  const expanded = runScript('kaola-workflow-adaptive-node.js',
+    ['expand-open', '--project', project, '--node-id', 'm1', '--json', '--stdin'],
+    JSON.stringify({
+      derivation: { grain: 'each unit owns a distinct surface', path: 'critical path to the wall',
+        join: 'mechanical — disjoint surfaces', probe: 'no unit reshapes the others',
+        serializer: 'none present — co-open' },
+      units: [{ name: 'u1', role: unitRole, model: 'standard', write_set: unitWriteSet, mode: 'co_open' }],
+    }));
+  assert.strictEqual(expanded.status, 0,
+    '#783 fixture: expand-open must exit 0, got ' + expanded.status + '\n' + expanded.stdout + expanded.stderr);
+  fx.unitId = (JSON.parse(expanded.stdout).units || []).map(u => u.id)[0];
+  fx.closeUnit = id => {
+    fs.appendFileSync(path.join(cacheDir, id + '.md'), '\nfindings: none\n');
+    const closed = runScript('kaola-workflow-adaptive-node.js',
+      ['close-node', '--project', project, '--node-id', id, '--json']);
+    assert.strictEqual(closed.status, 0,
+      '#783 fixture: close-node ' + id + ' must exit 0, got ' + closed.status + '\n' + closed.stdout + closed.stderr);
+  };
+  return fx;
+}
+
+// --- #780 (write side) + :4564 (read side) — the interlocked compliance pair. ---------------------
+{
+  const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: '' });
+  try {
+    const expandedPlan = fx.planText();
+    equal(fx.unitId, 'm1-r1-u1', '#783 fixture: expand-open derived the unit id');
+    ok(/^## Expansion Records[ \t]*$/m.test(expandedPlan) && /^record\(m1#1\):$/m.test(expandedPlan),
+      '#783 fixture: the plan carries a REAL renderExpansionRecord block (not a hand-authored spine)');
+    deepEqual(validator.parseNodes(expandedPlan).map(n => n.id), ['probe', 'm1', 'wall', 'done'],
+      '#783 fixture: the FREEZE view sees the spine and only the spine');
+    deepEqual(validator.planNodesWithExpansions(expandedPlan).map(n => n.id),
+      ['probe', 'm1', 'wall', 'done', 'm1-r1-u1'],
+      '#783 fixture: the EXECUTION view derives the unit from the records section');
+
+    // #780 write side: expand-open pre-seeds a PENDING compliance row for the unit in the SAME atomic
+    // Phase-1 write as its ledger row, so the compliance table already tracks the execution view.
+    ok(/^\| code-explorer \(m1-r1-u1\) \| pending \| \| \|$/m.test(expandedPlan),
+      '#780: expand-open pre-seeds a pending compliance row for the live unit (RED: no such row — '
+      + 'addCloseCompliance appended it only at close)');
+
+    // #780 GREEN: with the unit in_progress and its pending compliance row present, the epoch authority
+    // HOLDS mid-frontier (RED against the pre-#780 tree: state_compliance_authority_invalid — one
+    // compliance row per SPINE node while the execution view has spine + units).
+    const midFrontier = replan.verifyCurrentEpochAuthority(fx.projectDir);
+    ok(midFrontier.ok === true && midFrontier.authority_kind === 'planned',
+      '#780: a LIVE expansion frontier (unit in_progress) holds current-epoch authority: '
+      + JSON.stringify(midFrontier));
+
+    // :4564 GREEN: the resume compliance wall reads the EXECUTION view, so the pre-seeded unit row is
+    // exactly one-per-execution-node (RED against pre-:4564 tree: required_agent_compliance_invalid —
+    // freeze-view node count vs the execution-view compliance table).
+    const resume = validator.revalidateForResume(fx.planText(), { installedRoles: fx.installedRoles });
+    ok(resume.ok === true && resume.result === 'pass',
+      '#783 :4564: a resumed expanded spine passes the compliance wall on the execution view: '
+      + JSON.stringify({ ok: resume.ok, reasonCode: resume.reasonCode }));
+
+    // #780: addCloseCompliance FLIPS the pre-seeded row in place — never inserts a second one.
+    fx.closeUnit(fx.unitId);
+    const closedPlan = fx.planText();
+    const unitRows = closedPlan.match(/^\| code-explorer \(m1-r1-u1\) \|/gm) || [];
+    equal(unitRows.length, 1, '#780: exactly ONE compliance row for the unit after close (flip, not insert)');
+    ok(/^\| code-explorer \(m1-r1-u1\) \| subagent-invoked \| .+ \| \|$/m.test(closedPlan),
+      '#780: the pre-seeded pending row is flipped to subagent-invoked at close');
+    ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok,
+      '#780: the settled unit holds authority (the #779 closed/archive path stays intact)');
+
+    // :4564 NON-VACUITY — the wall is re-aimed, not gutted. A genuinely missing unit compliance row,
+    // and an EXTRA compliance row for a node in neither view, both still refuse on the execution view.
+    const missing = validator.revalidateForResume(
+      closedPlan.replace(/^\| code-explorer \(m1-r1-u1\) \|.*$\n/m, ''), { installedRoles: fx.installedRoles });
+    equal(missing.reasonCode, 'required_agent_compliance_invalid',
+      '#783 :4564 non-vacuity: a missing unit compliance row still refuses required_agent_compliance_invalid');
+    const extra = validator.revalidateForResume(
+      closedPlan.replace(/^(\| finalize \(done\) \|.*)$/m, '| code-explorer (ghost-unit) | pending | | |\n$1'),
+      { installedRoles: fx.installedRoles });
+    equal(extra.reasonCode, 'required_agent_compliance_invalid',
+      '#783 :4564 non-vacuity: a compliance row for a node in neither view still refuses');
+
+    // #780 NON-VACUITY — a genuinely unresolved unit still refuses the compliance authority tier.
+    const stillPending = replan.verifyCurrentEpochAuthority; // sanity: fn present
+    ok(typeof stillPending === 'function', '#780: verifyCurrentEpochAuthority present');
+    fs.writeFileSync(fx.planPath, closedPlan.replace(
+      /^\| code-explorer \(m1-r1-u1\) \| subagent-invoked \| .+ \| \|$/m,
+      '| code-explorer (m1-r1-u1) | pending | | |'));
+    equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, 'state_compliance_progress_invalid',
+      '#780 non-vacuity: a pending compliance row under a complete unit ledger row still refuses');
+    fs.writeFileSync(fx.planPath, closedPlan);
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// --- :6004 — the finalize attribution sweep must attribute a completed expansion unit's write. -----
+{
+  const fx = initExpandedFamilyFixture({ epochActive: false, unitWriteSet: 'lib/feature.js', unitRole: 'implementer' });
+  try {
+    // The unit really wrote lib/feature.js; settle its ledger + compliance (the ledger is not
+    // hash-covered, the same in-place transition buildLineageFixture uses) and commit the production
+    // file so it is enumerated by `git diff main...HEAD`.
+    fs.mkdirSync(path.join(fx.root, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(fx.root, 'lib', 'feature.js'), 'module.exports = "feature";\n');
+    const settled = fx.planText()
+      .replace('| m1-r1-u1 | in_progress |', '| m1-r1-u1 | complete |')
+      .replace('| implementer (m1-r1-u1) | pending | | |',
+        '| implementer (m1-r1-u1) | subagent-invoked | .cache/m1-r1-u1.md | |');
+    fs.writeFileSync(fx.planPath, settled);
+    git(fx.root, ['add', '-A']); git(fx.root, ['commit', '-m', 'unit landed lib/feature.js']);
+    const ch = fx.runScript('kaola-workflow-plan-validator.js', [fx.planPath, '--candidate-hash', '--json']);
+    const chHash = JSON.parse((ch.stdout || '').trim().split('\n').pop()).validated_candidate_hash;
+    fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'),
+      'verdict: pass\nvalidated_candidate_hash: ' + chHash + '\n');
+
+    const finalize = () => {
+      const r = fx.runScript('kaola-workflow-plan-validator.js',
+        [fx.planPath, '--finalize-check', '--base', 'main', '--json']);
+      return { exit: r.status, json: JSON.parse((r.stdout || '').trim().split('\n').pop()) };
+    };
+    const pass = finalize();
+    ok(pass.exit === 0 && pass.json.result === 'pass',
+      '#783 :6004: the finalize attribution sweep attributes a COMPLETE expansion unit\'s declared write '
+      + '(RED: unattributed_change lib/feature.js — parseNodes misses the unit): '
+      + JSON.stringify({ result: pass.json.result, reason: pass.json.reason, unattributed: pass.json.unattributed }));
+
+    // :6004 NON-VACUITY — the union WIDENS the attributed set, it does not disable the sweep: a file
+    // declared by NO node in the execution view still refuses unattributed_change.
+    fs.writeFileSync(path.join(fx.root, 'orphan.js'), 'module.exports = "orphan";\n');
+    git(fx.root, ['add', 'orphan.js']); git(fx.root, ['commit', '-m', 'orphan']);
+    const ch2 = fx.runScript('kaola-workflow-plan-validator.js', [fx.planPath, '--candidate-hash', '--json']);
+    fs.writeFileSync(path.join(fx.cacheDir, 'final-validation.md'),
+      'verdict: pass\nvalidated_candidate_hash: ' + JSON.parse((ch2.stdout || '').trim().split('\n').pop()).validated_candidate_hash + '\n');
+    const orphan = finalize();
+    ok(orphan.exit === 1 && orphan.json.reason === 'unattributed_change'
+      && (orphan.json.unattributed || []).includes('orphan.js')
+      && !(orphan.json.unattributed || []).includes('lib/feature.js'),
+      '#783 :6004 non-vacuity: an undeclared branch write still refuses unattributed_change while the '
+      + 'unit write stays attributed: ' + JSON.stringify(orphan.json.unattributed));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// --- :3521 cleanupAllowed — a unit evidence file must be cleanup-eligible via the execution view. ---
+{
+  const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: '' });
+  try {
+    const parentBytes = Buffer.from(fx.planText()).toString('base64');
+    const tx = { parent: { plan_bytes_base64: parentBytes } };
+    equal(replan.cleanupAllowed('.cache/m1-r1-u1.md', tx), true,
+      '#783 :3521: a recorded expansion unit\'s .cache/<unit-id>.md is cleanup-eligible via the '
+      + 'execution view (RED: false — parseNodes misses the unit, leaving unit evidence as un-cleanable residue)');
+    equal(replan.cleanupAllowed('.cache/probe.md', tx), true,
+      '#783 :3521: a spine node\'s evidence file stays cleanup-eligible');
+    equal(replan.cleanupAllowed('.cache/ghost-unit.md', tx), false,
+      '#783 :3521 non-vacuity: an id in NEITHER view is still not cleanup-eligible');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
+// --- :3432 (parent lineage nodes) + :977 (Case-B parent) — records-bearing divergence + source pin. -
+// :3432 is reachable only when a SEALED parent epoch expanded (plan_epoch>=2 lineage); :977 is masked
+// behind the unshipped question/bug-shaped `diagnosis_to_build` transition. For both, the load-bearing
+// property is that the parent plan's EXECUTION view carries the expansion unit (whose completed write /
+// evidence the consumer must attribute) while the FREEZE view does not. Prove that divergence on a REAL
+// records-bearing parent, then pin the fixed call site to the execution view (a mutation reverting the
+// swap reddens the pin).
+{
+  const fx = initExpandedFamilyFixture({ epochActive: true, unitWriteSet: 'lib/parent.js', unitRole: 'implementer' });
+  try {
+    const parentPlan = fx.planText();
+    const exec = validator.planNodesWithExpansions(parentPlan);
+    const unit = exec.find(n => n.id === 'm1-r1-u1');
+    ok(unit && Array.from(unit.writeSet || []).includes('lib/parent.js'),
+      '#783 :3432/:977: the parent EXECUTION view carries the expansion unit with its declared write — '
+      + 'the file a parent epoch legitimately WROTE, which parseNodes structurally cannot see');
+    ok(!validator.parseNodes(parentPlan).some(n => n.id === 'm1-r1-u1'),
+      '#783 :3432/:977: the parent FREEZE view (parseNodes) misses that unit');
+
+    const validatorSrc = fs.readFileSync(path.join(__dirname, 'kaola-workflow-plan-validator.js'), 'utf8');
+    const lineageFn = validatorSrc.slice(validatorSrc.indexOf('function resolveEpochLineagePlans('),
+      validatorSrc.indexOf('function readFinalizeReplanFence('));
+    ok(/nodes: planNodesWithExpansions\(snapContent\)/.test(lineageFn)
+      && /ledger: parseLedger\(snapContent\)/.test(lineageFn),
+      '#783 :3432 pin: resolveEpochLineagePlans builds each lineage plan\'s nodes from the EXECUTION '
+      + 'view (ledger stays parseLedger) — reverting to parseNodes reddens this');
+
+    const replanSrc = fs.readFileSync(path.join(__dirname, 'kaola-workflow-replan.js'), 'utf8');
+    const caseBFn = replanSrc.slice(replanSrc.indexOf('function verifyCaseBProof('),
+      replanSrc.indexOf('\nfunction ', replanSrc.indexOf('function verifyCaseBProof(') + 1));
+    ok(/const nodes = validator\.planNodesWithExpansions\(parentPlan\);/.test(caseBFn),
+      '#783 :977 pin (MASKED, question/bug-shaped unshipped): verifyCaseBProof ranges the parent '
+      + 'completeness gate + writer-surface whitelist over the EXECUTION view');
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);

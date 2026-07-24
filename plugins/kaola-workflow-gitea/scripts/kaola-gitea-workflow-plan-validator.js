@@ -3430,7 +3430,15 @@ function resolveEpochLineagePlans(content, planPath) {
     catch (_) {
       return { applicable: true, ok: false, reason: 'snapshot_plan_unreadable', detail: 'epoch ' + row.epoch };
     }
-    lineagePlans.push({ epoch: row.epoch, nodes: parseNodes(snapContent), ledger: parseLedger(snapContent) });
+    // #783: each lineage plan's `nodes` feeds the whole-plan allowlist union, the unattributed-write
+    // ownership map, and the finalize attribution sweep — all of which reason about what the parent
+    // epoch ACTUALLY wrote and completed (execution state), not the frozen plan's identity. A sealed
+    // parent epoch that opened a milestone wrote its files through expansion units, which live in the
+    // parent snapshot's ## Node Ledger + ## Expansion Records but never its ## Nodes. Read the EXECUTION
+    // view so `lp.ledger.get(unit.id)` resolves for those units; a parent snapshot with no ## Expansion
+    // Records returns the identical parseNodes array by reference, so every legacy lineage stays
+    // byte-unchanged. The ledger stays parseLedger (it already carries the unit rows).
+    lineagePlans.push({ epoch: row.epoch, nodes: planNodesWithExpansions(snapContent), ledger: parseLedger(snapContent) });
   }
   return { applicable: true, ok: true, lineagePlans };
 }
@@ -4568,7 +4576,18 @@ function revalidateForResume(content, opts) {
   // oversized frozen plan must be refused before the DFS rather than overflow the stack.
   if (nodes.length > schema.MAX_NODES) return refuse('too_many_nodes', `plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`);
   if (parseEpochContract(content).active) {
-    const compliance = validateRequiredAgentCompliance(content, nodes);
+    // SURGICAL SPLIT (mirrors verifyCurrentEpochAuthority replan.js): the five structural walls below
+    // (MAX_NODES, the ids Set, unknown_role, dangling_depends_on, hasCycle, uniqueSink) are freeze
+    // IDENTITY and MUST keep ranging over `nodes` (the FREEZE view) — a resumed expanded spine's
+    // intra-unit deps/ids would otherwise be re-subjected to the freeze-time closed-library/sink checks
+    // the spine form exists to defer. But validateRequiredAgentCompliance reasons about EXECUTED graph
+    // state: `appendLedgerRows` gives every expansion unit a ## Node Ledger row and never a ## Nodes
+    // row, and the compliance table is pre-seeded/flipped per unit, so on an expanded spine the table
+    // is written against the EXECUTION view. Judging it by the freeze view made the exact-one-row-per-
+    // node count mismatch unconditionally. A plan with no expansion records returns the identical
+    // parseNodes array by reference, so every non-expanded resume verdict is byte-unchanged.
+    const execNodes = planNodesWithExpansions(content);
+    const compliance = validateRequiredAgentCompliance(content, execNodes);
     if (!compliance.ok) return refuse(compliance.reason, compliance.detail);
   }
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
@@ -6002,7 +6021,16 @@ function main() {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', operator_hint: getOperatorHint('unattributed_change'), errors: ['attribution sweep could not enumerate `git diff ' + base + '...HEAD` (' + (e && e.message ? e.message.split('\n')[0] : 'git error') + ') — cannot prove every change is attributed'] }) : 'typed refusal: attribution sweep git error') + '\n');
       process.exitCode = 1; return;
     }
-    const nodes = parseNodes(content);
+    // #783: the finalize attribution sweep reasons about the EXECUTED graph — a path is attributed iff
+    // it is covered by a `complete` node's declared write set — so it ranges over the EXECUTION node
+    // view (spine + every recorded expansion unit), mirroring barrierCheck (#759). Post-#765 the planner
+    // authors plan_form: spine always, so a milestone that opens writes its production files through
+    // expansion units, which carry a ## Node Ledger row + a ## Expansion Records unit but NEVER a
+    // ## Nodes row. Read by the FREEZE view (parseNodes), those unit writes are missing from
+    // completeDeclared and a legitimate completed unit write reads as an out-of-window `unattributed_
+    // change`. A plan with no expansion records returns the identical parseNodes array by reference, so
+    // every legacy finalize verdict is byte-unchanged. parseLedger already carries the unit rows.
+    const nodes = planNodesWithExpansions(content);
     const ledger = parseLedger(content);
     // A path is ATTRIBUTED if it is in the narrow allowband OR covered by a `complete` node's declared
     // write set. The declared set unions only COMPLETE nodes (a pending/n-a node never ran).
