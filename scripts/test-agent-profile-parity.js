@@ -73,6 +73,41 @@ const FEATURE_TOKENS = [
   // all three .toml twins carry the spine grammar (md↔toml parity for the #767 authoring lever).
   'plan_form',
   'expansion-point',
+  // #790: the frozen ## Design section — the planner authors the plan-level WHY alongside
+  // ## Meta / ## Nodes / ## Node Briefs, it is hash-covered at freeze, and the freeze wall REFUSES
+  // an absent/empty one (design_missing) in ALL FOUR plan-validator copies. Without this pin the
+  // codex-runtime planner is never told to author the section while its validator twin still
+  // refuses the freeze without it — an unfixable wedge (the repair loop is fenced off ## Design).
+  // NOTE: the token is pinned BACKTICKED. The bare '## Design' is a substring of the unrelated
+  // '### Design Decisions' evidence heading in agents/code-architect.md, which would impose a
+  // spurious obligation on the code-architect toml triple; the backticked spelling is
+  // workflow-planner-unique.
+  '`## Design`',
+  'design_missing',
+  'plan-level WHY',
+  // #789: no-target survey mode — the planner owns backlog selection itself (the retired scout
+  // hop), running the survey, selecting a bundle jointly with how it decomposes, then claiming +
+  // authoring + freezing in ONE dispatch. Present in agents/workflow-planner.md, so this enforces
+  // all three .toml twins carry the mode (md↔toml parity for the entry path the codex next SKILL
+  // already promises).
+  'No-target survey mode',
+  // #789: the typed pre-claim verdicts joining the target_indeterminate family — the survey runs
+  // BEFORE any claim, so an empty/ambiguous backlog must fail closed with NO state written and no
+  // interactive ask.
+  'backlog_empty',
+  'selection_indeterminate',
+  // #789: the selection record the handoff folds into ## Planning Evidence — the chosen bundle,
+  // the priority reconciliation, the rejected candidates with reasons, and the disjointness
+  // rationale.
+  'selection_bundle',
+  'selection_priority_basis',
+  'selection_rejected',
+  'selection_disjointness',
+  // #789: the anti-proxy / frontier-blocked precedence rule — priority is a HARD rank and
+  // actionability only breaks ties within a tier, so a blocked frontier produces an explicit,
+  // reasoned fall-through, never a silent substitution of an easier lower-priority cluster.
+  'closest actionable proxy',
+  'frontier blocked because',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
