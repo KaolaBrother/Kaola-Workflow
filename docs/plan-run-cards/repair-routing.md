@@ -249,6 +249,21 @@ node scripts/kaola-workflow-adaptive-node.js revert-overflow \
 
 `revert-overflow` reverts the out-of-set writes while keeping the in-set writes intact.
 
+**`revert-overflow` DISCARDS the out-of-set writes — read this before running it.** If the
+out-of-surface files are junk (a stray build artifact, a debug edit), that is exactly what you
+want. If they are *real companion work* the node legitimately needed to touch, reverting throws
+that work away and the node will likely reproduce it on the next attempt. In that case the right
+move is to widen the declared write set — re-freeze via plan-repair so the surface legitimately
+covers those paths — and only then re-run the node.
+
+> **Dormant alternative — `amend-surface`.** The aggregator also implements an `amend-surface`
+> transaction (append-only surface amendment + attribution + mandatory re-review) intended to
+> preserve companion work instead of discarding it. It is **not wired into any routed recovery
+> path in this release**: no operator hint, selector, or card routes to it, and it has never run
+> in a production loop. Treat it as an advanced, manually-invoked primitive (see
+> `node scripts/kaola-workflow-adaptive-node.js --help`), not a supported recovery step. The
+> fail-closed floor is unaffected either way — an unamended out-of-surface write still refuses.
+
 **NEVER use `--drop-base`.** `--drop-base` drops the barrier baseline, laundering the node's
 accumulated work. This is explicitly banned by D-424-01. The `operator_hint` vocabulary
 enforces this — no hint in any aggregator's registry references `drop-base`.
