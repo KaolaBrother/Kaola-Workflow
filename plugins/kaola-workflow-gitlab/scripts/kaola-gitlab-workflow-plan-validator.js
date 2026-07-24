@@ -213,7 +213,7 @@ const PLAN_FORM_LEGAL = Object.freeze(['dag', 'spine']);
 const CANONICAL_ROLES = [
   'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
-  'adversarial-verifier', 'implementer', 'issue-scout',
+  'adversarial-verifier', 'implementer',
   // #634: metric-optimizer runs a bounded metric-ratchet loop for direction-not-destination work (make
   // it faster / smaller / less flaky). It is a WRITE + IMPLEMENT role (its per-iteration accepted commits
   // ARE code), so G1/G3 post-dominance is inherited for free; its optimize(<id>) Meta contract + OPT-1..6
@@ -241,7 +241,7 @@ const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implement
 // that depends_on a producer must prove it actually read that producer's evidence (the close-time
 // consumed-proof). Distinct from IMPLEMENT_ROLES (the consumer side). Exported via module.exports so
 // the per-node lifecycle aggregator imports the SAME set and the producer/consumer split never drifts.
-const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'issue-scout', 'synthesizer']);
+const PRODUCER_ROLES = new Set(['code-architect', 'planner', 'code-explorer', 'knowledge-lookup', 'synthesizer']);
 // #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
 // cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)
 // so the freeze-time sanitize-collision check sees the SAME collisions the barrier keys do
@@ -280,7 +280,6 @@ const ROLE_TOKEN_REGISTRY = {
   'code-explorer':        ['evidence-binding', 'findings'],
   'knowledge-lookup':     ['evidence-binding', 'findings', 'sources'],
   'planner':              ['evidence-binding', 'recommendation'],
-  'issue-scout':          ['evidence-binding', 'recommendation'],
   'build-error-resolver': ['evidence-binding', 'build-green'],
   'synthesizer':          ['evidence-binding', 'merge_outcome'],
   'doc-updater':          ['evidence-binding', 'docs_updated'],
@@ -1110,6 +1109,164 @@ function expansionRecordEfficiency(recs) {
 function renderExpansionEfficiencyLine(pointId, eff) {
   return 'expansion ' + pointId + ': width=' + eff.width + ' mode=' + eff.mode
     + ' serializer=' + eff.serializer + ' rework=' + eff.rework;
+}
+
+// #789 (D1+D2): the PLAN-ALTITUDE serializer-evidence audit + shape telemetry — the plan-level
+// analogue of the expansion-altitude expansionRecordEfficiency above, and AUDIT-ONLY in exactly the
+// same sense: it computes a non-blocking flag + telemetry from data already in hand at freeze, and
+// NEVER moves a freeze verdict (no error is pushed, no `decision` flips). D1 and D2 SHARE ONE
+// computation — evidenceLessSerializingEdges is the set; D1 reports it in plan_shape, D2 IS the flag.
+//
+// A node participates in a gate/selector/loop structural relation (so a serial edge touching it is
+// already EXPLAINED by that relation, not a candidate for the serializer-evidence check): a gate role
+// (GATE_VERDICT_ROLES post-dominates the producers it reviews), a select arm (selector_source set), or a
+// select/loop/fanout-shaped node.
+function nodeHasStructuralRelation(n) {
+  if (!n) return true;
+  if (GATE_VERDICT_ROLES.has(n.role)) return true;                 // gate relation (review ordering)
+  if (n.selectorSource) return true;                               // select arm
+  const kind = n.shape && n.shape.kind;
+  if (kind === 'select' || kind === 'loop' || kind === 'fanout') return true;
+  return false;
+}
+
+// evidenceLessSerializingEdges — the flag set for D2 (and the list D1 reports). A plan-level `sequence`
+// edge is a `depends_on` edge (parseNodes) u→v. It is a "serial-write claim requiring evidence" iff:
+//   (a) BOTH u and v are WRITERS (non-empty declared write set) — a read/gate/sink endpoint has nothing
+//       to co-open, so its ordering is not a wrong-serial candidate;
+//   (b) their declared write sets are DISJOINT as sets of exact paths (no exact-file overlap — an exact
+//       overlap IS the S2 serializer: the shared file names itself, so it is excluded). Reuses
+//       classifier.disjointWriteSets (the SAME comparator) — `kind === 'exact'` is the only shared-file
+//       verdict; coarse/shared-infra/green are all exact-file-disjoint and CO-OPEN by default (#760);
+//   (c) NEITHER endpoint carries a gate/selector/loop relation (nodeHasStructuralRelation).
+// Under "Parallel by Default; Serial Requires Evidence" such an edge must name a serializer
+// (S1 artifact / S2 resource / S3 probe) in the DEPENDENT node's brief — the node asserting the wait.
+// Existence-only (mirrors expansionRecordEfficiency's `/\bS[123]\b/` read): we look for an S1/S2/S3
+// token and never judge its content. No token named → FLAG (the edge is returned {from,to}).
+// `briefs` is a Map<nodeId, briefText> (or an array of {nodeId, brief}). Pure; never throws.
+function evidenceLessSerializingEdges(nodes, briefs) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const byId = new Map(list.map(n => [n.id, n]));
+  const briefMap = briefs instanceof Map
+    ? briefs
+    : new Map((Array.isArray(briefs) ? briefs : []).map(b => [b.nodeId, b.brief]));
+  const namesSerializer = text => /\bS[123]\b/.test(String(text || ''));
+  const out = [];
+  for (const v of list) {
+    if (nodeHasStructuralRelation(v)) continue;
+    if (!v.writeSet || v.writeSet.size === 0) continue;            // dependent must be a writer
+    if (namesSerializer(briefMap.get(v.id))) continue;            // an S1/S2/S3 token discharges every in-edge
+    for (const uId of (v.dependsOn || [])) {
+      const u = byId.get(uId);
+      if (!u || nodeHasStructuralRelation(u)) continue;
+      if (!u.writeSet || u.writeSet.size === 0) continue;          // producer must also be a writer
+      let dj;
+      try { dj = classifier.disjointWriteSets([u.writeSet, v.writeSet]); } catch (_) { dj = { kind: null }; }
+      if (dj && dj.kind === 'exact') continue;                     // shared exact file => self-serialized (S2)
+      out.push({ from: uId, to: v.id });
+    }
+  }
+  return out;
+}
+
+// planDepthLevels — longest-path (critical-path) depth of every node over `dependsOn`. A DAG by the
+// time this runs (hasCycle refuses cycles first); the in-progress guard keeps it total even on a cyclic
+// input (never throws). Returns an array indexed by depth; a node at depth d requires a length-d
+// predecessor chain, so depths 0..max are contiguous.
+function planDepthLevels(nodes) {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const memo = new Map();
+  function depth(id, stack) {
+    if (memo.has(id)) return memo.get(id);
+    if (stack.has(id)) return 0;                                   // cycle guard
+    stack.add(id);
+    const n = byId.get(id);
+    let d = 0;
+    if (n) for (const dep of (n.dependsOn || [])) {
+      if (byId.has(dep)) d = Math.max(d, 1 + depth(dep, stack));
+    }
+    stack.delete(id);
+    memo.set(id, d);
+    return d;
+  }
+  const levels = [];
+  for (const n of nodes) {
+    const d = depth(n.id, new Set());
+    (levels[d] = levels[d] || []).push(n);
+  }
+  for (let i = 0; i < levels.length; i++) if (!levels[i]) levels[i] = [];
+  return levels;
+}
+
+// #789 (D1): freeze-time plan-shape telemetry (AUDIT-ONLY — NO gate on any number). Reuses
+// planDepthLevels + classifier.disjointWriteSets; `evidenceLessEdges` is D2's shared list.
+// A "disjoint-write antichain" is a depth level (an antichain by construction — same-depth nodes never
+// depend on one another) whose >=2 writer nodes have NO pairwise exact-file overlap (they can co-open).
+function computePlanShape(nodes, evidenceLessEdges) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const nodeCount = list.length;
+  const levels = planDepthLevels(list);
+  const perDepthWidths = levels.map(l => (l ? l.length : 0));
+  const criticalPathLength = perDepthWidths.length;
+  const parallelismRatio = criticalPathLength > 0
+    ? Math.round((nodeCount / criticalPathLength) * 1000) / 1000 : 0;
+  const noExactOverlap = writeSets => {
+    for (let i = 0; i < writeSets.length; i++) {
+      for (let j = i + 1; j < writeSets.length; j++) {
+        let dj;
+        try { dj = classifier.disjointWriteSets([writeSets[i], writeSets[j]]); } catch (_) { dj = { kind: null }; }
+        if (dj && dj.kind === 'exact') return false;
+      }
+    }
+    return true;
+  };
+  let antichainCount = 0;
+  let antichainMaxWidth = 0;
+  for (const level of levels) {
+    const writers = (level || []).filter(n => n.writeSet && n.writeSet.size > 0);
+    if (writers.length < 2) continue;
+    if (noExactOverlap(writers.map(w => w.writeSet))) {
+      antichainCount++;
+      if (writers.length > antichainMaxWidth) antichainMaxWidth = writers.length;
+    }
+  }
+  return {
+    node_count: nodeCount,
+    critical_path_length: criticalPathLength,
+    parallelism_ratio: parallelismRatio,
+    per_depth_widths: perDepthWidths,
+    antichains: { count: antichainCount, max_width: antichainMaxWidth },
+    evidence_less_sequence_edges: Array.isArray(evidenceLessEdges) ? evidenceLessEdges : [],
+  };
+}
+
+// #789 (D0): the no-target survey SELECTION RECORD the planner authors into `## Meta` when it ran the
+// backlog survey itself (Meta-SCOPED read, decoy-immune — same scoping as parseGoal/parseSpeculative-
+// Policy). Surfaced by --freeze-checked → folded into `## Planning Evidence` by the handoff (which owns
+// the OTHER end, so splicePlanningEvidence re-derives it every run and never clobbers). Returns
+// { selection: {...} } when ANY selection_* field is present, else { selection: null } — so an
+// explicit-target plan (operator already chose) carries none and the handoff adds no selection lines.
+function parseSelectionRecord(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const get = key => {
+    const m = String(meta || '').match(new RegExp('^' + key + ':[ \\t]*(.*)$', 'm'));
+    return m ? m[1].trim() : null;
+  };
+  const bundle = get('selection_bundle');
+  const priorityBasis = get('selection_priority_basis');
+  const rejected = get('selection_rejected');
+  const disjointness = get('selection_disjointness');
+  if (bundle == null && priorityBasis == null && rejected == null && disjointness == null) {
+    return { selection: null };
+  }
+  return {
+    selection: {
+      bundle: bundle || '',
+      priority_basis: priorityBasis || '',
+      rejected: rejected || '',
+      disjointness: disjointness || '',
+    },
+  };
 }
 
 // expansionUnitNodes — project the recorded frontiers onto VALIDATOR-SHAPED nodes so every existing
@@ -4373,7 +4530,7 @@ function validatePlan(content, opts) {
   // #340 mechanism 1 — agent-set delta registration completeness. An exact-match
   // directory/registry assertion (validate-vendored-agents.js agents-listing, the forge
   // agent-profile counts) breaks on ANY agent add, keyed on no symbol of the new file —
-  // invisible to #306 symbol scoping (the #328 issue-scout plan-repair). Anchor-gated to
+  // invisible to #306 symbol scoping (the #328 agent-registration plan-repair). Anchor-gated to
   // the Kaola-Workflow repo itself; inert in user installs (zero false positives).
   const regRoot = opts.root || process.cwd();
   if (fs.existsSync(path.join(regRoot, 'scripts', 'validate-vendored-agents.js'))) {
@@ -4541,6 +4698,13 @@ function validatePlan(content, opts) {
   if (concurrentAmbiguousOverlap) { blastRadius = true; reasons.push('concurrent non-fanout siblings touch overlapping coarse/shared-infra areas — ambiguous concurrency (#232)'); }
 
   const decision = (sensitivity || blastRadius || uncertain) ? 'ask' : 'auto-run';
+  // #789 (D1+D2, AUDIT-ONLY): freeze-time plan-shape telemetry + the plan-altitude serializer-evidence
+  // flag, computed ONCE and shared. Never moves a verdict — assembled only on the in-grammar return, no
+  // error is pushed. #789 (D0): the no-target survey selection record (null in explicit-target mode).
+  const briefMapForShape = new Map(parseNodeBriefs(content).map(b => [b.nodeId, b.brief]));
+  const evidenceLessEdges = evidenceLessSerializingEdges(nodes, briefMapForShape);
+  const planShape = computePlanShape(nodes, evidenceLessEdges);
+  const selectionRecord = parseSelectionRecord(content).selection;
   return {
     result: 'in-grammar', decision, planHash, sink,
     risk: { sensitivity, blastRadius, uncertain, reasons },
@@ -4548,6 +4712,8 @@ function validatePlan(content, opts) {
     plan_schema_version: planSchemaVersion,
     contract_version: contractVersion,
     diagnostics: { wideFanout: wideFanouts },
+    plan_shape: planShape,
+    ...(selectionRecord ? { selection: selectionRecord } : {}),
     // #765: only `spine` reaches the freeze wall now (dag refuses earlier), so isSpine is always true
     // here; the conditional stays as a defensive spread and always emits plan_form: 'spine'.
     ...(isSpine ? { plan_form: 'spine' } : {}),
@@ -5259,6 +5425,11 @@ function main() {
     const out = {
       result: 'in-grammar', decision: v.decision, risk: v.risk, planHash: v.planHash,
       frozen: false, governance: { decision: v.decision, risk: v.risk },
+      // #789 (D1+D2 audit-only): surface plan-shape telemetry + the serializer-evidence flag so the
+      // handoff folds them into `## Planning Evidence`. #789 (D0): the no-target selection record when
+      // the planner authored one (omitted in explicit-target mode).
+      plan_shape: v.plan_shape,
+      ...(v.selection ? { selection: v.selection } : {}),
     };
     process.stdout.write((json ? JSON.stringify(out) : `checked (${v.decision}) plan_hash=${v.planHash} (not yet frozen)`) + '\n');
     return;
@@ -6323,6 +6494,11 @@ module.exports = {
   // claim.js's per-run archive rollup line) — ONE owner so the two surfaces cannot drift.
   expansionRecordEfficiency,
   renderExpansionEfficiencyLine,
+  // #789 (D0/D1/D2): plan-altitude AUDIT-ONLY telemetry + serializer-evidence flag + the no-target
+  // survey selection-record reader. Exported for direct unit coverage; never move a freeze verdict.
+  evidenceLessSerializingEdges,
+  computePlanShape,
+  parseSelectionRecord,
   expansionUnitNodes,
   planNodesWithExpansions,
   parseValidationCommand,
