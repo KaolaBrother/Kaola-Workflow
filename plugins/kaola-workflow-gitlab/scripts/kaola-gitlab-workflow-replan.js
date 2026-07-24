@@ -1353,19 +1353,31 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
   const exactHash = validator.readStoredHash(plan);
   if (!exactHash || exactHash !== validator.computePlanHash(plan)) return schema.refuse('state_active_plan_invalid');
   if (planningHash !== activeHash || exactHash !== activeHash) return schema.refuse('state_active_plan_hash_mismatch');
+  // TWO node views, deliberately. `parseNodes` is the FREEZE view (`## Nodes` only) and is the
+  // subject of exactly one tier below: the frozen plan's own IDENTITY, which `## Planning Evidence`
+  // pins and which no execution-time growth may ever redefine. `planNodesWithExpansions` is the
+  // EXECUTION view (the spine plus every recorded expansion unit) and is what the RUN-STATE tiers
+  // must range over: `appendLedgerRows` gives every expansion unit a `## Node Ledger` row and never
+  // a `## Nodes` row, and `addCloseCompliance` appends its `## Required Agent Compliance` row at
+  // close, so on any plan that actually expanded, both tables are written against the execution
+  // view. Judging them by the freeze view made a row-count equality mismatch unconditionally and
+  // refused every expanded run — including the `closed` archive of a successful one. A plan with no
+  // expansion records returns the identical `parseNodes` array by reference, so nothing about a
+  // non-expanded plan changes.
   const nodes = validator.parseNodes(plan);
   if (!nodes.length) return schema.refuse('state_active_plan_invalid');
   if (state.first_node_id !== nodes[0].id || state.first_node_role !== nodes[0].role) {
     return schema.refuse('state_planning_evidence_stale_first_node');
   }
+  const execNodes = validator.planNodesWithExpansions(plan);
   const ledgerRows = sectionTableRows(plan, 'Node Ledger');
-  const nodeIds = nodes.map(node => node.id);
+  const nodeIds = execNodes.map(node => node.id);
   // A deferred ledger tier leaves no trustworthy status map, so the two progress checks
   // that READ it are skipped rather than evaluated against garbage; their own tiers are
   // moot once the table they project is already reported broken.
   let ledger = null;
-  if (ledgerRows.length !== nodes.length
-      || new Set(ledgerRows.map(row => row.id)).size !== nodes.length
+  if (ledgerRows.length !== execNodes.length
+      || new Set(ledgerRows.map(row => row.id)).size !== execNodes.length
       || ledgerRows.some(row => !nodeIds.includes(row.id)
         || !['pending', 'in_progress', 'complete', 'n/a'].includes(row.status))) {
     if (!deferFailure('state_ledger_authority_invalid')) return schema.refuse('state_ledger_authority_invalid');
@@ -1373,7 +1385,7 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
     ledger = new Map(ledgerRows.map(row => [row.id, row.status]));
   }
   if (ledger) {
-    for (const node of nodes) {
+    for (const node of execNodes) {
       if (['in_progress', 'complete', 'n/a'].includes(ledger.get(node.id))
           && node.dependsOn.some(dep => !['complete', 'n/a'].includes(ledger.get(dep)))) {
         if (!deferFailure('state_ledger_progress_invalid')) return schema.refuse('state_ledger_progress_invalid');
@@ -1381,7 +1393,7 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
       }
     }
   }
-  const complianceAuthority = validator.validateRequiredAgentCompliance(plan, nodes);
+  const complianceAuthority = validator.validateRequiredAgentCompliance(plan, execNodes);
   let complianceRows = null;
   if (!complianceAuthority.ok) {
     const complianceDetail = { detail: complianceAuthority.detail || complianceAuthority.reason };
@@ -1392,7 +1404,7 @@ function verifyCurrentEpochAuthority(projectDir, opts) {
     complianceRows = complianceAuthority.rows;
   }
   if (complianceRows && ledger) {
-    const expectedRequirements = new Map(nodes.map(node => [node.role + ' (' + node.id + ')', node.id]));
+    const expectedRequirements = new Map(execNodes.map(node => [node.role + ' (' + node.id + ')', node.id]));
     for (const row of complianceRows) {
       const id = expectedRequirements.get(row.requirement);
       const status = String(row.status || '').toLowerCase();

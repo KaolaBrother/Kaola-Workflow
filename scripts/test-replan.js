@@ -5038,4 +5038,282 @@ const ownersFor = (uids, node) => uids.map(uid => uid + '=' + node).join(',');
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 }
 
+// ---------------------------------------------------------------------------
+// #779 — verifyCurrentEpochAuthority must read the EXECUTION node view for the run-state
+// tiers (ledger + compliance), not the FREEZE node view.
+//
+// `appendLedgerRows` gives every expansion unit a `## Node Ledger` row and NEVER a `## Nodes`
+// row (the spine is frozen; the record channel and the ledger are what grow). So on any spine
+// plan that actually expands, a ledger-row-count-vs-`parseNodes`-count equality unconditionally
+// mismatches and the whole authority ladder refuses `state_ledger_authority_invalid` — which
+// `claim.js` defers for an ABANDON but never for a `closed` archive. Net effect: finalize of a
+// SUCCESSFUL expanded spine run could not archive.
+//
+// The fixture is built by driving the PRODUCTION CLI (`--freeze` then `expand-open` then
+// `close-node`), so the `## Expansion Records` block is real `renderExpansionRecord` output and
+// the unit ledger rows are real `appendLedgerRows` output. That matters: `planNodesWithExpansions`
+// DERIVES its units from the records section, so a hand-authored fixture carrying bare unit ledger
+// rows and no records section would prove only that the count check trips — it would pass for the
+// wrong reason, without ever proving the execution view repairs a real expanded plan.
+// ---------------------------------------------------------------------------
+const SPINE_PLAN_779 = [
+  '# Workflow Plan — issue #779', '',
+  '## Meta', '',
+  'project: issue-779',
+  'labels: enhancement',
+  'plan_schema_version: 2',
+  'plan_form: spine',
+  'validation_command: node scripts/test-replan.js',
+  'validation_timeout_minutes: 20',
+  'code_certifier: wall',
+  'security_certifier: none',
+  'inherited_frontier_digest: none',
+  'inherited_frontier_classes: none', '',
+  'expansion(m1):',
+  '  milestone_goal: land the reader seam in the core script',
+  '  expected_surfaces: scripts/',
+  '  join_constraints: none',
+  '  review_class: code-reviewer', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape | gate_claim | gate_surface | gate_aggregation | certifies |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| probe | code-explorer | — | — | 1 | sequence | — | — | — | — |',
+  '| m1 | expansion-point | probe | — | 1 | sequence | — | — | — | — |',
+  '| wall | code-reviewer | m1 | — | 1 | sequence | the milestone lands its goal with no unreviewed surface | the accumulated candidate | sequence | — |',
+  '| done | finalize | wall | — | 1 | sequence | — | — | — | — |', '',
+  '## Node Ledger', '',
+  '| id | status |',
+  '| --- | --- |',
+  '| probe | complete |',
+  '| m1 | pending |',
+  '| wall | pending |',
+  '| done | pending |', '',
+  '## Required Agent Compliance', '',
+  '| Requirement | Status | Evidence | Skip Reason |',
+  '| --- | --- | --- | --- |',
+  '| code-explorer (probe) | invoked | .cache/probe.md | |',
+  '| expansion-point (m1) | pending | | |',
+  '| code-reviewer (wall) | pending | | |',
+  '| finalize (done) | pending | | |', '',
+].join('\n');
+
+// A REAL expanded spine: frozen through the plan-validator CLI, expanded through the
+// adaptive-node CLI. Nothing about the records/ledger coupling is hand-authored.
+function initExpandedSpineFixture() {
+  const project = 'issue-779';
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-replan-expand-')));
+  git(root, ['init', '-b', 'main']);
+  git(root, ['config', 'user.name', 'Test']);
+  git(root, ['config', 'user.email', 't@example.com']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(root, 'product.js'), 'module.exports = 1;\n');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-m', 'root']);
+  git(root, ['checkout', '-b', 'workflow/issue-779']);
+  const commit = git(root, ['rev-parse', 'HEAD']);
+  const tree = git(root, ['rev-parse', 'HEAD^{tree}']);
+
+  const projectDir = path.join(root, 'kaola-workflow', project);
+  const cacheDir = path.join(projectDir, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(projectDir, 'workflow-plan.md');
+  fs.writeFileSync(planPath, SPINE_PLAN_779);
+
+  const runScript = (script, args, input) => spawnSync(process.execPath,
+    [path.join(__dirname, script), ...args],
+    { cwd: root, encoding: 'utf8', timeout: 180000, killSignal: 'SIGKILL',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, ...(input ? { input } : {}) });
+
+  const frozen = runScript('kaola-workflow-plan-validator.js', [planPath, '--freeze', '--json']);
+  assert.strictEqual(frozen.status, 0,
+    '#779 fixture: the spine plan must freeze green, got ' + frozen.status + '\n' + frozen.stdout + frozen.stderr);
+  const planHash = JSON.parse(frozen.stdout).planHash;
+
+  const identity = schema.buildClaimIdentity({
+    schema_version: 2, repository_id: 'local:' + root, issue_numbers: [779], primary_issue: 779,
+    bundle_id: null, closure_policy: 'all_or_nothing', branch: 'workflow/issue-779', worktree_path: root,
+    claim_ts: '2026-07-16T00:00:00.000Z', session_marker: 'test-session',
+  });
+  const rootBase = schema.buildClaimRootBase({
+    schema_version: 2, object_format: commit.length === 64 ? 'sha256' : 'sha1',
+    commit, tree, branch: 'workflow/issue-779',
+  });
+  const lineage = schema.buildEpochLineage(identity, rootBase);
+  const baseState = stateText(project, 'workflow/issue-779', root, planHash)
+    .replace(/^first_node_id:.*$/m, 'first_node_id: probe')
+    .replace(/^first_node_role:.*$/m, 'first_node_role: code-explorer')
+    .replace(/^issue_number:.*$/m, 'issue_number: 779');
+  fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), schema.writeEpochStateBlock(baseState, {
+    epoch_schema_version: 2,
+    claim_repository_id: identity.repository_id,
+    claim_identity_digest: lineage.claim_identity_digest,
+    claim_root_object_format: rootBase.object_format,
+    claim_root_base_commit: rootBase.commit,
+    claim_root_base_tree: rootBase.tree,
+    claim_root_base_digest: lineage.claim_root_base_digest,
+    epoch_lineage_id: lineage.epoch_lineage_id,
+    plan_epoch: 1,
+    active_plan_hash: planHash,
+    inherited_frontier_digest: 'none',
+    inherited_frontier_classes: 'none',
+    automatic_review_replans: 0,
+    authorized_epoch_ceiling: 2,
+    case_b_exemption_consumed: false,
+    replan_status: 'none',
+    replan_transaction_id: 'none',
+    replan_phase: 'none',
+    active_snapshot_manifest_digest: 'none',
+  }));
+  fs.writeFileSync(path.join(cacheDir, 'probe.md'), 'evidence-binding: probe abc123\nfindings: none\n');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-m', 'frozen']);
+
+  const fx = { root, project, projectDir, cacheDir, planPath, planHash, runScript,
+    planText: () => fs.readFileSync(planPath, 'utf8') };
+
+  // Baseline: the SAME plan, not yet expanded, holds authority. This is what makes the
+  // post-expansion refusal attributable to the expansion and nothing else in the fixture.
+  ok(replan.verifyCurrentEpochAuthority(projectDir).ok,
+    '#779 baseline: the un-expanded frozen spine holds current-epoch authority');
+
+  const expanded = fx.runScript('kaola-workflow-adaptive-node.js',
+    ['expand-open', '--project', project, '--node-id', 'm1', '--json', '--stdin'],
+    JSON.stringify({
+      derivation: {
+        grain: 'each unit owns a distinct surface, well over its setup cost',
+        path: 'this frontier is the critical path to the review wall',
+        join: 'mechanical — the units touch disjoint surfaces',
+        probe: 'no unit outcome reshapes the others',
+        serializer: 'none present — co-open',
+      },
+      units: [
+        { name: 'u1', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+        { name: 'u2', role: 'code-explorer', model: 'standard', write_set: '', mode: 'co_open' },
+      ],
+    }));
+  assert.strictEqual(expanded.status, 0,
+    '#779 fixture: expand-open must exit 0, got ' + expanded.status + '\n' + expanded.stdout + expanded.stderr);
+  fx.unitIds = (JSON.parse(expanded.stdout).units || []).map(unit => unit.id);
+  fx.closeUnit = id => {
+    fs.appendFileSync(path.join(cacheDir, id + '.md'), '\nfindings: none\n');
+    const closed = fx.runScript('kaola-workflow-adaptive-node.js',
+      ['close-node', '--project', project, '--node-id', id, '--json']);
+    assert.strictEqual(closed.status, 0,
+      '#779 fixture: close-node ' + id + ' must exit 0, got ' + closed.status + '\n' + closed.stdout + closed.stderr);
+  };
+  return fx;
+}
+
+{
+  const fx = initExpandedSpineFixture();
+  try {
+    // ---- the fixture is RECORDS-BEARING, and its two node views genuinely disagree. ----
+    const expandedPlan = fx.planText();
+    deepEqual(fx.unitIds, ['m1-r1-u1', 'm1-r1-u2'],
+      '#779 fixture: expand-open derived the two unit ids');
+    ok(/^## Expansion Records[ \t]*$/m.test(expandedPlan) && /^record\(m1#1\):$/m.test(expandedPlan),
+      '#779 fixture: the plan carries a REAL renderExpansionRecord block, not bare unit ledger rows');
+    deepEqual(validator.parseNodes(expandedPlan).map(node => node.id), ['probe', 'm1', 'wall', 'done'],
+      '#779 fixture: the FREEZE view still sees the spine and only the spine');
+    deepEqual(validator.planNodesWithExpansions(expandedPlan).map(node => node.id),
+      ['probe', 'm1', 'wall', 'done', ...fx.unitIds],
+      '#779 fixture: the EXECUTION view derives the units FROM the records section — this is the '
+      + 'view the ledger rows were written against');
+
+    // ---- mid-expansion: the ledger tier must no longer trip on the count mismatch. ----
+    // (Deliberately `notEqualReason`, not `ok`: expand-open seeds unit LEDGER rows but no unit
+    // compliance rows — those are appended at close — so a live frontier can still legitimately
+    // refuse on the compliance tier. What must be gone is the unconditional ledger refusal.)
+    notEqualReason(replan.verifyCurrentEpochAuthority(fx.projectDir), 'state_ledger_authority_invalid',
+      '#779: a live expansion frontier must not refuse state_ledger_authority_invalid merely because '
+      + 'the ledger carries the unit rows expand-open itself wrote');
+
+    // ---- the settled expanded run — the shape finalize archives — holds full authority. ----
+    for (const id of fx.unitIds) fx.closeUnit(id);
+    const settledPlan = fx.planText();
+    const authority = replan.verifyCurrentEpochAuthority(fx.projectDir);
+    ok(authority.ok === true && authority.authority_kind === 'planned',
+      '#779: a settled records-bearing EXPANDED spine holds current-epoch authority — the ledger and '
+      + 'compliance tiers read the EXECUTION node view the unit rows were written against: '
+      + JSON.stringify(authority));
+    equal(authority.first_node_id, 'probe',
+      '#779: the reported first node stays the FROZEN spine head, never an expansion unit');
+    equal(authority.first_node_role, 'code-explorer',
+      '#779: the reported first node role stays the FROZEN spine head role');
+
+    // ---- NON-VACUITY: the tiers are re-aimed, not disabled. ----
+    const restore = () => fs.writeFileSync(fx.planPath, settledPlan);
+    const mutations = [
+      ['a missing ledger row for a real expansion unit',
+        text => text.replace('| ' + fx.unitIds[0] + ' | complete |\n', ''),
+        'state_ledger_authority_invalid'],
+      ['a ledger row for a node that exists in neither view',
+        text => text.replace('| ' + fx.unitIds[0] + ' | complete |',
+          '| ' + fx.unitIds[0] + ' | complete |\n| ghost-unit | pending |'),
+        'state_ledger_authority_invalid'],
+      ['a missing ledger row for a SPINE node',
+        text => text.replace('| wall | pending |\n', ''),
+        'state_ledger_authority_invalid'],
+      ['a ledger status outside the closed vocabulary',
+        text => text.replace('| ' + fx.unitIds[1] + ' | complete |', '| ' + fx.unitIds[1] + ' | done |'),
+        'state_ledger_authority_invalid'],
+      ['a missing compliance row for a closed expansion unit',
+        text => text.replace(new RegExp('^\\| code-explorer \\(' + fx.unitIds[0] + '\\) \\|.*\\n', 'm'), ''),
+        'state_compliance_authority_invalid'],
+      ['a compliance row still pending under a complete unit ledger row',
+        text => text.replace(new RegExp('^\\| code-explorer \\(' + fx.unitIds[0] + '\\) \\|.*$', 'm'),
+          '| code-explorer (' + fx.unitIds[0] + ') | pending | | |'),
+        'state_compliance_progress_invalid'],
+    ];
+    for (const [name, mutate, reason] of mutations) {
+      const mutated = mutate(settledPlan);
+      ok(mutated !== settledPlan, '#779 mutation "' + name + '" must actually change the plan');
+      fs.writeFileSync(fx.planPath, mutated);
+      equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, reason,
+        '#779 non-vacuity: ' + name + ' must STILL refuse ' + reason
+        + ' on the execution view — the fix re-aims the tier, it does not gut it');
+      restore();
+    }
+    // A unit-progress violation the FREEZE view structurally could not see: a unit reported
+    // `complete` above its own dependency. Only the execution view carries these edges at all.
+    fs.writeFileSync(fx.planPath, settledPlan.replace('| probe | complete |', '| probe | pending |')
+      .replace('| code-explorer (probe) | invoked | .cache/probe.md | |', '| code-explorer (probe) | pending | | |'));
+    equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, 'state_ledger_progress_invalid',
+      '#779 non-vacuity: a `complete` expansion unit above a `pending` dependency still refuses — '
+      + 'the progress tier now ranges over the unit edges too');
+    restore();
+
+    // ---- the first_node_id tier is FREEZE identity and stays on parseNodes. ----
+    const statePath = path.join(fx.projectDir, 'workflow-state.md');
+    const settledState = fs.readFileSync(statePath, 'utf8');
+    fs.writeFileSync(statePath, settledState.replace(/^first_node_id: probe$/m, 'first_node_id: ' + fx.unitIds[0]));
+    equal(replan.verifyCurrentEpochAuthority(fx.projectDir).reason, 'state_planning_evidence_stale_first_node',
+      '#779: Planning Evidence naming an expansion unit as the first node still refuses — the '
+      + 'first-node tier asserts the FROZEN plan identity, which no expansion can satisfy');
+    fs.writeFileSync(statePath, settledState);
+    ok(replan.verifyCurrentEpochAuthority(fx.projectDir).ok, '#779: restoring the frozen first node re-verifies');
+
+    const replanSource = fs.readFileSync(path.join(__dirname, 'kaola-workflow-replan.js'), 'utf8');
+    const fnStart = replanSource.indexOf('function verifyCurrentEpochAuthority(');
+    const fnEnd = replanSource.indexOf('\nfunction ', fnStart + 1);
+    const fnSource = replanSource.slice(fnStart, fnEnd);
+    ok(fnStart >= 0 && fnEnd > fnStart, '#779: verifyCurrentEpochAuthority source is locatable for the view pin');
+    ok(/const nodes = validator\.parseNodes\(plan\);/.test(fnSource),
+      '#779: the FREEZE view binding (validator.parseNodes) is still present');
+    ok(/state\.first_node_id !== nodes\[0\]\.id/.test(fnSource),
+      '#779: the first-node freeze-identity check still reads the parseNodes binding');
+    ok(/validator\.planNodesWithExpansions\(plan\)/.test(fnSource),
+      '#779: the run-state tiers read the EXECUTION view (validator.planNodesWithExpansions)');
+
+    // ---- the user-visible symptom: a `closed` archive of the settled expanded run. ----
+    // `closed` is the branch with NO deferral policy (ABANDON_DOWNGRADABLE_AUTHORITY_REASONS is
+    // passed only for `abandoned`), so this is exactly the finalize path a successful run takes.
+    const claim = require('./kaola-workflow-claim.js');
+    const archived = claim.archiveProjectDir(fx.root, fx.project, 'closed', '');
+    ok(archived.archived === true && !archived.snapshot_error,
+      '#779: finalize of a SUCCESSFUL expanded spine run reaches the `closed` archive instead of '
+      + 'refusing state_ledger_authority_invalid: ' + JSON.stringify(archived));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+}
+
 console.log(`test-replan: PASSED (${passed} assertions)`);
