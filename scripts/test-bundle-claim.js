@@ -379,19 +379,19 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (4): target_set_too_large — above KAOLA_BUNDLE_MAX_ISSUES (default 4)
+// Test (4): target_set_too_large — above KAOLA_BUNDLE_MAX_ISSUES (#789: default 8, not 4)
 // ---------------------------------------------------------------------------
 
 (function testTargetSetTooLarge() {
-  console.log('Test (4): target_set_too_large when more than 4 issues (default cap)');
+  console.log('Test (4): target_set_too_large when more than 8 issues (#789 default cap 8)');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   try {
     initGitRepo(tmpRoot);
-    writeGhMockScript(binDir, { openIssues: [1, 2, 3, 4, 5] });
+    writeGhMockScript(binDir, { openIssues: [1, 2, 3, 4, 5, 6, 7, 8, 9] });
 
     const result = runClaim(
-      ['startup', '--target-issues', '1,2,3,4,5', '--workflow-path', 'adaptive'],
+      ['startup', '--target-issues', '1,2,3,4,5,6,7,8,9', '--workflow-path', 'adaptive'],
       tmpRoot, binDir
     );
 
@@ -400,6 +400,41 @@ function readState(tmpRoot, project) {
     assert(out !== null, 'target_set_too_large emits JSON');
     assert(out.status === 'target_set_too_large',
       'status is target_set_too_large, got ' + JSON.stringify(out && out.status));
+    // #789: lock the DEFAULT to 8 (not 4) — the refusal message names the resolved cap.
+    assert(typeof out.reasoning === 'string' && /KAOLA_BUNDLE_MAX_ISSUES=8/.test(out.reasoning),
+      '#789: default bundle cap is 8 (reasoning names =8), got ' + JSON.stringify(out && out.reasoning));
+
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (4b) — #789: a 5-issue bundle (above the OLD default 4) now SUCCEEDS under the new default 8.
+// This is the RED→GREEN for the D3 cap bump: on the old default 4 this refused target_set_too_large.
+// ---------------------------------------------------------------------------
+
+(function testFiveIssueBundleUnderNewDefault() {
+  console.log('Test (4b): #789 5-issue bundle acquires under the new default cap 8');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    for (const n of [11, 12, 13, 14, 15]) writeRoadmapFile(tmpRoot, n);
+    writeGhMockScript(binDir, { openIssues: [11, 12, 13, 14, 15] });
+
+    const result = runClaim(
+      ['startup', '--target-issues', '11,12,13,14,15', '--workflow-path', 'adaptive'],
+      tmpRoot, binDir
+    );
+
+    const out = parseClaim(result);
+    assert(result.status === 0,
+      '#789: 5-issue bundle exits 0 under default 8, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out !== null && out.claim === 'acquired',
+      '#789: 5-issue bundle is acquired (not target_set_too_large) under default 8, got ' + JSON.stringify(out && (out.status || out.claim)));
+    assert(out && out.bundle_id === 'bundle-11-12-13-14-15',
+      '#789: 5-issue bundle_id is bundle-11-12-13-14-15, got ' + JSON.stringify(out && out.bundle_id));
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });

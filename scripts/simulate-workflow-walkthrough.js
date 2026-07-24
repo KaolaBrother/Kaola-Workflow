@@ -3248,7 +3248,6 @@ function testBundle424432433ValidatorGates() {
       'code-explorer':        ['evidence-binding', 'findings'],
       'knowledge-lookup':     ['evidence-binding', 'findings', 'sources'],
       'planner':              ['evidence-binding', 'recommendation'],
-      'issue-scout':          ['evidence-binding', 'recommendation'],
       'build-error-resolver': ['evidence-binding', 'build-green'],
       'synthesizer':          ['evidence-binding', 'merge_outcome'],
       'doc-updater':          ['evidence-binding', 'docs_updated'],
@@ -3257,6 +3256,34 @@ function testBundle424432433ValidatorGates() {
       assert(JSON.stringify(reg[role]) === JSON.stringify(expect[role]),
         '#433 (5): ROLE_TOKEN_REGISTRY[' + role + '] must equal ' + JSON.stringify(expect[role]) + ', got ' + JSON.stringify(reg[role]));
     }
+    // #789: issue-scout is FULLY retired from the plan-node-role registry (the AC is "fully retired").
+    assert(!('issue-scout' in reg), '#789: issue-scout removed from ROLE_TOKEN_REGISTRY');
+    assert(!pv.PRODUCER_ROLES.has('issue-scout'), '#789: issue-scout removed from PRODUCER_ROLES');
+    assert(!pv.installedRoles('/nonexistent-agents-dir').has('issue-scout'),
+      '#789: issue-scout removed from CANONICAL_ROLES baseline');
+  }
+
+  // --- #789 (D0/D1/D2): plan-altitude AUDIT-ONLY telemetry + serializer-evidence flag + selection record.
+  {
+    const pv = require('./kaola-workflow-plan-validator');
+    // D2 non-vacuity: a disjoint-write serial edge with no named serializer FLAGS; a named S1 does not.
+    const wnode = (id, dep, ws) => ({ id, role: 'implementer', dependsOn: dep,
+      writeSet: new Set(ws), shape: { kind: 'sequence' }, selectorSource: '' });
+    const chain = [wnode('a', [], ['scripts/a.js']), wnode('b', ['a'], ['scripts/b.js'])];
+    assert(pv.evidenceLessSerializingEdges(chain, new Map([['a', 'do a'], ['b', 'do b']])).length === 1,
+      '#789 D2: a disjoint-write serial edge with no named serializer flags');
+    assert(pv.evidenceLessSerializingEdges(chain, new Map([['a', 'do a'], ['b', 'S1: reads a']])).length === 0,
+      '#789 D2: a named S1 serializer in the dependent brief does not flag');
+    // D1: computePlanShape shape + the shared D2 list.
+    const shape = pv.computePlanShape(chain, pv.evidenceLessSerializingEdges(chain, new Map()));
+    assert(shape.node_count === 2 && shape.critical_path_length === 2 && shape.parallelism_ratio === 1
+      && Array.isArray(shape.per_depth_widths) && shape.antichains && Array.isArray(shape.evidence_less_sequence_edges),
+      '#789 D1: computePlanShape returns the full telemetry block, got ' + JSON.stringify(shape));
+    // D0: selection-record Meta reader (present vs absent).
+    assert(pv.parseSelectionRecord('## Meta\nselection_bundle: 789\n').selection.bundle === '789',
+      '#789 D0: parseSelectionRecord reads the survey selection record from ## Meta');
+    assert(pv.parseSelectionRecord('## Meta\nlabels: x\n').selection === null,
+      '#789 D0: no selection_* field => selection null (explicit-target mode unchanged)');
   }
 
   // --- Durable node channel: brief→goal_line + upstream_evidence derivation + freeze/back-compat.

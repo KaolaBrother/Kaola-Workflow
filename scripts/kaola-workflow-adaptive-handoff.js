@@ -207,6 +207,37 @@ function parseProjectName(stateContent, fallback) {
 }
 
 // ---------------------------------------------------------------------------
+// #789 (D0): the two NO-TARGET survey pre-claim verdicts. In no-target mode the planner runs the
+// backlog survey ITSELF (the separate pre-claim survey hop is retired). When the survey yields no bundle
+// (`backlog_empty`) or cannot resolve a determinate selection (`selection_indeterminate`), it emits one
+// of these typed verdicts and STOPS — this runs BEFORE any claim, so it never claims and never writes
+// any state. They join the claim.js `target_indeterminate` family in the SAME typed shape
+// (status/result/claim/issue/project/reasoning_class/reasoning) so the orchestrator classifies them
+// structurally; `result:'escalate'` (the indeterminate valve — the orchestrator acts, no interactive
+// ask). Pure verdict-builder: builds the shape only, touches nothing. An unknown status fails CLOSED to
+// selection_indeterminate (never a claim).
+// ---------------------------------------------------------------------------
+const SURVEY_VERDICTS = Object.freeze(['backlog_empty', 'selection_indeterminate']);
+function surveyVerdict(status, reasoning) {
+  const known = SURVEY_VERDICTS.includes(status);
+  const resolved = known ? status : 'selection_indeterminate';
+  const defaultReason = resolved === 'backlog_empty'
+    ? 'no claimable, unblocked, same-scope bundle in the backlog'
+    : (known
+        ? 'the backlog survey could not resolve a determinate selection'
+        : 'unknown survey verdict "' + status + '" — failing closed to selection_indeterminate');
+  return {
+    status: resolved,
+    result: 'escalate',
+    claim: 'none',
+    issue: null,
+    project: null,
+    reasoning_class: resolved === 'backlog_empty' ? 'backlog_empty' : 'selection_ambiguous',
+    reasoning: String(reasoning || defaultReason),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // splicePlanningEvidence — insert/replace ## Planning Evidence in state content.
 //
 // Anchor: insert immediately BEFORE ## Last Updated (fallback: before ## Sink;
@@ -627,6 +658,34 @@ function runHandoff(opts) {
     { line: 'first_node_role: ' + firstNode.role },
   ];
 
+  // #789 (D1+D2, AUDIT-ONLY): surface the validator's freeze-time plan-shape telemetry + the
+  // serializer-evidence flag count as ONE compact Planning Evidence line. Guarded on presence so a
+  // legacy validator payload (no plan_shape) leaves the record byte-identical to today.
+  const planShape = validateResult.plan_shape;
+  if (planShape && typeof planShape === 'object') {
+    const anti = planShape.antichains || {};
+    const widths = Array.isArray(planShape.per_depth_widths) ? planShape.per_depth_widths.join(',') : '';
+    const elessCount = Array.isArray(planShape.evidence_less_sequence_edges)
+      ? planShape.evidence_less_sequence_edges.length : 0;
+    peFields.push({ line: 'plan_shape: node_count=' + planShape.node_count
+      + ' critical_path_length=' + planShape.critical_path_length
+      + ' parallelism_ratio=' + planShape.parallelism_ratio
+      + ' per_depth_widths=' + widths
+      + ' antichains=' + (anti.count || 0) + '/' + (anti.max_width || 0)
+      + ' evidence_less_sequence_edges=' + elessCount });
+  }
+  // #789 (D0): fold the no-target survey selection record the planner authored into Planning Evidence.
+  // splicePlanningEvidence regenerates the WHOLE section from peFields every run, and the source of
+  // truth is the frozen plan (re-derived via the validator), so this never clobbers on a re-run.
+  // Omitted entirely in explicit-target mode (validateResult.selection absent).
+  const selection = validateResult.selection;
+  if (selection && typeof selection === 'object') {
+    peFields.push({ line: 'selection_bundle: ' + (selection.bundle || '—') });
+    peFields.push({ line: 'selection_priority_basis: ' + (selection.priority_basis || '—') });
+    peFields.push({ line: 'selection_rejected: ' + (selection.rejected || '—') });
+    peFields.push({ line: 'selection_disjointness: ' + (selection.disjointness || '—') });
+  }
+
   let currentState = readFile(statePath);
   let updatedState = splicePlanningEvidence(currentState, peFields, stateMtime);
   // #699: the initial handoff is the single publication boundary from the
@@ -771,8 +830,24 @@ function main() {
       '  --project NAME  derive plan from kaola-workflow/<NAME>/workflow-plan.md\n' +
       '  --plan PATH     explicit plan path; state is the sibling workflow-state.md\n' +
       '  --json          required; emit JSON output\n' +
-      '  --state-mtime   optional injectable clock → recorded_at in Planning Evidence\n'
+      '  --state-mtime   optional injectable clock → recorded_at in Planning Evidence\n' +
+      '  --survey-verdict <backlog_empty|selection_indeterminate> [--reason "..."]\n' +
+      '                  #789: emit a no-target survey pre-claim verdict (fail closed, NO claim,\n' +
+      '                  NO state write) and exit non-zero; the orchestrator acts on the escalate\n'
     );
+    return;
+  }
+
+  // #789 (D0): the no-target survey pre-claim verdict. Runs BEFORE any claim and touches NO fs — it
+  // emits the typed shape (joining the target_indeterminate family) and exits non-zero. No project or
+  // state file is read or written, which IS the fail-closed-no-state guarantee.
+  const svIdx = args.indexOf('--survey-verdict');
+  if (svIdx >= 0) {
+    const status = svIdx + 1 < args.length ? args[svIdx + 1] : '';
+    const reasonIdx = args.indexOf('--reason');
+    const reason = reasonIdx >= 0 && reasonIdx + 1 < args.length ? args[reasonIdx + 1] : '';
+    process.stdout.write(JSON.stringify(surveyVerdict(status, reason)) + '\n');
+    process.exitCode = 1;
     return;
   }
 
@@ -891,4 +966,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates };
+module.exports = { runHandoff, runReplanHandoff, replanOrientation, shellHandoff, extractDecisionIdCandidates, surveyVerdict, SURVEY_VERDICTS };

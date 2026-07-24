@@ -2167,6 +2167,95 @@ function runMirrorHandoffCase(mirrorResponse) {
       + JSON.stringify({ handoff_status: current.result.handoff_status, errors: current.result.errors }));
 }
 
+// ---------------------------------------------------------------------------
+// T-789 (D1+D2 audit surfacing): the validator's --freeze-checked plan_shape + the no-target survey
+// selection record are folded into ## Planning Evidence. plan_shape is a compact single line (with the
+// D2 evidence_less_sequence_edges count); the four selection_* fields surface only when present.
+// A --freeze-checked payload WITHOUT plan_shape (legacy) leaves the record byte-identical (guarded).
+// ---------------------------------------------------------------------------
+{
+  const planContent = makeUnfrozenPlan('auto-run');
+  const stateContent = makeStateContent({ issueNumber: 77 });
+  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  let writtenState = null;
+  let readCount = 0;
+
+  const shellStub = makeShellStub({
+    'kaola-workflow-plan-validator.js:--freeze-checked': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: false,
+      governance: { decision: 'auto-run', risk: {} },
+      risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+      plan_shape: { node_count: 4, critical_path_length: 3, parallelism_ratio: 1.333,
+        per_depth_widths: [1, 2, 1], antichains: { count: 1, max_width: 2 },
+        evidence_less_sequence_edges: [{ from: 'a', to: 'b' }] },
+      selection: { bundle: '789', priority_basis: 'is the frontier; guardrails honored',
+        rejected: '785 (machine-local)', disjointness: 'disjoint script/agent lanes' },
+    },
+    'kaola-workflow-plan-validator.js:--freeze': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, resumeOk: true,
+      risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] },
+    },
+    'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+    'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64 },
+  });
+
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', json: true, shell: shellStub,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) { readCount++; return readCount <= 1 ? planContent : frozenPlanContent; }
+      if (fpath.endsWith('workflow-state.md')) return writtenState || stateContent;
+      return '';
+    },
+    writeFile: (fpath, content) => { if (fpath.endsWith('workflow-state.md')) writtenState = content; },
+    stateMtime: undefined,
+  });
+
+  assert(result.handoff_status === 'ready_to_run', 'T-789: handoff still reaches ready_to_run with plan_shape/selection');
+  assert(writtenState !== null, 'T-789: Planning Evidence state was written');
+  assert(/^plan_shape: node_count=4 critical_path_length=3 parallelism_ratio=1\.333 per_depth_widths=1,2,1 antichains=1\/2 evidence_less_sequence_edges=1$/m.test(writtenState || ''),
+    'T-789: plan_shape audit line surfaced into Planning Evidence, got:\n' + (writtenState || ''));
+  assert(/^selection_bundle: 789$/m.test(writtenState || ''), 'T-789: selection_bundle surfaced');
+  assert(/^selection_priority_basis: is the frontier; guardrails honored$/m.test(writtenState || ''), 'T-789: selection_priority_basis surfaced');
+  assert(/^selection_rejected: 785 \(machine-local\)$/m.test(writtenState || ''), 'T-789: selection_rejected surfaced');
+  assert(/^selection_disjointness: disjoint script\/agent lanes$/m.test(writtenState || ''), 'T-789: selection_disjointness surfaced');
+
+  // Legacy guard: a --freeze-checked payload with NO plan_shape/selection adds no lines.
+  let legacyState = null; let lread = 0;
+  const legacyStub = makeShellStub({
+    'kaola-workflow-plan-validator.js:--freeze-checked': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: false,
+      governance: { decision: 'auto-run', risk: {} }, risk: { reasons: [] },
+    },
+    'kaola-workflow-plan-validator.js:--freeze': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, resumeOk: true, risk: { reasons: [] },
+    },
+    'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+    'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored' },
+  });
+  runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', json: true, shell: legacyStub,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) { lread++; return lread <= 1 ? planContent : frozenPlanContent; }
+      if (fpath.endsWith('workflow-state.md')) return legacyState || stateContent;
+      return '';
+    },
+    writeFile: (fpath, content) => { if (fpath.endsWith('workflow-state.md')) legacyState = content; },
+    stateMtime: undefined,
+  });
+  assert(legacyState !== null && !/plan_shape:/.test(legacyState) && !/selection_bundle:/.test(legacyState),
+    'T-789: a plan_shape-less --freeze-checked payload adds NO audit/selection lines (guarded, byte-compatible)');
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

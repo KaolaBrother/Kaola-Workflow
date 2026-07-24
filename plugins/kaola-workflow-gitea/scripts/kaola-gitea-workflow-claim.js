@@ -1244,7 +1244,7 @@ function claimBundle(root, opts) {
 
 // #328: the bundle analog of claimExplicitTarget — validates every member (steps 1-4 from design.md)
 // before any mutation, then delegates provisioning to claimBundle (step 5-6).
-// KAOLA_BUNDLE_MAX_ISSUES default 4; bundle lane is adaptive-only.
+// KAOLA_BUNDLE_MAX_ISSUES default 8 (#789); bundle lane is adaptive-only.
 function claimExplicitBundle(root, args) {
   const targets = args.targetIssues;
   // Step 0 (#370): refuse malformed tokens (echo the offender) BEFORE the empty check.
@@ -1260,8 +1260,8 @@ function claimExplicitBundle(root, args) {
   }
   // Step 2: cap. #370: clamp KAOLA_BUNDLE_MAX_ISSUES to a documented HARD ceiling.
   const BUNDLE_HARD_CEILING = 10;
-  const maxRaw = parseInt(process.env.KAOLA_BUNDLE_MAX_ISSUES || '4', 10);
-  const max = Math.min((Number.isFinite(maxRaw) && maxRaw > 0) ? maxRaw : 4, BUNDLE_HARD_CEILING);
+  const maxRaw = parseInt(process.env.KAOLA_BUNDLE_MAX_ISSUES || '8', 10);
+  const max = Math.min((Number.isFinite(maxRaw) && maxRaw > 0) ? maxRaw : 8, BUNDLE_HARD_CEILING);
   if (targets.length > max) {
     return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
       reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
@@ -1722,10 +1722,10 @@ function persistExpansionRollupToSummary(destDir) {
 }
 
 // n5 (#653 finding D3): advisory selection-evidence probe. A file matching selection-evidence.*
-// in either cache dir means the router docked the issue-scout's recommendation (see
-// workflow-next.md § Selection Evidence Docking) before dispatching the executor. Advisory
-// only — no invariant, no warning on absence: a user-named claim legitimately has none, since
-// the scout never runs on that branch.
+// in either cache dir means the planner's no-target survey docked its selection record (see
+// workflow-next.md § Selection Evidence Docking) before authoring the plan. Advisory
+// only — no invariant, no warning on absence: a user-named (explicit-target) claim legitimately has
+// none, since the no-target survey never runs on that branch.
 function probeSelectionEvidence(cacheDirCandidates) {
   for (const dir of (cacheDirCandidates || [])) {
     if (!dir) continue;
