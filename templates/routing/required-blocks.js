@@ -108,7 +108,7 @@ const REQUIRED_BLOCKS = [
     topic: 'plan-run',
     runtime_tag: 'both',
     surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: gate-instrumentation-provisioning -->', 'KAOLA_GATE_WINDOW_FENCE=0'],
+    content_tokens: ['<!-- PIN: gate-instrumentation-provisioning -->'],
   },
   {
     block_id: 'pr-dispatch-card-visibility',

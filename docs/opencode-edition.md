@@ -311,13 +311,11 @@ silently drift when a future second plugin is added. Enforced by `A11-allowlist`
 
 | Claude/Codex hook | opencode plugin mapping | Script |
 | --- | --- | --- |
-| `PreToolUse` Write\|Edit (#376 lane containment) | `tool.execute.before` · `edit`/`write` | `kaola-workflow-write-lane.sh` |
 | `SubagentStart` (dispatch attestation) | `tool.execute.before` · `task` | `kaola-workflow-subagent-dispatch-log.sh` |
 | `SessionStart` compact (resume state) | `experimental.session.compacting` | inline (reads `workflow-state.md`) |
 
 Fail-open everywhere (a missing script, malformed payload, or non-git cwd never
-breaks the session); only an explicit exit-2 deny throws. The write-lane hook
-stays dormant unless `KAOLA_LANE_CONTAINMENT` is set, matching canonical behavior.
+breaks the session); only an explicit exit-2 deny throws.
 
 ## Script resolution coupling
 

@@ -519,8 +519,9 @@ for (const ed of codexEditions) {
 // ---------------------------------------------------------------------------
 // T15: gate-instrumentation-provisioning block must appear in each of the 6 plan-run surfaces (3
 // Claude commands + 3 Codex SKILLs): a main-session-gate node body never instructs authoring
-// files, and the runtime gate-window fence (KAOLA_GATE_WINDOW_FENCE) backs it. Fail-closed:
-// unconditional assert() per surface.
+// files. Fail-closed: unconditional assert() per surface. The KAOLA_GATE_WINDOW_FENCE runtime
+// fence prose was retired (#768 — mainline's tool-write interceptor hook was deleted in #725 Phase
+// C; only the env-var-free scheduler hold survives) — banned below so it cannot silently re-creep.
 // ---------------------------------------------------------------------------
 {
   const planRunSurfaces = [
@@ -535,8 +536,8 @@ for (const ed of codexEditions) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
     assert(content.includes('<!-- PIN: gate-instrumentation-provisioning -->'),
       `T15: ${f} must contain <!-- PIN: gate-instrumentation-provisioning --> comment (n3-planner-prose)`);
-    assert(content.includes('KAOLA_GATE_WINDOW_FENCE=0'),
-      `T15: ${f} must contain "KAOLA_GATE_WINDOW_FENCE=0" literal (n3-planner-prose)`);
+    assert(!content.includes('KAOLA_GATE_WINDOW_FENCE'),
+      `T15: ${f} must NOT contain the retired "KAOLA_GATE_WINDOW_FENCE" token (#768 re-creep ban)`);
   }
 }
 
@@ -1363,7 +1364,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'frontier unit', surfaces: PR6 },
     { token: '--write-overlap-consent', surfaces: PR6 },
     { token: '--speculative-consent', surfaces: PR6 },
-    { token: 'KAOLA_GATE_WINDOW_FENCE=0', surfaces: PR6 },
     { token: 'Every spawn parameter comes from the dispatch card.', surfaces: PR6 },
     { token: '{node-id} → complete; opened: {next-id|—}', surfaces: PR6 },
     // T5b — plan-run skills × 3 (codex-live)

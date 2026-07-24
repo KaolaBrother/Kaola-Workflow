@@ -414,10 +414,7 @@ descriptive). Pass `dispatch.nonce` (evidence-binding token). Instruct the role 
 **A `main-session-gate` node body never instructs authoring files — it verifies.** When gate
 instrumentation is needed to run the check (a probe scene/test/fixture, including build wiring),
 an UPSTREAM writer node provisions it inside that node's own declared write set; the gate only
-runs what was provisioned. A gate-window fence backs this at runtime: an in-worktree out-of-band
-Write/Edit while a `main-session-gate` is open is denied by default (`KAOLA_GATE_WINDOW_FENCE=0`
-opt-out); legal exits are provisioning via an upstream writer node, `route-findings`/`repair-node`,
-or `write-halt --reason consent`.
+runs what was provisioned.
 
 <!-- PIN: leg-isolation-recipe -->
 **Co-open is the default for every write frontier; serial requires a NAMED serializer.** The

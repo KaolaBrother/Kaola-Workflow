@@ -1042,15 +1042,17 @@ New READ-ONLY mode of the `record-evidence` subcommand. Verifies on-disk `.cache
 
 ### Lane-group co-open and group-scoped close barrier (issue #437, D-419 P2)
 
-When `KAOLA_LANE_CONTAINMENT=1`, `open-ready` can co-open ≥2 pairwise-disjoint write nodes
-as a lane group. The group state is tracked inside `running-set.json` and the barrier is
-deferred to the last member's close.
+By default (`KAOLA_PARALLEL_WRITES` unset or not `0`/`false`/`no` — D-542-01),
+`open-ready` can co-open ≥2 pairwise-disjoint write nodes as a lane group. The
+group state is tracked inside `running-set.json` and the barrier is deferred to
+the last member's close.
 
 #### `running-set.json` — `lane_group` extension
 
 An optional top-level key `lane_group` is added to `running-set.json`
-(`kaola-workflow/{project}/.cache/running-set.json`). Absent when flag OFF; absent after the
-group clears (last member close + barrier pass).
+(`kaola-workflow/{project}/.cache/running-set.json`). Absent when the operator
+forces serial writes (`KAOLA_PARALLEL_WRITES=0`); absent after the group clears
+(last member close + barrier pass).
 
 ```json
 {
@@ -1284,8 +1286,6 @@ Configuration files control workflow behavior and issue sorting.
 - `parallel_mode` — Parallel-work classification strategy (`auto` or other); see README § Classifier configuration
 - `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
-- `KAOLA_LANE_CONTAINMENT` (#376) — env flag (default false; only `1`/`true`/`yes` enables). Read by no runtime consumer.
-- `KAOLA_GATE_WINDOW_FENCE` (#607) — a SECOND, independent switch (default-ON: only `0`/`false`/`no` disables it). Read by no runtime consumer. See `docs/decisions/D-607-01.md`.
 
 ### Agent model manifest (`~/.claude/agents/.kaola-agent-models.json`)
 

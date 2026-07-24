@@ -9824,16 +9824,7 @@ function tryR2bLeglessCoopen(writeNodes, liveNodes, planPath, project, readFile)
 // legCoupled is false (KAOLA_PARALLEL_WRITES=0 / a host that cannot
 // provision per-leg worktrees) NO group forms, NO leg is provisioned, NO lane_group.legs key is
 // written ⇒ serial-fallback byte-identical.
-//
-// resolveLegIsolation — RETAINED only as the exported boolean toggle / reconcile helper (no longer
-// the provisioning gate post-#542); mirrors resolveLaneContainment's exact truthiness logic (only an
-// explicit 1/true/yes opts in; fail-closed default FALSE). The KAOLA_LEG_ISOLATION env.
 // ---------------------------------------------------------------------------
-const LEG_ISOLATION_ENV = 'KAOLA_LEG_ISOLATION';
-function resolveLegIsolation(env) {
-  const raw = (env || {})[LEG_ISOLATION_ENV];
-  return raw === '1' || raw === 'true' || raw === 'yes';
-}
 
 // sanitizeLegId — the SAME String(x).replace(/[^A-Za-z0-9_-]/g,'_') sanitizer the validator's
 // barrier-base ref/file key applies (mirrors sanitizeNodeId ~3058); a node id reaches a worktree
@@ -14420,7 +14411,6 @@ module.exports = {
   computeReviewCandidateDigest,
   // #463 Slice 2 (LIVE since #542/D-542-01): per-leg `.kw` worktree provisioning primitives, exercised on
   // every disjoint-write co-open by default (no longer dormant); exported here for direct testing.
-  resolveLegIsolation,
   sanitizeLegId,
   legBranchFor,
   legPathFor,

@@ -800,11 +800,12 @@ for (const planRunSurface of [
   // #605: required progress-echo line printed after every close-and-open-next.
   assertIncludes(planRunSurface, '{node-id} → complete; opened: {next-id|—}');
 
-  // #607: gate-instrumentation-provisioning block — a main-session-gate node body never
-  // instructs authoring files; instrumentation is provisioned upstream; the runtime
-  // gate-window fence backs it. Pinned on BOTH the command and SKILL surfaces.
+  // #607/#768: gate-instrumentation-provisioning block — a main-session-gate node body never
+  // instructs authoring files; instrumentation is provisioned upstream. Pinned on BOTH the command
+  // and SKILL surfaces. The KAOLA_GATE_WINDOW_FENCE runtime fence prose was retired (#768) — banned
+  // below so it cannot silently re-creep.
   assertIncludes(planRunSurface, '<!-- PIN: gate-instrumentation-provisioning -->');
-  assertIncludes(planRunSurface, 'KAOLA_GATE_WINDOW_FENCE=0');
+  assertNotIncludes(planRunSurface, 'KAOLA_GATE_WINDOW_FENCE');
 
   // #611: the Codex Join Protocol reference — dispatch-card wait budget, delegation outcome, and
   // writer-kill-safety verdict, present on BOTH the command (runtime-appropriate equivalent) and

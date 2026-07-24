@@ -472,9 +472,9 @@ with a typed `path_not_installed` (scripts validate, never auto-pick — #44). T
 
   The unification is **by SUBSUMPTION, not deletion**. The runtime code paths are preserved
   byte-for-byte; what changes is the conceptual model and documentation. The hard
-  byte-identity invariant ([INV-2]) is: with `KAOLA_LANE_CONTAINMENT` off + no
-  `running-set.json` + ≤ 1 `in_progress` row, every guard-prologue layer is vacuously-pass and
-  the serial path is byte-identical to pre-#383 behavior. (The prior condition also named "no
+  byte-identity invariant ([INV-2]) is: with no `running-set.json` + ≤ 1 `in_progress` row,
+  every guard-prologue layer is vacuously-pass and the serial path is byte-identical to
+  pre-#383 behavior. (The prior condition also named "no
   active-batch"; #594 removed the `batch_active` mutual-exclusion arm entirely, so it is no
   longer a coordination surface any guard-prologue layer checks.) Any refactor that makes
   `open-next` begin writing a `running-set.json` violates [INV-2] and is rejected.
@@ -537,9 +537,8 @@ with a typed `path_not_installed` (scripts validate, never auto-pick — #44). T
 
   **Lane-group co-open and group-scoped close barrier — D-419 Part 2 implementation (issue #437).**
   Lane-attributed disjoint write co-open is **on by default**
-  (`parallelWritesDefaultOn(process.env)` true unless `KAOLA_PARALLEL_WRITES=0`); the
-  `KAOLA_LANE_CONTAINMENT` toggle is advanced/defense-in-depth (its `PreToolUse` hook
-  is fail-open only). When co-open is active, `runOpenReady` (`adaptive-node.js` L2550) does not
+  (`parallelWritesDefaultOn(process.env)` true unless `KAOLA_PARALLEL_WRITES=0`). When co-open
+  is active, `runOpenReady` (`adaptive-node.js` L2550) does not
   unconditionally enforce `write_node_exclusive`; instead it calls `tryFormLaneGroup`
   (`adaptive-node.js` L2522) to attempt a co-open of the entire ≥2 disjoint write frontier as a
   **lane group**. The formation is gated on a `--parallel-safe` disjointness check
@@ -568,7 +567,7 @@ with a typed `path_not_installed` (scripts validate, never auto-pick — #44). T
   **Cross-lane runtime protection** is advisory: while co-open writers share the parent worktree,
   nothing prevents A writing into B's declared lane at runtime. Enforcement is retrospective:
   (a) the group barrier at the last close, and (b) the `--finalize-check` attribution sweep
-  (#424). The `KAOLA_LANE_CONTAINMENT` `PreToolUse` hook (#376) emits warnings but is fail-open.
+  (#424).
 
   **Read/write co-open relaxed to a leg-contained invariant, with a last-member merge fence
   (issue #622, `docs/decisions/D-622-01.md`).** `write_node_exclusive` previously refused ANY
@@ -636,8 +635,7 @@ with a typed `path_not_installed` (scripts validate, never auto-pick — #44). T
   `if (legCoupled && writeNodes.length >= 2)` co-open guard in `runOpenReady` and the close-side
   group-member guard in `runCloseNode` are both dead, the existing
   `else { toOpen=[writeNodes[0]]; openKind='write'; }` serial path and the existing
-  `commit-node --node-id` per-node barrier run verbatim. (`KAOLA_LANE_CONTAINMENT` is not the gating
-  predicate — it serves as the advanced/defense-in-depth `PreToolUse` hook, fail-open.) The #498 invariant
+  `commit-node --node-id` per-node barrier run verbatim. The #498 invariant
   is preserved: co-open ALWAYS provisions legs (`groupForm ⟺ legCoupled ⟺ legs provisioned`) —
   never the legless attribution-blind union barrier. Canonical specs:
   `docs/decisions/D-437-01.md` and `docs/decisions/D-542-01.md`.

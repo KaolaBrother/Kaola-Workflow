@@ -824,17 +824,10 @@ worktree, and active folder ONLY after its own merge lands; it does not clean ot
 
 See `docs/decisions/D-579-01.md` for the full decision record.
 
-## Main-session-gate write fence and upstream instrumentation provisioning (#607)
+## Main-session-gate upstream instrumentation provisioning (#607)
 
 A `main-session-gate` is read-only by grammar and non-delegable — it never authors or deletes
-files. Two conventions enforce and preserve that boundary at runtime:
-
-**Gate-window fence.** While a `main-session-gate` node was open, an in-worktree, out-of-band
-`Write`/`Edit` was denied by default (exit 2) by the write-lane hook — the workflow bands, the
-`.kw/` band, member worktrees, and a co-open writer's own declared lane stayed legal, with
-`KAOLA_GATE_WINDOW_FENCE=0` (or `false`/`no`) as the opt-out. That enforcing hook has been
-removed; the flag and its opt-out are currently read by no runtime consumer. See
-`docs/decisions/D-607-01.md`.
+files. The following convention enforces and preserves that boundary at runtime:
 
 **Upstream instrumentation provisioning.** Any instrumentation a gate's acceptance check needs (a
 probe script, build wiring to make a probe runnable) is authored by an UPSTREAM WRITER node,

@@ -283,10 +283,9 @@ assertIncludes('hooks/hooks.json', 'compact-context');
 assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLaneContainment');
 // #542: pin the parallel-writes DEFAULT-ON opt-OUT resolver so a future edit cannot silently drop
 // the seam that lets planner-proven-disjoint write frontiers co-open as isolated legs by default
-// (D-542-01). Distinct from resolveLaneContainment (which stays fail-closed FALSE).
+// (D-542-01).
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function parallelWritesDefaultOn');
 // #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors so a future edit cannot
 // silently drop the synthesizer reasoning floor, the policy field, or the PROTECTED set.
@@ -970,10 +969,12 @@ for (const file of planRunSurfaces606) {
   assertIncludes(file, 'send EXACTLY ONE request for the deliverable, then wait');
 }
 
-// #607: the gate-instrumentation-provisioning block (a main-session-gate node body never
-// instructs authoring files; instrumentation is provisioned upstream; the runtime gate-window
-// fence backs it) must propagate to ALL SIX plan-run surfaces (#400) — a drop on any surface
-// fails here.
+// #607/#768: the gate-instrumentation-provisioning block (a main-session-gate node body never
+// instructs authoring files; instrumentation is provisioned upstream) must propagate to ALL SIX
+// plan-run surfaces (#400) — a drop on any surface fails here. The KAOLA_GATE_WINDOW_FENCE runtime
+// fence prose was retired (#768: mainline never had a tool-write interceptor for it once #725 Phase
+// C deleted the hook; only the env-var-free scheduler hold survives) — banned below so it cannot
+// silently re-creep.
 const planRunSurfacesGateFence607 = [
   'commands/kaola-workflow-plan-run.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
@@ -984,7 +985,7 @@ const planRunSurfacesGateFence607 = [
 ];
 for (const file of planRunSurfacesGateFence607) {
   assertIncludes(file, '<!-- PIN: gate-instrumentation-provisioning -->');
-  assertIncludes(file, 'KAOLA_GATE_WINDOW_FENCE=0');
+  assertNotIncludes(file, 'KAOLA_GATE_WINDOW_FENCE');
 }
 
 // #611: the Codex dispatch prose mandates fork_turns:"none" for EVERY role dispatch (not only
