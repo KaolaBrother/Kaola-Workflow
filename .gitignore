@@ -14,10 +14,14 @@ kaola-workflow/issue-55/
 # cwd/.cache). Anchored to the repo root so the tracked per-project / archive
 # kaola-workflow/**/.cache/ evidence is unaffected.
 /.cache/
-# Oracle Kernel (kaola-workflow-adaptive-schema.js): de-duplicated to ONE committed source in
-# scripts/. The three per-forge tree copies are byte-identical materializations produced on demand
-# (`node scripts/edition-sync.js --materialize-kernel`, folded into `--write` and the forge test
-# chains, and copied from canonical by install.sh) — never committed.
-/plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js
-/plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js
-/plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js
+# Oracle Kernel (kaola-workflow-adaptive-schema.js): ONE canonical source in scripts/, with the
+# three per-forge tree copies GENERATED from it (`node scripts/edition-sync.js --materialize-kernel`,
+# folded into `--write` and the forge test chains) and COMMITTED — the same generated-but-committed
+# posture as every other forge aggregator port, enforced by `edition-sync.js --check`.
+#
+# They are committed and NOT ignored because the Codex install path is `git clone` + `codex plugin
+# marketplace add <clone>`, which runs no post-clone step: the plugin scripts resolve the kernel as a
+# `__dirname` sibling, so a gitignored copy made every Codex plugin entrypoint in a fresh clone die
+# with "Cannot find module './kaola-workflow-adaptive-schema'". Ignoring them also made a `git pull`
+# of a kernel change leave a stale local copy silently paired with new scripts. Do not re-add them
+# here; regenerate with `npm run sync:editions` instead.

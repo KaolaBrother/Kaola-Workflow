@@ -669,6 +669,15 @@ const ROOT_EDITION_READ_FILES = new Set(['CLAUDE.md', 'README.md', 'install.sh',
 // above). Everything else is claude-exclusive. Fail-closed by construction: unsure -> all four.
 function isEditionCouplingPath(rel, cwd, forgeRefs) {
   const p = String(rel).replace(/\\/g, '/');
+  // The Oracle Kernel's per-forge copies are GENERATED from the one canonical source
+  // (edition-sync --materialize-kernel) and are committed ONLY so a fresh clone's Codex plugin
+  // entrypoints can resolve their `__dirname` sibling (the marketplace install runs no post-clone
+  // step). They are byte-identical by construction and re-verified by `edition-sync --check`, so a
+  // kernel change stays claude-sufficient even though it now touches plugins/ paths. Without this
+  // clause the committed mirrors would re-couple every kernel diff to all four chains and undo the
+  // frequency win. Matched rename-safely: the kernel is base-named in every tree, so a literal
+  // `kaola-workflow-adaptive-schema` would be rewritten to a nonexistent name in the forge ports.
+  if (/^plugins\/[^/]+\/scripts\/[^/]*-adaptive-schema\.js$/.test(p)) return false;
   if (p.indexOf('plugins/') === 0) return true;             // any edition tree (codex twin + both forges)
   if (p === 'package.json') return true;                    // the chain-script definitions
   if (forgeRefs && forgeRefs.has(p)) return true;           // a script a forge chain executes
