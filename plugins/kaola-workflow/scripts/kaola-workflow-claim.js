@@ -1907,7 +1907,7 @@ function persistAttestationToSummary(destDir, receipt) {
       'claim_planner_attested: ' + receipt.claim_planner_attested + '\n' +
       'finalize_contractor_attested: ' + receipt.finalize_contractor_attested + '\n';
     for (const w of attestationWarnings) block += w + '\n';
-    fs.writeFileSync(p, s ? (s.trimEnd() + '\n\n' + block) : block);
+    writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
     return true;
   } catch (_) { return false; }
 }
@@ -1952,7 +1952,7 @@ function persistExpansionRollupToSummary(destDir) {
     // file (.cache/<point>.md) for anyone who needs the mode/serializer breakdown.
     const block = '## Expansion Rollup\n'
       + 'expansion rollup: points=' + points + ' width=' + width + ' rework=' + rework + '\n';
-    fs.writeFileSync(p, s ? (s.trimEnd() + '\n\n' + block) : block);
+    writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
     return true;
   } catch (_) { return false; }
 }
@@ -2253,7 +2253,7 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
         s = s.replace(/READY FOR FINAL GIT GATE/g, 'ARCHIVED AFTER FINAL GIT GATE');
         s = s.replace(/Pending final git gate\. Final hash reported after push\./g,
           'Final git gate complete; merge/close status recorded in the closure receipt.');
-        fs.writeFileSync(summaryPath, s);
+        writeFile(summaryPath, s);
       }
     } catch (_) {}
     // #324 AC3: neutralize the known false-absolute in the archived final-validation evidence so a
@@ -2267,7 +2267,7 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
         let fv = fs.readFileSync(finalValPath, 'utf8');
         fv = fv.replace(/No files changed after those runs\.?/g,
           'Validation reuse covers code/test impact through the cited node; any later finalize-node docs/CHANGELOG edit is outside that rerun trigger (see the ## Node Ledger).');
-        fs.writeFileSync(finalValPath, fv);
+        writeFile(finalValPath, fv);
       }
     } catch (_) {}
   }
