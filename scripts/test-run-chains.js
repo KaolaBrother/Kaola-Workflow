@@ -1313,6 +1313,32 @@ function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) :
 }
 
 // ---------------------------------------------------------------------------
+// T-788: a change to ONLY the canonical Oracle Kernel scopes to the CLAUDE chain alone, even though
+// its gitignored forge mirror is materialized on disk (existsSync would otherwise force all-four).
+// NON-VACUOUS: without the kernel special-case in isEditionCouplingPath this scopes all-four and fails.
+// ---------------------------------------------------------------------------
+{
+  const { dir } = makeScopeRepo();
+  try {
+    // codex mirror: materialized on disk (existsSync sees it) but gitignored (excluded from the diff).
+    fs.writeFileSync(path.join(dir, '.gitignore'), '/plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js\n');
+    const mirror = path.join(dir, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-adaptive-schema.js');
+    fs.mkdirSync(path.dirname(mirror), { recursive: true });
+    fs.writeFileSync(mirror, '// materialized kernel copy (gitignored)\n');
+    // the ONLY real (diff-visible) change: the canonical kernel.
+    const kernel = path.join(dir, 'scripts', 'kaola-workflow-adaptive-schema.js');
+    fs.mkdirSync(path.dirname(kernel), { recursive: true });
+    fs.writeFileSync(kernel, '// kernel edit\n');
+    const rp = projReceipt(dir, 'issue-scope-kernel');
+    const r = run(dir, ['--project', 'issue-scope-kernel'], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+    assert(r.exitCode === 0, 'T-788: kernel-only scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+    const rc = r.receipt;
+    assert(chainNames(rc) === 'claude', 'T-788: a canonical Oracle Kernel change scopes to the claude chain ONLY; got ' + JSON.stringify(chainNames(rc)));
+    assert(rc && rc.scope && rc.scope.decision === 'claude-only', 'T-788: receipt.scope.decision === claude-only; got ' + JSON.stringify(rc && rc.scope));
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
 // T35 (B2): a step shared across multiple selected chains is HOISTED — executed EXACTLY ONCE in
 // the combined run (attributed to receipt.preamble) and NOT re-run inside any chain's steps[].
 // The per-chain steps still run once each.
