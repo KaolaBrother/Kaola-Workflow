@@ -5313,10 +5313,23 @@ function main() {
     const baseTree = snapshotWorktree(root, nodeId);
     const baseCommit = anchorBase(root, barrierRef(nodeId), baseTree);
     fs.mkdirSync(path.dirname(cacheBaseFile(nodeId)), { recursive: true });
-    fs.writeFileSync(cacheBaseFile(nodeId), baseCommit);
+    // TOKEN FIRST, BASE LAST — and both crash-atomic (tmp + fsync + rename). The two files are NOT
+    // fused: they are deliberately separate, and the ORDER is what makes the torn state safe.
+    //
+    // The base file is the SOLE gate into the idempotent reuse branch above, and the token is read
+    // only INSIDE that branch behind an `openHead &&` guard. So the two torn states are asymmetric:
+    //   base present / token absent → `stale` is unconditionally false and the branch returns BEFORE
+    //     re-stamping, so staleness detection is PERMANENTLY disabled for this node — the reuse then
+    //     silently mis-attributes an intervening tracked commit (#281/#296) — it fails OPEN.
+    //   token present / base absent → `existing` is '' so the reuse branch is skipped entirely, and
+    //     the next call re-snapshots, re-anchors and re-stamps BOTH — it fails CLOSED. Every other
+    //     consumer of that state already refuses (`--barrier-check` → `no_barrier_base`).
+    // Atomicity is what makes the ordering meaningful: a bare write has no fsync, so the page cache
+    // could settle the base before the token even in the intended program order.
     // #385: stamp the freshness token = the HEAD at first record. The reuse branch compares this
     // against the live HEAD to detect a baseline that predates an intervening tracked commit.
-    fs.writeFileSync(openTokenFile(nodeId), headNow() + '\n');
+    schema.writeFileAtomicReplace(openTokenFile(nodeId), headNow() + '\n');
+    schema.writeFileAtomicReplace(cacheBaseFile(nodeId), baseCommit);
     process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseCommit }) : 'recorded base ' + baseCommit + ' for node ' + nodeId) + '\n');
     return;
   }

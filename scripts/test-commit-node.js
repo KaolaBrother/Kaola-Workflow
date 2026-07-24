@@ -1432,6 +1432,144 @@ function assert(condition, message) {
   }
 }
 
+// ===========================================================================
+// T-RECORDBASE-ORDER (#776): --record-base writes the freshness TOKEN first and
+// the BASE last, both crash-atomically.
+//
+// The base file is the SOLE gate into the idempotent reuse branch, and the token
+// is read only INSIDE that branch behind an `openHead &&` guard. So the two torn
+// states are not symmetric:
+//   base present / token absent  → `stale` is unconditionally false, the branch
+//                                  returns BEFORE re-stamping ⇒ staleness
+//                                  detection is PERMANENTLY disabled (fail OPEN)
+//   token present / base absent  → `existing` is '' ⇒ the reuse branch is
+//                                  skipped ⇒ the next call re-snapshots,
+//                                  re-anchors and re-stamps BOTH (fail CLOSED)
+// Writing base-first makes the fail-OPEN state the reachable one. Token-first
+// makes the fail-CLOSED state the reachable one.
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const VALIDATOR776 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  const mkBaseRepo776 = () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'recbase776-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'plan_form: spine', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| impl | tdd-guide | — | src/a.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| impl | in_progress |', '| review | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'src', 'a.js'), '// a\n');
+    const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    const cacheDir = path.join(projDir, '.cache');
+    return { repoRoot, planPath, cacheDir, g,
+      baseFile: path.join(cacheDir, 'barrier-base-impl'),
+      tokenFile: path.join(cacheDir, 'barrier-open-impl') };
+  };
+  const runV776 = (repoRoot, argv) => {
+    try {
+      const stdout = execFileSync('node', argv, { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      let parsed = {};
+      try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {};
+      try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  };
+
+  // (a) ORDERING under an injected base-write failure. `barrier-base-impl` is
+  //     pre-created as a DIRECTORY, so the base write can never succeed. Whatever
+  //     the code writes BEFORE that failure is what survives on disk.
+  {
+    const f = mkBaseRepo776();
+    fs.mkdirSync(f.baseFile, { recursive: true });
+    const r = runV776(f.repoRoot, [VALIDATOR776, f.planPath, '--record-base', '--node-id', 'impl', '--json']);
+    assert(r.exitCode !== 0,
+      'T-RECORDBASE-ORDER-a: an unwritable base path fails the record (test is not vacuous), got ' + JSON.stringify(r));
+    assert(fs.existsSync(f.tokenFile),
+      'T-RECORDBASE-ORDER-a: the freshness TOKEN is written BEFORE the base, so it survives a base-write crash');
+    assert(!fs.statSync(f.baseFile).isFile(),
+      'T-RECORDBASE-ORDER-a: the base itself never landed (the injected failure held)');
+    fs.rmSync(f.repoRoot, { recursive: true, force: true });
+  }
+
+  // (b) The fail-CLOSED residual (token present / base absent) recovers: the next
+  //     --record-base re-snapshots, re-anchors and re-stamps BOTH files, and the
+  //     staleness detector is live again on the following call.
+  {
+    const f = mkBaseRepo776();
+    fs.writeFileSync(f.tokenFile, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n');  // orphan token, no base
+    const first = runV776(f.repoRoot, [VALIDATOR776, f.planPath, '--record-base', '--node-id', 'impl', '--json']);
+    assert(first.exitCode === 0 && first.result === 'ok' && !first.reused,
+      'T-RECORDBASE-ORDER-b: token-present/base-absent is skipped by the reuse branch and re-snapshots, got ' + JSON.stringify(first));
+    const headNow = execFileSync('git', ['-C', f.repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    assert(fs.readFileSync(f.tokenFile, 'utf8').trim() === headNow,
+      'T-RECORDBASE-ORDER-b: the orphan token is RE-STAMPED to the live HEAD');
+    fs.writeFileSync(path.join(f.repoRoot, 'src', 'b.js'), '// b\n');
+    f.g(['add', '-A']); f.g(['commit', '-m', 'intervening']);
+    const reused = runV776(f.repoRoot, [VALIDATOR776, f.planPath, '--record-base', '--node-id', 'impl', '--json']);
+    assert(reused.result === 'ok' && reused.reused === true && reused.stale === true
+      && reused.staleReason === 'head_advanced',
+      'T-RECORDBASE-ORDER-b: staleness detection is LIVE after the fail-closed recovery, got ' + JSON.stringify(reused));
+    fs.rmSync(f.repoRoot, { recursive: true, force: true });
+  }
+
+  // (c) CHARACTERIZATION of the state base-first would leave reachable: a base with
+  //     NO token silently disables staleness detection forever. This is why the
+  //     ordering in (a) is load-bearing.
+  {
+    const f = mkBaseRepo776();
+    const rec = runV776(f.repoRoot, [VALIDATOR776, f.planPath, '--record-base', '--node-id', 'impl', '--json']);
+    assert(rec.exitCode === 0, 'T-RECORDBASE-ORDER-c: baseline recorded, got ' + JSON.stringify(rec));
+    fs.unlinkSync(f.tokenFile);                                    // the base-first torn state
+    fs.writeFileSync(path.join(f.repoRoot, 'src', 'c.js'), '// c\n');
+    f.g(['add', '-A']); f.g(['commit', '-m', 'intervening']);
+    const blind = runV776(f.repoRoot, [VALIDATOR776, f.planPath, '--record-base', '--node-id', 'impl', '--json']);
+    assert(blind.result === 'ok' && blind.reused === true && blind.stale === undefined,
+      'T-RECORDBASE-ORDER-c: base-present/token-absent reuses BLIND — no stale flag even after HEAD advanced (fails OPEN), got '
+      + JSON.stringify(blind));
+    assert(!fs.existsSync(f.tokenFile),
+      'T-RECORDBASE-ORDER-c: the reuse branch returns BEFORE re-stamping, so the torn state is PERMANENT');
+    fs.rmSync(f.repoRoot, { recursive: true, force: true });
+  }
+
+  // (d) ATOMICITY: both durable writes go through the crash-atomic replace helper,
+  //     not a bare fs.writeFileSync (a bare write has no fsync, so page-cache
+  //     reordering can settle the base before the token even in program order).
+  {
+    const src776 = fs.readFileSync(path.join(__dirname, 'kaola-workflow-plan-validator.js'), 'utf8');
+    const from776 = src776.indexOf('const baseTree = snapshotWorktree(root, nodeId);');
+    const to776 = src776.indexOf("if (args.includes('--drop-base'))", from776);
+    assert(from776 >= 0 && to776 > from776, 'T-RECORDBASE-ORDER-d: the --record-base write block is locatable');
+    const block = src776.slice(from776, to776);
+    assert(!/fs\.writeFileSync\(cacheBaseFile\(nodeId\)/.test(block)
+      && !/fs\.writeFileSync\(openTokenFile\(nodeId\)/.test(block),
+      'T-RECORDBASE-ORDER-d: neither durable write is a bare fs.writeFileSync');
+    const tokenIdx = block.indexOf('writeFileAtomicReplace(openTokenFile(nodeId)');
+    const baseIdx = block.indexOf('writeFileAtomicReplace(cacheBaseFile(nodeId)');
+    assert(tokenIdx >= 0 && baseIdx >= 0 && tokenIdx < baseIdx,
+      'T-RECORDBASE-ORDER-d: both writes are atomic AND the token is written before the base, got '
+      + JSON.stringify({ tokenIdx, baseIdx }));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

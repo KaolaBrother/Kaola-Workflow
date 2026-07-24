@@ -1663,7 +1663,8 @@ function appendClosureBlock(destDir, fields) {
       'closure_invariants: ' + fields.closureInvariants + '\n' +
       'claim_planner_attested: ' + fields.claimPlannerAttested + '\n' +
       'finalize_contractor_attested: ' + fields.finalizeContractorAttested + '\n';
-    fs.writeFileSync(p, s);
+    // Atomic: this is the same workflow-state.md whose torn form readActiveFolders silently skips.
+    writeFile(p, s);
     return true;
   } catch (_) { return false; }
 }
@@ -1999,7 +2000,10 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // #333: status/step/#324-normalization/next_command/plan_hash/Last Updated all in one helper.
     // (this port has NO removeLegacyStateBlocks — pass raw content directly.)
     content = stampTerminalState(content, statusValue, src, opts);
-    fs.writeFileSync(state, content);
+    // Atomic (the module's own crash-safe writer): this is the LAST stamp of the terminal state
+    // before the folder is renamed into archive/, so a torn write here is unrecoverable — a torn
+    // workflow-state.md is silently skipped by readActiveFolders and the project goes invisible.
+    writeFile(state, content);
   } catch (_) {}
   // #324: sanitize the archived finalization-summary's PRE-SINK sentinels so a later audit reading
   // only the archive cannot mistake a merged/closed run for one still "READY FOR FINAL GIT GATE".
@@ -2845,7 +2849,10 @@ function cmdFinalize() {
         const raw = fs.readFileSync(destState, 'utf8');
         const st = field(raw, 'status');
         if (st !== 'closed' && st !== 'abandoned') {
-          fs.writeFileSync(destState,
+          // Atomic (same crash-safe writer as archiveProjectDir): this backstop exists precisely to
+          // repair a state file a crash left non-terminal — writing it non-atomically could tear the
+          // very file it is repairing and hide the ARCHIVED project from readActiveFolders.
+          writeFile(destState,
             stampTerminalState(raw, 'closed', destDir, { keepOpen: keepIssueOpen }));
           archiveStateStamped = 'repaired';
         }

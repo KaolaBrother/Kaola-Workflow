@@ -10,6 +10,9 @@ const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildC
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitlab-workflow-run-chains');
+// Crash-safe durable write (tmp + fsync + rename) for the sink transaction journals. adaptive-schema
+// is base-named in ALL four trees (the cross-edition byte anchor), so this literal is not forge-renamed.
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -516,7 +519,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       process.stderr.write('sink-merge: project archived (' + args.project + ') — fallback receipt written to archive .cache\n');
     }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-    fs.writeFileSync(receiptPath, JSON.stringify({
+    // Atomic (tmp + fsync + rename): this is a crash-resume journal whose payload — the resolved
+    // default branch and the full issue member set — CANNOT be re-derived once the live folder has
+    // been archived. A torn receipt breaks the exit-3 fallback chain with nothing to recover from.
+    adaptiveSchema.writeFileAtomicReplace(receiptPath, JSON.stringify({
       project: args.project,
       branch: args.branch,
       issue_number: args.issue != null ? args.issue : null,
@@ -774,7 +780,8 @@ function runDirectMerge(args, opts) {
     try {
       const receiptPath = path.join(_archiveDir, '.cache', 'sink-fallback.json');
       fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-      fs.writeFileSync(receiptPath, JSON.stringify({
+      // Atomic (tmp + fsync + rename): same crash-resume journal, same un-re-derivable payload.
+      adaptiveSchema.writeFileAtomicReplace(receiptPath, JSON.stringify({
         project: args.project,
         branch: args.branch,
         issue_number: args.issue != null ? args.issue : null,
@@ -902,11 +909,12 @@ const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'finalize', 'stash_re
 // fail-closed: an unrecognized reason refuses.
 const BENIGN_ARCHIVE_SKIP_REASONS = new Set(['state_missing']);
 
+// Routed through the shared primitive so the step journal gets the fsync + parent-dir fsync the
+// local temp+rename lacked — without it the rename can settle while the bytes are still only in the
+// page cache, which is exactly the crash this journal exists to survive.
 function writeSinkReceipt(receiptPath, receipt) {
   fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-  const tmp2 = receiptPath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp2, JSON.stringify(receipt, null, 2) + '\n');
-  fs.renameSync(tmp2, receiptPath);
+  adaptiveSchema.writeFileAtomicReplace(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
 }
 
 function resolveSinkReceiptPath(mainRoot, project) {

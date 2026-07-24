@@ -7,6 +7,9 @@ const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, i
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
+// Crash-safe durable write (tmp + fsync + rename) for the sink transaction journals. Base-named in
+// all four trees (the cross-edition byte anchor), so the forge hand-ports carry this exact literal.
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
@@ -503,7 +506,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       process.stderr.write('sink-merge: project archived (' + args.project + ') — fallback receipt written to archive .cache\n');
     }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-    fs.writeFileSync(
+    // Atomic (tmp + fsync + rename): this is a crash-resume journal whose payload — the resolved
+    // default branch and the full issue member set — CANNOT be re-derived once the live folder has
+    // been archived. A torn receipt breaks the exit-3 fallback chain with nothing to recover from.
+    adaptiveSchema.writeFileAtomicReplace(
       receiptPath,
       JSON.stringify({
         project: args.project,
@@ -808,12 +814,13 @@ const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'finalize', 'stash_re
 // fail-closed: an unrecognized reason refuses.
 const BENIGN_ARCHIVE_SKIP_REASONS = new Set(['state_missing']);
 
-// #429: write a sink-receipt.json atomically (temp+rename) to avoid corruption on crash.
+// #429: write a sink-receipt.json atomically (temp+rename) to avoid corruption on crash. Routed
+// through the shared primitive so the step journal gets the fsync + parent-dir fsync the local
+// temp+rename lacked — without it the rename can settle while the bytes are still only in the page
+// cache, which is exactly the crash this journal exists to survive.
 function writeSinkReceipt(receiptPath, receipt) {
   fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
-  const tmp = receiptPath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(receipt, null, 2) + '\n');
-  fs.renameSync(tmp, receiptPath);
+  adaptiveSchema.writeFileAtomicReplace(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
 }
 
 // #653: dispose of the sink-receipt.json / sink-fallback.json transaction journals once the sink

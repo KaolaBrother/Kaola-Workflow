@@ -126,7 +126,10 @@ function recordPrResult(projectDir, project, prUrl, prNumber, branch) {
   try {
     const cacheDir = path.join(projectDir, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(
+    // Atomic (tmp + fsync + rename): the whole point of this record is to be DURABLE before any step
+    // that can throw after PR creation. A bare write is neither fsynced nor all-or-nothing, so the
+    // very crash it guards against could leave watch-pr a truncated, unparseable pr_url.
+    adaptiveSchema.writeFileAtomicReplace(
       path.join(cacheDir, 'sink-pr-result.json'),
       JSON.stringify({ project, branch, pr_url: prUrl, pr_number: prNumber, timestamp: new Date().toISOString() }, null, 2) + '\n'
     );

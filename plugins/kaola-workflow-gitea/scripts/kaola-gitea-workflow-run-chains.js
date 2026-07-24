@@ -136,6 +136,49 @@ const { isTransientFetchStderr } = require('./kaola-gitea-workflow-classifier.js
 // maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
+// Crash-safe durable write for the chain receipt: tmp + fsync + atomic rename (+ a fail-soft parent
+// directory fsync, since a rename's directory entry is not itself durable until the containing
+// directory is synced). A bare writeFileSync opens O_TRUNC, so a crashed RE-RUN destroys the prior
+// receipt before it can replace it — throwing away a 20-25 minute artifact and forcing a full re-run.
+// It has no fsync either. This is a COST guarantee, not a gate: both readers (--finalize-check /
+// --release-check) already fail closed on unparseable JSON with `chains_unverified`.
+//
+// Deliberately a LOCAL copy of the adaptive-schema primitive rather than a require of it: this file
+// is a rename-normalized forge family, so the gitlab/gitea ports are byte-derived by rewriting every
+// `kaola-workflow-<name>` token to `kaola-{forge}-workflow-<name>`. adaptive-schema is base-named in
+// ALL four trees (it is the cross-edition byte anchor), so a require of it here would normalize to a
+// `kaola-{forge}-workflow-adaptive-schema` module that does not exist and break both forge ports.
+// The helper below carries no forge-renameable token.
+function writeReceiptAtomic(filePath, content) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, '.' + path.basename(filePath) + '.' + process.pid + '.'
+    + Date.now() + '.' + Math.random().toString(16).slice(2) + '.tmp');
+  let fd;
+  try {
+    fd = fs.openSync(tmp, 'wx');
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} }
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw err;
+  }
+  let dirFd;
+  try {
+    dirFd = fs.openSync(dir, 'r');
+    fs.fsyncSync(dirFd);
+  } catch (_) {
+    // fail-soft: some platforms/filesystems refuse to open or fsync a directory. The rename above
+    // already succeeded; never turn a settled write into a failure here.
+  } finally {
+    if (dirFd !== undefined) { try { fs.closeSync(dirFd); } catch (_) {} }
+  }
+}
+
 const KNOWN_CHAINS = ['claude', 'codex', 'gitlab', 'gitea'];
 
 const CHAIN_COMMANDS = {
@@ -1023,8 +1066,9 @@ async function main(argv) {
     chains: chainResults,
   };
 
-  // Write receipt (always — a red receipt is still a record).
-  fs.writeFileSync(outputPath, JSON.stringify(receipt, null, 2) + '\n', 'utf8');
+  // Write receipt (always — a red receipt is still a record). Atomic: a crashed re-run leaves the
+  // PRIOR receipt byte-intact instead of O_TRUNC-ing a completed four-chain artifact away.
+  writeReceiptAtomic(outputPath, JSON.stringify(receipt, null, 2) + '\n');
 
   // Determine exit code: 0 iff all non-waived chains passed.
   const failed = chainResults.filter(ch => ch.exitCode !== 0 && !ch.accepted_red);

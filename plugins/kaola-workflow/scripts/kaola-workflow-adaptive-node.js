@@ -1981,6 +1981,11 @@ function writeSchema2ReviewReceipt(opts, review) {
 }
 
 function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen) {
+  // Set once we have SEEN a body on disk that the rotation is obliged to discard. It is the predicate
+  // the catch below fails loud on: a rotation that never had a body to destroy (a fresh open, or an
+  // environment where the .cache dir cannot even be created) has nothing to launder and stays
+  // advisory, exactly as before.
+  let hadExistingBody = false;
   try {
     const fs = require('fs');
     let ROLE_TOKEN_REGISTRY;
@@ -2050,31 +2055,67 @@ function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate, reviewOpen
     };
 
     if (fs.existsSync(cachePath)) {
+      hadExistingBody = true;
       const existingContent = fs.readFileSync(cachePath, 'utf8');
       const firstLine = existingContent.split(/\r?\n/, 1)[0];
       const existingBinding = firstLine.match(/^evidence-binding:[ \t]*([^\s]+)[ \t]+([^\s]+)[ \t]*$/);
       const nonceChangedForSameNode = !!(existingBinding && existingBinding[1] === nodeId && existingBinding[2] && existingBinding[2] !== nonce);
-      if (forceRotate || nonceChangedForSameNode) {
+      // An existing file whose LINE 1 carries no parseable binding is NOT "already seeded" — it is an
+      // UNBOUND body (torn by a pre-atomic write, or clobbered). Treating it as seeded wedges the node
+      // permanently: every re-open sees "already seeded" and every close refuses `evidence_unbound`
+      // until someone deletes the file by hand. Re-seed it instead (this also self-heals a file torn
+      // by an older non-atomic write on upgrade). Guarded on the line-1 bytes we would WRITE, so an
+      // empty-nonce binding (which the parse regex cannot match) still counts as seeded and its
+      // in-progress body is preserved.
+      //
+      // The re-seed is admissible ONLY when the body carries no parseable binding ANYWHERE, which is
+      // what makes "unclosable by construction" true. The close-time readers scan MULTILINE
+      // (`/^evidence-binding: …$/m` in the plan-validator), so a body with prose on line 1 and a valid
+      // binding below it PASSES the binding check and is genuinely closable — discarding that on the
+      // strength of line 1 alone would destroy live evidence, which is the opposite of this fix's
+      // intent. Line 1 decides "is this the binding we would write"; the whole-body scan decides
+      // "is there any binding at all".
+      const anyParseableBinding = /^evidence-binding:[ \t]*([^\s]+)[ \t]+([^\s]+)[ \t]*$/m.test(existingContent);
+      const unboundExistingBody = !existingBinding && !anyParseableBinding && firstLine !== bindingLine;
+      if (forceRotate || nonceChangedForSameNode || unboundExistingBody) {
         // Nonce rotation (reopen-node): RE-SEED the ENTIRE file with fresh binding + role stubs.
         // Discarding the stale body is required so prior-attempt evidence (verdict: pass / GREEN /
         // findings_blocking: 0) cannot survive into the new open and defeat the #392 anti-replay guard.
-        fs.writeFileSync(cachePath, freshSeed(), 'utf8');
+        // Crash-atomic (tmp + fsync + rename): a torn rewrite would otherwise leave a PREFIX of the
+        // fresh seed — an unbound body the close gate can only refuse.
+        writeFileAtomicReplace(cachePath, freshSeed());
         return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: true };
       }
       // Idempotent: file already exists (crash-resume), do NOT overwrite.
       return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: false };
     }
 
-    fs.writeFileSync(cachePath, freshSeed(), 'utf8');
+    writeFileAtomicReplace(cachePath, freshSeed());
     return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: false };
-  } catch (_) {
-    // Best-effort: a seed failure returns the metadata but does not fail the open.
+  } catch (error) {
     let required_tokens = reviewOpen && Array.isArray(reviewOpen.required_tokens)
       ? reviewOpen.required_tokens.slice() : ['evidence-binding'];
     try {
       const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
       required_tokens = (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
     } catch (_2) {}
+    if (forceRotate && hadExistingBody) {
+      // FAIL LOUD. A rotating seed exists SOLELY to destroy a prior attempt's body, and an atomic
+      // replace by design leaves the PRIOR file byte-intact when it fails — so swallowing the error
+      // here would return success-shaped metadata over a surviving `verdict: pass`. In repair-node
+      // the nonce is UNCHANGED by design (the barrier baseline is REUSED, never re-snapshotted), so
+      // that survivor still carries a VALID binding: the shape check would pass and the repair brief
+      // would be appended on top of it — a complete anti-replay bypass reported as success. Unlink
+      // the stale body too, so the residual state is `evidence_unbound` (fail-closed) rather than a
+      // valid-nonce stale pass; the unlink is best-effort defence in depth — the caller's refusal on
+      // `ok:false` is the guarantee.
+      try { require('fs').unlinkSync(path.join(path.dirname(planPath), '.cache', nodeId + '.md')); } catch (_3) {}
+      return { ok: false, reason: 'evidence_seed_failed', detail: String(error && error.message || error),
+        evidence_file: '.cache/' + nodeId + '.md', required_tokens };
+    }
+    // Non-rotating seed: best-effort. A failure returns the metadata but does not fail the open —
+    // there is no stale body to launder (a fresh open has nothing to discard), and bricking the open
+    // over a seed hiccup costs far more than the missing stub file.
     return { evidence_file: '.cache/' + nodeId + '.md', required_tokens };
   }
 }
@@ -7853,6 +7894,13 @@ function runReopenNode(opts) {
   // prior-attempt evidence cannot pass checkEvidenceShape on the new open. forceRotate=true.
   const nodeRole = (nodes.find(n => n.id === nodeId) || {}).role || 'unknown';
   const reopenSeed = seedEvidenceFile(planPath, nodeId, reopenNonce, nodeRole, true, reopenReviewOpen);
+  if (reopenSeed && reopenSeed.ok === false) {
+    // The rotation is the ONLY thing that discards the prior attempt's body. If it could not be
+    // written, the reopened node's evidence file is in an unknown state — refuse rather than hand
+    // the node back out over evidence we cannot vouch for.
+    return { result: 'refuse', reason: 'evidence_seed_failed', nodeId, detail: reopenSeed.detail,
+      gatesReset, readOnlyReset, gatesFolded, baselinesRemoved, evidenceRemoved, baselineRecorded: true };
+  }
 
   // #317: post-dominating gates were folded → pending; the reopened node → in_progress.
   // #343: transitions are built from gatesFolded (rows actually flipped), never the
@@ -8967,6 +9015,15 @@ function runRepairNodeCore(opts) {
     const nonce = readNonce(planPath, nodeId, readFile) || '';
     const writer = nodes.find(n => n.id === nodeId);
     const seeded = seedEvidenceFile(planPath, nodeId, nonce, writer ? writer.role : 'implementer', true);
+    if (seeded && seeded.ok === false) {
+      // REFUSE BEFORE THE APPEND. Repair reuses the barrier baseline by design, so the binding nonce
+      // is IDENTICAL across the repair — a stale `verdict: pass` body that survived a failed rotation
+      // would still carry a valid nonce, pass the shape check, and get the repair brief appended onto
+      // it. Appending here is precisely what launders the prior pass; stop short of it.
+      return { result: 'refuse', reason: 'evidence_seed_failed', nodeId, detail: seeded.detail,
+        gatesReset, readOnlyReset, gatesFolded, deletedDownstreamBaselines, evidenceRemoved,
+        baselineReused: true, attempt_id: repairAttempt.attempt_id };
+    }
     const evidencePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
     let evidence = '';
     try { evidence = readFile(evidencePath); } catch (_) {}

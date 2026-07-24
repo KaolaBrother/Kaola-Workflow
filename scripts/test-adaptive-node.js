@@ -18418,14 +18418,42 @@ function rtHarness(initialFiles, opts) {
       '#654 rotated file contains none of the stale verdict/findings/upstream values');
     assert(fresh.includes('verdict: ') && fresh.includes('findings_blocking: '), '#654 rotated file contains fresh role-token stubs');
 
-    for (const untouched of [
-      'not-an-evidence-binding\nverdict: fail\n',
-      'evidence-binding: other-node other123456\nverdict: fail\n',
-    ]) {
-      fs.writeFileSync(evidencePath, untouched);
+    // A CROSS-NODE binding parses cleanly — it is evidence of a mis-wired open, not of a torn write —
+    // so it still stays byte-for-byte for the typed close refusal to name.
+    {
+      const crossNode = 'evidence-binding: other-node other123456\nverdict: fail\n';
+      fs.writeFileSync(evidencePath, crossNode);
       const result = seedEvidenceFile(planPath, 'review', 'fresh1234567', 'code-reviewer', false);
-      assert(result.nonce_rotated === false, '#654 malformed/cross-node binding is not rotated');
-      assert(fs.readFileSync(evidencePath, 'utf8') === untouched, '#654 malformed/cross-node binding stays byte-for-byte for typed close refusal');
+      assert(result.nonce_rotated === false, '#654 cross-node binding is not rotated');
+      assert(fs.readFileSync(evidencePath, 'utf8') === crossNode, '#654 cross-node binding stays byte-for-byte for typed close refusal');
+    }
+    // An UNPARSEABLE line 1 is re-seeded instead (#776). Preserving it made the node a permanent
+    // wedge: every re-open read "already seeded" and every close refused `evidence_unbound`, with
+    // hand-deletion the only exit. Nothing is lost — a body with no line-1 binding can never pass
+    // checkEvidenceShape, so it was unclosable content by construction.
+    {
+      const unbound = 'not-an-evidence-binding\nverdict: fail\n';
+      fs.writeFileSync(evidencePath, unbound);
+      const result = seedEvidenceFile(planPath, 'review', 'fresh1234567', 'code-reviewer', false);
+      const after = fs.readFileSync(evidencePath, 'utf8');
+      assert(after.startsWith('evidence-binding: review fresh1234567\n'),
+        '#654/#776 an unparseable line-1 body is RE-SEEDED with a fresh binding, got ' + JSON.stringify(after.split('\n')[0]));
+      assert(!after.includes('not-an-evidence-binding') && !after.includes('verdict: fail\n'),
+        '#654/#776 the unbound body is discarded by the re-seed');
+      assert(result.nonce_rotated === true, '#654/#776 the re-seed reports nonce_rotated:true');
+    }
+    // ...but a body whose line 1 is PROSE while a valid binding sits BELOW it is genuinely closable —
+    // the close-time readers scan multiline (`/^evidence-binding: …$/m`) — so the re-seed must NOT
+    // reach it. Deciding "unbound" on line 1 alone would discard live evidence, the exact opposite of
+    // the wedge this fix removes.
+    {
+      const lateBinding = '## Review notes\nevidence-binding: review fresh1234567\nverdict: fail\n';
+      fs.writeFileSync(evidencePath, lateBinding);
+      const result = seedEvidenceFile(planPath, 'review', 'fresh1234567', 'code-reviewer', false);
+      assert(result.nonce_rotated === false, '#776 a body carrying a binding below line 1 is NOT rotated');
+      assert(fs.readFileSync(evidencePath, 'utf8') === lateBinding,
+        '#776 a below-line-1 binding body is preserved byte-for-byte, got '
+          + JSON.stringify(fs.readFileSync(evidencePath, 'utf8')));
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -22604,6 +22632,269 @@ function rtHarness(initialFiles, opts) {
   const wired = spineReExpansionFirst(SPINE761c, wiredFiles);
   assert(wired && wired.result === 'route_local_reexpansion',
     '#761c: an attempt finding under a milestone surface routes local through the SAME precheck the escalation sites call, got ' + JSON.stringify(wired));
+}
+
+// ===========================================================================
+// T-SEED-ATOMIC (#776): seedEvidenceFile's durable writes are crash-atomic AND
+// the forceRotate path FAILS LOUD instead of returning success-shaped metadata.
+//
+// The rotation write exists SOLELY to discard a prior attempt's body so a stale
+// `verdict: pass` cannot survive into a new open (the anti-replay guard). Its
+// pre-fix shape was a bare fs.writeFileSync inside a whole-body `catch (_)` that
+// returns success-shaped metadata — so ANY write failure (ENOSPC/EIO/EROFS) left
+// the stale body byte-intact under a still-valid binding and reported success.
+// ===========================================================================
+{
+  const isRoot776 = typeof process.getuid === 'function' && process.getuid() === 0;
+  const STALE_BODY = 'evidence-binding: rot-node abcdef123456\nverdict: pass\nfindings_blocking: 0\nRED: stale red\nGREEN: stale green\n';
+
+  const mkSeedFixture = (nodeId) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-seed776-'));
+    const projectDir = path.join(tmp, 'kaola-workflow', 'issue-776');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '# dummy plan\n', 'utf8');
+    const cachePath = path.join(cacheDir, nodeId + '.md');
+    return { tmp, planPath, cacheDir, cachePath };
+  };
+
+  // (a) FAIL LOUD: an UNRECOVERABLE rotation write (read-only .cache dir + read-only
+  //     body — the EROFS/ENOSPC analogue) must return a failure-shaped result, NOT
+  //     success-shaped metadata over a surviving stale `verdict: pass` body.
+  if (!isRoot776) {
+    const f = mkSeedFixture('rot-node');
+    let r776a = null;
+    try {
+      fs.writeFileSync(f.cachePath, STALE_BODY, 'utf8');
+      fs.chmodSync(f.cachePath, 0o400);
+      fs.chmodSync(f.cacheDir, 0o500);
+      r776a = seedEvidenceFile(f.planPath, 'rot-node', 'abcdef123456', 'tdd-guide', true);
+    } finally {
+      try { fs.chmodSync(f.cacheDir, 0o700); } catch (_) {}
+      try { fs.chmodSync(f.cachePath, 0o600); } catch (_) {}
+    }
+    assert(r776a && r776a.ok === false && r776a.reason === 'evidence_seed_failed',
+      'T-SEED-ATOMIC-a: an unrecoverable forceRotate write returns {ok:false, reason:evidence_seed_failed}, got '
+      + JSON.stringify(r776a));
+    assert(r776a && r776a.nonce_rotated !== true,
+      'T-SEED-ATOMIC-a: a failed rotation NEVER claims nonce_rotated:true, got ' + JSON.stringify(r776a));
+    assert(typeof r776a.detail === 'string' && r776a.detail.length > 0,
+      'T-SEED-ATOMIC-a: the failure carries the underlying write error detail, got ' + JSON.stringify(r776a));
+    fs.rmSync(f.tmp, { recursive: true, force: true });
+  }
+
+  // (b) ATOMICITY: a write-protected BODY in a writable .cache dir is exactly the
+  //     case a bare writeFileSync cannot rotate (EACCES on the O_TRUNC open) but an
+  //     atomic tmp+rename CAN. The stale `verdict: pass` body must not survive.
+  if (!isRoot776) {
+    const f = mkSeedFixture('rot-node');
+    let r776b = null;
+    try {
+      fs.writeFileSync(f.cachePath, STALE_BODY, 'utf8');
+      fs.chmodSync(f.cachePath, 0o400);
+      r776b = seedEvidenceFile(f.planPath, 'rot-node', 'newnonce9999', 'tdd-guide', true);
+    } finally {
+      try { fs.chmodSync(f.cachePath, 0o600); } catch (_) {}
+    }
+    const after776b = fs.existsSync(f.cachePath) ? fs.readFileSync(f.cachePath, 'utf8') : '';
+    assert(r776b && r776b.ok !== false && r776b.nonce_rotated === true,
+      'T-SEED-ATOMIC-b: an atomic replace rotates over a write-protected body, got ' + JSON.stringify(r776b));
+    assert(!/verdict:\s*pass/.test(after776b) && !/GREEN: stale green/.test(after776b),
+      'T-SEED-ATOMIC-b: the stale `verdict: pass` body does NOT survive the rotation, got ' + JSON.stringify(after776b));
+    assert(after776b.split('\n')[0] === 'evidence-binding: rot-node newnonce9999',
+      'T-SEED-ATOMIC-b: line 1 carries the fresh binding, got ' + JSON.stringify(after776b.split('\n')[0]));
+    fs.rmSync(f.tmp, { recursive: true, force: true });
+  }
+
+  // (c) UNPARSEABLE LINE 1 ⇒ RE-SEED. An existing file whose line-1 binding cannot be
+  //     parsed (torn by the pre-fix bare write, or clobbered) is NOT "already seeded":
+  //     treating it as seeded wedges the node forever (close always refuses
+  //     evidence_unbound). It must be re-seeded even with forceRotate FALSE.
+  {
+    const f = mkSeedFixture('torn-node');
+    fs.writeFileSync(f.cachePath, 'evidence-bind', 'utf8');   // truncated header — no parseable binding
+    const r776c = seedEvidenceFile(f.planPath, 'torn-node', 'freshnonce12', 'tdd-guide', false);
+    const after776c = fs.readFileSync(f.cachePath, 'utf8');
+    assert(after776c.split('\n')[0] === 'evidence-binding: torn-node freshnonce12',
+      'T-SEED-ATOMIC-c: an unparseable line-1 body is RE-SEEDED (not treated as already-seeded), got '
+      + JSON.stringify(after776c.split('\n')[0]));
+    assert(r776c && r776c.ok !== false,
+      'T-SEED-ATOMIC-c: the re-seed is success-shaped, got ' + JSON.stringify(r776c));
+    fs.rmSync(f.tmp, { recursive: true, force: true });
+  }
+
+  // (d) INVARIANCE: a genuine crash-resume (line-1 binding parses AND matches the
+  //     requested nonce) still PRESERVES the in-progress body. The (c) widening must
+  //     not turn every re-open into a body-destroying re-seed.
+  {
+    const f = mkSeedFixture('resume-node');
+    const inProgress = 'evidence-binding: resume-node keepnonce123\nRED: real red output\nGREEN: real green\n';
+    fs.writeFileSync(f.cachePath, inProgress, 'utf8');
+    const r776d = seedEvidenceFile(f.planPath, 'resume-node', 'keepnonce123', 'tdd-guide', false);
+    assert(r776d && r776d.nonce_rotated === false && fs.readFileSync(f.cachePath, 'utf8') === inProgress,
+      'T-SEED-ATOMIC-d: a same-nonce crash-resume is byte-preserving, got ' + JSON.stringify(r776d));
+    fs.rmSync(f.tmp, { recursive: true, force: true });
+  }
+
+  // (e) INVARIANCE: forceRotate=false on an unreachable path stays ADVISORY (never
+  //     throws, never fail-shaped) — the open path must not be bricked by a seed hiccup.
+  {
+    let threw776e = false;
+    let r776e = null;
+    try { r776e = seedEvidenceFile('/no/such/path/workflow-plan.md', 'nx', 'nonce', 'unknown-role', false); }
+    catch (_) { threw776e = true; }
+    assert(!threw776e && r776e && r776e.ok !== false && Array.isArray(r776e.required_tokens),
+      'T-SEED-ATOMIC-e: a NON-rotating seed failure stays advisory (success-shaped, no throw), got '
+      + JSON.stringify(r776e));
+  }
+}
+
+// ===========================================================================
+// T-REPAIR-REPLAY (#776): runRepairNode must REFUSE when the evidence rotation
+// fails, instead of appending the repair brief onto a stale `verdict: pass` body.
+//
+// This is the complete anti-replay bypass. In repair the nonce is UNCHANGED by
+// design (baselineReused:true — readNonce derives it from the REUSED
+// barrier-base), so a swallowed rotation failure leaves a VALID nonce on a stale
+// pass body: checkEvidenceShape's expectedNonce passes, the stale verdict passes,
+// and the brief is appended on top — laundering it into "fresh seed + brief".
+// ===========================================================================
+{
+  const tmp776r = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair776-'));
+  try {
+    const projectDir = path.join(tmp776r, 'kaola-workflow', 'issue-776r');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const body = makePlan([
+      '| writer | complete | |', '| review | in_progress | |', '| done | pending | |',
+    ], [
+      '| writer | tdd-guide | — | scripts/writer.js | 1 | sequence |',
+      '| review | code-reviewer | writer | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]);
+    const hash = planValidator.computePlanHash(body);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const journalPath = path.join(cacheDir, 'review-attempts.json');
+    const writerBaseline = 'w'.repeat(40);
+    const identity = { baseline: writerBaseline, anchored_ref: writerBaseline,
+      open_token: 'writer-open-token', generation: writerBaseline.slice(0, 12),
+      ref: 'refs/kaola-workflow/barrier/issue-776r/writer' };
+    fs.writeFileSync(planPath, '<!-- plan_hash: ' + hash + ' -->\n' + body);
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-writer'), writerBaseline + '\n');
+    fs.writeFileSync(path.join(cacheDir, 'barrier-base-review'), 'rrrrrrrrrrrr-rest\n');
+    fs.writeFileSync(path.join(cacheDir, 'review.md'),
+      'evidence-binding: review rrrrrrrrrrrr\nverdict: fail\nfindings_blocking: 1\n');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open',
+      nodes: [{ id: 'review', role: 'code-reviewer', kind: 'read' }] }));
+    // The stale PRIOR-ATTEMPT body the rotation exists to destroy. Its binding nonce is
+    // the writer's REUSED baseline generation — i.e. a VALID nonce for the repair open.
+    const writerEvidence = path.join(cacheDir, 'writer.md');
+    const stalePass = 'evidence-binding: writer ' + writerBaseline.slice(0, 12)
+      + '\nRED: prior attempt red\nGREEN: prior attempt green\nverdict: pass\nfindings_blocking: 0\n';
+    fs.writeFileSync(writerEvidence, stalePass, 'utf8');
+    const common = { planPath, project: 'issue-776r',
+      shell: () => ({ exitCode: 0, result: 'ok', ok: true, overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } }),
+      readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c),
+      cacheExists: p => fs.existsSync(p), unlink: p => fs.unlinkSync(p), readdir: d => fs.readdirSync(d),
+      computeReviewCandidateDigest: () => '7'.repeat(64), captureWriterBarrierIdentity: () => identity };
+
+    const closed = runCloseNode({ ...common, nodeId: 'review' });
+    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const attempt = journal.attempts[0];
+    assert(closed.result === 'review_failed' && attempt,
+      'T-REPAIR-REPLAY: the failing review produces a repairable attempt, got ' + JSON.stringify(closed));
+
+    // Fault injection: the FIRST durable write targeting the writer's evidence file
+    // throws (ENOSPC). One-shot + path-scoped, so the repair's own subsequent append
+    // (the laundering step) is left free to succeed — which is exactly what the
+    // pre-fix code does and what the fix must prevent.
+    const origWrite776 = fs.writeFileSync;
+    const origOpen776 = fs.openSync;
+    const tmpPrefix776 = path.join(cacheDir, '.writer.md.');
+    let shots776 = 1;
+    const enospc776 = () => { const e = new Error('T-776 injected fault: ENOSPC on evidence rotation'); e.code = 'ENOSPC'; return e; };
+    fs.writeFileSync = function (p, ...rest) {
+      if (shots776 > 0 && typeof p === 'string' && p === writerEvidence) { shots776--; throw enospc776(); }
+      return origWrite776.apply(fs, [p, ...rest]);
+    };
+    fs.openSync = function (p, ...rest) {
+      if (shots776 > 0 && typeof p === 'string' && p.startsWith(tmpPrefix776)) { shots776--; throw enospc776(); }
+      return origOpen776.apply(fs, [p, ...rest]);
+    };
+    let repaired776 = null;
+    let threw776 = null;
+    try { repaired776 = runRepairNode({ ...common, nodeId: 'writer', attemptId: attempt.attempt_id }); }
+    catch (err) { threw776 = err; }
+    finally { fs.writeFileSync = origWrite776; fs.openSync = origOpen776; }
+
+    assert(shots776 === 0, 'T-REPAIR-REPLAY: the injected rotation fault actually fired (test is not vacuous)');
+    assert(!threw776, 'T-REPAIR-REPLAY: the refusal is a typed return, never a raw throw, got ' + (threw776 && threw776.message));
+    assert(repaired776 && repaired776.result === 'refuse' && repaired776.reason === 'evidence_seed_failed',
+      'T-REPAIR-REPLAY: a failed evidence rotation REFUSES the repair, got ' + JSON.stringify(repaired776));
+    const after776 = fs.existsSync(writerEvidence) ? fs.readFileSync(writerEvidence, 'utf8') : '';
+    assert(!/verdict:\s*pass/.test(after776),
+      'T-REPAIR-REPLAY: the stale `verdict: pass` body never survives a failed rotation, got ' + JSON.stringify(after776));
+    assert(!/repair brief/i.test(after776) && !/finding/i.test(after776),
+      'T-REPAIR-REPLAY: the repair brief is NEVER appended onto a stale body, got ' + JSON.stringify(after776));
+  } finally { fs.rmSync(tmp776r, { recursive: true, force: true }); }
+}
+
+// ===========================================================================
+// T-REOPEN-SEEDFAIL (#776): runReopenNode refuses on the same failure signal.
+// Reopen's whole contract is "a NEW nonce over a FRESH body" — handing the node
+// back out over an evidence file we could not rewrite breaks it.
+// ===========================================================================
+{
+  const tmp776o = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reopen776-'));
+  try {
+    const projectDir = path.join(tmp776o, 'kaola-workflow', 'issue-776o');
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    const nodes776o = [
+      '| impl | tdd-guide | — | scripts/impl.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ];
+    fs.writeFileSync(planPath, makePlan(['| impl | complete | |', '| review | complete | |',
+      '| finalize | pending | |'], nodes776o));
+    const implEvidence = path.join(cacheDir, 'impl.md');
+    fs.writeFileSync(implEvidence,
+      'evidence-binding: impl oldnonce1234\nRED: prior red\nGREEN: prior green\nverdict: pass\n', 'utf8');
+
+    const origWrite776o = fs.writeFileSync;
+    const origOpen776o = fs.openSync;
+    const tmpPrefix776o = path.join(cacheDir, '.impl.md.');
+    let shots776o = 1;
+    const eio776o = () => { const e = new Error('T-776 injected fault: EIO on evidence rotation'); e.code = 'EIO'; return e; };
+    fs.writeFileSync = function (p, ...rest) {
+      if (shots776o > 0 && typeof p === 'string' && p === implEvidence) { shots776o--; throw eio776o(); }
+      return origWrite776o.apply(fs, [p, ...rest]);
+    };
+    fs.openSync = function (p, ...rest) {
+      if (shots776o > 0 && typeof p === 'string' && p.startsWith(tmpPrefix776o)) { shots776o--; throw eio776o(); }
+      return origOpen776o.apply(fs, [p, ...rest]);
+    };
+    let reopened776 = null;
+    try {
+      reopened776 = runReopenNode({
+        planPath, project: 'issue-776o', nodeId: 'impl',
+        shell: () => ({ exitCode: 0, result: 'ok', recordBase: { base: 'a'.repeat(40) } }),
+        readFile: p => origWrite776o && fs.readFileSync(p, 'utf8'),
+        writeFile: (p, c) => origWrite776o.apply(fs, [p, c]),
+        cacheExists: p => fs.existsSync(p), unlink: () => {}, readdir: () => [],
+      });
+    } finally { fs.writeFileSync = origWrite776o; fs.openSync = origOpen776o; }
+
+    assert(shots776o === 0, 'T-REOPEN-SEEDFAIL: the injected rotation fault actually fired (test is not vacuous)');
+    assert(reopened776 && reopened776.result === 'refuse' && reopened776.reason === 'evidence_seed_failed',
+      'T-REOPEN-SEEDFAIL: reopen refuses when the evidence rotation fails, got ' + JSON.stringify(reopened776));
+    const afterReopen776 = fs.existsSync(implEvidence) ? fs.readFileSync(implEvidence, 'utf8') : '';
+    assert(!/verdict:\s*pass/.test(afterReopen776),
+      'T-REOPEN-SEEDFAIL: the stale body does not survive the failed rotation, got ' + JSON.stringify(afterReopen776));
+  } finally { fs.rmSync(tmp776o, { recursive: true, force: true }); }
 }
 
 
