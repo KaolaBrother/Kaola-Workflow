@@ -156,7 +156,7 @@ for (const md of mdFiles) {
 // in the schema/planner; a named role profile must not override the current parent session pair.
 for (const tree of TOML_TREES) {
   const profiles = fs.readdirSync(path.join(root, tree)).filter(f => f.endsWith('.toml')).sort();
-  assert(profiles.length === 16, `${tree} must contain exactly 16 role profiles, got ${profiles.length}`);
+  assert(profiles.length === 15, `${tree} must contain exactly 15 role profiles, got ${profiles.length}`);
   for (const profile of profiles) {
     const content = read(`${tree}/${profile}`) || '';
     const schema = codexRoleSchema(content);

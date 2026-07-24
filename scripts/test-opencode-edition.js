@@ -668,26 +668,14 @@ for (const target of emittedCommandTargets) {
     'A25 (#645): opencode workflow-next must carry the First Principles axiom pointer (shared-body reference line)');
   assert(wfNext.includes('never cite one to skip a typed gate'),
     'A25 (#645): opencode workflow-next must carry the axiom tighten-only clause');
-  // A26 (#646): the {ISSUE_SCOUT_MODEL} placeholder is a CLAUDE-command-only install token —
-  // install.sh renders it, but opencode has no such render step, so the sync transform STRIPS it.
-  // It must never survive into the generated opencode surface (an unrendered placeholder would ship
-  // as literal dispatch text — the #443/#328 leak class, on the opencode edition).
+  // A26 (#646, updated #789): the {ISSUE_SCOUT_MODEL} placeholder and the issue-scout dispatch it
+  // named are retired entirely — the no-target survey folded into the workflow-planner (dispatched
+  // by the separate adapt surface), so workflow-next carries no agent dispatch of its own at all.
+  // Assert the retired vocabulary never resurfaces on the generated opencode surface.
   assert(!wfNext.includes('ISSUE_SCOUT_MODEL'),
-    'A26 (#646): opencode workflow-next must NOT leak the {ISSUE_SCOUT_MODEL} placeholder (stripped by the sync transform)');
-  // A27 (#646/R1): token-absence alone (A26) is not enough — the GENERIC {X_MODEL} strip mangles the
-  // scout-dispatch paragraph, leaving an empty inline-code span ("Dispatch it with ``") where the
-  // placeholder was PLUS an "install time" resolution sentence that is FALSE for opencode (opencode
-  // has no install-time render step — it centralizes the tier in opencode.json). The sync transform
-  // paragraph-rewrites the whole paragraph to opencode-true wording; assert the mangled residue is
-  // gone AND the clean rewrite is present, so a regression in the rewrite reds here (not just A26).
-  assert(!/Dispatch it with\s+``/.test(wfNext),
-    'A27 (R1): opencode workflow-next must NOT carry the empty inline-code span residue "Dispatch it with ``" (the generic {X_MODEL} strip mangling the scout dispatch)');
-  assert(!wfNext.includes('resolved at install time'),
-    'A27 (R1): opencode workflow-next must NOT carry the false "resolved at install time" sentence (untrue for opencode — the tier is centralized in opencode.json, not rendered at install)');
-  assert(!wfNext.includes('the router does not substitute it'),
-    'A27 (R1): opencode workflow-next must NOT carry the command-region "the router does not substitute it" residue (paragraph-rewritten out on the opencode surface)');
-  assert(wfNext.includes('Dispatch the read-only issue-scout agent; its effort variant resolves centrally from `opencode.json`'),
-    'A27 (R1): opencode workflow-next must carry the opencode-true scout-dispatch rewrite (effort variant resolves centrally from opencode.json)');
+    'A26 (#646): opencode workflow-next must NOT leak the {ISSUE_SCOUT_MODEL} placeholder (retired)');
+  assert(!wfNext.includes('issue-scout'),
+    'A26 (#789): opencode workflow-next must NOT carry any retired issue-scout dispatch prose');
   // The generated command surface (post-render at install) must read cleanly too: the reworded
   // scout note drops the dangling "this placeholder" phrasing, which has no referent once
   // install.sh renders {ISSUE_SCOUT_MODEL} to a concrete model (the model above is then in view).

@@ -27,7 +27,7 @@ user's model choices — those live only in the user-owned Kimi `config.toml`.
 ## Roles as Skills
 
 Kimi Code's Agent tool has **no named custom subagents** — only the three built-in types
-`coder` (full tools), `explore` (read-only), and `plan`. The 16 canonical roles therefore
+`coder` (full tools), `explore` (read-only), and `plan`. The 15 canonical roles therefore
 cannot ship as named agent definitions the way they do on Claude Code (`agents/*.md`),
 Codex (`.toml` profiles), or opencode (`.opencode/agent/*.md`). Instead each role ships as a
 **role-contract Skill** `kaola-role-<role>`, and every canonical dispatch card —
@@ -41,11 +41,12 @@ built-in type for the role's kind:
   `kaola-role-<role>` Skill and follow its contract for the entire task."*
 
 The role-kind map is **computed from canonical frontmatter, never hand-listed**, so a
-canonical role that gains or loses write tools flips kind automatically. `workflow-next`'s
-issue-scout dispatch is prose (not an `Agent()` card) and gets its own rewrite to the same
-shape (`subagent_type="explore"` + `kaola-role-issue-scout`). Every `kaola-role-*`
-reference inside a generated command skill is checked to resolve to a generated role skill,
-so a renamed canonical role cannot leave a dangling Skill reference.
+canonical role that gains or loses write tools flips kind automatically. `workflow-next`
+dispatches no agent of its own (the retired issue-scout survey folded into
+`workflow-planner`'s no-target mode, dispatched by the separate adapt surface), so it
+carries no `Agent()` cards or prose dispatch to rewrite. Every `kaola-role-*` reference
+inside a generated command skill is checked to resolve to a generated role skill, so a
+renamed canonical role cannot leave a dangling Skill reference.
 
 Should Skill invocation from a subagent ever prove unreliable in practice, the recorded
 fallback is to install the role contracts as plain files under `kaola-workflow/roles/` and
@@ -303,7 +304,8 @@ The edition is covered by `scripts/test-kimi-edition.js`, which regenerates the 
 - **K5 — dispatch-card rewrite:** per-command, in-order card parity — read-only roles →
   `explore`, write roles → `coder` (kind map computed from canonical), every card invoking
   its matching `kaola-role-<role>` Skill, no dangling role-Skill references, and
-  `workflow-next`'s prose scout dispatch rewritten to `explore` + `kaola-role-issue-scout`.
+  `workflow-next` carrying no retired issue-scout dispatch prose (it dispatches nothing
+  of its own).
 - **K6 — reviewer behavior identity:** `code-reviewer` / `adversarial-verifier` /
   `security-reviewer` keep their deterministic normalized behavior identity (role,
   `behavior_contract_version`, `behavior_contract_hash`, core bytes) through the kimi

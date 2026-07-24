@@ -627,9 +627,8 @@ again authoritative. The mechanism is derived from each role's tool manifest —
   RETURNS its deliverable for orchestrator persistence via `record-evidence --stdin` (below).
   `record-evidence` re-injects this node's `evidence-binding:` header, so persisting evidence
   cannot strip the header — the role MUST NOT try to add or modify it. Current roster (EXAMPLES
-  only): read producers `code-explorer`, `knowledge-lookup`, `code-architect`, `planner`,
-  `issue-scout`; plus the read gates `adversarial-verifier` / `code-reviewer` /
-  `security-reviewer`.
+  only): read producers `code-explorer`, `knowledge-lookup`, `code-architect`, `planner`;
+  plus the read gates `adversarial-verifier` / `code-reviewer` / `security-reviewer`.
 - Any node role WITH `Write` in its tool manifest SELF-WRITES its `.cache` evidence, INCLUDING
   the seeded `evidence-binding:` header (read it from the seeded file, never alter it). Current
   roster (EXAMPLES only): `implementer`, `tdd-guide`, `metric-optimizer`, `build-error-resolver`,

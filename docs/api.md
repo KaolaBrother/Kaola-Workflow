@@ -51,7 +51,7 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 |------|----------------|-----------|
 | `target_ambiguity` | — | Both scalar and multi-target provided simultaneously |
 | `target_set_empty` | — | Resolved issue list is empty after sort+dedup |
-| `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | `refuse` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | `refuse` | One or more targets are already closed on the forge |
 | `target_set_red` | `refuse` | One or more targets are red per the overlap classifier |
@@ -174,7 +174,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
 - **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Adaptive is the only workflow path, so the bundle lane always runs it — there is no `bundle_requires_adaptive` refusal (retired). Numbers are sorted and deduped before validation.
 
-- **`KAOLA_BUNDLE_MAX_ISSUES`** (default `4`) — Maximum number of issues allowed in a single bundle. Bundles whose resolved size exceeds this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles.
+- **`KAOLA_BUNDLE_MAX_ISSUES`** (default `8`) — Maximum number of issues allowed in a single bundle. Bundles whose resolved size exceeds this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and planner-selected auto-bundles.
 
 ### Worktree Provisioning
 
@@ -3289,7 +3289,7 @@ finalize_contractor_attested: <value>
 
 Both column-0 status fields are always written, even when both are `attested` — a clean result is a positive statement, not an absence. Called in `cmdFinalize` immediately after `checkDispatchAttestations`, before `computeGoalCheck`. `appendClosureBlock`'s field set independently gains the same two attestation fields in the archived `workflow-state.md`'s `## Closure` block (see `docs/workflow-state-contract.md`), so the archive carries two durable, mutually-reinforcing copies of the attestation outcome. **Known residual:** a contractor-authored summary that pre-seeds a column-0 `## Attestation` heading before finalize suppresses the append (the presence guard exists for crash-resume idempotence, not tamper-resistance) — fenced by the `## Closure` block + stdout receipt still carrying the true fields in the same run, and by finalize prose forbidding removal/summarization of the section; see `docs/decisions/D-653-01.md`.
 
-**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since `issue-scout` only runs on the auto-bundle branch. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
+**`selection_evidence` (issue #653 / D-653-01).** Advisory-only field, `null` default in `emptyReceipt()` (the `goal_check`-style template). `probeSelectionEvidence(cacheDirCandidates)` (`kaola-workflow-claim.js` + byte-identical Codex copy) iterates `[archiveCacheDir, liveCacheDir]` — the same candidate order and precedence the attestation probe uses — testing each for a file matching `/^selection-evidence\./`, returning `'present'` on the first match or `'absent'` if none is found. No invariant, no warning on absence: a user-named claim legitimately has none, since the no-target survey only runs on the auto-bundle branch. The docked artifact and its persistence mechanism are documented in `docs/workflow-state-contract.md`.
 
 Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`

@@ -77,7 +77,7 @@ function generatedTreeFiles() {
 
 const canonCommands = sync.listCanonCommands();                    // ['kaola-workflow-adapt.md', ...]
 const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // 5 command basenames (adaptive-only, #725)
-const canonAgents = sync.listCanonAgents();                        // 16 roles (top-level agents/*.md only)
+const canonAgents = sync.listCanonAgents();                        // 15 roles (top-level agents/*.md only)
 const roleDirNames = canonAgents.map(a => 'kaola-role-' + a);
 const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 
@@ -147,9 +147,14 @@ for (const name of ['workflow-next', 'kaola-workflow-adapt']) {
   const content = read(skillDir(name));
   assert(/--runtime kimi\b/.test(content),
     'K2[' + name + ']: claim invocation stamps "--runtime kimi" into workflow-state.md');
-  assert(content.includes('Never pass a per-call model override; sub-agents inherit the session model.'),
-    'K2[' + name + ']: carries the inherit-model guidance (the stripped "MUST pass model=" prose replacement)');
 }
+// #789: workflow-next itself no longer carries ANY "MUST pass model=" dispatch instruction
+// (issue-scout was its only one, and is fully retired), so there is nothing left to strip and
+// replace there. kaola-workflow-adapt still dispatches workflow-planner with an explicit model
+// badge, so its inherit-model replacement stays checked.
+assert(read(skillDir('kaola-workflow-adapt')).includes(
+  'Never pass a per-call model override; sub-agents inherit the session model.'),
+  'K2[kaola-workflow-adapt]: carries the inherit-model guidance (the stripped "MUST pass model=" prose replacement)');
 
 // ---------------------------------------------------------------------------
 // K3: byte-parity — regenerating from canonical reproduces every committed
@@ -232,8 +237,9 @@ for (const name of ['workflow-next', 'kaola-workflow-adapt']) {
 // else → "coder" (roleKindMap is computed from canonical, never hand-listed),
 // and the prompt is prefixed with the instruction to invoke the matching
 // kaola-role-<role> Skill. Cards are compared PER COMMAND, IN ORDER, so a
-// dropped/mis-paired rewrite fails here. workflow-next's issue-scout dispatch
-// is prose (not an Agent() card) and gets its own rewrite assertion.
+// dropped/mis-paired rewrite fails here. workflow-next dispatches no agent inline
+// (retired issue-scout survey folded into the workflow-planner's no-target mode,
+// dispatched by the separate adapt surface), so it carries no Agent() cards at all.
 // ---------------------------------------------------------------------------
 {
   const kinds = sync.roleKindMap();
@@ -277,16 +283,14 @@ for (const name of ['workflow-next', 'kaola-workflow-adapt']) {
         'K5[' + name + ']: kaola-role-' + m[1] + ' reference resolves to a generated role skill');
     }
   }
-  // workflow-next's prose scout dispatch: the {ISSUE_SCOUT_MODEL} card-free
-  // dispatch is rewritten to kimi-true wording (explore + role Skill + inherit).
+  // workflow-next no longer dispatches any agent inline (the retired issue-scout survey folded
+  // into the workflow-planner's no-target mode, dispatched by the SEPARATE adapt surface), so no
+  // {ISSUE_SCOUT_MODEL} placeholder or install-time-resolution prose should ever leak here.
   const wfNext = read(skillDir('workflow-next'));
   assert(!wfNext.includes('ISSUE_SCOUT_MODEL'),
     'K5[workflow-next]: no {ISSUE_SCOUT_MODEL} placeholder leaks (kimi has no install-time render step)');
-  assert(!wfNext.includes('resolved at install time'),
-    'K5[workflow-next]: no false "resolved at install time" sentence (rewritten to kimi-true wording)');
-  assert(wfNext.includes('Dispatch it via `subagent_type="explore"`')
-    && wfNext.includes('kaola-role-issue-scout'),
-    'K5[workflow-next]: scout dispatch rewritten to subagent_type="explore" + kaola-role-issue-scout Skill (issue-scout is read-only)');
+  assert(!wfNext.includes('issue-scout'),
+    'K5[workflow-next]: no retired issue-scout dispatch prose leaks into the router surface');
 }
 
 // ---------------------------------------------------------------------------

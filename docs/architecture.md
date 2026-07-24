@@ -743,7 +743,7 @@ ignored, never refused (scripts validate, never auto-pick — #44). The agent
 
 **Consumer final-validation candidate-hash binding (issue #653, D-653-01).** The consumer (non-npm) `--finalize-check` gate previously accepted a bare `verdict: pass` with no binding to the tree it validated: a stale `final-validation.md` from an earlier candidate would silently pass. `kaola-workflow-plan-validator.js --candidate-hash --json` (a new producer mode, read-only, no tests executed) emits the deterministic `computeCodeTreeHash` snapshot of the current candidate over the SAME `validation_test_consumes` band the chain-receipt producer uses (the frozen plan is the shared band source), for the agent to record as a column-0 `validated_candidate_hash:` line in `.cache/final-validation.md`, computed LAST after every file the validation covered has landed. The consumer arm of `--finalize-check` now additionally refuses `final_validation_unbound` (no well-formed hash line — fail-closed) and `final_validation_stale` (the recorded hash differs from a fresh recompute — payload carries `recorded_candidate_hash` + `current_candidate_hash`), precedence-ordered `final_validation_unverified > final_validation_failed > final_validation_unbound > final_validation_stale`. The gate compares two hashes and never re-executes the validation command — #475's "the agent owns verification" boundary is unchanged. #648's citation fields (`source: cited:<node-id>`, `validated_command`, `validated_at_head`, `reuse_boundary`) are untouched; a citation additionally requires a FRESH `validated_candidate_hash` computed at citation time. See `docs/api.md` § Candidate-hash binding for consumer final-validation.
 
-**Selection evidence docking (issue #653, D-653-01).** On the no-issue-named auto-bundle branch, `workflow-next.md`'s router persists the `issue-scout`'s entire JSON recommendation verbatim (fenced, one-line `selection_mode: auto-bundle|single-issue` header) to `kaola-workflow/{project}/.cache/selection-evidence.md` before dispatching the executor — durable evidence of why a bundle was selected, previously visible only in the scout's dispatch reply. `cmdFinalize` probes for the file (`probeSelectionEvidence`, mirroring the attestation probe's archive-then-live candidate order) and attaches `selection_evidence: present|absent` to the closure receipt — advisory only, no invariant, no warning on absence (a user-named claim legitimately has none, since the scout never runs on that branch). See `docs/api.md` § Closure Contract and `docs/workflow-state-contract.md`.
+**Selection evidence docking (issue #653, D-653-01; issue-scout hop retired per #789).** On the no-issue-named auto-bundle branch, `workflow-planner`'s own no-target survey selects the bundle/primary-issue and docks its selection record (bundle/primary-issue choice, rejected candidates, disjointness reasoning), fenced with a one-line `selection_mode: auto-bundle|single-issue` header, to `kaola-workflow/{project}/.cache/selection-evidence.md` before dispatching the executor — durable evidence of why a bundle was selected. `cmdFinalize` probes for the file (`probeSelectionEvidence`, mirroring the attestation probe's archive-then-live candidate order) and attaches `selection_evidence: present|absent` to the closure receipt — advisory only, no invariant, no warning on absence (a user-named claim legitimately has none, since the no-target survey never runs on that branch). See `docs/api.md` § Closure Contract and `docs/workflow-state-contract.md`.
 
 ### Reviewer contract 2 state machine
 
@@ -882,7 +882,7 @@ Gitea edition (`plugins/kaola-workflow-gitea/`) now includes a complete Finaliza
 The bundle lane is an additive capability on the adaptive path. The overall execution shape is:
 
 ```
-issue-set selection (explicit --target-issues A,B,C  OR  issue-scout recommendation)
+issue-set selection (explicit --target-issues A,B,C  OR  workflow-planner's no-target survey)
     ↓
 all-or-nothing multi-claim (claimExplicitBundle validates every target before any mutation)
     ↓
@@ -903,14 +903,11 @@ one finalization  →  close N issues  →  remove N .roadmap/issue-N.md files
 
 **No separate scheduler.** The bundle shares the existing `kaola-workflow-plan-run` executor and `kaola-workflow-adaptive-node.js` per-node lifecycle. The plan itself covers the combined scope of all N issues as a single adaptive DAG.
 
-**`issue-scout` role — read-only only.** The `issue-scout` agent reads forge issues, the local roadmap, and active folders to recommend a same-scope issue set for bundling. It returns a structured recommendation to the orchestrator. Hard constraints:
-
-- MUST NOT claim issues.
-- MUST NOT write files, author plans, or modify durable state.
-- MUST NOT close issues or dispatch other agents.
-- The orchestrator decides whether to accept the recommendation and proceed as a bundle.
-
-`issue-scout` is not a write role, not an implement role, and not a gate node. It is advisory input only.
+**No-target survey folded into `workflow-planner` (#789).** The standalone `issue-scout` agent
+is retired. In no-target mode (no issue named), `workflow-planner` itself reads forge issues,
+the local roadmap, and active folders, then selects a same-scope issue set jointly with how it
+decomposes the work — no separate pre-claim recommendation hop, and no distinct read-only role
+for the orchestrator to adopt a recommendation from.
 
 ## Agent Profile Structure and Edition Sync
 

@@ -167,14 +167,13 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `doc-updater` | Finalization — docs | Sonnet | |
 | `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | Sonnet | |
 | `contractor` | Mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
-| `workflow-planner` | Front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically) | Opus | no |
-| `issue-scout` | Bundle lane — read-only selection agent (recommends same-scope issue sets; never claims, writes, or dispatches) | Sonnet | yes |
+| `workflow-planner` | Front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically; in no-target mode also runs the backlog survey + selection) | Opus | no |
 | `synthesizer` | Parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | Opus | no |
 | `metric-optimizer` | Bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | Sonnet | |
 
 The **Model** column is the `common` profile. The **default** install profile is
-`higher`, so the four agents marked _yes_ (`code-architect`, `code-reviewer`,
-`security-reviewer`, `issue-scout`) install on **Opus** unless you pass
+`higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
+`security-reviewer`) install on **Opus** unless you pass
 `--profile=common`.
 
 On the current Codex runtime, every named Kaola role profile omits top-level `model` and
@@ -217,7 +216,11 @@ returns control to main), and stays Opus regardless of profile (there is no
 `profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored read-only `planner`, which
 stays a read-only in-plan node role.
 
-`issue-scout` is locally authored for the [bundle lane](#multi-issue-bundle-lane-adaptive-only) (issue #328): a read-only selection agent the orchestrator may dispatch to recommend a same-scope issue set for a bundle claim. It reads forge issues, the local roadmap, and active folders to surface candidate sets, then returns a structured recommendation. It MUST NOT claim issues, write files, author plans, close issues, or dispatch other agents. Its output is advisory input — the orchestrator decides whether to proceed as a bundle. Since issue #646 its model tier is governed like the reviewers': the default `higher` profile installs it on Opus (`common` keeps Sonnet), and the router dispatches it with the install-rendered model rather than a hardcoded tier.
+The standalone `issue-scout` agent (issue #328/#646) is retired: in no-target mode (no issue
+named), `workflow-planner` now runs the [bundle-lane](#multi-issue-bundle-lane-adaptive-only)
+backlog survey itself — reading forge issues, the local roadmap, and active folders — selects a
+same-scope bundle (or a single issue) jointly with how it decomposes the work, then claims +
+authors + freezes in ONE dispatch. There is no separate pre-claim survey hop.
 
 `synthesizer` is locally authored for the adaptive parallel-write path (issue #463): a reasoning-class (Opus) write-convergence specialist. When planner-proven-disjoint write legs co-open as isolated worktrees, the last member's close octopus-merges them mechanically; the `synthesizer` is dispatched **only** when that mechanical merge hits a real conflict, and reconciles the legs into the feature branch by *intent* rather than by textual hunks. It is never invoked for cleanly-disjoint legs and stays Opus regardless of profile (there is no `profiles/higher/synthesizer.md`).
 
@@ -236,7 +239,7 @@ differs from the agent's frontmatter). **After installing or re-running
 >   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `knowledge-lookup`,
 >   `doc-updater`, `adversarial-verifier`, `contractor`, `metric-optimizer`) run silently.
 >   Opus-dispatched agents (`planner`, `workflow-planner`, `synthesizer`, plus
->   `code-architect`, `code-reviewer`, `security-reviewer`, and `issue-scout` on the
+>   `code-architect`, `code-reviewer`, and `security-reviewer` on the
 >   default `higher` profile) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
 >
@@ -323,11 +326,11 @@ cd Kaola-Workflow
 
 #### Agent profiles
 
-The default profile is `higher`: `code-architect`, `code-reviewer`,
-`security-reviewer`, and `issue-scout` install on Opus (deeper threat modeling,
-architecture analysis, and backlog clustering; roughly 3× cost for those four
-agents). All other agents are unaffected. The `common` profile (those four on
-Sonnet) must be requested explicitly with `--profile=common`.
+The default profile is `higher`: `code-architect`, `code-reviewer`, and
+`security-reviewer` install on Opus (deeper threat modeling and architecture
+analysis; roughly 3× cost for those three agents). All other agents are
+unaffected. The `common` profile (those three on Sonnet) must be requested
+explicitly with `--profile=common`.
 
 ```bash
 ./install.sh                              # GitHub edition, higher profile (Opus reviewers) by default
@@ -771,15 +774,15 @@ doc-updater
 adversarial-verifier
 contractor
 workflow-planner
-issue-scout
 synthesizer
 metric-optimizer
 ```
 
 (`adversarial-verifier` is the read-only falsifier for the adaptive path; its mode is derived from
-the frozen graph as either an analytical investigation or a change gate. `contractor`,
-`workflow-planner`, and `issue-scout` are the adaptive lean-orchestrator roles —
-bookkeeper, DAG front end, and read-only bundle-lane backlog scout. `synthesizer` is the
+the frozen graph as either an analytical investigation or a change gate. `contractor` and
+`workflow-planner` are the adaptive lean-orchestrator roles — bookkeeper and DAG front end (the
+front end also runs the backlog survey + bundle-lane selection itself in no-target mode).
+`synthesizer` is the
 adaptive parallel-write convergence role (#463) — reasoning-class (Opus), dispatched only
 to reconcile concurrent write legs by intent on a real merge conflict. `metric-optimizer`
 is the adaptive bounded metric-ratchet role — each iteration it proposes a change,
@@ -864,10 +867,10 @@ Beyond the vendored set, the adaptive path adds locally-authored roles: `adversa
 read-only, refute-by-default falsifier whose investigation/change-gate mode comes from graph
 reachability), `synthesizer` (parallel-write convergence on a real merge conflict), and
 `metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the
-`workflow-planner`/`contractor`/`issue-scout` orchestration roles described in
+`workflow-planner`/`contractor` orchestration roles described in
 [Workflow roles](#workflow-roles).
 
-**Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `issue-scout`, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
+**Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `workflow-planner`'s no-target selection, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
 
 **Legacy contract-1 review transactions and bounded repair.** Verified already-frozen plans that
 predate `plan_schema_version` keep their original evidence vocabulary and schema-1 journal bytes.
@@ -1048,8 +1051,8 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_PARALLEL_WRITES` | `1` (ON) | Default-ON master switch for default-on disjoint write parallelism (D-542-01). When ON, write frontiers the planner proves **disjoint** (`parallel_safe`) co-open as isolated parallel legs — per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net. Set to `0` (also `false`/`no`) to force every write frontier serial. Overlapping (non-disjoint) writes stay serial/consent-gated regardless, and a host without worktree support degrades to serial regardless |
 | `--write-overlap-consent` / `write_overlap_policy` | (overlap only) | The overlap-only consent gate. `--write-overlap-consent` plus a plan `write_overlap_policy: coarse` (anything other than `off`) is what permits a **genuinely-overlapping** (non-disjoint) write frontier to co-open under a coarse shared lane; it does NOT gate disjoint co-open (that is default-on, above). With the policy `off` or consent absent, an overlapping frontier stays serial |
 | `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (sets off the `target_ambiguity` refusal). Adaptive path only |
-| `KAOLA_BUNDLE_MAX_ISSUES` | `4` | Maximum number of issues allowed in a single bundle. Bundles larger than this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles |
-| `KAOLA_GOAL` | (unset) | Operator-side goal text for goal-conditioned bundles (#441). When set, the orchestrator places the goal in the `workflow-planner` dispatch prompt so it is transcribed as `goal: <text>` into `## Meta` of `workflow-plan.md`, hash-covered by `computePlanHash`. The `issue-scout` reads `KAOLA_GOAL` as clustering context and surfaces a `goal_alignment` note in its recommendation. Finalization emits `goal_check: satisfied|unsatisfied|absent` in the closure receipt (advisory in v1; does not block) |
+| `KAOLA_BUNDLE_MAX_ISSUES` | `8` | Maximum number of issues allowed in a single bundle. Bundles larger than this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and planner-selected auto-bundles |
+| `KAOLA_GOAL` | (unset) | Operator-side goal text for goal-conditioned bundles (#441). When set, the orchestrator places the goal in the `workflow-planner` dispatch prompt so it is transcribed as `goal: <text>` into `## Meta` of `workflow-plan.md`, hash-covered by `computePlanHash`. In no-target mode, `workflow-planner` reads `KAOLA_GOAL` as clustering context and surfaces a `goal_alignment` note in its selection. Finalization emits `goal_check: satisfied|unsatisfied|absent` in the closure receipt (advisory in v1; does not block) |
 
 **Active-folder subcommands:**
 
@@ -1300,7 +1303,7 @@ Issue #328 adds an additive bundle lane that lets N same-scope issues share one 
 
 2. **Explicit bundle** — pass `--target-issues A,B,C` (comma-separated, sorted+deduped) or set `KAOLA_TARGET_ISSUES=A,B,C`. Adaptive path only. The claim script validates all targets before any mutation (all-or-nothing: if any target is invalid the whole bundle is refused). On success, one `kaola-workflow/bundle-A-B-C/` folder is created and one `workflow/bundle-A-B-C` branch is provisioned (forge editions prefix the edition name, e.g. `workflow/gitlab-bundle-A-B-C`).
 
-3. **Auto-bundle via `issue-scout`** — the orchestrator may dispatch the read-only `issue-scout` agent to recommend a same-scope issue set. The scout returns a structured recommendation; the orchestrator decides whether to proceed as a bundle. The scout MUST NOT claim, write files, author plans, or dispatch agents.
+3. **Auto-bundle via `workflow-planner`** — when the user names no issue, `workflow-planner` runs its own no-target backlog survey and selects a same-scope issue set jointly with how it decomposes the work, then claims + authors + freezes in ONE dispatch. There is no separate pre-claim recommendation step to adopt.
 
 Setting both `--target-issue` and `--target-issues` (or both env-var equivalents) is refused with a `target_ambiguity` typed error before any state is written.
 
@@ -1312,7 +1315,7 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 |------|---------|
 | `target_ambiguity` | Both scalar and multi-target provided simultaneously |
 | `target_set_empty` | Resolved issue list is empty after dedup |
-| `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | One or more targets are already closed on the forge |
 | `target_set_red` | One or more targets are red (conflict) per the classifier |

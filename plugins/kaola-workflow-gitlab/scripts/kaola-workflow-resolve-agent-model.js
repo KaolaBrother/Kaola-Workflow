@@ -19,7 +19,6 @@ const DEFAULT_AGENT_MODELS = {
   'security-reviewer': 'opus',
   'doc-updater': 'sonnet',
   'adversarial-verifier': 'opus',
-  'issue-scout': 'sonnet',
   contractor: 'sonnet',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
   // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.

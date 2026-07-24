@@ -561,7 +561,6 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'adaptive au
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'MUST delegate');
 for (const [surface, role, task] of [
-  [`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue-scout', 'issue_scout'],
   [`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner', 'workflow_planner_<issue-or-project>']
 ]) {
   for (const token of ['agents.spawn_agent', `agent_type: "${role}"`, `task_name: "${task}"`,
@@ -569,6 +568,11 @@ for (const [surface, role, task] of [
     assertIncludes(surface, token);
   }
 }
+// #789: issue-scout is fully retired — the no-target backlog survey folded into the
+// workflow-planner (dispatched by the adapt skill above), so the "next" SKILL no longer
+// dispatches any agent of its own; assert the retired control-plane literal never resurfaces.
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue-scout');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_scout');
 // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
 // the project-local needle above GREEN (add, never remove) and pin the global path alongside it.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.codex/agents/kaola-workflow/');

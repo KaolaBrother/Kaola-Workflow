@@ -277,7 +277,7 @@ request, so the retired `bundle_requires_adaptive` refusal no longer fires.
 
 ## Bundle Lane — Cross-Edition Requirement (issue #328)
 
-The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) spans all four editions. Any change to bundle-related code — `claimExplicitBundle`, `claimBundle`, bundle state fields, bundle branch naming, bundle finalization, or the `issue-scout` agent file — is a **cross-edition diff** and MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green before Finalization. The cross-edition validation rules from § Testing — Cross-Edition Validation apply without exception. The bundle lane's edition behavioral coverage lives in the gitlab/gitea walkthroughs (six scenarios each — claim / refusal-rollback / duplicate-block / orient / finalize-roadmap-cleanup / single-issue regression — mirroring `simulate-workflow-walkthrough.js` §#328; added by #342) — keep them in lockstep when bundle behavior changes (see § Testing — Cross-Edition Validation, Edition behavioral coverage).
+The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `workflow-planner`'s no-target survey) spans all four editions. Any change to bundle-related code — `claimExplicitBundle`, `claimBundle`, bundle state fields, bundle branch naming, or bundle finalization — is a **cross-edition diff** and MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green before Finalization. The cross-edition validation rules from § Testing — Cross-Edition Validation apply without exception. The bundle lane's edition behavioral coverage lives in the gitlab/gitea walkthroughs (six scenarios each — claim / refusal-rollback / duplicate-block / orient / finalize-roadmap-cleanup / single-issue regression — mirroring `simulate-workflow-walkthrough.js` §#328; added by #342) — keep them in lockstep when bundle behavior changes (see § Testing — Cross-Edition Validation, Edition behavioral coverage).
 
 **Agent-set deltas carry an exact-match registration surface (#340).** Adding or removing an agent profile (root `agents/<name>.md` or a plugin `agents/<name>.toml`) breaks exact-match registries and by-name dispatch registrations that are **keyed on no symbol of the new file** — so a symbol-grep (#306) cannot find them. The full 22-path surface: the three sibling edition profiles; the three `config/agents.toml` codex-dispatch templates (the `[agents.<name>]` table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile installs); `validate-vendored-agents.js` (`localAgents` exact listing); `install.sh` **and** `uninstall.sh` `REQUIRED_AGENTS` (a missing uninstall name orphans the installed agent); `resolve-agent-model.js` (×4, byte-identical); the plan-validator `CANONICAL_ROLES` (×4); the gitlab/gitea contract-validator agent counts; and the two forge `test-*-workflow-scripts.js` counts. The adaptive plan validator refuses an addition omitting any of these at freeze (`agent-registration gap`); removals are not machine-detected on the plan side but the derived config↔dir and install↔uninstall parity guards in the contract validators red the affected chain. This is itself a cross-edition diff.
 
@@ -521,8 +521,8 @@ Plans may include an optional `goal: <text>` prose line in `## Meta`. Key proper
 
 - **Reader-only, no gate** — `parseGoal` reads `^goal:[ \t]*(.*)$` from the `sectionBody('Meta')` region, the same decoy-immune scoping `parseLabels` uses. No validator gate is added; goal-absent plans stay valid and hash-stable.
 - **Hash-covered for free** — `computePlanHash` already hashes the entire `## Meta` body, so the `goal:` line is covered with no code change. Tampering the goal after freeze trips `plan_hash_mismatch` on `--resume-check`.
-- **Operator entry** — `KAOLA_GOAL` is the operator-side env var for the goal text. Because subagent shells do NOT inherit env vars across the spawn boundary, the goal text ALSO travels in the scout/planner dispatch prompts — the orchestrator owns placing it in both.
-- **Scout integration** — the `issue-scout` reads the goal as clustering context and surfaces a `goal_alignment` note in its recommendation. Goal alignment narrows which issues cluster together; it does not relax the D-430-01 bundle-coherence / target-set-integrity guards.
+- **Operator entry** — `KAOLA_GOAL` is the operator-side env var for the goal text. Because subagent shells do NOT inherit env vars across the spawn boundary, the goal text ALSO travels in the `workflow-planner` dispatch prompt — the orchestrator owns placing it there.
+- **No-target selection integration** — in no-target mode, `workflow-planner` reads the goal as clustering context and surfaces a `goal_alignment` note in its selection. Goal alignment narrows which issues cluster together; it does not relax the D-430-01 bundle-coherence / target-set-integrity guards.
 - **Advisory attestation** — `cmdFinalize` in `kaola-workflow-claim.js` writes `goal_check: satisfied|unsatisfied|absent` into the closure receipt. In v1 this is informational metadata only and does NOT block claim or finalize. Flip-to-blocking is deferred to the #429 follow-up. See `docs/decisions/D-441-01.md`.
 
 ## Chain receipt is the only valid greenness evidence (#432)
@@ -873,18 +873,10 @@ existing gate belongs in the gate itself, with its own review, not as an axiom a
 
 See `docs/decisions/D-645-01.md`.
 
-## Issue-scout higher-profile model tier (#646)
+## Issue-scout higher-profile model tier (#646; role fully retired by #789)
 
-`issue-scout` has a `agents/profiles/higher/issue-scout.md` file (`model: opus`) alongside the base
-`agents/issue-scout.md` (`model: sonnet`), following the same higher/common tier shape as
-`code-reviewer`/`security-reviewer`. `ISSUE_SCOUT_MODEL` is wired into `install.sh`'s
-`model_for_placeholder` case and `render_command_file`'s `placeholders` array — both entries land
-together in the same change, never partially: a partial land (either list without the other)
-reproduces a historical unrendered-placeholder regression, where the token survived install with no
-case to resolve it. The rendered placeholder is COMMAND-surface-only (the three `workflow-next`
-commands) — Codex SKILL packs keep prose-only scout dispatch, matching the model-less
-`issue-scout.toml` twins across all three plugin editions; a shared-body placeholder would leak
-into the skills. `DEFAULT_AGENT_MODELS['issue-scout']` and `REASONING_FLOOR_ROLES` are unaffected —
-a higher-profile lever raises quality, it never lowers the reasoning floor.
-
-See `docs/decisions/D-646-01.md`.
+The standalone `issue-scout` agent, its higher-profile `model: opus` override, and the
+`ISSUE_SCOUT_MODEL` install-time placeholder are retired: the no-target backlog survey folded
+into `workflow-planner`'s own no-target mode, which was already Opus-pinned under every
+profile. There is nothing left to model-tier separately. See `docs/decisions/D-646-01.md` for
+the original tier-governance history.

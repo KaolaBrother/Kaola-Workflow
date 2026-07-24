@@ -230,12 +230,14 @@ assertIncludes('commands/workflow-next.md', '## Co-active Folders');
 // the classifier's trap-2 tolerant fast-summary.md read survives retirement, so the router's
 // active-folder detection still recognizes a legacy fast-summary.md marker).
 assertIncludes('commands/workflow-next.md', '`workflow-plan.md` or a `workflow-state.md`');
-// #380: the issue-scout auto-bundle entry must stay REACHABLE — Step 0 branches on whether the
-// user named an issue, and the no-issue-named branch dispatches the scout (regression-locks the
-// #380 unreachable-entry defect). Pin the branch marker + the env-wiring contract.
+// #380/#789: the auto-bundle entry must stay REACHABLE — Step 0 branches on whether the user
+// named an issue, and the no-issue-named branch routes to the adaptive front end with no target
+// (regression-locks the #380 unreachable-entry defect; #789 retired the issue-scout hop in favor
+// of the workflow-planner's own no-target survey mode). Pin the branch marker + the no-target
+// hand-off contract.
 assertIncludes('commands/workflow-next.md', 'Branch first on whether the user named an issue');
-assertIncludes('commands/workflow-next.md', 'issue-scout');
-assertIncludes('commands/workflow-next.md', 'Output → env wiring');
+assertIncludes('commands/workflow-next.md', 'auto-bundle entry');
+assertIncludes('commands/workflow-next.md', 'No target (auto-bundle entry)');
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
 for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-next.md', token);
 // #372: sweep the retired advisor-gate vocabulary over workflow-init.md too (the consult-mandate
@@ -769,16 +771,14 @@ assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-w
 // This surface was unlocked before, which let forge-edition router drift ship green on all 4 lanes.
 assertIncludes('commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
 assertIncludes('commands/workflow-next.md', 'Skip this entire step');
-// #646: the issue-scout is dispatched PRE-CLAIM via router prose (Step 0, no-issue-named branch), not a
-// fenced Agent() block — and commands/workflow-next.md is NOT in phaseCommands, so
-// assertEveryDispatchHasModel never scans it. Pin the governed scout dispatch here explicitly: the
-// tier must stay the install-rendered {ISSUE_SCOUT_MODEL} placeholder, never drift back to an
-// ungoverned (model-less) prose dispatch (the #443 regression shape — an unrendered placeholder — is
-// separately caught by test-install-model-rendering.js).
-assertIncludes('commands/workflow-next.md', 'the governed issue-scout tier');
-assertIncludes('commands/workflow-next.md', 'model="{ISSUE_SCOUT_MODEL}"');
-assertIncludes('commands/workflow-next.md', 'isolated, self-contained control-plane brief');
-assertIncludes('commands/workflow-next.md', 'argument-shape refusal');
+// #789: issue-scout is fully retired — the router no longer dispatches PRE-CLAIM at all; the
+// no-issue-named branch instead routes to the adaptive front end with NO target, and the
+// workflow-planner's own no-target survey mode owns the backlog survey. Pin the no-target
+// hand-off contract and assert the retired scout vocabulary never resurfaces.
+assertIncludes('commands/workflow-next.md', 'No target (auto-bundle entry)');
+assertIncludes('commands/workflow-next.md', "planner's no-target survey mode");
+assertNotIncludes('commands/workflow-next.md', 'issue-scout');
+assertNotIncludes('commands/workflow-next.md', 'ISSUE_SCOUT_MODEL');
 // adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance
 // #277 M3: FANOUT_CAP and post-dominate concepts relocated from commands/kaola-workflow-adapt.md
 // (now a dispatch-handle-only file) to agents/workflow-planner.md (sole home of authoring procedure).

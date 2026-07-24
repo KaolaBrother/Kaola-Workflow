@@ -86,15 +86,16 @@ here for the full contract.
     from the agent manifest and `model` the runtime-supplied tier — codex CLI
     only; empty otherwise). Used by `checkDispatchAttestations`
     at closure time for WARN-FIRST subagent-seam attestation (see `docs/api.md` § Closure Contract).
-  - `selection-evidence.md` (issue #653 / D-653-01) — written by the `workflow-next.md` router,
-    BEFORE the executor is dispatched, only on the no-issue-named auto-bundle branch: the
-    `issue-scout`'s entire JSON recommendation, verbatim and fenced, with a one-line
+  - `selection-evidence.md` (issue #653 / D-653-01, retired issue-scout hop folded per #789) —
+    docked BEFORE the executor is dispatched, only on the no-issue-named auto-bundle branch: the
+    `workflow-planner`'s no-target selection record (bundle/primary-issue choice, rejected
+    candidates, disjointness reasoning), verbatim and fenced, with a one-line
     `selection_mode: auto-bundle|single-issue` header. Archives with the cycle automatically (no
     special-casing at `archiveProjectDir`). `probeSelectionEvidence` (`kaola-workflow-claim.js`)
     checks `[archiveCacheDir, liveCacheDir]` for any file matching `/^selection-evidence\./` and
     attaches `selection_evidence: present|absent` to the closure receipt (advisory only — a
-    user-named claim legitimately has none, since the scout never runs on that branch). See
-    `docs/api.md` § Closure Contract.
+    user-named claim legitimately has none, since the no-target survey never runs on that
+    branch). See `docs/api.md` § Closure Contract.
   - `review-contexts/<context-hash>.json` (contract 2) — canonical runtime-neutral gate context.
     The hash binds plan/behavior/claim/epoch/logical-gate identity, graph-derived gate mode, claim
     root, landable candidate, inherited frontier, stable scope lineage, discovery/closure phase,

@@ -440,7 +440,7 @@ A bundle run ends at ONE finalization. The finalization step:
 |------|---------|
 | `target_ambiguity` | both `--target-issue` and `--target-issues` set |
 | `target_set_empty` | issue list empty or missing |
-| `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 8) |
 | `target_set_conflicts_active_work` | any member is already claimed |
 | `target_set_has_closed_issue` | any member is already closed |
 | `target_set_red` | classifier returns `red` for any member |

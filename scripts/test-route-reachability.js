@@ -251,37 +251,19 @@ for (const ed of codexEditions) {
       `T5b: ${f} must not describe sonnet as an inherited role_default tier`);
   }
 
+  // #789: issue-scout is fully retired — the no-target backlog survey folded into the
+  // workflow-planner (dispatched by the separate adapt surface, see workflowPlannerSpec below), so
+  // the "next" SKILL no longer dispatches any agent of its own. Assert the retired control-plane
+  // literal never resurfaces on any of the 3 codex-live next surfaces.
   const nextSurfaces = [
     'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
     'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
     'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md'
   ];
-  const issueScoutSpec = { taskName: 'issue_scout', agentType: 'issue-scout',
-    targetField: 'Selected issue/set request:', contractField: 'issue-scout skill/profile',
-    returnField: 'bounded durable recommendation JSON' };
   for (const f of nextSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(controlPlaneBlockValid(content, issueScoutSpec),
-      `T5b structural: ${f} issue-scout literal must carry the exact isolated v2 argument shape`);
-    const corrupted = content.replace('fork_turns: "none"\n  message:',
-      'fork_turns: "all"\n  model: "gpt-5.6-sol"\n  reasoning_effort: "xhigh"\n  message:');
-    assert(!controlPlaneBlockValid(corrupted, issueScoutSpec),
-      `T5b mutation: ${f} must reject a corrupted issue-scout literal despite nearby compliant prose`);
-    for (const [kind, mutation] of conflictingControlPlaneMutations(content)) {
-      assert(!controlPlaneBlockValid(mutation, issueScoutSpec),
-        `T5b duplicate mutation: ${f} must reject issue-scout ${kind}`);
-    }
-    assert(content.includes('direct `agents.spawn_agent` tool')
-      && content.includes('never dispatch through `functions.exec` or Code Mode'),
-      `T5b: ${f} must require role-safe direct issue-scout dispatch`);
-    assert(!content.includes('codex_v2_encrypted_transport_unsafe')
-      && !content.includes('codex_v2_role_transport_unsafe'),
-      `T5b (#775): ${f} must retire the 0.142/0.144 transport-mode gate — Codex >=0.145.0 no longer needs it`);
-    for (const token of ['task_name: "issue_scout"', 'agent_type: "issue-scout"', 'fork_turns: "none"',
-      'argument-shape refusal', 'exactly once', 'repository root', 'durable return']) {
-      assert(content.includes(token), `T5b: ${f} must pin isolated issue-scout control-plane token ${token}`);
-    }
-    assert(content.includes('No control-plane dispatch uses `fork_turns: "all"`'), `T5b: ${f} must prohibit full-history control-plane forks`);
+    assert(!content.includes('issue-scout') && !content.includes('issue_scout'),
+      `T5b (#789): ${f} must NOT carry any retired issue-scout dispatch literal or prose`);
   }
 
   const adaptSurfaces = [
@@ -1402,14 +1384,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: 'result: escalate', surfaces: NX6 },
     { token: 'kaola-workflow-plan-run', surfaces: NX6 },
     { token: 'auto-bundle', surfaces: NX6 },
-    // T13-half — next skills × 3 (codex-live)
-    { token: 'direct `agents.spawn_agent` tool', surfaces: nxSkill },
-    { token: 'never dispatch through `functions.exec` or Code Mode', surfaces: nxSkill },
     // router prose — next commands × 3 (claude-live)
     { token: 'thin router', surfaces: nxCmd },
     { token: 'active folders', surfaces: nxCmd },
     { token: '--target-issue', surfaces: nxCmd },
-    { token: 'issue-scout', surfaces: nxCmd },
     // forge-renamed noun (gitlab: watch-mr) — residual
     { token: 'watch-pr', surfaces: nxCmd },
   ];

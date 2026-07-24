@@ -180,7 +180,7 @@ assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-sta
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab phantom-advisor hook must be removed (#372)');
 // #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired). #463: +synthesizer = 15.
 // #634: +metric-optimizer = 16.
-assert(agentFiles.length === 16, 'expected 16 GitLab agent profiles (14 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451)');
+assert(agentFiles.length === 15, 'expected 15 GitLab agent profiles (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789)');
 assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register

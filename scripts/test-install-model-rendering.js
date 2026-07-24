@@ -3236,9 +3236,6 @@ try {
       assert(manifest['contractor'] === 'sonnet', 'higher manifest must map contractor→sonnet');
       assert(manifest['workflow-planner'] === 'opus', 'higher manifest must map workflow-planner→opus; got ' + manifest['workflow-planner']);
       assert(manifest['synthesizer'] === 'opus', 'higher manifest must map synthesizer→opus; got ' + manifest['synthesizer']);
-      // #646: the governed issue-scout tier — higher profile installs the profiles/higher/issue-scout.md
-      // (model: opus) override, so the manifest the adaptive resolver reads must map issue-scout→opus.
-      assert(manifest['issue-scout'] === 'opus', 'higher manifest must map issue-scout→opus; got ' + manifest['issue-scout']);
       // All keys must be non-empty and in {opus,sonnet}
       for (const [k, v] of Object.entries(manifest)) {
         assert(v === 'opus' || v === 'sonnet', 'manifest value for ' + k + ' must be opus or sonnet; got ' + v);
@@ -3261,9 +3258,6 @@ try {
       assert(manifest['planner'] === 'opus', 'common manifest must still map planner→opus; got ' + manifest['planner']);
       assert(manifest['contractor'] === 'sonnet', 'common manifest must map contractor→sonnet (the contractor stays sonnet under every profile); got ' + manifest['contractor']);
       assert(manifest['workflow-planner'] === 'opus', 'common manifest must still map workflow-planner→opus (Opus under every profile); got ' + manifest['workflow-planner']);
-      // #646: the governed issue-scout tier — common profile has no higher override, so the base
-      // agents/issue-scout.md (model: sonnet) tier lands; the manifest must map issue-scout→sonnet.
-      assert(manifest['issue-scout'] === 'sonnet', 'common manifest must map issue-scout→sonnet (no higher override); got ' + manifest['issue-scout']);
     } finally { fs.rmSync(cmtmp, { recursive: true, force: true }); }
   }
 

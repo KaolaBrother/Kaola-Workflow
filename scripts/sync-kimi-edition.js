@@ -17,7 +17,7 @@
 // ONE model tier: there is NO Reasoning/Standard split on Kimi (the Codex inherit
 // precedent). Kimi Code's Agent tool supports only three built-in subagent types
 // (`coder`, `explore`, `plan`) and has no per-dispatch model override — every
-// subagent inherits the session model. The 16 canonical roles therefore ship as
+// subagent inherits the session model. The 15 canonical roles therefore ship as
 // ROLE-CONTRACT Skills (`kaola-role-<role>`): the command dispatch cards are
 // rewritten to `subagent_type="coder"` (write roles) / `"explore"` (read-only
 // roles — computed from the canonical frontmatter `tools:` array, never hand-listed)
@@ -349,14 +349,6 @@ function transformCommandBody(body) {
   text = text.replace(
     /For every ([^.]*?), include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
     'For every $1, never pass a per-call model override; sub-agents inherit the session model.'
-  );
-  // workflow-next's issue-scout dispatch names `model="{ISSUE_SCOUT_MODEL}"` plus an
-  // install-time resolution note that is FALSE for kimi (no install-time render step;
-  // the session model is inherited). Rewrite the whole paragraph to kimi-true wording
-  // BEFORE the generic strip runs. The scout is a read-only role → `explore`.
-  text = text.replace(
-    /Dispatch it with `model="\{ISSUE_SCOUT_MODEL\}"` — the governed issue-scout tier\.\s+The model above is resolved at install time; the router does not substitute it\./g,
-    'Dispatch it via `subagent_type="explore"` and begin its prompt with: First invoke the `kaola-role-issue-scout` Skill and follow its contract for the entire task. Never pass a per-call model override; sub-agents inherit the session model.'
   );
   // Prose: kimi-neutral wording for subagent references (was "Claude Code agent(s)").
   text = text.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');

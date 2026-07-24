@@ -75,7 +75,7 @@ const RETIRED_PROFILE_FILES = [
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'code-explorer', 'knowledge-lookup', 'tdd-guide', 'implementer',
-  'doc-updater', 'issue-scout', 'contractor', 'metric-optimizer',
+  'doc-updater', 'contractor', 'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',

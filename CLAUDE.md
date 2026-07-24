@@ -31,7 +31,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 Issue selection is an agent decision, not a hidden script decision.
 
 - **When user names an issue**: use that exact issue. Scripts validate and claim but must not fall back to another.
-- **When user asks for "next issue"**: agent inspects local roadmap, GitHub issues, recent completed work, active folders, and user goal, then states the selected issue before claiming via `KAOLA_TARGET_ISSUE=N`.
+- **When user asks for "next issue"**: the adaptive `workflow-planner`, dispatched with no target, runs the backlog survey itself (local roadmap, GitHub issues, recent completed work, active folders, and user goal), selects a bundle or single issue jointly with how it decomposes the work, states the selection aloud, then claims it directly — no separate pre-claim survey hop.
 - **Startup scripts validate, not select**: `cmdStartup`, `cmdPickNext`, and `cmdBootstrap` require an explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
 - **Ambiguity handling**: When next issue is ambiguous or conflicts with active state, ask or stop. Do not let a script silently choose.
 

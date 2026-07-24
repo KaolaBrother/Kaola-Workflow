@@ -369,26 +369,9 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // #775: v2-task-name is the only dispatch mode (--codex-dispatch-mode and
-    // the 0.142/0.144 transport-unsafe refusals are retired) — issue-scout
-    // dispatch no longer detects or names a mode.
-    block_id: 'nx-codex-issue-scout-dispatch',
-    topic: 'next',
-    runtime_tag: 'codex-live',
-    surface_type_tag: 'skill',
-    content_tokens: [
-      'direct `agents.spawn_agent` tool',
-      'never dispatch through `functions.exec` or Code Mode',
-      'agents.spawn_agent',
-      'task_name: "issue_scout"',
-      'agent_type: "issue-scout"',
-      'fork_turns: "none"',
-      'isolated, self-contained control-plane brief',
-      'argument-shape refusal',
-      'exactly once',
-    ],
-  },
-  {
+    // #789: issue-scout is fully retired — the no-target backlog survey folded into the
+    // workflow-planner (dispatched by the separate adapt surface), so the "next" SKILL no longer
+    // dispatches any agent of its own and carries no distinct control-plane literal here.
     // `watch-pr` is forge-renamed to `watch-mr` on the gitlab next command, so
     // it cannot be a command-obligating content token; it stays a residual
     // additive pin (RESIDUAL_ALLOWLIST). The rest hold across all 3 commands.
@@ -400,15 +383,8 @@ const REQUIRED_BLOCKS = [
       'thin router',
       'active folders',
       '--target-issue',
-      'issue-scout',
       'This step never runs; it is retained only for the shared',
       'typed-refusal classification below',
-      // #646: the governed issue-scout model placeholder — command-only (install.sh
-      // renders {X_MODEL} placeholders in COMMANDS; no SKILL.md may carry one), so it
-      // rides this claude-live/command block, not the both/both blocks above.
-      'model="{ISSUE_SCOUT_MODEL}"',
-      'isolated, self-contained control-plane brief',
-      'argument-shape refusal',
     ],
   },
   {

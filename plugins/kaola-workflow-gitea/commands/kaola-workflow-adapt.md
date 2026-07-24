@@ -201,7 +201,7 @@ node "$CLAIM_JS" startup --runtime claude --target-issues 42,47,53
 Shape: active folder + branch `bundle-42-47-53` (sorted, deduplicated); `workflow-state.md` records
 `issue_number: 42` + `issue_numbers: 42,47,53`, `bundle_id`, `closure_policy: all_or_nothing`. The
 bundle lane always runs `workflow_path: adaptive` (the set may exceed
-`KAOLA_BUNDLE_MAX_ISSUES`, default 4). The planner authors ONE implementation-lane DAG (not
+`KAOLA_BUNDLE_MAX_ISSUES`, default 8). The planner authors ONE implementation-lane DAG (not
 one-node-per-issue); `## Meta` carries a conservative union of labels. A bundle run ends at ONE
 finalization that closes every issue in `issue_numbers` (all-or-nothing), removes each
 `.roadmap/issue-N.md`, regenerates `ROADMAP.md` once, archives one bundle folder, and writes one
