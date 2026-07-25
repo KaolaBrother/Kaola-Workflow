@@ -15,8 +15,9 @@
 //
 // Checks (post-dominance + structural properties over ANY topology):
 //   - runtime-closed role library (installed set) — unknown role => refuse
-//   - exactly three shapes: SEQUENCE / FAN-OUT (N <= FANOUT_CAP, pairwise-disjoint
-//     write-role sets) / BOUNDED LOOP (static cap) — heterogeneous fan-out => refuse
+//   - exactly four shapes: SEQUENCE / FAN-OUT (N <= FANOUT_CAP, pairwise-disjoint
+//     write-role sets) / BOUNDED LOOP (static cap) / SELECT(<group>) (selective-execution
+//     arm; requires a selectorSource) — heterogeneous fan-out => refuse
 //   - a single unique `finalize` sink; acyclic DAG (loops are annotated single nodes)
 //   - G1 code-reviewer post-dominates every implement node (trivial-docs exemption)
 //   - G2 security-reviewer post-dominates every sensitive node (when sensitive)
