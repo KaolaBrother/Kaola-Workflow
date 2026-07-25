@@ -1,6 +1,6 @@
 ---
 description: Kaola-Workflow Adaptive Authoring. The agent freely composes a task-shaped DAG of role nodes into workflow-plan.md, then the validator proves it in-grammar and freezes it.
-argument-hint: <issue number>
+argument-hint: [issue number | issue set | task description]
 ---
 
 # Kaola-Workflow Adaptive Authoring (adapt)
@@ -93,14 +93,44 @@ Every subagent dispatch below carries an explicit `model=` line — the installe
 `model="{...}"` placeholder from the agent's frontmatter and it is what shows the model badge. You
 MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in the Agent call below exactly as shown; never omit it.
 
+## Entry contract — what this surface receives
+
+The caller hands off in one of four shapes, and each has a defined rendering in the planner
+dispatch below. Resolve the shape FIRST, before the authoring guard.
+
+- **An issue number or project** — the ordinary explicit target. Use it exactly as given.
+- **An issue set** (comma-separated) — the bundle lane; see Bundle Lane below.
+- **A free-form task description** — the user described the work and named no issue. Resolve it
+  to exactly ONE issue BEFORE the claim, because the claim, the project folder, the branch, the
+  roadmap source, and the closure receipt are all keyed by issue number:
+  1. Look up the OPEN issues of the active repository on the forge. If exactly one clearly
+     matches the description, that is the target — state the match aloud.
+  2. If none matches, file a new issue for it: the user's description verbatim as the body and a
+     one-line summary of it as the title. State the new number aloud.
+  3. If more than one plausibly matches, or the forge cannot be reached (including
+     `KAOLA_WORKFLOW_OFFLINE=1`), STOP and ask the user which issue to use. Never guess, and
+     never fall through to the no-target survey.
+  The described task then enters as an explicit target, and the description travels on as the
+  planner's binding scope. The no-target survey does NOT run on this shape, so roadmap priority
+  cannot outrank the work the user asked for.
+- **Empty (no target)** — dispatch in no-target survey mode: the `workflow-planner` runs the
+  backlog survey itself, selects the work, and claims it in the same dispatch. Do NOT resolve or
+  pre-select a target here.
+
 ## Front end: claim + author (the `workflow-planner` subagent)
 
 ONE enforced dispatch: the main session never runs the claim or authoring write but keeps every
-judgment. The router enters with `{issue}`; the planner RETURNS `{project}`. **Re-entry:** a *frozen*
+judgment. The router enters with `{issue-or-project}` — an issue number, an issue set, or the
+issue a task description resolved to under the Entry contract above — or with NO target at all,
+in which case the planner selects the work itself in its no-target survey mode. The planner
+RETURNS `{project}`. **Re-entry:** a *frozen*
 plan never reaches adapt (it resumes via `/kaola-workflow-plan-run`), but an authored-but-NOT-frozen
 plan (no `plan_hash`) does — re-run the planner+handoff (it MAY overwrite an unfrozen invalid plan,
 never a frozen one) with prior validator errors; a pre-freeze exit is resumable
 (`kaola-workflow-claim.js discard --project {project}` abandons it).
+
+Resolve the entry shape first (Entry contract above) — a task description must already be a
+resolved issue number by the time this guard runs.
 
 **Before the claim (main session):** run the authoring guard
 (`node "$(kaola_script kaola-workflow-claim.js)" authoring-allowed`; always `authoring_allowed: true`,
@@ -121,9 +151,18 @@ Agent(
   subagent_type="workflow-planner",
   model="{WORKFLOW_PLANNER_MODEL}",
   description="Adaptive front end {issue}",
-  prompt="Repository root: {repo-root}. Selected issue/set/project: {issue-or-project}. Settle the starting contract and design the adaptive workflow per the kaola-workflow-adapt skill and workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md) — the full procedure lives there as the sole home. Return only the bounded durable handoff packet."
+  prompt="Repository root: {repo-root}. Selected issue/set/project: {issue-or-project}. Binding scope: {task-description-or-none}. Settle the starting contract and design the adaptive workflow per the kaola-workflow-adapt skill and workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md) — the full procedure lives there as the sole home. Return only the bounded durable handoff packet."
 )
 ```
+
+Render both target slots from the entry shape; never leave a placeholder literal:
+
+| Entry shape | `Selected issue/set/project:` renders | `Binding scope:` renders |
+| --- | --- | --- |
+| Issue number / project | that issue number or project name | `none` |
+| Issue set | the comma-separated set | `none` |
+| Task description | the issue it resolved to under the Entry contract | the user's description, verbatim, on one line |
+| No target | `none — no target named; run no-target survey mode and select the work yourself` | `none` |
 
 This is an **isolated, self-contained control-plane brief**: never inherit the full conversation. A
 spawn **argument-shape refusal** requires correcting arguments and retrying the same planner

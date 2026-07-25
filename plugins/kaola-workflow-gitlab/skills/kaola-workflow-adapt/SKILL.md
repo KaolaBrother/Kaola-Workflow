@@ -289,6 +289,30 @@ the example above models both.
 
 When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, dispatched concurrently) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping epoch, then continues through the claim-preserving re-plan control plane into one immutable child epoch (new `plan_hash`, parent remains frozen). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
 
+## Entry contract — what this surface receives
+
+The caller hands off in one of four shapes, and each has a defined rendering in the planner
+dispatch below. Resolve the shape FIRST, before the authoring guard.
+
+- **An issue number or project** — the ordinary explicit target. Use it exactly as given.
+- **An issue set** (comma-separated) — the bundle lane; see Bundle Lane below.
+- **A free-form task description** — the user described the work and named no issue. Resolve it
+  to exactly ONE issue BEFORE the claim, because the claim, the project folder, the branch, the
+  roadmap source, and the closure receipt are all keyed by issue number:
+  1. Look up the OPEN issues of the active repository on the forge. If exactly one clearly
+     matches the description, that is the target — state the match aloud.
+  2. If none matches, file a new issue for it: the user's description verbatim as the body and a
+     one-line summary of it as the title. State the new number aloud.
+  3. If more than one plausibly matches, or the forge cannot be reached (including
+     `KAOLA_WORKFLOW_OFFLINE=1`), STOP and ask the user which issue to use. Never guess, and
+     never fall through to the no-target survey.
+  The described task then enters as an explicit target, and the description travels on as the
+  planner's binding scope. The no-target survey does NOT run on this shape, so roadmap priority
+  cannot outrank the work the user asked for.
+- **Empty (no target)** — dispatch in no-target survey mode: the `workflow-planner` runs the
+  backlog survey itself, selects the work, and claims it in the same dispatch. Do NOT resolve or
+  pre-select a target here.
+
 ## Front end: claim + author (the `workflow-planner` agent role)
 
 The adaptive path opens by delegating to ONE subagent. **You MUST delegate the starting contract
@@ -303,12 +327,17 @@ freezes, judges risk, asks the user, or dispatches further — it returns contro
 The persisted detection paths are `.codex/agents/kaola-workflow/` for a trusted project override
 and `~/.codex/agents/kaola-workflow/` for the global default; the preflight alone resolves precedence.
 
-The router enters with the agent-selected target issue for fresh adaptive work; the planner RETURNS
-the `{project}` used after. **Re-entry (unfrozen plan):** an *authored-but-NOT-frozen* plan (a prior
+The router enters with the agent-selected target for fresh adaptive work — an issue number, an issue
+set, or the issue a task description resolved to under the Entry contract above — or with NO target
+at all, in which case the planner selects the work itself in its no-target survey mode. The planner
+RETURNS the `{project}` used after. **Re-entry (unfrozen plan):** an *authored-but-NOT-frozen* plan (a prior
 governance refusal / declined ask / abort — no `plan_hash`) routes back here; SKIP the freshness gate
 + planner delegation and re-run the planner+handoff on the existing plan (the planner MAY overwrite an unfrozen plan; never a frozen one); the handoff freezes mechanically. A pre-freeze exit
 leaves a **resumable** project; `kaola-gitlab-workflow-claim.js discard --project
 {project}` abandons it.
+
+Resolve the entry shape first (Entry contract above) — a task description must already be a
+resolved issue number by the time this guard runs.
 
 **Entry guard (this session, before the delegation).** Run the **authoring guard**. It
 needs no project. Adaptive authoring is always allowed, so this returns `authoring_allowed: true`;
@@ -357,9 +386,19 @@ agents.spawn_agent:
   task_name: "workflow_planner_<issue-or-project>"
   agent_type: "workflow-planner"
   fork_turns: "none"
-  message: "Repository root: <absolute-root>. Selected issue/set/project: <target>. Apply the kaola-workflow-adapt skill and workflow-planner profile contract. Return only the bounded durable handoff packet."
+  message: "Repository root: <absolute-root>. Selected issue/set/project: <target>. Binding scope: <task-description-or-none>. Apply the kaola-workflow-adapt skill and workflow-planner profile contract. Return only the bounded durable handoff packet."
 ```
-Sanitize the stable task suffix to lowercase letters, digits, and underscores. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
+Render both target slots from the entry shape; never leave a placeholder literal:
+
+| Entry shape | `Selected issue/set/project:` renders | `Binding scope:` renders |
+| --- | --- | --- |
+| Issue number / project | that issue number or project name | `none` |
+| Issue set | the comma-separated set | `none` |
+| Task description | the issue it resolved to under the Entry contract | the user's description, verbatim, on one line |
+| No target | `none — no target named; run no-target survey mode and select the work yourself` | `none` |
+
+Sanitize the stable task suffix to lowercase letters, digits, and underscores. With no target, use
+the literal suffix `no_target`. This is an isolated, self-contained control-plane brief; omit transient `model` and `reasoning_effort`, and never use `fork_turns: "all"`. Always use `fork_turns: "none"` per the established identity/header convention. The observed full-history rejection is an **argument-shape refusal**: correct the shape and retry the same workflow-planner role, task identity, isolated brief, and bounded durable return exactly once. Never author inline; reserve `local-fallback-tool-unavailable` for genuinely unavailable agent tooling.
 
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
