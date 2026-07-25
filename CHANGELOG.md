@@ -5,6 +5,7 @@
 ### Changed
 
 - **Codex installation wording now matches the official plugin and subagent guides.** The primary install flow separates marketplace registration from plugin installation, tells users to install exactly one forge edition, and requires a new Codex chat/session after installation or config changes. The guide and all six workflow-init surfaces now distinguish Codex's default general subagent availability from Kaola-Workflow's stricter requirement for an explicit `[agents] enabled = true` V2 task-name attestation; installer and preflight remediation text uses the same distinction. This is a wording-only correction: no preflight, dispatch, or concurrency behavior changed.
+- **Codex hook-trust installation guidance now includes the required post-trust repair.** On Codex 0.145.0, `/hooks` can persist `[hooks.state]` trust tables immediately before Kaola's trailing managed-block marker, making the doctor report the otherwise-current install as stale. The guide now tells users to exit after trusting hooks, rerun the profile installer to preserve the trust hashes while restoring the marker, run the doctor, and only then start a new working session. This is documentation-only; installer and doctor behavior are unchanged.
 
 ## [7.0.0] - 2026-07-25
 

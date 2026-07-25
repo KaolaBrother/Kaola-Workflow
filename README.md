@@ -524,6 +524,23 @@ Review the `kaola-workflow:` entries and trust them. This is a one-time step per
 machine (trust survives across projects and upgrades as long as a hook's content does
 not change; editing a hook re-marks it untrusted, so re-run `/hooks` after an upgrade
 that changes a hook's content).
+
+After trusting new or changed Kaola hooks, exit that Codex session and re-run the
+same profile installer once, then run the doctor:
+
+```bash
+node <plugin-root>/scripts/install-codex-agent-profiles.js --global
+node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-root <project-root> --json
+```
+
+Codex 0.145.0 can persist its new `[hooks.state]` trust tables immediately before
+a trailing comment in `config.toml`. When that comment is Kaola's
+`# END kaola-workflow agents` marker, the trust tables temporarily appear inside
+the managed block and the doctor correctly reports `status: stale`. Re-running
+the installer preserves the trusted hashes while restoring the end marker above
+`[hooks.state]`; do not delete or hand-edit the trust tables. Start a new Codex
+chat/session after this final repair.
+
 There is **no config key, trust file, or CLI flag that persists trust
 non-interactively** — the only non-interactive option is
 `codex exec --dangerously-bypass-hook-trust`, which skips the check for that single run
@@ -1251,7 +1268,9 @@ those paths.
 
 - **`/hooks` one-time trust step:** after install, run `/hooks` once in Codex to
   review and trust the command hooks (content-hash trust; editing a hook marks it
-  untrusted again). For automation use `codex exec --dangerously-bypass-hook-trust`.
+  untrusted again), then exit and follow the post-trust installer + doctor sequence
+  under *Trust the hooks* above. For automation use
+  `codex exec --dangerously-bypass-hook-trust`.
 - **`multi_agent` precondition:** `SubagentStart` provenance requires Codex
   `multi_agent` enabled. With it off the hook never fires and closure attestation
   reads `missing` — non-fatal, WARN-first (closure still succeeds).
@@ -1594,9 +1613,11 @@ node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
 ./install-opencode.sh --global --yes
 ```
 
-Restart Claude Code and start a new Codex chat/session after reinstalling. Run the Codex doctor
-shown above before starting the new session; the generated reviewer roles should then load without malformed-agent warnings.
-If hook content changed, open `/hooks` and renew trust for the changed entries.
+Restart Claude Code after reinstalling. If Codex hook content changed, open a new
+Codex session, use `/hooks` to renew trust for the changed entries, exit, and
+follow the post-trust installer + doctor sequence under *Trust the hooks* above.
+Start the working Codex chat/session only after that final doctor returns `status: ok`;
+the generated reviewer roles should then load without malformed-agent warnings.
 
 ## License
 
