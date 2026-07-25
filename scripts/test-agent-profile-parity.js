@@ -108,6 +108,13 @@ const FEATURE_TOKENS = [
   // reasoned fall-through, never a silent substitution of an easier lower-priority cluster.
   'closest actionable proxy',
   'frontier blocked because',
+  // #796 (n4-planner-profiles): the selection-record sidecar gains a writer — the planner, in
+  // no-target survey mode only, writes kaola-workflow/{project}/.cache/selection-evidence.md
+  // after the claim, with a leading selection_mode: auto-bundle|single-issue header. Present in
+  // agents/workflow-planner.md's selection-record section, so this enforces all three .toml
+  // twins carry both the sidecar path and its header token (md↔toml parity for the #796 fix).
+  'selection-evidence',
+  'selection_mode',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
