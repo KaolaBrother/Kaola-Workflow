@@ -417,6 +417,16 @@ Re-derive script paths as the commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
    `node <claim.js> startup --runtime claude [--sink <sink>] (--target-issue <N> | --target-issues <A,B,…>) --attest-planner-spawn`.
    `--attest-planner-spawn` back-fills the planner's own dispatch marker. Writes `workflow-state.md`
    at repo-root and provisions the worktree; you author/freeze at repo-root and never cd into it.
+   - **`Binding scope:` — the dispatch brief's scope field.** It carries the user's own task
+     description VERBATIM when the run entered from a free-form task description, and the literal
+     `none` for every other entry shape (issue number, issue set, no target). Precedence is fixed
+     and one-directional: the resolved target is the claim target and **the unit of completion** —
+     a binding scope never widens, narrows, or substitutes that claim, and never turns one claimed
+     issue into a bundle. What it constrains is WHAT you author inside the target: asking for LESS
+     than the target's scope means author to the description and state the untouched remainder in
+     `## Design` as a deferred gap; asking for MORE than the target covers means the TARGET wins —
+     the surplus is a gap to file after the run, never silently absorbed into this claim. `none`
+     means the target's own scope governs alone.
    - **Overwrite guard:** a `workflow-plan.md` carrying a `<!-- plan_hash: <64-hex> -->` marker is
      FROZEN — STOP and return (never destroy it); one without the marker is unfrozen+invalid and may
      be overwritten ONLY in the validator-repair loop.

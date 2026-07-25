@@ -39,6 +39,15 @@
 # REINSTALL IS SELF-HEALING: copy_tree PRUNES kaola-owned command files before re-copying, so a
 # reinstall converges to exactly the workflow command set on disk. --uninstall removes the full
 # deployed surface; see uninstall_edition.
+#
+# AGENTS ARE MANIFEST-DRIVEN (they cannot be blind-pruned). Commands live in a reserved
+# `kaola-workflow-*` / `workflow-*` namespace, so the prune above is namespace-complete and a
+# retired command self-heals. Agent files are NOT namespaced (bare `code-explorer.md`) and share
+# the deployed agent dir with user-authored agents, so there is no pattern that means "ours".
+# Instead copy_tree records `<filename>\t<sha256>` for every agent it deploys, and the NEXT
+# install removes exactly the previously-recorded files the tree no longer ships that are still
+# byte-identical to what we wrote. A file absent from the manifest is user-authored and is never
+# touched; a recorded file the user then edited is their work and is never touched either.
 
 set -euo pipefail
 
@@ -70,8 +79,10 @@ repo needs none of that (./scripts/ is used directly).
 
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved scope
 (project DEST_ROOT via --target/$PWD, or --global ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}):
-the deployed agents/commands/plugin/hooks (by source-tree filename — never a blind rm of a
-dir) and the opencode-native support scripts (parallel_mode + the SHARED
+the deployed agents/commands/plugin/hooks (agents by deploy manifest + source-tree filename,
+the rest by source-tree filename — never a blind rm of a dir; the manifest is what lets an
+agent RETIRED since the last install still be removed) and the opencode-native support scripts
+(parallel_mode + the SHARED
 ~/.config/kaola-workflow/config.json are kept for any co-installed Claude/Codex edition).
 Your own opencode.json (model/permission config) is PRESERVED. A subsequent bare install
 then deploys the workflow edition.
@@ -113,6 +124,90 @@ WORKFLOW_COMMANDS=(
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 
+# Name of the deploy manifest recorded inside the deployed agent dir (a dotfile, so it never
+# shadows an agent). Same tab-separated `<filename>\t<sha256>` shape install.sh uses.
+AGENT_MANIFEST_NAME=".kaola-workflow-agent-manifest"
+SOURCE_AGENT_DIR="$SCRIPT_DIR/.opencode/agent"
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# True when `$1` is a plain file name: non-empty, no path separator, not `.`/`..`,
+# not absolute. A deploy manifest records BASENAMES only, so anything else is corruption or
+# tampering and must never be turned into a filesystem path.
+is_plain_basename() {
+  local n="${1-}"
+  [[ -n "$n" ]] || return 1
+  case "$n" in
+    */*|*\\*|.|..) return 1 ;;
+  esac
+  return 0
+}
+
+# Print the hash the given manifest records for `$1` and return 0 when the manifest lists that
+# exact name; return 1 (printing nothing) otherwise. Literal string compare — the name is never
+# interpolated into a path or a pattern.
+manifest_row_hash() {
+  local want="$1" file="$2" row_name row_hash row_rest
+  [[ -f "$file" ]] || return 1
+  while IFS=$'\t' read -r row_name row_hash row_rest || [[ -n "${row_name:-}" ]]; do
+    [[ -n "${row_name:-}" ]] || continue
+    [[ "$row_name" == "$want" ]] || continue
+    printf '%s\n' "${row_hash:-}"
+    return 0
+  done < "$file"
+  return 1
+}
+
+# Report every manifest row that is not a plain file name. Such a row cannot describe a file this
+# installer deployed into the agent dir, so it is named on stderr and then ignored.
+warn_unsafe_manifest_names() {
+  local file="$1" row_name row_rest
+  [[ -f "$file" ]] || return 0
+  while IFS=$'\t' read -r row_name row_rest || [[ -n "${row_name:-}" ]]; do
+    [[ -n "${row_name:-}" ]] || continue
+    if ! is_plain_basename "$row_name"; then
+      echo "warning: ignoring agent manifest entry that is not a plain file name: $row_name" >&2
+    fi
+  done < "$file"
+  return 0
+}
+
+# Remove agents a PREVIOUS install deployed that the current tree no longer ships. Fail-closed:
+# a candidate must be recorded in the previous manifest, absent from the canonical source tree,
+# present on disk, and still byte-identical to the hash we recorded. Anything else is left alone.
+# An absent/empty previous manifest sweeps NOTHING.
+#
+# The sweep ENUMERATES THE AGENT DIRECTORY and intersects it against the previous manifest, so a
+# delete path is never CONSTRUCTED from a manifest-supplied name: a row holding `../…`, an
+# absolute path, or a separator simply matches no directory entry and is reported + skipped.
+sweep_retired_agents() {
+  local prev_manifest="$1"
+  local agent_dir="$2"
+  local dest base prev_hash current_hash
+  [[ -f "$prev_manifest" ]] || return 0
+  warn_unsafe_manifest_names "$prev_manifest"
+  for dest in "$agent_dir"/*.md; do
+    [[ -f "$dest" ]] || continue
+    base="$(basename "$dest")"
+    # Still shipped by the tree → it was just re-copied; never a sweep candidate.
+    if [[ -f "$SOURCE_AGENT_DIR/$base" ]]; then continue; fi
+    prev_hash=""
+    if ! prev_hash="$(manifest_row_hash "$base" "$prev_manifest")"; then continue; fi
+    [[ -n "$prev_hash" ]] || continue
+    current_hash="$(sha256_file "$dest")"
+    [[ "$current_hash" == "$prev_hash" ]] || continue
+    rm -f "$dest"
+    echo "Removed retired agent: $dest"
+  done
+  return 0
+}
+
 copy_tree() {
   local dest_root="$1"    # holds opencode.json (config/project root)
   # layout_root: the dir that DIRECTLY holds agent/command/plugins/hooks. Project → $dest_root/.opencode;
@@ -133,7 +228,33 @@ copy_tree() {
     echo "Self-dev deploy (source .opencode is already the live tree) → copy skipped."
     return
   fi
-  cp "$SCRIPT_DIR/.opencode/agent/"*.md "$layout_root/agent/"
+  # Agents: snapshot the previous deploy manifest, re-copy the current source set, record the new
+  # manifest, then sweep whatever the previous manifest owned that the tree has since retired.
+  local agent_manifest prev_manifest manifest_tmp agent_file agent_base agent_count
+  agent_manifest="$layout_root/agent/$AGENT_MANIFEST_NAME"
+  prev_manifest="$(mktemp)"
+  if [[ -f "$agent_manifest" ]]; then
+    cp "$agent_manifest" "$prev_manifest"
+  fi
+  manifest_tmp="$(mktemp)"
+  agent_count=0
+  for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
+    [[ -f "$agent_file" ]] || continue
+    agent_base="$(basename "$agent_file")"
+    cp "$agent_file" "$layout_root/agent/$agent_base"
+    printf '%s\t%s\n' "$agent_base" "$(sha256_file "$layout_root/agent/$agent_base")" >> "$manifest_tmp"
+    agent_count=$((agent_count + 1))
+  done
+  # Fail CLOSED on an empty agent source (the previous bare `cp <dir>/*.md` errored out here; a
+  # silent zero-agent deploy would be the 5.4.0 silent-empty regression class).
+  if [[ "$agent_count" -eq 0 ]]; then
+    rm -f "$manifest_tmp" "$prev_manifest"
+    echo "Install error: no agent sources found in $SOURCE_AGENT_DIR" >&2
+    exit 1
+  fi
+  mv "$manifest_tmp" "$agent_manifest"
+  sweep_retired_agents "$prev_manifest" "$layout_root/agent"
+  rm -f "$prev_manifest"
   # The COMMAND deploy is SELF-HEALING. First PRUNE every kaola-owned command file from the dest,
   # then re-copy the workflow command set via a fail-CLOSED ALLOWLIST: a command not in
   # WORKFLOW_COMMANDS is skipped + warned, so a future canonical command cannot silently widen the
@@ -178,7 +299,26 @@ uninstall_edition() {
     return
   fi
   local f base sub
-  for f in "$SCRIPT_DIR/.opencode/agent/"*.md;               do [[ -f "$f" ]] || continue; rm -f "$layout_root/agent/$(basename "$f")"; done
+  # Agents: remove the UNION of what the deploy manifest records this installer wrote — which
+  # includes agents RETIRED since that install and therefore absent from the current source tree —
+  # and the current source-tree filenames, so an install predating the manifest still uninstalls
+  # cleanly. Manifest-listed names only; an unlisted file is user-authored and is left alone.
+  #
+  # Like the sweep, this ENUMERATES the agent dir and intersects it against the manifest rather
+  # than building `$layout_root/agent/<manifest name>` — a manifest row is never treated as a
+  # path, so a row holding `../…` or an absolute path cannot delete anything outside the dir.
+  local agent_manifest dest
+  agent_manifest="$layout_root/agent/$AGENT_MANIFEST_NAME"
+  if [[ -f "$agent_manifest" ]]; then
+    warn_unsafe_manifest_names "$agent_manifest"
+    for dest in "$layout_root/agent/"*.md; do
+      [[ -f "$dest" ]] || continue
+      base="$(basename "$dest")"
+      if manifest_row_hash "$base" "$agent_manifest" >/dev/null; then rm -f "$dest"; fi
+    done
+    rm -f "$agent_manifest"
+  fi
+  for f in "$SOURCE_AGENT_DIR/"*.md;                         do [[ -f "$f" ]] || continue; rm -f "$layout_root/agent/$(basename "$f")"; done
   for f in "$SCRIPT_DIR/.opencode/command/"*.md;             do [[ -f "$f" ]] || continue; rm -f "$layout_root/command/$(basename "$f")"; done
   for f in "$SCRIPT_DIR/templates/opencode/plugins/"*.js;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/plugins/$(basename "$f")"; done
   for f in "$SCRIPT_DIR/.opencode/hooks/"*.sh;               do [[ -f "$f" ]] || continue; rm -f "$layout_root/hooks/$(basename "$f")"; done
@@ -192,6 +332,12 @@ uninstall_edition() {
     local name
     while IFS= read -r name || [[ -n "$name" ]]; do
       [[ -n "$name" ]] || continue
+      # Defense in depth: the manifest emits plain script basenames. Anything else never
+      # becomes a delete path.
+      if ! is_plain_basename "$name"; then
+        echo "warning: ignoring support-script manifest entry that is not a plain file name: $name" >&2
+        continue
+      fi
       rm -f "$scripts_dir/$name"
     done < <(node "$manifest" --forge=github --scripts 2>/dev/null)
     rmdir "$scripts_dir" 2>/dev/null || true

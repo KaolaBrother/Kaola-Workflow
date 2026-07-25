@@ -309,7 +309,18 @@ if os.path.isdir(agents_dir):
         except (json.JSONDecodeError, OSError):
             managed = []
     # Remove manifest-listed + named stale profile files (never unknown user TOMLs).
+    # The manifest is attacker-influenceable input to a DELETE path, so a name is only
+    # ever a plain basename: anything carrying a separator, a parent ref, or an absolute
+    # root would escape agents_dir via os.path.join and delete outside the managed tree.
+    def is_plain_basename(n):
+        return bool(n) and n not in (".", "..") and os.path.basename(n) == n \
+            and "/" not in n and "\\" not in n and not os.path.isabs(n)
+
     for name in sorted(set(managed) | set(STALE_PROFILE_FILES)):
+        if not is_plain_basename(name):
+            print("kaola-workflow uninstall: skipping unsafe managed-profile entry: %r" % (name,),
+                  file=sys.stderr)
+            continue
         p = os.path.join(agents_dir, name)
         if os.path.isfile(p):
             os.remove(p)

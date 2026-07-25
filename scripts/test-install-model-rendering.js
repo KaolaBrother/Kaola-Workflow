@@ -2275,13 +2275,14 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// #716: a frozen schema-2 plan's ## Nodes table mixes DELEGATED roles with the
-// built-in, intentionally non-delegable roles (`main-session-gate`, `finalize`).
-// The built-ins run in the main session and carry no Codex profile and no
-// config/agents.toml entry BY DESIGN, so exact-plan preflight must exempt them
-// from the template/profile availability check — while staying fail-closed for
-// any unknown or genuinely missing DELEGATED role. The downstream reproduction
-// entry is the repository-root command with `--plan` appended.
+// #716/#800: a frozen schema-2 plan's ## Nodes table mixes DELEGATED roles with
+// the built-in, intentionally non-delegable roles (`main-session-gate`,
+// `finalize`, and a spine plan's `expansion-point`). The built-ins run in the
+// main session — or, for an expansion point, never dispatch at all — and carry no
+// Codex profile and no config/agents.toml entry BY DESIGN, so exact-plan preflight
+// must exempt them from the template/profile availability check — while staying
+// fail-closed for any unknown or genuinely missing DELEGATED role. The downstream
+// reproduction entry is the repository-root command with `--plan` appended.
 {
   const pluginRoot = path.join(root, 'plugins', 'kaola-workflow');
   const installerPath = path.join(pluginRoot, 'scripts', 'install-codex-agent-profiles.js');
@@ -2298,7 +2299,7 @@ function enableMultiAgentV2(homeRoot) {
     assert.strictEqual(install.status, 0, '#716 fixture global install: ' + install.stderr);
     enableMultiAgentV2(homeRoot);
 
-    function writePlan(basename, roles) {
+    function writePlan(basename, roles, extraMeta = []) {
       const planPath = path.join(fixtureRoot, basename);
       const rows = roles.map((role, index) =>
         `| n${index + 1} | ${role} | ${index === 0 ? '—' : 'n1'} | — | 1 | sequence | — | — | — | — | — | — | — | — |`);
@@ -2307,6 +2308,7 @@ function enableMultiAgentV2(homeRoot) {
         '',
         '## Meta',
         'plan_schema_version: 2',
+        ...extraMeta,
         '',
         '## Nodes',
         '',
@@ -2360,6 +2362,31 @@ function enableMultiAgentV2(homeRoot) {
     assert((unknownJson.missing_roles || []).includes('not-a-real-role'),
       '#716(b): the refusal names the unknown delegated role');
 
+    // (d) #800: a spine plan carrying an `expansion-point` row passes exact-plan
+    // preflight on a fresh install. The expansion point is a BUILT-IN synthetic
+    // role — the executor's expansion transaction composes its interior at open
+    // time and the scheduler never returns it as dispatchable — so it has no
+    // agents.toml entry and no profile file, and preflight must never require one.
+    // Before the exemption landed this refused `role_not_in_template` BEFORE the
+    // first node could open, wedging every progressively-elaborated Codex run.
+    const spinePlan = writePlan('workflow-plan-spine.md',
+      ['implementer', 'expansion-point', 'code-reviewer', 'main-session-gate', 'finalize'],
+      ['plan_form: spine']);
+    const spine = runPlanPreflight(spinePlan);
+    assert.strictEqual(spine.status, 0,
+      '#800(d): a spine plan with an expansion-point row must pass exact-plan preflight: '
+      + spine.stderr + spine.stdout);
+    const spineJson = JSON.parse(spine.stdout);
+    assert.strictEqual(spineJson.status, 'ok',
+      '#800(d): a fresh install keeps the ok status for a spine plan with an expansion point');
+    assert(!spineJson.roles_checked.includes('expansion-point'),
+      '#800(d): the built-in expansion-point role is exempt from the profile availability check');
+    assert(spineJson.roles_checked.includes('implementer')
+        && spineJson.roles_checked.includes('code-reviewer'),
+      '#800(d): the delegated roles of a spine plan keep the required-role union behavior');
+    assert(!fs.existsSync(path.join(globalAgentsDir, 'expansion-point.toml')),
+      '#800(d): no fake profile is fabricated for the expansion-point role');
+
     // (c) a genuinely missing DELEGATED profile still refuses under --plan.
     fs.rmSync(path.join(globalAgentsDir, 'implementer.toml'));
     const missingProfile = runPlanPreflight(mixedPlan);
@@ -2374,6 +2401,59 @@ function enableMultiAgentV2(homeRoot) {
     fs.rmSync(homeRoot, { recursive: true, force: true });
     fs.rmSync(projectRoot, { recursive: true, force: true });
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+// #800 drift pin: the preflight hand-rolls its own copy of the built-in
+// non-delegable role set because the file is deliberately standalone (Node
+// builtins only, no kernel require) — that copy is what went stale when the spine
+// form added `expansion-point`. Parity therefore lives HERE: the preflight list
+// MUST equal the kernel's own built-in role set (the adaptive node script's
+// RESERVED_EXPANSION_UNIT_ROLES), read from the kernel source text so a new
+// built-in role cannot be added on one side alone. The literal is asserted in all
+// four byte-identical preflight copies as well, so a plugin-tree-only edit reds
+// here and not only in validate-script-sync.
+{
+  const builtinRoleListRe =
+    /const PLAN_BUILTIN_NON_DELEGABLE_ROLES\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/;
+  const kernelRoleSetRe =
+    /const RESERVED_EXPANSION_UNIT_ROLES\s*=\s*new Set\(\[([\s\S]*?)\]\)/;
+  const quotedTokens = (source) => [...source.matchAll(/['"]([^'"]+)['"]/g)].map(m => m[1]).sort();
+
+  const kernelSource = fs.readFileSync(
+    path.join(root, 'scripts', 'kaola-workflow-adaptive-node.js'), 'utf8');
+  const kernelMatch = kernelSource.match(kernelRoleSetRe);
+  assert(kernelMatch,
+    '#800: the kernel RESERVED_EXPANSION_UNIT_ROLES literal must stay readable — '
+    + 'the preflight parity pin reads it as the built-in-role source of truth');
+  const kernelBuiltins = quotedTokens(kernelMatch[1]);
+  assert(kernelBuiltins.length > 0, '#800: kernel built-in role set must be non-empty');
+
+  // The exported constant is what runPreflight actually filters with.
+  assert(Array.isArray(codexPreflight.PLAN_BUILTIN_NON_DELEGABLE_ROLES),
+    '#800: the preflight must export PLAN_BUILTIN_NON_DELEGABLE_ROLES for the parity pin');
+  assert.deepStrictEqual(
+    [...codexPreflight.PLAN_BUILTIN_NON_DELEGABLE_ROLES].sort(), kernelBuiltins,
+    '#800: the preflight built-in non-delegable role list must equal the kernel\'s '
+    + 'RESERVED_EXPANSION_UNIT_ROLES — a drifted copy refuses valid plans at preflight');
+
+  // The spine expansion role is the token that drifted: pin it by name from the
+  // validator that owns it, so renaming the token cannot silently pass this test.
+  const { SPINE_EXPANSION_ROLE } = require('./kaola-workflow-plan-validator');
+  assert(codexPreflight.PLAN_BUILTIN_NON_DELEGABLE_ROLES.includes(SPINE_EXPANSION_ROLE),
+    `#800: the preflight must exempt the spine expansion role "${SPINE_EXPANSION_ROLE}"`);
+  assert(kernelBuiltins.includes(SPINE_EXPANSION_ROLE),
+    `#800: the kernel built-in role set must carry "${SPINE_EXPANSION_ROLE}"`);
+
+  for (const relDir of ['scripts',
+    path.join('plugins', 'kaola-workflow', 'scripts'),
+    path.join('plugins', 'kaola-workflow-gitlab', 'scripts'),
+    path.join('plugins', 'kaola-workflow-gitea', 'scripts')]) {
+    const copyPath = path.join(root, relDir, 'kaola-workflow-codex-preflight.js');
+    const copyMatch = fs.readFileSync(copyPath, 'utf8').match(builtinRoleListRe);
+    assert(copyMatch, `#800: ${relDir} preflight must declare PLAN_BUILTIN_NON_DELEGABLE_ROLES`);
+    assert.deepStrictEqual(quotedTokens(copyMatch[1]), kernelBuiltins,
+      `#800: ${relDir} preflight built-in role literal drifted from the kernel role set`);
   }
 }
 

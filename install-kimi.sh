@@ -112,6 +112,17 @@ WORKFLOW_COMMANDS=(
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 
+# True when `$1` is a plain file name: non-empty, no path separator, not `.`/`..`, not absolute.
+# The install manifest emits plain basenames; anything else must never become a filesystem path.
+is_plain_basename() {
+  local n="${1-}"
+  [[ -n "$n" ]] || return 1
+  case "$n" in
+    */*|*\\*|.|..) return 1 ;;
+  esac
+  return 0
+}
+
 copy_skills() {
   local skills_dest="$1"   # project → <dest_root>/.kimi-code/skills; global → <kimi_home>/skills
   mkdir -p "$skills_dest"
@@ -307,6 +318,12 @@ uninstall_edition() {
     local name
     while IFS= read -r name || [[ -n "$name" ]]; do
       [[ -n "$name" ]] || continue
+      # Defense in depth: the manifest emits plain script basenames. Anything else never
+      # becomes a delete path.
+      if ! is_plain_basename "$name"; then
+        echo "warning: ignoring support-script manifest entry that is not a plain file name: $name" >&2
+        continue
+      fi
       rm -f "$scripts_dir/$name"
     done < <(node "$manifest" --forge=github --scripts 2>/dev/null)
   fi

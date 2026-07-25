@@ -1192,6 +1192,188 @@ if (exists(pluginRel)) {
       'A (#544): ZERO Claude path leaks (CLAUDE_PLUGIN_ROOT / .claude/kaola-workflow) across the deployed .opencode/ tree — found ' + leaks + ' match(es) in: ' + leakFiles.slice(0, 6).join(', ') + (leakFiles.length > 6 ? ', …' : ''));
     clean(r);
   }
+
+  // -------------------------------------------------------------------------
+  // R1–R3 (#795) — manifest-driven retired-agent sweep.
+  //
+  // Commands live in a reserved `kaola-workflow-*` / `workflow-*` namespace, so the
+  // command prune above is namespace-complete and a retired command self-heals.
+  // Agent files are NOT namespaced (bare `code-explorer.md`) and the deployed agent
+  // dir is SHARED with user-authored agents, so a blind prune is unavailable — the
+  // install records a `<filename>\t<sha256>` manifest and the next install removes
+  // exactly what it proves this installer wrote and the user has not touched.
+  // Before this, a role retired from the tree stayed deployed and dispatchable
+  // forever, and survived --uninstall too (which iterated the CURRENT source tree).
+  // -------------------------------------------------------------------------
+  {
+    const crypto = require('crypto');
+    const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'R1: seed install exits 0 (got ' + r1.status + ')');
+    const agentDir = path.join(r1.dest, '.opencode', 'agent');
+    const manifestPath = path.join(agentDir, AGENT_MANIFEST);
+    assert(existsSync(manifestPath), 'R1 (#795): the install records an agent deploy manifest');
+
+    // The manifest describes EXACTLY the canonical agent set, at the deployed bytes.
+    const lines = readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean);
+    const manifestNames = lines.map(l => l.split('\t')[0]).sort();
+    const canonNames = sync.listCanonAgents().map(n => n + '.md').sort();
+    assert(JSON.stringify(manifestNames) === JSON.stringify(canonNames),
+      'R1 (#795): manifest lists exactly the canonical agents — got ' + JSON.stringify(manifestNames));
+    const hashDrift = [];
+    for (const line of lines) {
+      const [n, h] = line.split('\t');
+      if (sha256(readFileSync(path.join(agentDir, n))) !== h) hashDrift.push(n);
+    }
+    assert(hashDrift.length === 0,
+      'R1 (#795): every recorded hash matches the deployed bytes — drifted: ' + hashDrift.join(', '));
+
+    // Plant the three classes the sweep must tell apart.
+    const retiredBody = '---\nname: issue-scout\n---\n\nRetired role.\n';          // ours, retired
+    const editedRecorded = '---\nname: legacy-role\n---\n\nOriginal.\n';           // ours, then user-edited
+    const userAuthored = '---\nname: my-own-helper\n---\n\nMy own agent.\n';       // never ours
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+    fs.writeFileSync(path.join(agentDir, 'legacy-role.md'), editedRecorded + '\nUser edit.\n');
+    fs.writeFileSync(path.join(agentDir, 'my-own-helper.md'), userAuthored);
+    fs.appendFileSync(manifestPath,
+      'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n' +
+      'legacy-role.md\t' + sha256(Buffer.from(editedRecorded)) + '\n');
+
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'R2: reinstall exits 0 (got ' + r2.status + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R2 (#795): a retired agent recorded in the previous manifest is removed on reinstall');
+    assert(/Removed retired agent: .*issue-scout\.md/.test(r2.stdout),
+      'R2 (#795): the sweep names each removal — stdout: ' + r2.stdout.split('\n').slice(-6).join(' | '));
+    assert(existsSync(path.join(agentDir, 'legacy-role.md')),
+      'R2 (#795): a retired agent the user edited after install is left untouched');
+    assert(readFileSync(path.join(agentDir, 'my-own-helper.md'), 'utf8') === userAuthored,
+      'R2 (#795): a user-authored agent absent from the manifest is never swept');
+    for (const a of sync.listCanonAgents()) {
+      assert(existsSync(path.join(agentDir, a + '.md')),
+        'R2 (#795): canonical agent ' + a + ' still deployed after the sweep');
+    }
+    const afterNames = readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean)
+      .map(l => l.split('\t')[0]).sort();
+    assert(JSON.stringify(afterNames) === JSON.stringify(canonNames),
+      'R2 (#795): the rewritten manifest owns only what the tree ships — got ' + JSON.stringify(afterNames));
+
+    // Idempotent: nothing left to sweep on a converged reinstall.
+    const r3 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r3.ok && !/Removed retired agent:/.test(r3.stdout),
+      'R2 (#795): a converged reinstall sweeps nothing');
+
+    // R3 — --uninstall removes what the manifest claims, INCLUDING an agent retired
+    // since the last install (the old uninstall iterated the current source tree, so
+    // an orphan survived it). A never-recorded user agent still survives.
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+    fs.appendFileSync(manifestPath, 'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(ru.status === 0, 'R3: --uninstall exits 0 (got ' + ru.status + ')');
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R3 (#795): --uninstall removes an agent retired since the last install (manifest-driven)');
+    for (const a of sync.listCanonAgents()) {
+      assert(!existsSync(path.join(agentDir, a + '.md')),
+        'R3: --uninstall still removes canonical agent ' + a);
+    }
+    assert(existsSync(path.join(agentDir, 'my-own-helper.md')),
+      'R3 (#795): --uninstall never touches a user-authored agent absent from the manifest');
+    assert(!existsSync(manifestPath), 'R3 (#795): --uninstall removes its own manifest');
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // R4 (#795) — PATH TRAVERSAL: a manifest name is never a path.
+  //
+  // The deploy manifest lives INSIDE the deployed agent dir and records BASENAMES.
+  // A row carrying `../` (corruption, or a tampered manifest) must never reach a
+  // delete outside that dir. Both destructive halves — the reinstall sweep and
+  // `--uninstall` — therefore ENUMERATE the agent directory and intersect against
+  // the manifest instead of building `$layout_root/agent/<manifest name>`.
+  //
+  // Without the guard: the sweep row clears every fail-closed check it applies
+  // (absent from the source tree, present on disk, sha256 matches) and deletes the
+  // outside file; and `--uninstall` deleted `$layout_root/agent/<name>` with NO
+  // validation at all, so a bare `../../../x` removed a file three dirs above.
+  // -------------------------------------------------------------------------
+  {
+    const crypto = require('crypto');
+    const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+    // A deleted victim must not ABORT the block — every later assertion (notably
+    // the --uninstall half) still has to run and report.
+    const safeRead = p => { try { return readFileSync(p, 'utf8'); } catch (_) { return null; } };
+
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'R4: seed install exits 0 (got ' + r1.status + ')');
+    const agentDir = path.join(r1.dest, '.opencode', 'agent');
+    const manifestPath = path.join(agentDir, AGENT_MANIFEST);
+
+    // Victims OUTSIDE the agent dir. `.opencode/VICTIM.txt` is one level up;
+    // `<dest>/DEEP-VICTIM.txt` is two — the shape the verifier reproduced.
+    const upOne = path.join(r1.dest, '.opencode', 'VICTIM.txt');
+    const upTwo = path.join(r1.dest, 'DEEP-VICTIM.txt');
+    const upOneBody = 'one level up\n';
+    const upTwoBody = 'two levels up\n';
+    fs.writeFileSync(upOne, upOneBody);
+    fs.writeFileSync(upTwo, upTwoBody);
+
+    // A legitimate retired agent rides along: the guard must reject the hostile
+    // rows WITHOUT disarming the sweep for real ones.
+    const retiredBody = '---\nname: issue-scout\n---\n\nRetired role.\n';
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+
+    fs.appendFileSync(manifestPath,
+      '../VICTIM.txt\t' + sha256(Buffer.from(upOneBody)) + '\n' +
+      '../../DEEP-VICTIM.txt\t' + sha256(Buffer.from(upTwoBody)) + '\n' +
+      upTwo + '\t' + sha256(Buffer.from(upTwoBody)) + '\n' +
+      'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
+
+    // (a) REINSTALL sweep.
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'R4: reinstall over a traversal-bearing manifest exits 0 (got ' + r2.status + ')');
+    assert(existsSync(upOne),
+      'R4 (#795): a `../`-bearing manifest entry must never let the SWEEP delete outside the agent dir');
+    assert(existsSync(upTwo),
+      'R4 (#795): a `../../`-bearing manifest entry must never let the SWEEP delete two dirs up');
+    assert(safeRead(upTwo) === upTwoBody,
+      'R4 (#795): the outside file is byte-identical after the sweep');
+    assert(/not a plain file name/.test(r2.stdout + r2.stderr),
+      'R4 (#795): the sweep names the rejected manifest entries loudly — got: '
+        + (r2.stderr || r2.stdout).split('\n').slice(-4).join(' | '));
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R4 (#795): the traversal guard does not disarm the sweep for a legitimate retired agent');
+
+    // (b) --uninstall. Re-plant both victims and a manifest naming them; the
+    //     uninstall half had NO validation at all before this guard.
+    fs.writeFileSync(upOne, upOneBody);
+    fs.writeFileSync(upTwo, upTwoBody);
+    const userAuthored = '---\nname: my-own-helper\n---\n\nMy own agent.\n';
+    fs.writeFileSync(path.join(agentDir, 'my-own-helper.md'), userAuthored);
+    fs.appendFileSync(manifestPath,
+      '../VICTIM.txt\tignored\n' +
+      '../../DEEP-VICTIM.txt\tignored\n');
+
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(ru.status === 0, 'R4: --uninstall exits 0 (got ' + ru.status + ')');
+    assert(existsSync(upOne),
+      'R4 (#795): --uninstall must never delete a file one dir above the agent dir');
+    assert(existsSync(upTwo),
+      'R4 (#795): --uninstall must never delete a file two dirs above the agent dir');
+    assert(safeRead(upTwo) === upTwoBody,
+      'R4 (#795): the outside file survives --uninstall byte-identical');
+    assert(existsSync(path.join(agentDir, 'my-own-helper.md')),
+      'R4 (#795): --uninstall still never touches a user-authored agent absent from the manifest');
+    for (const a of sync.listCanonAgents()) {
+      assert(!existsSync(path.join(agentDir, a + '.md')),
+        'R4: --uninstall still removes canonical agent ' + a);
+    }
+    clean(r1);
+  }
 }
 
 if (failed) {

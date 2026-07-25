@@ -309,6 +309,97 @@ manifest_lookup() {
   awk -F '\t' -v name="$file_name" '$1 == name { value = $2 } END { if (value) print value }' "$AGENT_MANIFEST_FILE"
 }
 
+# True when `$1` is a plain file name: non-empty, no path separator, not `.`/`..`,
+# not absolute. A deploy manifest records BASENAMES only, so anything else is
+# corruption or tampering and must never be turned into a filesystem path.
+is_plain_basename() {
+  local n="${1-}"
+  [[ -n "$n" ]] || return 1
+  case "$n" in
+    */*|*\\*|.|..) return 1 ;;
+  esac
+  return 0
+}
+
+# Print the hash the given manifest file records for `$1`, and return 0, when the
+# manifest lists that exact name; return 1 (printing nothing) otherwise. The
+# comparison is a literal string compare — the name is never interpolated into a
+# pattern, a path, or an awk assignment.
+manifest_row_hash() {
+  local want="$1" file="$2" row_name row_hash row_rest
+  [[ -f "$file" ]] || return 1
+  while IFS=$'\t' read -r row_name row_hash row_rest || [[ -n "${row_name:-}" ]]; do
+    [[ -n "${row_name:-}" ]] || continue
+    [[ "$row_name" == "$want" ]] || continue
+    printf '%s\n' "${row_hash:-}"
+    return 0
+  done < "$file"
+  return 1
+}
+
+# Warn once per manifest row that is not a plain file name. Such a row can never
+# describe a file this installer deployed into the agents dir, so it is reported
+# and then ignored — it never reaches a delete decision.
+warn_unsafe_manifest_names() {
+  local file="$1" row_name row_rest
+  [[ -f "$file" ]] || return 0
+  while IFS=$'\t' read -r row_name row_rest || [[ -n "${row_name:-}" ]]; do
+    [[ -n "${row_name:-}" ]] || continue
+    if ! is_plain_basename "$row_name"; then
+      echo "warning: ignoring agent manifest entry that is not a plain file name: $row_name" >&2
+    fi
+  done < "$file"
+  return 0
+}
+
+# Remove agents this installer deployed on a PREVIOUS run that the current tree no
+# longer ships (a retired role). Mirrors the stale-command and stale-script sweeps
+# above, but ~/.claude/agents/ is SHARED with user-authored agents and the file
+# names are not namespaced (bare `code-explorer.md`), so a blind prune is not
+# available — the sweep is manifest-driven and deletes ONLY what the previous
+# manifest proves this installer wrote, unmodified since.
+#
+# The sweep ENUMERATES THE AGENTS DIRECTORY and intersects it against the previous
+# manifest (the same shape as pruneStaleProfiles() in the Codex profile installer).
+# It never CONSTRUCTS a path from a manifest-supplied name, so a manifest row
+# holding `../…`, an absolute path, or a separator can only fail to match a real
+# directory entry — it can never escape $AGENTS_DIR. Such rows are reported on
+# stderr and skipped.
+#
+# Four fail-closed conditions, all required before any rm:
+#   1. the name is recorded in the PREVIOUS manifest (never touch an unlisted file
+#      — an unlisted file is user-authored, which is the whole point of a manifest);
+#   2. the name is NOT in REQUIRED_AGENTS (a required agent missing from the new
+#      manifest was SKIPPED as user-owned/modified, not retired — never sweep it);
+#   3. the installed file still carries the managed marker;
+#   4. its current sha256 still equals the hash the previous manifest recorded, so
+#      an agent the user edited after install is their work and stays.
+# An absent/empty previous manifest sweeps NOTHING (no directory entry matches).
+sweep_retired_agents() {
+  local prev_manifest="$1"
+  local dest base prev_hash current_hash agent is_required
+  [[ -f "$prev_manifest" ]] || return 0
+  warn_unsafe_manifest_names "$prev_manifest"
+  for dest in "$AGENTS_DIR"/*.md; do
+    [[ -f "$dest" ]] || continue
+    base="$(basename "$dest")"
+    is_required=0
+    for agent in "${REQUIRED_AGENTS[@]}"; do
+      if [[ "$agent.md" == "$base" ]]; then is_required=1; break; fi
+    done
+    [[ "$is_required" -eq 0 ]] || continue
+    prev_hash=""
+    if ! prev_hash="$(manifest_row_hash "$base" "$prev_manifest")"; then continue; fi
+    [[ -n "$prev_hash" ]] || continue
+    grep -Fq "$MANAGED_AGENT_MARKER" "$dest" || continue
+    current_hash="$(sha256_file "$dest")"
+    [[ "$current_hash" == "$prev_hash" ]] || continue
+    rm -f "$dest"
+    echo "Removed retired agent: $dest"
+  done
+  return 0
+}
+
 agent_source_file() {
   local agent="$1"; local file_name="$agent.md"
   local source_file="$SOURCE_AGENTS_DIR/$file_name"
@@ -350,6 +441,15 @@ install_agent_files() {
 
   local manifest_tmp
   manifest_tmp="$(mktemp)"
+  # Snapshot the PREVIOUS manifest before it is overwritten — it is the only record
+  # of which agent files this installer owns, and the retired-agent sweep below
+  # reads it after the new manifest lands. Always a real file (empty when there is
+  # no previous manifest) so cleanup never has to branch.
+  local prev_manifest
+  prev_manifest="$(mktemp)"
+  if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
+    cp "$AGENT_MANIFEST_FILE" "$prev_manifest"
+  fi
   local installed=0
   local skipped=0
 
@@ -363,7 +463,7 @@ install_agent_files() {
 
     if [[ ! -f "$source_file" ]]; then
       echo "Required agent source not found: $source_file" >&2
-      rm -f "$manifest_tmp"
+      rm -f "$manifest_tmp" "$prev_manifest"
       exit 1
     fi
 
@@ -395,7 +495,7 @@ install_agent_files() {
 
     if ! grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
       echo "Install verification failed: missing managed marker in agent: $dest" >&2
-      rm -f "$manifest_tmp"
+      rm -f "$manifest_tmp" "$prev_manifest"
       exit 1
     fi
 
@@ -415,9 +515,14 @@ install_agent_files() {
 
   if [[ -s "$manifest_tmp" ]]; then
     mv "$manifest_tmp" "$AGENT_MANIFEST_FILE"
+    # Only sweep once the NEW manifest is durably in place: if the deploy produced
+    # nothing there is no converged state to reconcile against, so a partial run
+    # can never delete an agent it did not just replace.
+    sweep_retired_agents "$prev_manifest"
   else
     rm -f "$manifest_tmp"
   fi
+  rm -f "$prev_manifest"
 
   if [[ "$skipped" -gt 0 ]]; then
     echo "Skipped $skipped agent file(s). Existing files were left untouched."

@@ -337,6 +337,124 @@ async function selfTest() {
     );
   }
 
+  // ------------------------------------------------------------------
+  // (f) Within-chain step pool + scenario sharding.
+  //
+  // These are the load-bearing properties of the faster chain: the shard
+  // partition must cover every scenario exactly once, and the coverage audit
+  // must turn a partition that drops or duplicates one RED. They are asserted
+  // here, in the chain, so a regression cannot ship as "the suite got faster".
+  // ------------------------------------------------------------------
+  const shardLib = require('./test-shard-lib');
+  const pool = require('./run-chain-pool');
+
+  // (f1) EXACT PARTITION: for every width, every ordinal is owned by exactly one shard.
+  {
+    let exact = true;
+    let detail = '';
+    for (let total = 1; total <= 12 && exact; total++) {
+      for (let ordinal = 0; ordinal < 400; ordinal++) {
+        let owners = 0;
+        for (let index = 1; index <= total; index++) {
+          if (shardLib.owns(ordinal, index, total)) owners++;
+        }
+        if (owners !== 1) { exact = false; detail = `total=${total} ordinal=${ordinal} owners=${owners}`; break; }
+      }
+    }
+    assert('(f1) every ordinal is owned by exactly one shard for widths 1..12 ' + detail, exact);
+  }
+
+  // (f2) An unsharded run owns everything (a bare `node scripts/<suite>.js` is unchanged).
+  {
+    const sel = shardLib.selector(['node', 'suite.js']);
+    assert('(f2) no --shard => sharded:false and owns() is total',
+      sel.sharded === false && sel.total === 1 && sel.owns(0) && sel.owns(7) && sel.owns(123));
+  }
+
+  // (f3) A malformed --shard REFUSES; it never degrades into "ran everything".
+  {
+    const bad = ['1/0', '0/4', '5/4', 'x/4', '', '1-4'];
+    let allThrew = true;
+    for (const raw of bad) {
+      try { shardLib.parseShard(['--shard', raw]); allThrew = false; } catch (_) { /* expected */ }
+    }
+    assert('(f3) malformed --shard values all refuse', allThrew);
+    assert('(f3) well-formed --shard parses', JSON.stringify(shardLib.parseShard(['--shard', '3/8'])) === '{"index":3,"total":8}');
+  }
+
+  // (f4) Coverage audit: a complete shard set passes; a dropped, duplicated, drifted or
+  // missing slice fails CLOSED with a typed reason.
+  {
+    const full = [
+      { suite: 's', index: 1, total: 3, scenarios: 10, ran: 4 },
+      { suite: 's', index: 2, total: 3, scenarios: 10, ran: 3 },
+      { suite: 's', index: 3, total: 3, scenarios: 10, ran: 3 },
+    ];
+    assert('(f4a) complete shard set audits ok', shardLib.auditShardCoverage('s', 3, full).ok === true);
+    const dropped = full.map((r, i) => (i === 1 ? Object.assign({}, r, { ran: 2 }) : r));
+    assert('(f4b) a dropped scenario => shard_coverage_mismatch',
+      shardLib.auditShardCoverage('s', 3, dropped).error === 'shard_coverage_mismatch');
+    const drifted = full.map((r, i) => (i === 2 ? Object.assign({}, r, { scenarios: 11 }) : r));
+    assert('(f4c) shards disagreeing on the registry => shard_registry_drift',
+      shardLib.auditShardCoverage('s', 3, drifted).error === 'shard_registry_drift');
+    assert('(f4d) a silent shard => shard_report_missing',
+      shardLib.auditShardCoverage('s', 3, full.slice(0, 2)).error === 'shard_report_missing');
+    const duped = [full[0], full[0], full[2]];
+    assert('(f4e) a duplicated shard index => shard_report_duplicate',
+      shardLib.auditShardCoverage('s', 3, duped).error === 'shard_report_duplicate');
+  }
+
+  // (f5) parseCoverage reads the marker line back out of a captured run.
+  {
+    const blob = 'noise\n' + shardLib.coverageLine({ suite: 'z', index: 1, total: 2, scenarios: 5, ran: 3 }) + '\nmore noise\n';
+    const got = shardLib.parseCoverage(blob);
+    assert('(f5) parseCoverage recovers exactly one payload', got.length === 1 && got[0].suite === 'z' && got[0].ran === 3);
+  }
+
+  // (f6) planUnits: a registered suite expands into N tagged shard units; anything else
+  // stays one unit; the queue is ordered longest-hint-first.
+  {
+    const suite = Object.keys(pool.SHARDED_SUITES)[0];
+    const units = pool.planUnits([suite, 'node scripts/test-next-action.js'], {});
+    const shardUnits = units.filter(u => u.suite === suite);
+    const width = pool.SHARDED_SUITES[suite];
+    assert('(f6a) a registered suite expands to its declared width', shardUnits.length === width);
+    assert('(f6b) every expanded unit carries a distinct --shard i/N',
+      new Set(shardUnits.map(u => u.command)).size === width
+      && shardUnits.every(u => u.command.startsWith(suite + ' --shard ')));
+    assert('(f6c) an unregistered step stays a single whole-suite unit',
+      units.filter(u => u.command === 'node scripts/test-next-action.js').length === 1);
+    assert('(f6d) the queue is ordered longest-hint-first',
+      units.every((u, i) => i === 0 || units[i - 1].cost >= u.cost));
+  }
+
+  // (f7) KAOLA_TEST_POOL_SHARDS=off disables expansion — the escape hatch runs the whole suite.
+  {
+    const suite = Object.keys(pool.SHARDED_SUITES)[0];
+    const units = pool.planUnits([suite], { KAOLA_TEST_POOL_SHARDS: 'off' });
+    assert('(f7) SHARDS=off runs the suite whole', units.length === 1 && units[0].command === suite);
+  }
+
+  // (f8) Pool sizing: serial on request, forced on a number, bounded on auto, and a typo
+  // falls back to auto rather than crashing the gate.
+  {
+    assert('(f8a) serial forces a pool of 1', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: 'serial' }, 16, 40) === 1);
+    assert('(f8b) "1" forces a pool of 1', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: '1' }, 16, 40) === 1);
+    assert('(f8c) a number forces that pool size', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: '3' }, 16, 40) === 3);
+    assert('(f8d) a forced size never exceeds the unit count', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: '99' }, 16, 4) === 4);
+    assert('(f8e) auto stays at the measured non-inflating ceiling', pool.resolveConcurrency({}, 64, 40) === 4
+      && pool.resolveConcurrency({}, 8, 40) === 4);
+    assert('(f8f) a tiny host stays serial', pool.resolveConcurrency({}, 2, 40) === 1);
+    assert('(f8g) a typo falls back to auto', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: 'yes-please' }, 16, 40) > 1);
+  }
+
+  // (f9) parseArgs splits the serial --first prefix from the pooled remainder.
+  {
+    const { first, pooled } = pool.parseArgs(['--first', 'a', '--first', 'b', 'c', 'd']);
+    assert('(f9) --first steps are separated, in order, from the pooled steps',
+      first.join(',') === 'a,b' && pooled.join(',') === 'c,d');
+  }
+
   // Roll-up
   console.log('');
   console.log(`self-test: ${passed} assertions passed, ${failed} failed`);

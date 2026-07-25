@@ -54,7 +54,12 @@ function runNode(script, args, cwd, extraEnv, opts) {
   // Git isolation: prevent developer gpgsign/hooksPath from breaking fixture commits.
   baseEnv.GIT_CONFIG_GLOBAL = '/dev/null';
   baseEnv.GIT_CONFIG_NOSYSTEM = '1';
-  const timeout = (opts && opts.timeout != null) ? opts.timeout : 120000;
+  // The timeout is a HANG guard, not an assertion. When this suite runs inside a concurrent
+  // chain pool a single fixture subprocess legitimately takes far longer than on an idle
+  // host, so the runner exports KAOLA_TEST_TIMEOUT_SCALE and the guard tracks the load it is
+  // running under. A standalone run (no scale set) keeps the original bound exactly.
+  const timeoutScale = Math.max(1, Number(process.env.KAOLA_TEST_TIMEOUT_SCALE) || 1);
+  const timeout = ((opts && opts.timeout != null) ? opts.timeout : 120000) * timeoutScale;
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
@@ -18907,11 +18912,22 @@ async function main() {
     runFocusedReviewOutcomeTransport699();
     return;
   }
+  // --shard i/N runs a disjoint stride of the registry in this process. The shared-tmp
+  // group is ONE indivisible unit (its members share a single fixture root and run in
+  // order), so it is registered as a single ordinal and lands whole in one shard.
+  //
+  // NOT PROVEN FOR CONCURRENT USE: several scenarios here drive real subprocesses under
+  // their own timeouts, and shards of this suite running side by side against one checkout
+  // have been observed to go red. The chain runner therefore does NOT fan this suite out.
+  const shardLib = require('./test-shard-lib');
+  const shard = shardLib.selector(args);
   const onlyTokens = [];
   let listMode = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--list') {
       listMode = true;
+    } else if (args[i] === '--shard') {
+      i++;   // consumed by the shard selector above
     } else if (args[i] === '--only') {
       if (i + 1 >= args.length) {
         process.stderr.write('Error: --only requires a token argument\n');
@@ -18959,12 +18975,21 @@ async function main() {
     // just like every standalone claim fixture that calls initGitRepo itself.
     initGitRepo(tmp);
     if (fullRun) {
-      // Full run: same order as original main(), shared-tmp group first.
-      await runSharedTmpGroup(tmp);
+      // Full run: same order as original main(), shared-tmp group first. Ordinal 0 is
+      // the shared-tmp group; ordinals 1..n are the standalone scenarios in file order.
+      let ordinal = 0;
+      let ran = 0;
+      if (shard.owns(ordinal++)) {
+        await runSharedTmpGroup(tmp);
+        ran++;
+      }
       for (const entry of SCENARIO_REGISTRY) {
-        if (entry.sharedTmp) continue; // already ran above
+        if (entry.sharedTmp) continue; // part of the group unit above
+        if (!shard.owns(ordinal++)) continue;
+        ran++;
         await entry.fn();
       }
+      shardLib.reportCoverage('simulate-workflow-walkthrough', shard, ordinal, ran, ran, 0);
       console.log('Workflow walkthrough simulation passed');
     } else {
       // Subset run.

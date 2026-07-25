@@ -1806,14 +1806,24 @@ function readPlanRoles(planPath) {
 }
 
 // ---------------------------------------------------------------------------
-// #716: built-in, intentionally non-delegable workflow roles. A frozen plan's
+// #716/#800: built-in, intentionally non-delegable workflow roles. A frozen plan's
 // ## Nodes table may list them (the gates and the finalize sink run in the main
-// session, never as delegated subagents), so they have no Codex profile and no
-// config/agents.toml entry BY DESIGN. They are exempt from the template/profile
-// availability checks in runPreflight; every other (delegated) plan role stays
-// fail-closed (role_not_in_template / profiles_missing).
+// session, never as delegated subagents; a spine `expansion-point` never dispatches
+// at all — the executor's expansion transaction composes its interior at open time),
+// so they have no Codex profile and no config/agents.toml entry BY DESIGN. They are
+// exempt from the template/profile availability checks in runPreflight; every other
+// (delegated) plan role stays fail-closed (role_not_in_template / profiles_missing).
+//
+// This list MUST equal the kernel's own built-in role set (the adaptive node script's
+// RESERVED_EXPANSION_UNIT_ROLES). This file is deliberately standalone — Node builtins
+// only, no kernel require — so the parity pin lives in the test suite instead
+// (scripts/test-install-model-rendering.js).
 // ---------------------------------------------------------------------------
-const PLAN_BUILTIN_NON_DELEGABLE_ROLES = Object.freeze(['main-session-gate', 'finalize']);
+const PLAN_BUILTIN_NON_DELEGABLE_ROLES = Object.freeze([
+  'main-session-gate',
+  'finalize',
+  'expansion-point',
+]);
 
 // ---------------------------------------------------------------------------
 // Profile check: assert .codex/agents/kaola-workflow/<role>.toml exists for all roles.
@@ -3939,6 +3949,7 @@ module.exports = {
   runDoctor,
   readTemplateRoles,
   readPlanRoles,
+  PLAN_BUILTIN_NON_DELEGABLE_ROLES,
   checkManagedBlock,
   checkProfiles,
   validateProfileText,
