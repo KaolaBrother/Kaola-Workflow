@@ -358,5 +358,31 @@ for (const [fragment, want] of tagProbeCases) {
   fs.rmSync(fault.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true });
 }
 
+// A release surface file LARGER than Node's default 1 MB execFileSync maxBuffer must still tag.
+// Every `git show <sha>:<file>` in the tag-time surface verification reads the blob through
+// execFileSync; at the default maxBuffer a >1 MB CHANGELOG makes the probe throw ENOBUFS, the
+// verifier reads that as "bytes do not match", and the tag refuses candidate_tree_verification_failed
+// — a release that can never be cut, with a reason naming the wrong cause. Real occurrence: the
+// CHANGELOG crossed 1 MB and blocked the v7.0.0 tag. Same class as the #666 run-chains hardening.
+{
+  const d = fixture();
+  // Push CHANGELOG.md past 1 MB while keeping the [Unreleased] section prepare needs intact.
+  const bulk = '\n' + ('- historical entry padding to exceed the default maxBuffer. '.repeat(24) + '\n').repeat(900);
+  fs.appendFileSync(path.join(d, 'CHANGELOG.md'), bulk);
+  git(d, 'add', 'CHANGELOG.md'); git(d, 'commit', '-qm', 'bulk changelog');
+  assert(fs.statSync(path.join(d, 'CHANGELOG.md')).size > 1024 * 1024,
+    'oversize fixture: CHANGELOG.md must exceed the 1 MB default maxBuffer');
+  prepare(d);
+  const candidate = commitCandidate(d);
+  chain(d);
+  const r = run(d, ['--tag', '--version', '5.1.0', '--json']);
+  assert(r.status === 0 && r.json && r.json.result === 'ok',
+    'a >1 MB release surface file still tags (got ' + JSON.stringify(r.json) + ')');
+  let tagged = null; try { tagged = git(d, 'rev-parse', 'kaola-workflow--v5.1.0^{commit}'); } catch (_) {}
+  assert(tagged === candidate,
+    'the tag points at the candidate commit for an oversize surface (got ' + tagged + ')');
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 if (failed) { console.error(`\ntest-release: ${failed} test(s) FAILED, ${passed} passed`); process.exit(1); }
 console.log(`test-release: all ${passed} assertions passed`);

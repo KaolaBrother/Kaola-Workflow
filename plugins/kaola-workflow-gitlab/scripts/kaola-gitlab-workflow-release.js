@@ -23,8 +23,14 @@ const RELEASE_TAG_PREFIX = 'kaola-workflow' + '--v';
 
 function flagVal(args, flag) { const i = args.indexOf(flag); return i < 0 ? null : (args[i + 1] || null); }
 function hasFlag(args, flag) { return args.includes(flag); }
+// Cap every repo-size-scaling git read at 64 MB. Node's default execFileSync maxBuffer is 1 MB, and
+// the tag-time surface verification reads each release-surface blob whole via `git show <sha>:<file>`
+// — a CHANGELOG that grows past 1 MB makes that probe throw ENOBUFS, which the verifier cannot
+// distinguish from "the bytes do not match", so the tag refuses `candidate_tree_verification_failed`
+// and NO release can be cut again. Mirrors the run-chains hardening for the same failure class.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 function gitProbe(root, args, encoding = 'utf8') {
-  try { const value = execFileSync('git', args, { cwd: root, encoding, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }); return { ok: true, value: encoding ? value.trim() : value }; }
+  try { const value = execFileSync('git', args, { cwd: root, encoding, maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }); return { ok: true, value: encoding ? value.trim() : value }; }
   catch (error) { return { ok: false, exitCode: error && error.status != null ? error.status : null }; }
 }
 function emit(json, payload, human) {
@@ -41,7 +47,7 @@ function releaseTags(root) { const p = gitProbe(root, ['tag', '-l', RELEASE_TAG_
 function jsonFile(root, rel) { try { return JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8')); } catch (_) { return null; } }
 function hashFile(root, rel) { return crypto.createHash('sha256').update(fs.readFileSync(path.join(root, rel))).digest('hex'); }
 function trackedStatus(root) {
-  try { return { ok: true, value: execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }) }; }
+  try { return { ok: true, value: execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }) }; }
   catch (error) { return { ok: false, reason: 'worktree_status_unavailable', exitCode: error && error.status != null ? error.status : null }; }
 }
 function lockstep(root) {
