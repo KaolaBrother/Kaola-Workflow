@@ -428,6 +428,17 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
 
 **Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
 
+## Cross-runtime lexicon parity (#812)
+
+A typed refusal code emitted by the shared engine (`scripts/kaola-workflow-*.js`) can reach **any** runtime, so it must be documented on **every** runtime or on none. `scripts/test-runtime-lexicon-parity.js` enforces this and is wired into the claude chain (~0.3s).
+
+- **The domain is derived, not curated.** Candidates are the ~555 snake_case typed codes the shared engine actually emits, read off both spellings — a `reason:` field and the first argument of `refuse|halt|warn|blocked|refusal(...)`. The oracle never decides which codes are agent-facing; a code documented nowhere is silent and a code documented everywhere is silent, so **only asymmetry speaks**. Widening coverage means widening `EMIT_PATTERNS`, never hand-adding a token.
+- **Enforcement is the default.** `RUNTIME_NATIVE` allowlists what is **exempt** (with a one-line capability reason), the inverse of `test-agent-profile-parity.js`'s opt-in `FEATURE_TOKENS`, where a token nobody remembered to add is silently unguarded. It is **bidirectional**: a Codex-only token is a violation exactly like a Codex-missing one.
+- **Six buckets, not four.** The three Codex editions are collected separately (`codex-github` / `codex-gitlab` / `codex-gitea`). Merging them let a code surviving in only one edition count as present for all three — the very drift the oracle exists to catch.
+- **`agents/profiles/higher/` is excluded by construction.** Those overrides are substituted by `install.sh` only at `--profile=higher` and are never rendered into the opencode/kimi trees, so walking them would red the always-run chain for a structural difference rather than a drift.
+- **Anti-vacuity floors are part of the guard.** A broken extractor refuses with `derivation_vacuous` and an empty runtime tree with `runtime_tree_vacuous`, because a guard that silently measures nothing is the failure mode this issue exists to close.
+- **Mutation-proof any new guard.** `test-kimi-edition.js` previously passed 415 assertions while detecting no template drift at all. A green suite is not evidence; only a demonstrated RED-on-mutation is.
+
 ## `.md` files as production surfaces (#424)
 
 `.md` files in the allowband — `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**` — may be declared in a node's `declared_write_set` and pass the `--barrier-check` without requiring explicit declaration beyond the node's write set. `.md` files **outside** this allowband are production surfaces: `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml`, and any other `.md` outside the four allowband roots must appear explicitly in the node's write set. The blanket `.md` exemption that existed before #424 is removed; a non-allowband `.md` write not in any node's declared set fails the barrier with `write_set_overflow`.

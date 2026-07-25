@@ -141,8 +141,10 @@ refusals teach the walls at freeze — author to them, never clamp around them.
   with `optimize_budget`. State the concrete-duration evidence: difficulty alone is not evidence;
   never inflate a budget to hide a wedged agent.
 - **Node Ledger header MUST be canonical** — `| id | status |` exactly (an alias fails
-  `ledger_header_invalid`; `--repair` normalizes). Author `## Node Briefs` (one `### <node-id>`
-  heading per brief: intent, approach, constraints, which upstream evidence to read).
+  `ledger_header_invalid`; `--repair` normalizes). Author `## Node Briefs` (one column-0
+  `### <node-id>` heading per brief: intent, approach, constraints, which upstream evidence to
+  read). Every brief heading id MUST match a `## Nodes` row — an unknown id refuses the freeze
+  with `brief_unknown_node`, a repeated id with `brief_duplicate_node`.
 - **Author `## Design` — REQUIRED, prose, no grammar inside it.** Record the plan-level WHY: the
   named units of work and what each delivers; the named serializer-evidence line (S1 artifact /
   S2 resource / S3 probe) for EVERY `sequence` edge between otherwise-independent writers — this

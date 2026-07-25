@@ -748,6 +748,45 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// K11 (#812, the kimi twin of test-opencode-edition.js's A24): the generated kimi
+// workflow-init Skill carries the re-grounded adaptive ## Kaola-Workflow template —
+// phase-free (no retired numbered-phase model, no "phase file/artifact" framing) AND
+// in parity with the canonical GitHub template MODULO the DECLARED runtime-noun
+// transform (Claude Code agents → subagents; the sole template-region rewrite
+// transformCommandBody applies, see sync-kimi-edition.js).
+//
+// This is TEMPLATE-CONTENT parity against the canonical source, which K3 structurally
+// cannot prove: this suite self-provisions .kimi/ via `sync --write`, so K3's
+// `sync --check` compares the generated tree against the tree it just wrote — that is
+// sync IDEMPOTENCY, never content parity. A template-mangling transform added to
+// sync-kimi-edition.js keeps K3 green (both sides mangled) and is caught only here.
+// .kimi/ is fully gitignored, so the four-chain contract validators must not read it —
+// this is the kimi-edition home for the template ban + parity (regenerate via --write).
+// ---------------------------------------------------------------------------
+{
+  const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
+  const TPL_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const extractTemplate = (text, label) => {
+    const s = text.indexOf(TPL_START);
+    const e = text.indexOf(TPL_END);
+    assert(s !== -1 && e !== -1 && e > s,
+      'K11[' + label + ']: KW-CLAUDE-TEMPLATE-START/END markers present');
+    return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
+  };
+  const kimiTpl = extractTemplate(read(skillDir('workflow-init')), 'kimi');
+  // Phase-ban (mirror validate-kaola-workflow-contracts.js AC4).
+  assert(!/Phase\s+\d/.test(kimiTpl),
+    'K11: kimi workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
+  assert(!/phase file|phase artifact/i.test(kimiTpl),
+    'K11: kimi workflow-init template must not use "phase file/artifact" durable-state framing');
+  // Parity modulo the declared runtime-noun transform.
+  const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
+  const canonTplRuntime = canonTpl.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
+  assert(kimiTpl === canonTplRuntime,
+    'K11: kimi workflow-init template is in parity with the canonical GitHub template modulo the declared runtime-noun transform (Claude Code agents → subagents)');
+}
+
 if (failed) {
   console.error('\nkimi-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.');
   process.exit(1);

@@ -13,7 +13,7 @@ Purpose:
 
 Output contract:
 - Report the assigned task, write set, tests changed, implementation files changed, and validation commands.
-- Your written cache evidence MUST contain non-empty column-0 `RED:` (failing-test signature, pre-impl) and `GREEN:` (the same test passing post-impl) lines; the orchestrator never reconstructs them from the compact return.
+- Your written cache evidence MUST contain non-empty column-0 `RED:` (failing-test signature, pre-impl) and `GREEN:` (the same test passing post-impl) lines; the orchestrator never reconstructs them from the compact return. A written evidence file missing RED or GREEN is refused by the close gate with evidence_shape_failed.
 - Keep refactors scoped to the task.
 - If validation fails, classify the failure as behavior/test or build/type/lint/tooling.
 - You are a WRITE-role agent: SELF-WRITE the RED->GREEN evidence block directly into your seeded .cache/{node-id}.md file at the path you were given. The seeded file already carries an evidence-binding: <node-id> <nonce> header line -- read it, preserve it verbatim, and never add, alter, or strip it; append your own content below it.

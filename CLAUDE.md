@@ -65,6 +65,16 @@ Minimize **synergy** (coupling to systems the workflow does not own); maximize *
 - **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
 - **Accuracy still comes from inside** — this does not weaken axiom 1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*.
 
+### One Rule, One Wording; Runtime Divergence Requires Declaration
+
+A rule, refusal code, or generated template has **exactly one wording**, and every agent runtime reads that wording. A runtime is a *rendering target*, never an authoring surface: the same rule may not be restated, abridged, or re-neutralized per runtime.
+
+- **Divergence must be declared** — allowed only where a runtime's capabilities genuinely differ (Codex spawns via `agent_type` where Claude uses `subagent_type`; Kimi subagents inherit the session model). Express it as a named region in the single source or a named entry in an exemption table with a one-line reason, never as an incidental rewrite rule.
+- **Generated text is runtime-neutral at the source**, not neutralized on the way out. Every per-runtime rewrite is a site where two targets can silently diverge, so the count of rewrite rules is itself the reliability metric — drive it toward zero.
+- **Consumer-facing artifacts this project writes into someone else's repo** (`CLAUDE.md`, `AGENTS.md`) are read by every runtime: name no vendor, no model, and no command that does not resolve on the reader's runtime.
+- **Regulating clause** — any change touching a prompt surface states which runtimes it reaches. "I edited the Claude command" is not a complete change; the surface set is part of the diff.
+- **A guard is evidence only once mutation-proven.** A green suite is not evidence a guard is armed — enforcement must default to on (exempt-lists, not opt-in allowlists) and be bidirectional, or a forgotten token is silently unguarded.
+
 ### The Adaptive Workflow
 
 The workflow runs one path; the orchestrator does not spend tokens or wall-clock choosing between paths.
