@@ -1,0 +1,54 @@
+{
+  "plan_hash": "f64fbb6f44c30ee8e18f4996862155c0b9220f2eb53b69c6abdc800bbeb35a31",
+  "updated_at": "2026-07-25T08:41:07.547Z",
+  "op": "repair-node",
+  "node_ledger": [
+    {
+      "id": "n1-route-spec",
+      "role": "code-architect",
+      "status": "complete"
+    },
+    {
+      "id": "n2-next-surfaces",
+      "role": "implementer",
+      "status": "complete"
+    },
+    {
+      "id": "n3-adapt-surfaces",
+      "role": "implementer",
+      "status": "complete"
+    },
+    {
+      "id": "n4-planner-profiles",
+      "role": "implementer",
+      "status": "complete"
+    },
+    {
+      "id": "n5-regression-pins",
+      "role": "implementer",
+      "status": "complete"
+    },
+    {
+      "id": "n6-docs",
+      "role": "doc-updater",
+      "status": "complete"
+    },
+    {
+      "id": "n7-falsify",
+      "role": "adversarial-verifier",
+      "status": "complete"
+    },
+    {
+      "id": "n8-code-certify",
+      "role": "code-reviewer",
+      "status": "pending"
+    },
+    {
+      "id": "n9-finalize",
+      "role": "finalize",
+      "status": "pending"
+    }
+  ],
+  "in_progress": [],
+  "all_done": false
+}
