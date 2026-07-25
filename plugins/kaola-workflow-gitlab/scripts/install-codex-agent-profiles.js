@@ -2633,8 +2633,11 @@ function parseTopLevelModelReasoningEffort(configContent) {
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Codex sub-agent spawn tools are not exposed ([agents] enabled absent-or-false). '
-      + 'Enable them, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex '
+    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because explicit '
+      + '[agents] enabled = true is absent or false. Current Codex releases enable general subagent workflows '
+      + 'by default; this explicit value is a Kaola preflight requirement, not a general Codex prerequisite. '
+      + 'Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work '
+      + 'in-session; or, if your Codex '
       + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
       + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
       + 'model_reasoning_effort=ultra) for proactive delegation.';

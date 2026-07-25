@@ -434,11 +434,15 @@ three editions.
 
 Prerequisites:
 
-- Codex is installed and authenticated on your computer.
+- Codex >= 0.145.0 is installed and authenticated on your computer.
 - Your computer can access this GitHub repository.
-- Restart Codex after adding or updating the plugin.
 
-Clone the repository, then register it with Codex from the local path:
+The steps below follow Codex's official separation between adding a marketplace
+source and installing a plugin from that source. See
+[Install and use plugins](https://learn.chatgpt.com/docs/plugins#install-and-use-a-plugin)
+and [Package your plugin](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
+
+Clone the repository and add its local marketplace:
 
 ```bash
 git clone https://github.com/KaolaBrother/Kaola-Workflow.git ~/kaola-workflow
@@ -447,22 +451,39 @@ codex plugin marketplace add ~/kaola-workflow
 
 The local marketplace exposes all three entries: `kaola-workflow` for GitHub,
 `kaola-workflow-gitlab` for GitLab, and `kaola-workflow-gitea` for Gitea.
+Marketplace registration alone does not install a plugin. Install exactly one
+edition, either through `/plugins` or with the matching CLI command:
 
-For direct config enablement, add the desired entry to your Codex configuration:
+```bash
+# GitHub
+codex plugin add kaola-workflow@kaolabrother-kaola-workflow
+
+# GitLab
+codex plugin add kaola-workflow-gitlab@kaolabrother-kaola-workflow
+
+# Gitea
+codex plugin add kaola-workflow-gitea@kaolabrother-kaola-workflow
+```
+
+Current Codex releases enable general subagent workflows by default. Kaola-Workflow
+uses a stricter, fail-closed V2 task-name dispatch contract, so it additionally
+requires this explicit setting in `~/.codex/config.toml`:
 
 ```toml
-[plugins."kaola-workflow@kaolabrother-kaola-workflow"]
-enabled = true
-
-[plugins."kaola-workflow-gitlab@kaolabrother-kaola-workflow"]
-enabled = true
-
-[plugins."kaola-workflow-gitea@kaolabrother-kaola-workflow"]
+[agents]
 enabled = true
 ```
 
-After restarting Codex, open your project and ask Codex to initialize the
-selected workflow:
+This explicit value is a Kaola preflight requirement, not a claim that general
+Codex subagents are disabled when the key is absent. If a
+`# BEGIN kaola-workflow agents` managed block already exists, place the bare
+`[agents]` table above it. See the official
+[Subagents guide](https://learn.chatgpt.com/docs/agent-configuration/subagents#global-settings)
+for Codex's defaults.
+
+Start a new Codex chat/session after installing the plugin or changing
+`config.toml`. Then open your project and ask Codex to initialize the selected
+workflow:
 
 ```text
 Use Kaola-Workflow for Codex in this repo.
@@ -535,10 +556,10 @@ node <plugin-root>/scripts/install-codex-agent-profiles.js --global
 node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-root <project-root> --json
 ```
 
-Restart Codex to pick up the updated plugin files.
+Start a new Codex chat/session to pick up the updated plugin files and config.
 
 For the standalone-profile release, both refresh steps above are required: the plugin upgrade
-replaces the cached source profiles, and the profile installer copies all 16 role TOMLs into the
+replaces the cached source profiles, and the profile installer copies all 15 role TOMLs into the
 active global/project scope. A plugin-only upgrade leaves stale generated profiles in place; the
 doctor reports the mismatch instead of treating the install as current.
 
@@ -601,14 +622,19 @@ to configure this machine or explicitly approves the change.
 The audit must keep these facts separate:
 
 - `codex features list` should report `multi_agent_v2` as enabled.
+- Current Codex releases enable general subagent workflows by default. Kaola's
+  requirement for an explicit `[agents].enabled = true` is a stricter V2
+  dispatch attestation enforced by Kaola's preflight, not Codex's general
+  subagent default.
 - Codex >=0.145.0 unified multi-agent settings under a top-level `[agents]`
   table and stabilized MultiAgentV2 as the only supported dispatch path. The
   legacy `[features.multi_agent_v2]` table, a top-level `[features] multi_agent`
   flag, and the retired `tool_namespace` / `hide_spawn_agent_metadata` /
   `non_code_mode_only` sub-fields have no effect and are not read by this gate.
-- `[agents].enabled = true` is the only flag Kaola's gate reads. Kaola-Workflow
-  does **not** write it for you (owner decision D2) — a fresh install refuses
-  at preflight (`codex_multi_agent_v2_required`) until you add it by hand,
+- `[agents].enabled = true` is the only explicit V2 attestation Kaola's gate
+  reads. Kaola-Workflow does **not** write it for you (owner decision D2) — a
+  fresh Kaola install refuses at preflight (`codex_multi_agent_v2_required`)
+  until you add it by hand,
   ABOVE the `# BEGIN kaola-workflow agents` managed block (TOML forbids
   re-declaring `[agents]` once an `[agents.<role>]` sub-table inside that block
   has already opened it).
@@ -635,8 +661,8 @@ Kaola-Workflow:
 
 `developer_instructions` is a top-level key, so place it before the first TOML
 table. If the key already exists, merge these rules into its existing value
-instead of declaring it twice. Likewise, extend the existing inline or table
-form of `features.multi_agent_v2`; do not declare both forms.
+instead of declaring it twice. Add or extend one top-level `[agents]` table;
+do not use the retired `features.multi_agent_v2` forms.
 
 ```toml
 developer_instructions = """
@@ -693,15 +719,16 @@ effort-gated MultiAgentMode the Codex runtime will actually enforce, plus whethe
 ```text
 Kaola-Workflow Codex multi_agent_v2: NOT enabled (see codex_multi_agent_v2_required at preflight)
 Kaola-Workflow Codex dispatch posture: none (model_reasoning_effort unset)
-Kaola-Workflow Codex dispatch posture: Codex sub-agent spawn tools are not exposed ([agents] enabled absent-or-false). Enable them, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
+Kaola-Workflow Codex dispatch posture: Kaola-Workflow cannot attest its required V2 task-name dispatch path because explicit [agents] enabled = true is absent or false. Current Codex releases enable general subagent workflows by default; this explicit value is a Kaola preflight requirement, not a general Codex prerequisite. Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
 Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on Codex >=0.145.0 (rust-v0.145.0); it may change in a future Codex release.
 status: ok
 ```
 
 This report is REPORT-ONLY and never fails the install: `[agents].enabled` and
 `model_reasoning_effort` are both user-owned choices, so the installer never writes
-them. An install that prints `status: ok` while `multi_agent_v2` reads NOT enabled
-still needs the operator to add `[agents]\nenabled = true` by hand (ABOVE the
+them. Although current Codex releases enable general subagent workflows by default,
+an install that prints `status: ok` while Kaola's `multi_agent_v2` attestation reads
+NOT enabled still needs the operator to add `[agents]\nenabled = true` by hand (ABOVE the
 managed block — see `codex_multi_agent_v2_required`'s repair diff) before any role
 agent can actually be dispatched; once enabled, a non-proactive posture still needs
 one of the remediations above: explicitly ask for sub-agents / delegation / parallel
@@ -1567,8 +1594,8 @@ node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
 ./install-opencode.sh --global --yes
 ```
 
-Restart Claude Code and Codex after reinstalling. Run the Codex doctor shown above before the
-restart; after startup, the generated reviewer roles should load without malformed-agent warnings.
+Restart Claude Code and start a new Codex chat/session after reinstalling. Run the Codex doctor
+shown above before starting the new session; the generated reviewer roles should then load without malformed-agent warnings.
 If hook content changed, open `/hooks` and renew trust for the changed entries.
 
 ## License

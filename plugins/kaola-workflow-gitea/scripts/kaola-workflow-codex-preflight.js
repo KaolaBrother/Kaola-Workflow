@@ -829,8 +829,11 @@ function parseTopLevelModelReasoningEffort(configContent) {
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
-    return 'Codex sub-agent spawn tools are not exposed ([agents] enabled absent-or-false). '
-      + 'Enable them, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex '
+    return 'Kaola-Workflow cannot attest its required V2 task-name dispatch path because explicit '
+      + '[agents] enabled = true is absent or false. Current Codex releases enable general subagent workflows '
+      + 'by default; this explicit value is a Kaola preflight requirement, not a general Codex prerequisite. '
+      + 'Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work '
+      + 'in-session; or, if your Codex '
       + 'exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the '
       + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
       + 'model_reasoning_effort=ultra) for proactive delegation.';
@@ -2318,9 +2321,11 @@ function codexVersionUnsupportedRemediation(detected) {
 // codex_multi_agent_v2_required refusal. Kaola does NOT write [agents] enabled = true into the
 // user's config.toml itself (canonicalManagedBlockBodies splits the managed-block template at a bare
 // [agents] header, and a user-owned top-level [agents] table would otherwise TOML-duplicate-table
-// error) — a fresh install now refuses until the user edits config.toml by hand; this remediation
-// string is what makes that acceptable.
-const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Codex MultiAgentV2 is required and not enabled. '
+// error) — Kaola's preflight refuses until the user edits config.toml by hand; this remediation
+// string explains the Kaola-specific requirement without misdescribing Codex's general default.
+const CODEX_MULTI_AGENT_V2_REQUIRED_REMEDIATION = 'Kaola-Workflow requires an explicit MultiAgentV2 '
+  + 'attestation, but [agents] enabled = true is absent or false. Current Codex releases enable general '
+  + 'subagent workflows by default; this explicit value is a stricter Kaola V2 task-name preflight requirement. '
   + 'Kaola-Workflow does not write this flag for you (see docs/decisions for the D2 config posture) — '
   + 'add it to ~/.codex/config.toml (or a trusted project .codex/config.toml) by hand, ABOVE the '
   + '"# BEGIN kaola-workflow agents" managed block (TOML forbids re-declaring [agents] once an '

@@ -189,7 +189,9 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 > `kaola-workflow-codex-preflight.js --doctor --json` must show the top-level `[agents]` table's
 > `enabled = true` — the sole supported form (the legacy `[features.multi_agent_v2]`
 > table and a top-level `[features] multi_agent` flag have no effect and are not read by this
-> gate). Kaola never writes this flag for you; if absent, preflight refuses
+> gate). Current Codex releases enable general subagent workflows by default; this explicit value
+> is a stricter Kaola V2 task-name attestation, not a general Codex prerequisite. Kaola never
+> writes this flag for you; if it is not explicitly true, preflight refuses
 > `codex_multi_agent_v2_required` and its diff must be applied by hand with user authorization —
 > never silently. Warning suppression under `[notice]` is not feature enablement. Enablement alone
 > is NOT the same as dispatch-ready: read the doctor JSON's additive `dispatch_posture` field too
