@@ -338,11 +338,18 @@ router-side dispatch at all, on either branch):
    never orphans a worktree); the roadmap check runs in adapt too. Do NOT run
    the Startup transaction / git-freshness / roadmap steps in the router for this path.
 
+   **Task description (no issue number):** when the user described the work but named no
+   issue (the described-task branch), route to `kaola-workflow-adapt <the task
+   description, verbatim>`. Adapt resolves the description to exactly one issue before the
+   claim and dispatches the planner in explicit-target mode with that issue plus the
+   description verbatim. The no-target backlog survey does NOT run on this route, so roadmap
+   priority cannot outrank the described task.
+
    **No target (auto-bundle entry):** when neither `KAOLA_TARGET_ISSUE` nor
-   `KAOLA_TARGET_ISSUES` was set (the no-issue-named branch), route to `kaola-workflow-adapt`
-   with no argument. The planner's no-target survey mode runs the backlog survey, selection,
-   and claim itself before authoring — see "Agent Issue Selection — Bundle Lane" above,
-   *Auto-bundle entry*.
+   `KAOLA_TARGET_ISSUES` was set and the user described no task (the no-issue-named branch),
+   route to `kaola-workflow-adapt` with no argument. The planner's no-target survey mode runs
+   the backlog survey, selection, and claim itself before authoring — see "Agent Issue
+   Selection — Bundle Lane" above, *Auto-bundle entry*.
 
    **Bundle:** when `KAOLA_TARGET_ISSUES` is set (multi-issue bundle), route to
    `kaola-workflow-adapt` with the full issue set — the planner uses

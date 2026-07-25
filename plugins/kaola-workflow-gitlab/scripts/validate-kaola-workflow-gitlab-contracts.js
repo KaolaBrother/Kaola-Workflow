@@ -85,6 +85,33 @@ function assertConcept(file, concept, terms) {
     file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
+// #796: a routing surface that cites a section of the workflow-planner profile must cite one that
+// EXISTS. The citation shape is `its own *<Name>* section` (a `*A* / *B*` list form is also parsed,
+// since that is the shape a stale citation took). Every extracted <Name> must resolve to an h2/h3
+// heading in the shared repo-root `agents/workflow-planner.md`, of which this edition's TOML twin is
+// a parity-checked flattening. This guards the CLASS, not a literal: these surfaces shipped green
+// for a full release citing two section names that had been deleted from the profile, because no
+// assertion ever compared the two files.
+function assertProfileSectionCitations(file, profile) {
+  const cited = [];
+  for (const run of norm(read(file)).matchAll(/its own ((?:\*[^*\n]+\*(?:\s*(?:\/|,|and)\s*)?)+)/g)) {
+    for (const name of run[1].matchAll(/\*([^*]+)\*/g)) cited.push(name[1].trim());
+  }
+  assert(cited.length > 0,
+    file + ' must cite at least one ' + profile + ' section as `its own *<Name>* section`');
+  const headings = new Set();
+  for (const line of read(profile).split('\n')) {
+    if (!/^#{2,3}\s/.test(line)) continue;
+    const text = line.replace(/^#{2,3}\s+/, '').trim();
+    headings.add(text);
+    // a heading may carry a trailing `— gloss`; the citable title is the part before it
+    headings.add(text.split(/\s+[—–-]\s+/)[0].trim());
+  }
+  for (const name of cited) {
+    assert(headings.has(name), file + ' cites a ' + profile + ' section that does not exist: ' + name);
+  }
+}
+
 function assertEveryDispatchHasModel(file) {
   const lines = read(file).split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -643,6 +670,40 @@ assertIncludes(pluginRoot + '/commands/workflow-next.md', 'Skip this entire step
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'KAOLA_PATH');
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'path_not_installed');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'path_not_installed');
+// #796: the router's issue-selection contract, pinned on both GitLab routing surfaces. Every needle
+// here was unasserted before, which is exactly how a cross-reference to two deleted profile sections
+// survived a release on this edition too: correct-looking prose with nothing checking it. The tokens
+// are forge-neutral, so the same needle set fits the command and the SKILL.
+for (const file of [pluginRoot + '/commands/workflow-next.md',
+  pluginRoot + '/skills/kaola-workflow-next/SKILL.md']) {
+  // A user-named issue outranks an active folder, and the numbered procedure must SAY so before it
+  // reaches the active-folder step. Order is half the fix; the explicit match condition is the other.
+  assertBefore(file, 'A named target is never substituted', 'if exactly one active folder is already present');
+  assertIncludes(file, 'do not read, adopt, or fall back to an active folder');
+  // The described-task branch and the guarantee that makes it worth having: no survey, so the
+  // roadmap frontier cannot outrank the work the user actually asked for.
+  assertIncludes(file, 'User described a task but named no issue');
+  assertIncludes(file, 'the backlog survey NEVER runs on this branch');
+  // The no-target entry states its default in its FIRST paragraph, not after the bundle prose.
+  assertIncludes(file, 'Single-issue is the default here');
+  // The selection-evidence sidecar has a NAMED writer, so surface prose and the claim-side probe
+  // tell one story instead of asserting a file nobody was told to write.
+  assertIncludes(file, 'The planner is that sidecar');
+  assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
+  // The two deleted section names must not return, and every cited section must resolve.
+  assertNotIncludes(file, 'Backlog Inventory');
+  assertNotIncludes(file, 'What You May Read');
+  assertProfileSectionCitations(file, 'agents/workflow-planner.md');
+}
+// #796: the adapt surfaces are the receiving end of the described-task route — they must document
+// the entry shapes, carry the planner dispatch's binding-scope field, and render a defined
+// no-target target slot instead of a placeholder literal.
+for (const file of [pluginRoot + '/commands/kaola-workflow-adapt.md',
+  pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md']) {
+  assertIncludes(file, 'Entry contract');
+  assertIncludes(file, 'Binding scope:');
+  assertIncludes(file, 'no target named; run no-target survey mode');
+}
 // #277 M3: FANOUT_CAP and post-dominate relocated from commands/kaola-workflow-adapt.md
 // (dispatch-handle-only) to agents/workflow-planner.md (sole home of authoring procedure).
 // agents/workflow-planner.md is a shared repo-root file; use a root-relative path (no pluginRoot).

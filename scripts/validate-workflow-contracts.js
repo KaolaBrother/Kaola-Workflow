@@ -60,6 +60,32 @@ function assertBefore(file, first, second) {
   assert(content.indexOf(nf) < content.indexOf(ns), file + ' must put ' + first + ' before ' + second);
 }
 
+// #796: a routing surface that cites a section of the workflow-planner profile must cite one that
+// EXISTS. The citation shape is `its own *<Name>* section` (a `*A* / *B*` list form is also parsed,
+// since that is the shape a stale citation took). Every extracted <Name> must resolve to an h2/h3
+// heading in the profile. This guards the CLASS, not a literal: the router shipped green for a full
+// release citing two section names that had been deleted from the profile, because no assertion ever
+// compared the two files. Normalized content, so a line-wrapped citation still parses.
+function assertProfileSectionCitations(file, profile) {
+  const cited = [];
+  for (const run of norm(read(file)).matchAll(/its own ((?:\*[^*\n]+\*(?:\s*(?:\/|,|and)\s*)?)+)/g)) {
+    for (const name of run[1].matchAll(/\*([^*]+)\*/g)) cited.push(name[1].trim());
+  }
+  assert(cited.length > 0,
+    file + ' must cite at least one ' + profile + ' section as `its own *<Name>* section`');
+  const headings = new Set();
+  for (const line of read(profile).split('\n')) {
+    if (!/^#{2,3}\s/.test(line)) continue;
+    const text = line.replace(/^#{2,3}\s+/, '').trim();
+    headings.add(text);
+    // a heading may carry a trailing `— gloss`; the citable title is the part before it
+    headings.add(text.split(/\s+[—–-]\s+/)[0].trim());
+  }
+  for (const name of cited) {
+    assert(headings.has(name), file + ' cites a ' + profile + ' section that does not exist: ' + name);
+  }
+}
+
 function assertEveryDispatchHasModel(file) {
   const lines = read(file).split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -244,6 +270,80 @@ for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-ne
 // bullet lived here, inside the byte-locked KW-CLAUDE-TEMPLATE region).
 for (const token of retired) assertNotIncludes('commands/workflow-init.md', token);
 for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-init.md', token);
+
+// #796: the router's issue-selection contract is now pinned end to end across all six next
+// surfaces. Every needle here was unasserted before, which is exactly how a cross-reference to two
+// deleted profile sections survived a release: correct-looking prose with nothing checking it.
+// The tokens are forge-neutral, so one needle set fits all six (same shape as the #486 loop above).
+const nextSurfaces796 = [
+  'commands/workflow-next.md',
+  'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
+  'plugins/kaola-workflow-gitea/commands/workflow-next.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md',
+];
+for (const file of nextSurfaces796) {
+  // A user-named issue outranks an active folder, and the numbered procedure must SAY so before it
+  // reaches the active-folder step. Order is half the fix (a reader following top-to-bottom hit the
+  // unconditional active-folder adoption first); the explicit match condition is the other half.
+  assertBefore(file, 'A named target is never substituted', 'if exactly one active folder is already present');
+  assertIncludes(file, 'do not read, adopt, or fall back to an active folder');
+  // The described-task branch and the guarantee that makes it worth having: no survey, so the
+  // roadmap frontier cannot outrank the work the user actually asked for.
+  assertIncludes(file, 'User described a task but named no issue');
+  assertIncludes(file, 'the backlog survey NEVER runs on this branch');
+  // The no-target entry states its default in its FIRST paragraph, not after the bundle prose.
+  assertIncludes(file, 'Single-issue is the default here');
+  // The selection-evidence sidecar has a NAMED writer, so surface prose, the claim-side probe, and
+  // the walkthrough legs tell one story instead of asserting a file nobody was told to write.
+  assertIncludes(file, 'The planner is that sidecar');
+  assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
+  // The FRONT-END-ENTRY enumeration must carry the described-task case too — not just the Step 0
+  // selection branch above. These are different sections, and pinning only the selection branch is
+  // what let the gap ship: the three SKILL surfaces kept the selection branch but never gained the
+  // entry case, so the described-task state fell through to the no-target case below it and routed
+  // to adapt with NO argument, silently dropping the description into the backlog survey.
+  assertIncludes(file, 'Task description (no issue number)');
+  // Order is load-bearing: the described-task case must be reachable BEFORE the no-target case,
+  // because the no-target case would otherwise match the described-task state first.
+  assertBefore(file, 'Task description (no issue number)', 'No target (auto-bundle entry)');
+  // ...and the no-target case must exclude the described-task state explicitly, so the two cases
+  // cannot both match a single state on a top-to-bottom read.
+  assertIncludes(file, 'and the user described no task');
+  // The two section names the router used to cite are headings in no profile; they must not return.
+  assertNotIncludes(file, 'Backlog Inventory');
+  assertNotIncludes(file, 'What You May Read');
+  // ...and the structural guard for the whole class, not just those two literals.
+  assertProfileSectionCitations(file, 'agents/workflow-planner.md');
+}
+// The skeleton is the single source of all six surfaces above; sweep it too so a dangling
+// cross-reference is red at the source and not only in the rendered output.
+assertNotIncludes('templates/routing/next.skeleton.md', 'Backlog Inventory');
+assertNotIncludes('templates/routing/next.skeleton.md', 'What You May Read');
+
+// #796: the adapt entry contract. The surface must document the entry shapes it can receive, carry
+// the planner dispatch's binding-scope field, and render a defined no-target target slot — before
+// this, adapt documented no entry shape but an issue number, so the described-task route had no
+// receiving end at all. Same six surfaces as the #486 loop; the tokens are forge-neutral.
+for (const file of adaptSurfaces486) {
+  assertIncludes(file, 'Entry contract');
+  assertIncludes(file, 'Binding scope:');
+  assertIncludes(file, 'no target named; run no-target survey mode');
+}
+
+// #796: the workflow-planner profile is the cited home of the no-target survey, so the framing the
+// router now points at must actually be there — default-first, with the bundle as the exception.
+assertBefore('agents/workflow-planner.md', 'Default: single issue',
+  'Auto-bundle only when ALL of the following are true');
+assertNotIncludes('agents/workflow-planner.md', 'selects a bundle jointly with how it decomposes');
+// The sidecar disposition, pinned at both machine ends so prose and probe cannot drift apart: the
+// profile instructs the write, and the claim still probes the file the closure receipt reports.
+assertIncludes('agents/workflow-planner.md', '.cache/selection-evidence.md');
+assertIncludes('agents/workflow-planner.md', 'selection_mode: auto-bundle');
+assertIncludes('agents/workflow-planner.md', 'selection_mode: single-issue');
+assertIncludes('scripts/kaola-workflow-claim.js', 'probeSelectionEvidence');
+assertIncludes('scripts/kaola-workflow-claim.js', 'selection-evidence.md');
 
 // issue #207: fast-overlap parity — trap-2 tolerant keep. The fast/full command surfaces are
 // retired, but the classifier RETAINS its defensive fast-summary.md `## Scope` reader (readers

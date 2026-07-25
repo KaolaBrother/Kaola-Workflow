@@ -36,6 +36,43 @@ function assertConcept(file, concept, terms) {
   assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
+// #796: reading-order assertion — a procedure whose steps are correct but ordered wrong still
+// misroutes an agent reading top-to-bottom, so some pins have to check position, not presence.
+function assertBefore(file, first, second) {
+  const content = norm(read(file));
+  const nf = norm(first), ns = norm(second);
+  assert(content.indexOf(nf) >= 0, file + ' must include: ' + first);
+  assert(content.indexOf(ns) >= 0, file + ' must include: ' + second);
+  assert(content.indexOf(nf) < content.indexOf(ns), file + ' must put ' + first + ' before ' + second);
+}
+
+// #796: a routing surface that cites a section of the workflow-planner profile must cite one that
+// EXISTS. The citation shape is `its own *<Name>* section` (a `*A* / *B*` list form is also parsed,
+// since that is the shape a stale citation took). Every extracted <Name> must resolve to an h2/h3
+// heading in the profile — the canonical `agents/workflow-planner.md`, of which the packaged TOML
+// twins are parity-checked flattenings. This guards the CLASS, not a literal: the router SKILL
+// shipped green for a full release citing two section names that had been deleted from the profile,
+// because no assertion ever compared the two files.
+function assertProfileSectionCitations(file, profile) {
+  const cited = [];
+  for (const run of norm(read(file)).matchAll(/its own ((?:\*[^*\n]+\*(?:\s*(?:\/|,|and)\s*)?)+)/g)) {
+    for (const name of run[1].matchAll(/\*([^*]+)\*/g)) cited.push(name[1].trim());
+  }
+  assert(cited.length > 0,
+    file + ' must cite at least one ' + profile + ' section as `its own *<Name>* section`');
+  const headings = new Set();
+  for (const line of read(profile).split('\n')) {
+    if (!/^#{2,3}\s/.test(line)) continue;
+    const text = line.replace(/^#{2,3}\s+/, '').trim();
+    headings.add(text);
+    // a heading may carry a trailing `— gloss`; the citable title is the part before it
+    headings.add(text.split(/\s+[—–-]\s+/)[0].trim());
+  }
+  for (const name of cited) {
+    assert(headings.has(name), file + ' cites a ' + profile + ' section that does not exist: ' + name);
+  }
+}
+
 function parseJson(file) {
   return JSON.parse(read(file));
 }
@@ -573,6 +610,36 @@ for (const [surface, role, task] of [
 // dispatches any agent of its own; assert the retired control-plane literal never resurfaces.
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue-scout');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_scout');
+// #796: folding the survey into the planner left the router SKILL citing two profile sections that
+// no longer existed, and it shipped green because nothing asserted this band. Pin the whole
+// issue-selection contract of the Codex router SKILL, including the structural citation guard.
+{
+  const nextSkill796 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
+  // A user-named issue outranks an active folder, and the numbered procedure must SAY so before it
+  // reaches the active-folder step — this SKILL previously had NO numbered step that ever set the
+  // target from a user-named issue; the only assignment was the unconditional active-folder adoption.
+  assertBefore(nextSkill796, 'A named target is never substituted',
+    'if exactly one active folder is already present');
+  assertIncludes(nextSkill796, 'do not read, adopt, or fall back to an active folder');
+  // The described-task branch and the guarantee that makes it worth having.
+  assertIncludes(nextSkill796, 'User described a task but named no issue');
+  assertIncludes(nextSkill796, 'the backlog survey NEVER runs on this branch');
+  // The no-target entry states its default in its FIRST paragraph, not after the bundle prose.
+  assertIncludes(nextSkill796, 'Single-issue is the default here');
+  // The selection-evidence sidecar has a NAMED writer, so prose and the claim-side probe agree.
+  assertIncludes(nextSkill796, 'The planner is that sidecar');
+  assertIncludes(nextSkill796, 'selection_mode: auto-bundle|single-issue');
+  // The two deleted section names must not return, and every cited section must resolve.
+  assertNotIncludes(nextSkill796, 'Backlog Inventory');
+  assertNotIncludes(nextSkill796, 'What You May Read');
+  assertProfileSectionCitations(nextSkill796, 'agents/workflow-planner.md');
+  // The adapt SKILL is the receiving end of the described-task route: it must document the entry
+  // shapes, carry the dispatch's binding-scope field, and render a defined no-target target slot.
+  const adaptSkill796 = `${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`;
+  assertIncludes(adaptSkill796, 'Entry contract');
+  assertIncludes(adaptSkill796, 'Binding scope:');
+  assertIncludes(adaptSkill796, 'no target named; run no-target survey mode');
+}
 // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
 // the project-local needle above GREEN (add, never remove) and pin the global path alongside it.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.codex/agents/kaola-workflow/');

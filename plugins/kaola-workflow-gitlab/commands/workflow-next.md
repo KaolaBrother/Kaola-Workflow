@@ -248,10 +248,10 @@ authoring:
    priority cannot outrank the described task.
 
    **No target (auto-bundle entry):** when neither `KAOLA_TARGET_ISSUE` nor
-   `KAOLA_TARGET_ISSUES` was set (Step 0's no-issue-named branch), route to
-   `/kaola-workflow-adapt` with no argument. The planner's no-target survey mode runs
-   the backlog survey, selection, and claim itself before authoring — see "Startup
-   Step 0c — Bundle Lane" above, *Auto-bundle entry*.
+   `KAOLA_TARGET_ISSUES` was set and the user described no task (Step 0's no-issue-named
+   branch), route to `/kaola-workflow-adapt` with no argument. The planner's no-target
+   survey mode runs the backlog survey, selection, and claim itself before authoring — see
+   "Startup Step 0c — Bundle Lane" above, *Auto-bundle entry*.
 
    **Bundle:** when `KAOLA_TARGET_ISSUES` is set (multi-issue bundle), route to
    `/kaola-workflow-adapt` with the full issue set — the planner uses
