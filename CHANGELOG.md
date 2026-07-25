@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Codex installation wording now matches the official plugin and subagent guides.** The primary install flow separates marketplace registration from plugin installation, tells users to install exactly one forge edition, and requires a new Codex chat/session after installation or config changes. The guide and all six workflow-init surfaces now distinguish Codex's default general subagent availability from Kaola-Workflow's stricter requirement for an explicit `[agents] enabled = true` V2 task-name attestation; installer and preflight remediation text uses the same distinction. This is a wording-only correction: no preflight, dispatch, or concurrency behavior changed.
+
 ## [7.0.0] - 2026-07-25
 
 ### Changed

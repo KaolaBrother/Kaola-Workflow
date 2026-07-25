@@ -161,10 +161,13 @@ Read the doctor JSON's `codex_version` field first — it gates everything else.
 Codex >=0.145.0 unified multi-agent settings under a top-level `[agents]` table
 and stabilized MultiAgentV2 as the only dispatch path; an unsupported version
 returns a typed `codex_version_unsupported` refusal (repair: upgrade Codex)
-before any profile/config check runs. Once the version floor is met, read the
+before any profile/config check runs. Current Codex releases enable general
+subagent workflows by default; Kaola's explicit `agents.enabled = true`
+requirement is a stricter V2 task-name attestation, not a general Codex
+prerequisite. Once the version floor is met, read the
 per-scope `dispatch_posture` field alongside the existing checks — it is the
-effort-gated runtime dispatch MODE, distinct from enablement: `none` (spawn
-tools not exposed — `agents.enabled` absent-or-false), `explicitRequestOnly`
+effort-gated Kaola dispatch posture, distinct from Codex's general default:
+`none` (Kaola's explicit V2 attestation is absent-or-false), `explicitRequestOnly`
 (tools exposed, but the runtime model-refuses a spawn unless the session
 explicitly asks), or `proactive` (`model_reasoning_effort = "ultra"` — the
 runtime accepts a spawn with no per-session ask). Classify the result:
@@ -183,9 +186,10 @@ runtime accepts a spawn with no per-session ask). Classify the result:
   NEVER report this state as `ok` — enablement alone is not dispatch-ready.
 - `warning_only`: only `[notice].suppress_unstable_features_warning = true`
   differs; this is optional warning posture, not dispatch proof.
-- `needs_update`: `agents.enabled` is missing or false, or `dispatch_posture`
-  reads `none`. Preserve the typed `codex_multi_agent_v2_required` refusal and
-  show its repair diff verbatim — Kaola does not write this flag for you.
+- `needs_update`: Kaola's required explicit `agents.enabled = true` attestation
+  is missing or false, or `dispatch_posture` reads `none`. Preserve the typed
+  `codex_multi_agent_v2_required` refusal and show its repair diff verbatim —
+  Kaola does not write this flag for you.
 - `blocked`: config is malformed, policy-managed, or conflicts with a
   user/admin constraint.
 
@@ -199,9 +203,10 @@ top-level `[features] multi_agent` flag, or the retired `tool_namespace` /
 under Codex >=0.145.0 and are not read by this gate. Warning suppression is
 independent: never treat `[notice].suppress_unstable_features_warning = true`
 as evidence that MultiAgentV2 is enabled. Kaola does not silently edit
-`~/.codex/config.toml`'s `[agents]` table on the user's behalf — enabling it is
-a hand edit the user makes from the `codex_multi_agent_v2_required` refusal's
-diff; Kaola also never writes or overrides `agents.default_subagent_model` /
+`~/.codex/config.toml`'s `[agents]` table on the user's behalf — satisfying
+Kaola's explicit V2 attestation is a hand edit the user makes from the
+`codex_multi_agent_v2_required` refusal's diff; Kaola also never writes or
+overrides `agents.default_subagent_model` /
 `agents.default_subagent_reasoning_effort` — Codex resolves the sub-agent's own
 model/reasoning effort independently. After a config change, require a fresh
 Codex session. Do not claim effort-safe dispatch from config text alone; a
