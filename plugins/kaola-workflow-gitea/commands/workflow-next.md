@@ -105,22 +105,33 @@ do not auto-pick; the agent owns this decision.
 
 - **User named a specific issue** — `$ARGUMENTS` carries an issue number/project, or
   the prompt names one (e.g. "work on #N") → use the single-issue selection
-  (steps 1–4 below), byte-unchanged.
-- **User did NOT name an issue** — the common "work on the next issue" / no-argument
-  case → this is the **auto-bundle entry**. Resolve the path intent first (Step 0a-1), then
-  leave `KAOLA_TARGET_ISSUE` / `KAOLA_TARGET_ISSUES` UNSET and route straight to the adaptive
-  front-end entry (Step 0a-2; Step 0c's *Auto-bundle entry* below documents the selection
-  contract): the `workflow-planner`, dispatched by `/kaola-workflow-adapt` with no target,
-  runs its own no-target backlog survey, selects a bundle jointly with how it decomposes the
-  work, then claims + authors + freezes in ONE dispatch. Skip steps 1–4 below on this branch
-  — there is no router-selected target to validate or state.
+  (steps 1–4 below). That issue IS the target: never substitute another, and never
+  adopt an active folder's issue in its place.
+- **User described a task but named no issue** — a free-form description of the work
+  (e.g. "fix the login timeout") → leave `KAOLA_TARGET_ISSUE` / `KAOLA_TARGET_ISSUES`
+  UNSET and route to `/kaola-workflow-adapt <the task description, verbatim>`
+  (Step 0a-2). The described task IS the target: adapt resolves it to exactly one issue
+  before claiming, and the backlog survey NEVER runs on this branch, so roadmap priority
+  cannot outrank the work the user asked for. Skip steps 1–4 below.
+- **User named neither an issue nor a task** — the common "work on the next issue" /
+  no-argument case → this is the **auto-bundle entry**. Resolve the path intent first
+  (Step 0a-1), then leave `KAOLA_TARGET_ISSUE` / `KAOLA_TARGET_ISSUES` UNSET and route
+  straight to the adaptive front-end entry (Step 0a-2; Step 0c's *Auto-bundle entry* below
+  documents the selection contract): the `workflow-planner`, dispatched by
+  `/kaola-workflow-adapt` with no target, runs its own no-target backlog survey, selects a
+  single issue by default — or a high-confidence same-scope bundle when every bundle rule is
+  met — jointly with how it decomposes the work, then claims + authors + freezes in ONE
+  dispatch. Skip steps 1–4 below on this branch — there is no router-selected target to
+  validate or state.
 
-On the no-issue-named branch, **the `workflow-planner` is the SOLE backlog reader** — the
-router does NOT scan the backlog or select a target itself. The planner reads `ROADMAP.md`,
-the forge issue list, active folders, and archived summaries (its own *Backlog Inventory* /
-*What You May Read*), then claims what it selects. Do not duplicate the scan here.
+On the no-target branch (the user named neither an issue nor a task), **the
+`workflow-planner` is the SOLE backlog reader** — the router does NOT scan the backlog or
+select a target itself. The planner reads `ROADMAP.md`, the forge issue list, active
+folders, and archived summaries — its own *No-target survey mode* section lists the sources
+— then claims what it selects. Do not duplicate the scan here.
 
-1. If exactly one active folder is already present, read its issue number from `node "$CLAIM_JS" status` (`active[0].issue_number`) and set `KAOLA_TARGET_ISSUE` to that value before calling startup. The script will return `verdict: owned`; proceed to routing. Do not skip the startup call.
+1. If the user named a specific issue number or project — in `$ARGUMENTS` or in the prompt — set `KAOLA_TARGET_ISSUE` to THAT issue and go to step 3. A named target is never substituted: do not read, adopt, or fall back to an active folder's issue in its place.
+2. ONLY when the user named no issue and no project: if exactly one active folder is already present, read its issue number from `node "$CLAIM_JS" status` (`active[0].issue_number`) and set `KAOLA_TARGET_ISSUE` to that value before calling startup. The script will return `verdict: owned`; proceed to routing. Do not skip the startup call. If a target WAS named and it differs from the active folder's issue, keep the named target — co-active folders are supported, and the named issue gets its own lane.
 
    ```bash
    kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
@@ -128,7 +139,6 @@ the forge issue list, active folders, and archived summaries (its own *Backlog I
    STATUS_OUT="$(node "$CLAIM_JS" status 2>/dev/null)"
    KAOLA_TARGET_ISSUE="$(node -e "try{const j=JSON.parse(process.argv[1]);process.stdout.write(j.count===1?String(j.active[0].issue_number):'')}catch(e){}" "$STATUS_OUT")"
    ```
-2. If `$ARGUMENTS` names a specific issue number or project, use that as the explicit target.
 3. Validate the target exists before calling startup. Validate against the active consumer repository, not against the Kaola-Workflow package repository unless that is the active project.
    - Online: `tea issues view "$KAOLA_TARGET_ISSUE" --output json` against the active project. If the fetch fails, stop and ask — do not fall back to a different issue.
    - Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require `kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md` to exist in the cwd's repo, OR an active folder whose `issue_number` matches the target. If neither is present, stop and ask the user to confirm the issue or run online.
@@ -154,29 +164,34 @@ and pass `--target-issues 42,47,53` (project/branch `bundle-42-47-53`, sorted
 
 ### Auto-bundle entry
 
-This is the **no-issue-named branch of Step 0**: whenever the user does not name a specific
-issue — including the everyday "work on the next issue" entry — the router dispatches
-nothing itself. It routes with no target to the adaptive front end (Step 0a-2): the
-`workflow-planner`, dispatched by `/kaola-workflow-adapt` with no issue, surveys the backlog
-itself (the sources are documented in its own contract — roadmap sources, remote open issues
-+ dependency labels, active folders, archived summaries) and selects either a high-confidence
-same-scope bundle or a single `primary_issue`, jointly with how it decomposes the work, then
-claims + authors + freezes in ONE dispatch.
+**Single-issue is the default here.** On this branch the planner selects ONE issue unless
+EVERY bundle rule below is met; it never manufactures a bundle. The heading names the entry
+point, not the expected outcome.
+
+This is the **no-target branch of Step 0** — the user named neither an issue nor a task. The
+router dispatches nothing itself. It routes with no target to the adaptive front end
+(Step 0a-2): the `workflow-planner`, dispatched by `/kaola-workflow-adapt` with no issue,
+surveys the backlog itself (the sources are documented in its own contract — roadmap sources,
+remote open issues + dependency labels, active folders, archived summaries) and selects a
+single `primary_issue` — or a high-confidence same-scope bundle when every rule below holds —
+jointly with how it decomposes the work, then claims + authors + freezes in ONE dispatch.
+
+A bundle requires ALL of: every candidate open + unclaimed, no dependency unresolved outside
+the set, a shared coherent scope signal, and a count at or below `KAOLA_BUNDLE_MAX_ISSUES`
+(default 8). If any rule fails, or confidence is not high, the planner selects a single
+`primary_issue` → single-issue selection.
 
 **The main orchestrator STATES the selected issue set aloud once the planner returns it.**
 Scripts validate but never select or substitute issues.
 
 **Selection record.** There is no router-side selection to persist on this branch: the
-`workflow-planner` records its own bundle/primary-issue choice, rejected candidates, and
+`workflow-planner` records its own single-issue/bundle choice, rejected candidates, and
 disjointness reasoning as a durable selection record surfaced through the frozen plan's
-`## Planning Evidence` (see `agents/workflow-planner.md` for the full selection contract).
-The `kaola-workflow/{project}/.cache/selection-evidence.md` sidecar this record backs remains
-present only on this no-issue-named branch — a user-named claim legitimately has none.
-
-Auto-bundle selects a bundle only when all candidates are open + unclaimed, no dependency is
-unresolved outside the set, they share a coherent scope signal, and the count is ≤
-`KAOLA_BUNDLE_MAX_ISSUES` (default 8). Otherwise the planner selects a single `primary_issue`
-→ single-issue selection; it does not manufacture a bundle.
+`## Planning Evidence` (see `agents/workflow-planner.md` for the full selection contract),
+and writes the same record to the sidecar
+`kaola-workflow/{project}/.cache/selection-evidence.md` with a leading
+`selection_mode: auto-bundle|single-issue` line. The planner is that sidecar's only writer,
+so it exists only on this no-target branch — a user-named claim legitimately has none.
 
 ### Bundle closure
 
@@ -224,6 +239,13 @@ authoring:
    (the claim + worktree + `workflow-state.md`); git-freshness (Startup Step 1) runs INSIDE adapt against MAIN **before** the planner claims
    (so a dirty/behind main never orphans a worktree); the roadmap check (Startup Step 2) runs in adapt too.
    Do NOT run Startup Step 0b / 1 / 2 in the router for this path.
+
+   **Task description (no issue number):** when the user described the work but named no
+   issue (Step 0's described-task branch), route to `/kaola-workflow-adapt <the task
+   description, verbatim>`. Adapt resolves the description to exactly one issue before the
+   claim and dispatches the planner in explicit-target mode with that issue plus the
+   description verbatim. The no-target backlog survey does NOT run on this route, so roadmap
+   priority cannot outrank the described task.
 
    **No target (auto-bundle entry):** when neither `KAOLA_TARGET_ISSUE` nor
    `KAOLA_TARGET_ISSUES` was set (Step 0's no-issue-named branch), route to
