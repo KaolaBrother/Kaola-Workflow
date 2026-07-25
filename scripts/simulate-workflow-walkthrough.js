@@ -17099,11 +17099,16 @@ function testSpinePlanFormFreeze758() {
         }
       })(archiveRoot);
     }
-    assert(plans.length >= 150,
-      '#758 (e): the archived-plan regression pin needs the real corpus; found only ' + plans.length + ' plans');
+    // The dag-retirement corpus is the LEGACY population only. A current-generation
+    // `plan_form: spine` plan is in-grammar by construction and DOES carry a plan_form field, so
+    // both assertions below would fail on it — and every successful run now archives one. Scoping
+    // here (rather than at the walk) keeps the corpus-size guard counting what it asserts over.
+    const legacyPlans = plans.filter(p => !/^plan_form:[ \t]*spine[ \t]*$/m.test(fs.readFileSync(p, 'utf8')));
+    assert(legacyPlans.length >= 150,
+      '#758 (e): the archived-plan regression pin needs the real corpus; found only ' + legacyPlans.length + ' legacy plans');
     let dagRetired = 0;
     let resumeGreen = 0;
-    for (const p of plans.sort()) {
+    for (const p of legacyPlans.sort()) {
       const content = fs.readFileSync(p, 'utf8');
       const legacy = validator.validatePlan(content, { root: repoRoot });
       assert(legacy.result === 'refuse',
