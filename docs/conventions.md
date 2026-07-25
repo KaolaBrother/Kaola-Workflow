@@ -248,7 +248,7 @@ anything — the `WORKFLOW_PATHS` const and `isLegalWorkflowPath` helper were re
 and `--workflow-path` no longer select or refuse a path; a stale request naming any value is
 silently ignored and the claim ACQUIRES via adaptive regardless — never a `path_not_installed`
 refusal (that reason code is retired), never a crash. The single-issue claim path still persists
-whatever raw value was requested into the `workflow_path` state field as a diagnostic record only
+the constant `adaptive` into the `workflow_path` state field (the retired selector leaves no residue in durable state)
 (never a selection); the bundle claim path hardcodes `workflow_path: adaptive` in state regardless
 of what was requested.
 

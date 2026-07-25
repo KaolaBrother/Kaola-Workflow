@@ -10,7 +10,7 @@
 //
 // The kimi edition is delivered the Kimi-native way: directory-form Skills
 // under `.kimi/skills/<name>/SKILL.md` (5 command skills — adaptive-only, the
-// fast/full command skills are #725-retired — + 16 kaola-role-*
+// fast/full command skills are #725-retired — + 15 kaola-role-*
 // role-contract skills) plus `.kimi/hooks/` (1 byte-copied shell hook + the
 // generated `kimi-hooks.toml` fragment the installer merges into the global
 // config.toml). ONE model tier: every subagent inherits the session model (the
@@ -82,7 +82,7 @@ const roleDirNames = canonAgents.map(a => 'kaola-role-' + a);
 const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 
 // ---------------------------------------------------------------------------
-// K1: count/structure parity — exactly 5 command Skill dirs + 16 kaola-role-*
+// K1: count/structure parity — exactly 5 command Skill dirs + 15 kaola-role-*
 // Skill dirs, set-equal to the canonical commands/*.md + top-level agents/*.md
 // inventories (agents/profiles/higher/ is skipped by the generator's
 // construction — it never matches listCanonAgents). Every SKILL.md carries a
@@ -96,7 +96,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
   assert(entries.length === expected.length && entries.every(e => e.isDirectory()),
     'K1: .kimi/skills/ holds exactly ' + expected.length + ' entries, all directories (no stray files)');
   assert(JSON.stringify(dirNames) === JSON.stringify(expected),
-    'K1: .kimi/skills/ dir set == 5 canonical commands + 16 kaola-role-* roles — got ' + JSON.stringify(dirNames));
+    'K1: .kimi/skills/ dir set == 5 canonical commands + 15 kaola-role-* roles — got ' + JSON.stringify(dirNames));
   const roleSet = dirNames.filter(d => d.startsWith('kaola-role-'));
   assert(roleSet.length === canonAgents.length,
     'K1: kaola-role-* skill count matches canonical agent count (' + canonAgents.length + ')');
@@ -424,7 +424,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 
 // ---------------------------------------------------------------------------
 // P1 / P4 / U1 / A1: install-kimi.sh contract — the install-time COMMAND-skill
-// deploy (adaptive-core 5, all 16 kaola-role-* always), re-install idempotency
+// deploy (adaptive-core 5, all 15 kaola-role-* always), re-install idempotency
 // (exactly ONE managed hooks block in config.toml), --uninstall zero-residue,
 // and zero Claude-path leaks across the deployed tree. HERMETIC per sub-case:
 // each run gets its OWN fresh temp HOME (seed_kaola_config writes only under
@@ -504,7 +504,7 @@ for (const script of sync.HOOK_SCRIPTS) {
   const expectDeployed = (r, cmdNames, label) => {
     const expected = [...cmdNames, ...roleDirNames].sort();
     assert(JSON.stringify(deployedSkills(r)) === JSON.stringify(expected),
-      label + ': deployed skill set == ' + cmdNames.length + ' command(s) + 16 kaola-role-* roles — got ' + JSON.stringify(deployedSkills(r)));
+      label + ': deployed skill set == ' + cmdNames.length + ' command(s) + 15 kaola-role-* roles — got ' + JSON.stringify(deployedSkills(r)));
   };
   const firstStderrLine = r => String(r.stderr).split('\n')[0];
 
