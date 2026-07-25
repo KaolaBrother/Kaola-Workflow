@@ -102,11 +102,14 @@ node scripts/simulate-workflow-walkthrough.js
 ```
 Must exit 0 with "Workflow walkthrough simulation passed".
 
+Two tiers. `test:kaola-workflow:claude` is the **fast gate** (~6.5 min): every cheap step at full coverage, but the three heavyweight suites run a rotating 1/12 slice and six non-samplable suites are deferred. `test:kaola-workflow:claude:full` runs everything.
+
 For any **cross-edition** diff (see Validation Policy), run all four chains sequentially:
 ```bash
 npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
   npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
 ```
+A **release receipt must use the complete tier** — `npm run test:full` — never the sampled gate. See `docs/conventions.md` § Two validation tiers for exactly what the fast gate skips.
 
 ## Documentation Update Checklist
 

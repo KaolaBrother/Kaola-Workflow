@@ -428,6 +428,16 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
 
 **Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
 
+## Two validation tiers — the fast gate is SAMPLED (#801)
+
+`npm run test:kaola-workflow:claude` is the **fast gate**: a hard 10-minute budget, bought by sampling, measured at 391s. `npm run test:kaola-workflow:claude:full` is the **complete gate**, and it is what a release receipt requires. `npm run test:full` chains the complete gate with the other three editions.
+
+- **What the fast gate does NOT execute on a given run.** 11 of every 12 scenarios in `test-adaptive-node`, `test-replan` and `simulate-workflow-walkthrough`; and all of `test-interior-gate-freshness`, `test-release`, `test-run-chains`, `test-claim-hardening`, `test-barrier-base-integrity`, `test-sink-merge`. Those six are not registry-backed, so sampling is unavailable and whole-suite deferral was the only option.
+- **The rotation is the bound on that loss.** `--shard auto/N` seeds the slice index from HEAD: the same commit always runs the same slice (so a red is reproducible and re-running cannot shuffle a failure out of view), while consecutive commits run different slices (so the whole registry is covered across N commits). A fixed slice would leave the other N−1 permanently unexecuted for the same runtime — strictly worse.
+- **Coverage loss stays fail-closed.** The shard-coverage audit still asserts that shards agree on the registered scenario count and that their slices sum to exactly it, so a partition that drops or duplicates a scenario reds the chain.
+- **A cut must name its surviving gate.** Deferring a suite from the fast gate does not retire it: the full tier still runs it. Never defer without recording the defect class that stops being checked per-run and where it is still checked.
+- **Do not reach for concurrency.** It has been measured twice on this suite set and produces false reds — see the #801 CHANGELOG entry and `docs/decisions/D-523-01.md`. Spawn reduction is likewise already refuted; the time is genuine nested work.
+
 ## Cross-runtime lexicon parity (#812)
 
 A typed refusal code emitted by the shared engine (`scripts/kaola-workflow-*.js`) can reach **any** runtime, so it must be documented on **every** runtime or on none. `scripts/test-runtime-lexicon-parity.js` enforces this and is wired into the claude chain (~0.3s).

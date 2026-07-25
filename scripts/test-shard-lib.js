@@ -48,16 +48,45 @@ const MARKER = '##KW-SHARD ';
  * @throws {Error} on a malformed or out-of-range value (never silently ignored —
  *   a typo must not degrade into "ran everything twice").
  */
+/**
+ * `auto/N` slice index — deterministic WITHIN a commit, rotating ACROSS commits.
+ *
+ * This exists to buy wall-clock by SAMPLING, which is a real coverage reduction per
+ * run: only 1/N of the registry executes. The rotation is what bounds the loss —
+ * consecutive commits execute different slices, so a regression anywhere in the
+ * registry surfaces within N commits rather than never. A fixed slice would leave
+ * the other N-1 permanently unexecuted, which is a strictly worse trade for the
+ * same runtime.
+ *
+ * Seeded from HEAD so a given commit always runs the same slice: a red is
+ * reproducible, and re-running the gate cannot shuffle a failure out of view.
+ * KAOLA_SHARD_SEED overrides for tests. No repo / git failure => slice 1, never throws
+ * (the gate must degrade to a stable subset, never to a crash).
+ */
+function autoIndex(total) {
+  let seed = String(process.env.KAOLA_SHARD_SEED || '');
+  if (!seed) {
+    try {
+      seed = require('child_process').execFileSync('git', ['rev-parse', 'HEAD'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (_) { seed = ''; }
+  }
+  if (!seed) return 1;
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = ((h * 31) + seed.charCodeAt(i)) >>> 0;
+  return (h % total) + 1;
+}
+
 function parseShard(argv) {
   const args = Array.isArray(argv) ? argv : [];
   const at = args.indexOf('--shard');
   if (at === -1) return null;
   const raw = String(args[at + 1] === undefined ? '' : args[at + 1]).trim();
-  const m = /^(\d+)\s*\/\s*(\d+)$/.exec(raw);
-  if (!m) throw new Error('--shard expects i/N (1-based), got: ' + JSON.stringify(raw));
-  const index = parseInt(m[1], 10);
+  const m = /^(\d+|auto)\s*\/\s*(\d+)$/.exec(raw);
+  if (!m) throw new Error('--shard expects i/N or auto/N (1-based), got: ' + JSON.stringify(raw));
   const total = parseInt(m[2], 10);
   if (!(total >= 1)) throw new Error('--shard total must be >= 1, got: ' + raw);
+  const index = m[1] === 'auto' ? autoIndex(total) : parseInt(m[1], 10);
   if (!(index >= 1) || index > total) throw new Error('--shard index must be in 1..' + total + ', got: ' + raw);
   return { index, total };
 }
