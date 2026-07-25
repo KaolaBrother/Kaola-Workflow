@@ -963,7 +963,12 @@ function claimProject(root, args) {
       worktree_path: worktreePath,
       worktree_error: worktreeError,
       base_branch: baseBranch,
-      workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
+      // Adaptive is the ONLY workflow path, so this is a CONSTANT, never an echo of a request.
+      // The retired KAOLA_PATH env var and --workflow-path flag are warn-and-ignore shims: they
+      // cannot select, cannot refuse, and must leave no trace in durable state either. Keeping a
+      // diagnostic echo of a retired selector only invited it to be misread as a live switch.
+      // A legacy folder carrying a stale non-adaptive value is still tolerated on READ.
+      workflow_path: adaptiveSchema.ADAPTIVE_PATH,
       runtime: args.runtime || 'claude',
       // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
       // was absent → writeState omits the field).

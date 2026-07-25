@@ -69,7 +69,7 @@ Minimize **synergy** (coupling to systems the workflow does not own); maximize *
 The workflow runs one path; the orchestrator does not spend tokens or wall-clock choosing between paths.
 
 - **The workflow is adaptive.** Every install ships it; there is nothing to select or configure.
-- **There is no path to select or refuse.** A stale `KAOLA_PATH` / `--workflow-path` request runs adaptive (the flag is a warn-and-ignore shim; the env var is ignored), rather than refusing. This deliberately supersedes the former "never silently substitute adaptive for a named path" stance and retires the `fast`/`full` vocabulary and the `path_not_installed` refusal — a values call (First Principle 4) that became moot once exactly one path remained.
+- **There is no path to select or refuse, and no residue of one.** A stale `KAOLA_PATH` / `--workflow-path` request runs adaptive (the flag is a warn-and-ignore shim; the env var is ignored), rather than refusing — and the request leaves no trace: the persisted `workflow_path` field is the constant `adaptive`, never an echo, so a retired selector can never be misread as a live switch (a legacy folder's stale value is still tolerated on read). This deliberately supersedes the former "never silently substitute adaptive for a named path" stance and retires the `fast`/`full` vocabulary and the `path_not_installed` refusal — a values call (First Principle 4) that became moot once exactly one path remained.
 - **When adaptive can't proceed, it recovers inside adaptive**: bounded planner repair → discard+restart → stop+ask. Repair and the in-place posture are the only fallbacks.
 
 ## Key Scripts

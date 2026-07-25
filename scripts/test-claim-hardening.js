@@ -957,8 +957,8 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 
   // (b) #770: KAOLA_PATH=fast (a retired path name) is silently IGNORED for selection — the claim
   // ACQUIRES via adaptive regardless. The persisted workflow_path field still echoes the raw
-  // requested value ('fast') as a diagnostic record only; next_command routes unconditionally
-  // to the adaptive executor.
+  // requested value NEVER reaches durable state: the persisted workflow_path is the constant
+  // 'adaptive', and next_command routes unconditionally to the adaptive executor.
   {
     const r = runClaim538(
       ['startup', '--target-issue', '5381'],
@@ -969,8 +969,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     rmProj538('5381');
     assert(r.json && r.json.status === 'acquired',
       '#770(b): a stale KAOLA_PATH=fast request must silently acquire via adaptive, no refusal (got ' + JSON.stringify(r.json) + ')');
-    assert(/^workflow_path: fast$/m.test(state5381),
-      '#770(b): the persisted workflow_path field must echo the raw stale request as a diagnostic record (never a selection), got:\n' + state5381);
+    assert(/^workflow_path: adaptive$/m.test(state5381),
+      '#770(b): a stale KAOLA_PATH must leave NO trace — the persisted workflow_path is the constant adaptive, never an echo of the request, got:\n' + state5381);
+    assert(!/^workflow_path: fast$/m.test(state5381),
+      '#770(b): the retired path name must not appear anywhere in durable state, got:\n' + state5381);
     assert(/^next_command: \/kaola-workflow-plan-run issue-5381$/m.test(state5381),
       '#770(b): routing must be unconditionally adaptive despite the stale KAOLA_PATH value, got:\n' + state5381);
   }
@@ -990,8 +992,10 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#770(d): a stale --workflow-path full request must silently acquire via adaptive, no refusal (got ' + JSON.stringify(r.json) + ')');
     assert(r.stderr.includes('--workflow-path is retired; running adaptive'),
       '#770(d): the retired flag must print its one-line warn-and-ignore stderr notice, got stderr:\n' + r.stderr);
-    assert(/^workflow_path: full$/m.test(state5383),
-      '#770(d): the persisted workflow_path field must echo the raw stale request as a diagnostic record, got:\n' + state5383);
+    assert(/^workflow_path: adaptive$/m.test(state5383),
+      '#770(d): a stale --workflow-path must leave NO trace — the persisted workflow_path is the constant adaptive, got:\n' + state5383);
+    assert(!/^workflow_path: full$/m.test(state5383),
+      '#770(d): the retired path name must not appear anywhere in durable state, got:\n' + state5383);
   }
 
   // (f) explicit KAOLA_PATH=adaptive → ACQUIRED (adaptive is the only legal path).
