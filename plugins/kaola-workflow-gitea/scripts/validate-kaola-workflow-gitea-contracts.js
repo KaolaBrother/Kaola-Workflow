@@ -672,31 +672,11 @@ assertIncludes(pluginRoot + '/commands/workflow-next.md', 'Skip this entire step
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'KAOLA_PATH');
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'path_not_installed');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'path_not_installed');
-// #796: the router's issue-selection contract, pinned on both Gitea routing surfaces. Every needle
-// here was unasserted before, which is exactly how a cross-reference to two deleted profile sections
-// survived a release on this edition too: correct-looking prose with nothing checking it. The tokens
-// are forge-neutral, so the same needle set fits the command and the SKILL.
-for (const file of [pluginRoot + '/commands/workflow-next.md',
-  pluginRoot + '/skills/kaola-workflow-next/SKILL.md']) {
-  // A user-named issue outranks an active folder, and the numbered procedure must SAY so before it
-  // reaches the active-folder step. Order is half the fix; the explicit match condition is the other.
-  assertBefore(file, 'A named target is never substituted', 'if exactly one active folder is already present');
-  assertIncludes(file, 'do not read, adopt, or fall back to an active folder');
-  // The described-task branch and the guarantee that makes it worth having: no survey, so the
-  // roadmap frontier cannot outrank the work the user actually asked for.
-  assertIncludes(file, 'User described a task but named no issue');
-  assertIncludes(file, 'the backlog survey NEVER runs on this branch');
-  // The no-target entry states its default in its FIRST paragraph, not after the bundle prose.
-  assertIncludes(file, 'Single-issue is the default here');
-  // The selection-evidence sidecar has a NAMED writer, so surface prose and the claim-side probe
-  // tell one story instead of asserting a file nobody was told to write.
-  assertIncludes(file, 'The planner is that sidecar');
-  assertIncludes(file, 'selection_mode: auto-bundle|single-issue');
-  // The two deleted section names must not return, and every cited section must resolve.
-  assertNotIncludes(file, 'Backlog Inventory');
-  assertNotIncludes(file, 'What You May Read');
-  assertProfileSectionCitations(file, 'agents/workflow-planner.md');
-}
+// The router's whole issue-selection contract — named-target precedence and its reading order, the
+// described-task branch, the single-issue default, the selection-evidence sidecar's named writer,
+// the two banned section names, and the structural profile-section-citation guard — is asserted on
+// THIS EDITION'S OWN next command and SKILL by the root validator's six-next-surface loop, with a
+// SUPERSET of needles, in the always-selected claude chain.
 // The adapt entry contract (entry shapes, the dispatch's binding-scope field, and a defined
 // no-target target slot) is asserted on THIS EDITION'S OWN adapt command and SKILL by the root
 // validator's six-adapt-surface loop, in the always-selected claude chain.

@@ -591,32 +591,9 @@ for (const [surface, role, task] of [
 // dispatches any agent of its own; assert the retired control-plane literal never resurfaces.
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue-scout');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_scout');
-// #796: folding the survey into the planner left the router SKILL citing two profile sections that
-// no longer existed, and it shipped green because nothing asserted this band. Pin the whole
-// issue-selection contract of the Codex router SKILL, including the structural citation guard.
-{
-  const nextSkill796 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
-  // A user-named issue outranks an active folder, and the numbered procedure must SAY so before it
-  // reaches the active-folder step — this SKILL previously had NO numbered step that ever set the
-  // target from a user-named issue; the only assignment was the unconditional active-folder adoption.
-  assertBefore(nextSkill796, 'A named target is never substituted',
-    'if exactly one active folder is already present');
-  assertIncludes(nextSkill796, 'do not read, adopt, or fall back to an active folder');
-  // The described-task branch and the guarantee that makes it worth having.
-  assertIncludes(nextSkill796, 'User described a task but named no issue');
-  assertIncludes(nextSkill796, 'the backlog survey NEVER runs on this branch');
-  // The no-target entry states its default in its FIRST paragraph, not after the bundle prose.
-  assertIncludes(nextSkill796, 'Single-issue is the default here');
-  // The selection-evidence sidecar has a NAMED writer, so prose and the claim-side probe agree.
-  assertIncludes(nextSkill796, 'The planner is that sidecar');
-  assertIncludes(nextSkill796, 'selection_mode: auto-bundle|single-issue');
-  // The two deleted section names must not return, and every cited section must resolve.
-  assertNotIncludes(nextSkill796, 'Backlog Inventory');
-  assertNotIncludes(nextSkill796, 'What You May Read');
-  assertProfileSectionCitations(nextSkill796, 'agents/workflow-planner.md');
-  // The adapt entry contract is asserted on THIS SAME Codex adapt SKILL path by the root
-  // validator's six-adapt-surface loop, in the always-selected claude chain.
-}
+// The router's whole issue-selection contract, including the structural profile-section-citation
+// guard, is asserted on THIS SAME Codex router SKILL path by the root validator's six-next-surface
+// loop, with a SUPERSET of needles, in the always-selected claude chain.
 // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
 // the project-local needle above GREEN (add, never remove) and pin the global path alongside it.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.codex/agents/kaola-workflow/');
