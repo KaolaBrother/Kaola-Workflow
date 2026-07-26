@@ -3242,7 +3242,7 @@ try {
     'installed commands must render concrete Claude model aliases, never the neutral plan-tier tokens');
 
   const requiredAgents = ['code-explorer','knowledge-lookup','planner','code-architect','tdd-guide',
-    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor','workflow-planner','synthesizer'];
+    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','workflow-planner','synthesizer'];
   for (const agent of requiredAgents) {
     const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');
     const fmEnd = installed.indexOf('\n---', 3);
@@ -3303,7 +3303,6 @@ try {
     'security-reviewer': 'opus',
     'doc-updater': 'sonnet',
     'adversarial-verifier': 'sonnet',
-    contractor: 'sonnet',
     'workflow-planner': 'opus',
     synthesizer: 'opus',
     'metric-optimizer': 'sonnet'
@@ -3326,8 +3325,8 @@ try {
       }
       // A planted manifest in the installed agent dir is INERT — precedence is provably three-step.
       fs.writeFileSync(path.join(agentDir, '.kaola-agent-models.json'),
-        JSON.stringify({ contractor: 'opus', 'code-reviewer': 'haiku', planner: 'haiku' }));
-      for (const role of ['contractor', 'code-reviewer', 'planner']) {
+        JSON.stringify({ implementer: 'opus', 'code-reviewer': 'haiku', planner: 'haiku' }));
+      for (const role of ['implementer', 'code-reviewer', 'planner']) {
         const got = resolveRole(agentDir, role);
         assert(got === EXPECTED_ROLE_MODELS[role],
           'a planted .kaola-agent-models.json must not affect ' + role + ' (expected '

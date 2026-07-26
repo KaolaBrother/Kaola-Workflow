@@ -35,9 +35,11 @@ const CLOSURE_RECEIPT_FIELDS = {
   // truthful legacy lane; `preserved` includes a verified canonical schema-2
   // planless epoch or recursively verified manifest/index proof files.
   epoch_lineage_preserved: ['preserved', 'absent', 'failed'],
-  // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
+  // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking. The
+  // CLAIM/AUTHOR seam is the only attested seam: the finalize seam is orchestrator-owned by
+  // design, so it emits no attestation field. A LEGACY receipt carrying the retired
+  // finalize-side field is read and preserved verbatim; it is simply not re-emitted.
   claim_planner_attested: ['attested', 'missing', 'failed'],
-  finalize_contractor_attested: ['attested', 'missing', 'failed'],
   warnings: 'string[]',
   // #369 BUNDLE post-attached arrays (NOT builder fields — emptyReceipt does not seed them; the
   // sink-merge / cmdFinalize close path attaches them only for a bundle with issue_numbers.length>1):
@@ -84,9 +86,8 @@ const CLOSURE_INVARIANTS = [
   { id: 'in-progress-label-removed', description: 'The remote issue does not have workflow:in-progress after closure.' },
   { id: 'branch-worktree-resolved', description: 'Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.' },
   { id: 'epoch-lineage-preserved', description: 'Every claim-scoped epoch snapshot and lineage receipt is recursively preserved and digest-verified in the archive.' },
-  // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
+  // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking.
   { id: 'claim-planner-attested', description: 'A workflow-planner subagent spawn is recorded in the dispatch log (.cache/dispatch-log.jsonl) BEFORE the plan was frozen.' },
-  { id: 'finalize-contractor-attested', description: 'A contractor subagent spawn is recorded in the dispatch log during the finalize window.' },
   { id: 'roadmap-residue-clean', description: 'No .roadmap/issue-N.md source survives in any tree after closure.' },
 ];
 
@@ -105,9 +106,8 @@ function emptyReceipt(project, issueNumber) {
     worktree_removed: 'failed',
     branch_removed: 'failed',
     epoch_lineage_preserved: 'failed',
-    // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
+    // WARN-FIRST detection invariant (#277 Phase 2 / M2) — recorded, not hard-blocking.
     claim_planner_attested: 'failed',
-    finalize_contractor_attested: 'failed',
     warnings: [],
     // #441: advisory goal-check — null until evaluated.
     goal_check: null,

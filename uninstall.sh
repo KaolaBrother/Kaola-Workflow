@@ -5,7 +5,12 @@ FORGE=""
 AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "workflow-planner" "synthesizer" "metric-optimizer")
+# Agents this installer deployed on a PREVIOUS release and no longer ships. Uninstall removes by
+# NAME, so a role dropped from REQUIRED_AGENTS would otherwise linger forever on an upgraded box.
+# Same managed-marker gate as the required roster: a user-authored file of the same name is left
+# alone. Append here whenever a role file is retired from agents/.
+RETIRED_AGENTS=("contractor")
 
 usage() {
   echo "Usage: ./uninstall.sh [--forge=github|gitlab|gitea|all]"
@@ -56,7 +61,7 @@ removed=0
 
 shopt -s nullglob
 
-for agent in "${REQUIRED_AGENTS[@]}"; do
+for agent in "${REQUIRED_AGENTS[@]}" "${RETIRED_AGENTS[@]}"; do
   dest="$AGENTS_DIR/$agent.md"
   if [[ -f "$dest" ]] && grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
     rm "$dest"

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// issue #399: ledger-regression guard for the contractor's Step-8a artifact mirror.
+// issue #399: ledger-regression guard for the finalize transaction's Step-8a artifact mirror.
 //
 // The Step-8a mirror `cp -R`s `kaola-workflow/{project}/.` from the main checkout into the
 // linked worktree right before archive. Run from the WRONG direction (cwd = main checkout with a

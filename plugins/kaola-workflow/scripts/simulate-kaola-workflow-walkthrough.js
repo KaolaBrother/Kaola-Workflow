@@ -360,8 +360,7 @@ function testAC3AttestationSeeded() {
     fs.mkdirSync(cacheDir, { recursive: true });
     const ts = '2026-06-09T00:00:00Z';
     fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'test-planner', cwd: root }) + '\n' +
-      JSON.stringify({ ts, agent_type: 'contractor', agent_id: 'test-contractor', cwd: root }) + '\n'
+      JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'test-planner', cwd: root }) + '\n'
     );
 
     // Plant roadmap entry (finalize reads it for roadmap cleanup).
@@ -374,9 +373,9 @@ function testAC3AttestationSeeded() {
     assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested === 'attested',
       'AC3 GREEN: claim_planner_attested must be "attested" when dispatch-log is seeded, got: ' +
       JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested));
-    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.finalize_contractor_attested === 'attested',
-      'AC3 GREEN: finalize_contractor_attested must be "attested" when dispatch-log is seeded, got: ' +
-      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.finalize_contractor_attested));
+    assert(finalizeResult.closure_receipt && !('finalize_contractor_attested' in finalizeResult.closure_receipt),
+      '#816: the finalize seam emits no attestation field, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && Object.keys(finalizeResult.closure_receipt)));
 
     // #333: the archived state must not advertise an active resume command. startup seeds
     // next_command: /kaola-workflow-phase1 issue-284; the archive must neutralize it.
@@ -396,7 +395,7 @@ function testAC3AttestationSeeded() {
 
 // Attestation warning durable persistence (codex edition): a non-empty ATTESTATION WARNING must
 // land in the archived finalization-summary.md and workflow-state.md ## Closure block, not just
-// stdout JSON. Seed a contractor-only dispatch-log (no workflow-planner entry).
+// stdout JSON. Seed a role-only dispatch-log (no workflow-planner entry).
 function testAttestationWarningPersistenceCodex() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-attest-persist-codex-'));
   try {
@@ -411,11 +410,11 @@ function testAttestationWarningPersistenceCodex() {
     assert(acquired.claim === 'acquired', 'attestation persistence (codex): startup must acquire issue-653102, got: ' + JSON.stringify(acquired));
     seedAdaptiveFinalizeFixture(root, 'issue-653102');
 
-    // Seed dispatch-log with ONLY a contractor entry (no workflow-planner).
+    // Seed dispatch-log with ONLY a role entry (no workflow-planner).
     const cacheDir = path.join(root, 'kaola-workflow', 'issue-653102', '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: '2026-06-09T00:00:00Z', agent_type: 'contractor', agent_id: 'test-contractor', cwd: root }) + '\n');
+      JSON.stringify({ ts: '2026-06-09T00:00:00Z', agent_type: 'tdd-guide', agent_id: 'test-role', cwd: root }) + '\n');
 
     plantRoadmap(root, 653102, '');
 
@@ -1747,7 +1746,7 @@ function testInstallSchemaPruneManifest332() {
     const tomls = listTomls(agentsDir);
     // #451: 13 base role profiles (the <role>-max effort variants are retired; issue-scout
     // retired #789).
-    assert(tomls.length === 15, '#463 AC: fresh install must place exactly 15 *.toml (13 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789), got ' + tomls.length);
+    assert(tomls.length === 14, '#463 AC: fresh install must place exactly 14 *.toml (12 base + synthesizer + metric-optimizer; <role>-max retired, issue-scout retired #789), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     const profilePolicy = require(installProfilesScript);
     for (const f of tomls) {
@@ -1765,8 +1764,8 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 15, '#463 AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
-    assert(manifest.files && Object.keys(manifest.files).length === 15
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#463 AC: manifest must list 15 roles (13 base + synthesizer + metric-optimizer)');
+    assert(manifest.files && Object.keys(manifest.files).length === 14
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
       '#463 AC: manifest.files must carry 15 sha256 entries (13 base + synthesizer + metric-optimizer)');
     for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
@@ -2305,7 +2304,7 @@ function main() {
     assert(status.count === 1, 'status should report one active folder');
 
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
-    // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
+    // claim_planner_attested; 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
     seedAdaptiveFinalizeFixture(tmp, 'issue-163');
     plantRoadmap(tmp, 163, '');
@@ -2316,18 +2315,13 @@ function main() {
       'M2 (#277): Codex closure_receipt must have claim_planner_attested field'
     );
     assert(
-      finalizeResult.closure_receipt && 'finalize_contractor_attested' in finalizeResult.closure_receipt,
-      'M2 (#277): Codex closure_receipt must have finalize_contractor_attested field'
+      finalizeResult.closure_receipt && !('finalize_contractor_attested' in finalizeResult.closure_receipt),
+      '#816: Codex closure_receipt must NOT carry a retired finalize-seam attestation field'
     );
     assert(
       finalizeResult.closure_receipt.claim_planner_attested === 'missing' ||
       finalizeResult.closure_receipt.claim_planner_attested === 'attested',
       'M2 (#277): Codex claim_planner_attested must be missing or attested'
-    );
-    assert(
-      finalizeResult.closure_receipt.finalize_contractor_attested === 'missing' ||
-      finalizeResult.closure_receipt.finalize_contractor_attested === 'attested',
-      'M2 (#277): Codex finalize_contractor_attested must be missing or attested'
     );
     assert(
       finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,

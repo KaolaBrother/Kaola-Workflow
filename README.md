@@ -166,7 +166,6 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `security-reviewer` | Gate — review (conditional) | reasoning |
 | `doc-updater` | Finalization — docs | standard |
 | `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | standard |
-| `contractor` | Mechanical bookkeeper (runs scripts + writes durable state; never a gate) | standard |
 | `workflow-planner` | Front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically; in no-target mode also runs the backlog survey + selection) | reasoning |
 | `synthesizer` | Parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | reasoning |
 | `metric-optimizer` | Bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | standard |
@@ -200,12 +199,13 @@ repository files). The graph, not role prose, decides its mode: a verifier downs
 producer and able to reach the sink is a `change_gate`; otherwise it is an analytical
 `investigation`. It installs on every edition.
 
-`contractor` is locally authored for the lean-orchestrator (issue #242): a mechanical Sonnet
-bookkeeper that runs the workflow scripts and writes the durable bookkeeping (ledger rows, phase
-files, `workflow-state.md`, roadmap, archive) at every seam, returning a compact summary. The main
-Opus session keeps all judgment, dispatch, synthesis, and the sink/close. It never dispatches a
-role, judges, gates, or asks the user, and is never escalated to the reasoning tier for
-bookkeeping.
+There is no mechanical-bookkeeper role. Judgment-adjacent seams ride the orchestrator and
+mechanical floors ride scripts, with no judgment-forbidden agent in between: the finalize seam's
+whole residue — artifact mirror (with its ledger-regression guard), archive + status close, roadmap
+staging, and the `chore: finalize <project>` commit gate — is ONE resumable `cmdFinalize`
+transaction the orchestrator runs directly and reasons over. `workflow-planner` stays: the
+claim/author/freeze seam at run start is a genuine reasoning delegation, where orchestrator context
+economy is at its maximum.
 
 `workflow-planner` is locally authored for the [adaptive workflow](#adaptive-workflow) front end: a
 fixed-Opus agent the main session dispatches **once** at the start of the adaptive path. It runs the
@@ -247,7 +247,7 @@ differs from the agent's frontmatter). **After installing or re-running
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
 >   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `knowledge-lookup`,
->   `doc-updater`, `adversarial-verifier`, `contractor`, `metric-optimizer`) run silently.
+>   `doc-updater`, `adversarial-verifier`, `metric-optimizer`) run silently.
 >   Opus-dispatched agents (`planner`, `workflow-planner`, `synthesizer`,
 >   `code-architect`, `code-reviewer`, and `security-reviewer`) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
@@ -819,16 +819,15 @@ code-reviewer
 security-reviewer
 doc-updater
 adversarial-verifier
-contractor
 workflow-planner
 synthesizer
 metric-optimizer
 ```
 
 (`adversarial-verifier` is the read-only falsifier for the adaptive path; its mode is derived from
-the frozen graph as either an analytical investigation or a change gate. `contractor` and
-`workflow-planner` are the adaptive lean-orchestrator roles — bookkeeper and DAG front end (the
-front end also runs the backlog survey + bundle-lane selection itself in no-target mode).
+the frozen graph as either an analytical investigation or a change gate. `workflow-planner` is the
+adaptive DAG front end (it also runs the backlog survey + bundle-lane selection itself in no-target
+mode).
 `synthesizer` is the
 adaptive parallel-write convergence role (#463) — reasoning-class, dispatched only
 to reconcile concurrent write legs by intent on a real merge conflict. `metric-optimizer`
@@ -870,10 +869,10 @@ Dependent nodes consume the full cache artifact through `dispatch.upstream_evide
 advance the DAG. If the parent summary transport disconnects, a terminal child plus a green verified
 cache artifact may continue as `returned_partial`; without that artifact the node stays open.
 
-`workflow-planner` and `contractor` run outside the Node Ledger. Their complete workflow-state,
-plan, phase, and finalization artifacts are the authoritative durable full result; they return a
-compact summary to the orchestrator and also mirror the full packet into `dispatch.evidence_file`
-when their dispatch supplies a seeded cache file.
+`workflow-planner` runs outside the Node Ledger. Its complete workflow-state and plan artifacts are
+the authoritative durable full result; it returns a compact summary to the orchestrator and also
+mirrors the full packet into `dispatch.evidence_file` when its dispatch supplies a seeded cache
+file.
 
 Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
 is the only mode — there is no v1/thread-id fallback. Once `[agents].enabled = true`
@@ -914,7 +913,7 @@ Beyond the vendored set, the adaptive path adds locally-authored roles: `adversa
 read-only, refute-by-default falsifier whose investigation/change-gate mode comes from graph
 reachability), `synthesizer` (parallel-write convergence on a real merge conflict), and
 `metric-optimizer` (bounded metric-ratchet for optimize-shaped work), alongside the
-`workflow-planner`/`contractor` orchestration roles described in
+`workflow-planner` orchestration role described in
 [Workflow roles](#workflow-roles).
 
 **Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `workflow-planner`'s no-target selection, recorded as `goal_check` in the closure receipt). Nodes are also fed through a **durable node-to-node information channel**: every dispatch card carries the node's `goal_line` (from the plan's `## Node Briefs`) and `upstream_evidence` pointers to its dependencies' recorded evidence, and a node cannot close without a **consumed-proof** — a recorded `upstream_read: <id> <nonce>` line proving it actually opened each upstream producer's evidence. Every node role carries a registry-backed, machine-checked evidence-recording contract (role-specific required tokens in its `.cache` evidence). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.

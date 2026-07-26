@@ -1445,6 +1445,500 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   }
 }
 
+// --- #816: cmdFinalize owns the whole mechanical finalization as ONE resumable transaction ------
+// The contractor role is retired: the artifact mirror (with its ledger-regression guard), the
+// archive + status close, the roadmap staging, and the `chore: finalize` commit gate all live in
+// cmdFinalize. Two guardrails carry over as TYPED refusals inside the transaction: the machinery
+// never authors the implementation commit, and the single-project staging rule.
+//
+// Fixture uses a REAL `git worktree add` linked worktree (the lane the transaction serves), so the
+// mirror direction (main -> linked worktree) and the commit gate are exercised for real.
+{
+  const { execFileSync: execFS816, spawnSync: spawnS816 } = require('child_process');
+  const CLAIM816 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const PLAN_VALIDATOR816 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  const GIT_ENV816 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const g816 = (cwd, args) => {
+    try {
+      execFS816('git', ['-C', cwd, ...args],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV816 });
+      return true;
+    } catch (_) { return false; }
+  };
+  const gOut816 = (cwd, args) => {
+    const r = spawnS816('git', ['-C', cwd, ...args], { encoding: 'utf8', env: GIT_ENV816 });
+    return String(r.stdout || '').trim();
+  };
+
+  // Build a self-host repo whose feature branch lives in a REAL linked worktree.
+  // Returns { base, mainRoot, wtRoot, project, headSha, wtCacheDir, mainProjDir, wtProjDir }.
+  function mk816(project) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-816-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+
+    g816(mainRoot, ['init', '-b', 'main']);
+    g816(mainRoot, ['config', 'user.email', 't@t.com']);
+    g816(mainRoot, ['config', 'user.name', 'Test']);
+    g816(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:kaola-workflow:claude': 'true',
+        'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true',
+        'test:kaola-workflow:gitea': 'true'
+      }
+    }) + '\n');
+    g816(mainRoot, ['add', 'package.json']);
+    g816(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
+
+    // REAL linked worktree carrying the feature branch.
+    g816(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+
+    const anchors = buildClaimAnchors(wtRoot, {
+      issue_number: 816,
+      branch: 'workflow/' + project,
+      worktree_path: wtRoot,
+      claim_ts: '2026-01-01T00:00:00Z',
+      session_marker: 'fixture-816',
+    });
+
+    const planBody = [
+      '# Workflow Plan — ' + project,
+      '',
+      '## Meta',
+      'plan_form: spine',
+      'labels: enhancement',
+      '',
+      '## Nodes',
+      '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| impl | implementer | — | impl.txt | 1 | sequence |',
+      '| rv | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |',
+      '',
+      '## Node Ledger',
+      '',
+      '| id | status |',
+      '|---|---|',
+      '| impl | complete |',
+      '| rv | complete |',
+      '| done | complete |',
+      '',
+      '## Required Agent Compliance',
+      '',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|---|---|---|---|',
+      '| implementer (impl) | invoked | fixture | |',
+      '| code-reviewer (rv) | invoked | fixture | |',
+      '| finalize (done) | invoked | fixture | |',
+      ''
+    ].join('\n');
+
+    const wtProjDir = path.join(wtRoot, 'kaola-workflow', project);
+    const wtCacheDir = path.join(wtProjDir, '.cache');
+    fs.mkdirSync(wtCacheDir, { recursive: true });
+    const wtPlanPath = path.join(wtProjDir, 'workflow-plan.md');
+    const preHash = require(PLAN_VALIDATOR816).computePlanHash(planBody);
+    fs.writeFileSync(wtPlanPath, '<!-- plan_hash: ' + preHash + ' -->\n\n' + planBody);
+    try {
+      execFS816('node', [PLAN_VALIDATOR816, wtPlanPath, '--freeze', '--json'],
+        { cwd: wtRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) {}
+    const planHash = (fs.readFileSync(wtPlanPath, 'utf8')
+      .match(/<!-- plan_hash: ([0-9a-f]{64}) -->/) || [])[1];
+    assert(!!planHash, '#816 fixture: adaptive plan freezes with a plan hash');
+
+    const stateText = [
+      '# Kaola-Workflow State',
+      '',
+      '## Project',
+      'name: ' + project,
+      'status: active',
+      '',
+      '## Current Position',
+      'phase: adaptive',
+      'phase_name: Adaptive',
+      'workflow_path: adaptive',
+      'step: start',
+      'next_command: /kaola-workflow-plan-run ' + project,
+      'next_skill: kaola-workflow-plan-run ' + project,
+      '',
+      '## Pending Gates',
+      '- workflow-plan',
+      '',
+      '## Last Evidence',
+      'last_command: startup',
+      'last_result: folder_claimed',
+      '',
+      '## Last Updated',
+      new Date().toISOString(),
+      '',
+      '## Planning Evidence',
+      'plan_hash: ' + planHash,
+      'decision: auto-run',
+      'risk: sensitivity=false blast_radius=false uncertain=false reasons=—',
+      'first_node_id: impl',
+      'first_node_role: implementer',
+      '',
+      '## Epoch Lineage',
+      'epoch_schema_version: ' + anchors.epoch_schema_version,
+      'claim_repository_id: ' + anchors.claim_repository_id,
+      'claim_identity_digest: ' + anchors.claim_identity_digest,
+      'claim_root_object_format: ' + anchors.claim_root_object_format,
+      'claim_root_base_commit: ' + anchors.claim_root_base_commit,
+      'claim_root_base_tree: ' + anchors.claim_root_base_tree,
+      'claim_root_base_digest: ' + anchors.claim_root_base_digest,
+      'epoch_lineage_id: ' + anchors.epoch_lineage_id,
+      'plan_epoch: 1',
+      'active_plan_hash: ' + planHash,
+      'inherited_frontier_digest: none',
+      'inherited_frontier_classes: none',
+      'automatic_review_replans: 0',
+      'authorized_epoch_ceiling: 2',
+      'case_b_exemption_consumed: false',
+      'replan_status: none',
+      'replan_transaction_id: none',
+      'replan_phase: none',
+      'active_snapshot_manifest_digest: none',
+      '',
+      '## Sink',
+      'branch: workflow/' + project,
+      'base_branch: main',
+      'issue_number: 816',
+      'sink: merge',
+      'run_posture: worktree',
+      'worktree_path: ' + wtRoot,
+      'main_root: ' + mainRoot,
+      'session_marker: fixture-816',
+      'claim_ts: 2026-01-01T00:00:00Z',
+      ''
+    ].join('\n');
+    const tasksText = JSON.stringify({
+      source_plan_hash: planHash,
+      tasks: [
+        { id: 'impl', role: 'implementer', ledger_status: 'complete', status: 'completed' },
+        { id: 'rv', role: 'code-reviewer', ledger_status: 'complete', status: 'completed' },
+        { id: 'done', role: 'finalize', ledger_status: 'complete', status: 'completed' },
+      ],
+    }) + '\n';
+    fs.writeFileSync(path.join(wtProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(wtProjDir, 'workflow-tasks.json'), tasksText);
+
+    // Implementation commit on the branch, authored INSIDE the worktree (never by the machinery).
+    fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
+    g816(wtRoot, ['add', '-A']);
+    g816(wtRoot, ['commit', '-m', 'feat: impl for ' + project]);
+    const headSha = gOut816(wtRoot, ['rev-parse', 'HEAD']);
+
+    // The orchestrator's copy of the project folder lives in MAIN (its cwd during Finalization).
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(mainProjDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-plan.md'), fs.readFileSync(wtPlanPath, 'utf8'));
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-tasks.json'), tasksText);
+
+    // Chain receipt bound to the worktree HEAD (self-host gate).
+    fs.writeFileSync(path.join(wtCacheDir, 'chain-receipt.json'), JSON.stringify({
+      headSha,
+      chains: [
+        { name: 'claude', exitCode: 0, accepted_red: false },
+        { name: 'codex', exitCode: 0, accepted_red: false },
+        { name: 'gitlab', exitCode: 0, accepted_red: false },
+        { name: 'gitea', exitCode: 0, accepted_red: false }
+      ]
+    }) + '\n');
+
+    return { base, mainRoot, wtRoot, project, headSha, wtCacheDir, mainProjDir, wtProjDir };
+  }
+
+  // Run the ONE-CALL transaction the orchestrator issues, from the linked worktree.
+  function runFinalize816(fx, extraArgs) {
+    const e = Object.assign({}, process.env, GIT_ENV816, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    });
+    const r = spawnS816(process.execPath,
+      [CLAIM816, 'finalize', '--project', fx.project, '--keep-worktree', ...(extraArgs || [])],
+      { cwd: fx.wtRoot, encoding: 'utf8', timeout: 60000, env: e });
+    let json = null;
+    try {
+      const lines = String(r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
+  }
+  const cleanup816 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
+
+  // --- T1: the artifact mirror is INSIDE the transaction (no contractor bash block) -------------
+  {
+    const fx = mk816('issue-816a');
+    try {
+      // A Finalization artifact the orchestrator authored in MAIN only.
+      fs.writeFileSync(path.join(fx.mainProjDir, 'finalization-summary.md'), '# Finalization\n');
+      fs.writeFileSync(path.join(fx.mainProjDir, '.cache', 'final-validation.md'), 'verdict: pass\n');
+      const r = runFinalize816(fx);
+      assert(r.status === 0,
+        '#816(T1): the one-call finalize transaction must succeed (got ' + r.status +
+        ', json=' + JSON.stringify(r.json) + ', stderr=' + String(r.stderr || '').slice(0, 400) + ')');
+      const archived = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project);
+      assert(fs.existsSync(path.join(archived, 'finalization-summary.md')),
+        '#816(T1): cmdFinalize must mirror main-authored Finalization artifacts into the worktree before archiving');
+      assert(fs.existsSync(path.join(archived, '.cache', 'final-validation.md')),
+        '#816(T1): the mirror must carry .cache evidence authored in the main checkout');
+      assert(r.json && r.json.finalize_transaction && r.json.finalize_transaction.mirror === 'mirrored',
+        '#816(T1): the receipt must record the mirror step, got ' +
+        JSON.stringify(r.json && r.json.finalize_transaction));
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T2: the ledger-regression guard refuses INSIDE the transaction --------------------------
+  {
+    const fx = mk816('issue-816b');
+    try {
+      // Make MAIN's copy of the plan STALER than the worktree ledger (complete -> pending).
+      const mainPlan = path.join(fx.mainProjDir, 'workflow-plan.md');
+      fs.writeFileSync(mainPlan, fs.readFileSync(mainPlan, 'utf8').replace(/\| complete \|/g, '| pending |'));
+      const r = runFinalize816(fx);
+      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused'
+        && r.json.inner_reason === 'ledger_regression',
+        '#816(T2): a staler MAIN ledger must refuse finalize_mirror_refused/ledger_regression, got status='
+        + r.status + ' json=' + JSON.stringify(r.json));
+      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+        '#816(T2): the refused mirror must leave the live project folder in place (no archive side effect)');
+      let wtPlan = '';
+      try { wtPlan = fs.readFileSync(path.join(fx.wtProjDir, 'workflow-plan.md'), 'utf8'); } catch (_) {}
+      assert(!!wtPlan && !/\| pending \|/.test(wtPlan),
+        '#816(T2): the refusal must happen BEFORE the copy — the worktree ledger stays complete');
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T3: Step 7 roadmap staging + the `chore: finalize` commit gate are inside the transaction -
+  {
+    const fx = mk816('issue-816c');
+    try {
+      // Finalization docs authored in MAIN (the orchestrator's cwd) — the residue Step 8 commits.
+      fs.writeFileSync(path.join(fx.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      fs.mkdirSync(path.join(fx.mainRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+      fs.writeFileSync(path.join(fx.mainRoot, 'kaola-workflow', '.roadmap', 'issue-816.md'), '# 816\n');
+      const r = runFinalize816(fx);
+      assert(r.status === 0,
+        '#816(T3): the transaction must succeed (got ' + r.status + ', json=' + JSON.stringify(r.json) + ')');
+      const log = gOut816(fx.wtRoot, ['log', '--format=%s', '-5']);
+      assert(log.split('\n').includes('chore: finalize ' + fx.project),
+        '#816(T3): the transaction must author the `chore: finalize <project>` commit, got log:\n' + log);
+      assert(r.json && r.json.finalize_transaction
+        && r.json.finalize_transaction.finalize_commit === 'committed',
+        '#816(T3): the receipt must record the finalize commit, got ' +
+        JSON.stringify(r.json && r.json.finalize_transaction));
+      const dirty = gOut816(fx.wtRoot, ['status', '--porcelain'])
+        .split('\n').filter(l => l.trim() && !/^..\s+kaola-workflow\//.test(l));
+      assert(dirty.length === 0,
+        '#816(T3): the sink must receive only committed work — no residue left, got: ' + JSON.stringify(dirty));
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T4: the machinery NEVER authors the implementation commit (surfaced, not repaired) -------
+  {
+    const fx = mk816('issue-816d');
+    try {
+      // Rewind the branch so no implementation commit exists, leaving impl.txt uncommitted.
+      g816(fx.wtRoot, ['reset', '--soft', 'main']);
+      g816(fx.wtRoot, ['reset']);
+      const r = runFinalize816(fx);
+      assert(r.status !== 0 && r.json && r.json.reason === 'implementation_commit_missing',
+        '#816(T4): an uncommitted implementation must be SURFACED as implementation_commit_missing, got status='
+        + r.status + ' json=' + JSON.stringify(r.json));
+      assert(fs.existsSync(path.join(fx.wtProjDir, 'workflow-state.md')),
+        '#816(T4): the surfaced refusal must make no archive side effect');
+      const log4 = gOut816(fx.wtRoot, ['log', '--format=%s', '-5']);
+      assert(!log4.split('\n').includes('chore: finalize ' + fx.project),
+        '#816(T4): the machinery must never author the implementation commit, got log:\n' + log4);
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T5: the single-project staging rule is a TYPED refusal inside the transaction -----------
+  {
+    const fx = mk816('issue-816e');
+    try {
+      // A FOREIGN project's live folder is pre-staged in the worktree index ALONGSIDE this one.
+      const foreign = path.join(fx.wtRoot, 'kaola-workflow', 'issue-999999');
+      fs.mkdirSync(foreign, { recursive: true });
+      fs.writeFileSync(path.join(foreign, 'workflow-state.md'), 'name: issue-999999\n');
+      fs.writeFileSync(path.join(fx.wtProjDir, '.cache', 'own.md'), 'own evidence\n');
+      g816(fx.wtRoot, ['add', '--', 'kaola-workflow/issue-999999',
+        'kaola-workflow/' + fx.project + '/.cache/own.md']);
+      const r = runFinalize816(fx);
+      assert(r.status !== 0 && r.json && r.json.reason === 'staging_guard_multi_project',
+        '#816(T5): more than one kaola-workflow project staged must refuse staging_guard_multi_project, got status='
+        + r.status + ' json=' + JSON.stringify(r.json));
+      const log5 = gOut816(fx.wtRoot, ['log', '--format=%s', '-5']);
+      assert(!/^chore: (finalize|archive) /m.test(log5),
+        '#816(T5): the staging guard must refuse BEFORE any commit, got log:\n' + log5);
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T6: crash-resume covers all THREE re-entry points ---------------------------------------
+  // (a) pre-archive  (b) post-archive / pre-commit  (c) post-commit
+  {
+    // (a) pre-archive: nothing has happened yet — the whole transaction runs.
+    const fxa = mk816('issue-816f');
+    try {
+      const r = runFinalize816(fxa);
+      assert(r.status === 0 && fs.existsSync(path.join(fxa.wtRoot, 'kaola-workflow', 'archive', fxa.project)),
+        '#816(T6a): pre-archive re-entry runs the whole transaction, got ' + JSON.stringify(r.json));
+    } finally { cleanup816(fxa); }
+
+    // (b) post-archive / pre-commit: the archive exists but nothing was committed.
+    const fxb = mk816('issue-816g');
+    try {
+      // Simulate the crash: archive the folder by hand, terminal-stamped, uncommitted.
+      const src = fxb.wtProjDir;
+      const dest = path.join(fxb.wtRoot, 'kaola-workflow', 'archive', fxb.project);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(src, dest);
+      const st = path.join(dest, 'workflow-state.md');
+      fs.writeFileSync(st, fs.readFileSync(st, 'utf8').replace('status: active', 'status: closed'));
+      const resume = spawnS816(process.execPath,
+        [CLAIM816, 'resume', '--project', fxb.project, '--json'],
+        { cwd: fxb.wtRoot, encoding: 'utf8', env: Object.assign({}, process.env, GIT_ENV816, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      let rj = null;
+      try { rj = JSON.parse(String(resume.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+      assert(rj && rj.reason === 'finalize_incomplete',
+        '#816(T6b): a crashed post-archive finalize must resume as finalize_incomplete, got ' + JSON.stringify(rj));
+      const r = runFinalize816(fxb);
+      assert(r.status === 0,
+        '#816(T6b): re-running the one-call transaction must complete the commit step, got ' + r.status
+        + ' json=' + JSON.stringify(r.json));
+      const logb = gOut816(fxb.wtRoot, ['log', '--format=%s', '-5']);
+      assert(/chore: (finalize|archive) /.test(logb),
+        '#816(T6b): the resumed transaction must land the commit, got log:\n' + logb);
+    } finally { cleanup816(fxb); }
+
+    // (c) post-commit: a second run is a clean no-op (no new commit).
+    const fxc = mk816('issue-816h');
+    try {
+      const first = runFinalize816(fxc);
+      assert(first.status === 0, '#816(T6c): first run succeeds, got ' + JSON.stringify(first.json));
+      const headAfterFirst = gOut816(fxc.wtRoot, ['rev-parse', 'HEAD']);
+      // The typed post-commit re-entry emit: there is nothing left to resume.
+      const resumeC = spawnS816(process.execPath,
+        [CLAIM816, 'resume', '--project', fxc.project, '--json'],
+        { cwd: fxc.wtRoot, encoding: 'utf8', env: Object.assign({}, process.env, GIT_ENV816, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      let rjc = null;
+      try { rjc = JSON.parse(String(resumeC.stdout || '').trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+      assert(rjc && rjc.reason === 'already_finalized',
+        '#816(T6c): post-commit re-entry must report already_finalized, got ' + JSON.stringify(rjc));
+      // Re-running the transaction itself is idempotent: the commit step finds nothing to commit
+      // (the receipt is re-bound to the post-commit HEAD, exactly as a real re-entry would be).
+      const archCache = path.join(fxc.wtRoot, 'kaola-workflow', 'archive', fxc.project, '.cache');
+      fs.writeFileSync(path.join(archCache, 'chain-receipt.json'), JSON.stringify({
+        headSha: headAfterFirst,
+        chains: [
+          { name: 'claude', exitCode: 0, accepted_red: false },
+          { name: 'codex', exitCode: 0, accepted_red: false },
+          { name: 'gitlab', exitCode: 0, accepted_red: false },
+          { name: 'gitea', exitCode: 0, accepted_red: false }
+        ]
+      }) + '\n');
+      g816(fxc.wtRoot, ['add', '-A']);
+      g816(fxc.wtRoot, ['commit', '-m', 'chore: rebind receipt']);
+      const headRebound = gOut816(fxc.wtRoot, ['rev-parse', 'HEAD']);
+      fs.writeFileSync(path.join(archCache, 'chain-receipt.json'), JSON.stringify({
+        headSha: headRebound,
+        chains: [
+          { name: 'claude', exitCode: 0, accepted_red: false },
+          { name: 'codex', exitCode: 0, accepted_red: false },
+          { name: 'gitlab', exitCode: 0, accepted_red: false },
+          { name: 'gitea', exitCode: 0, accepted_red: false }
+        ]
+      }) + '\n');
+      const second = runFinalize816(fxc);
+      assert(second.status === 0,
+        '#816(T6c): a settled post-commit re-entry must be a clean no-op, got ' + second.status
+        + ' json=' + JSON.stringify(second.json));
+      assert(second.json && second.json.finalize_transaction
+        && second.json.finalize_transaction.mirror === 'skipped_post_archive',
+        '#816(T6c): the mirror must not resurrect an archived live folder, got ' +
+        JSON.stringify(second.json && second.json.finalize_transaction));
+      assert(second.json && second.json.finalize_transaction
+        && second.json.finalize_transaction.finalize_commit === 'nothing_to_commit',
+        '#816(T6c): the receipt must say so explicitly, got ' +
+        JSON.stringify(second.json && second.json.finalize_transaction));
+    } finally { cleanup816(fxc); }
+  }
+
+  // --- T7: attestation inversion — the contractor field/warning are gone, legacy is tolerated ---
+  {
+    const fx = mk816('issue-816i');
+    try {
+      const r = runFinalize816(fx);
+      assert(r.status === 0, '#816(T7): finalize succeeds, got ' + JSON.stringify(r.json));
+      const receipt = r.json && r.json.closure_receipt;
+      assert(receipt && !('finalize_contractor_attested' in receipt),
+        '#816(T7): the closure receipt must no longer carry finalize_contractor_attested, got '
+        + JSON.stringify(receipt && Object.keys(receipt)));
+      assert(receipt && 'claim_planner_attested' in receipt,
+        '#816(T7): the planner seam attestation is deliberately KEPT');
+      const warnings = (receipt && receipt.warnings) || [];
+      assert(!warnings.some(w => /contractor/i.test(String(w))),
+        '#816(T7): no contractor ATTESTATION WARNING may be emitted, got ' + JSON.stringify(warnings));
+      const archivedSummary = fs.readFileSync(
+        path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, 'finalization-summary.md'), 'utf8');
+      assert(!/finalize_contractor_attested/.test(archivedSummary),
+        '#816(T7): the archived ## Attestation block must not write the retired field, got:\n' + archivedSummary);
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T7b: a LEGACY archive carrying the retired field is tolerated VERBATIM on read ----------
+  {
+    const fx = mk816('issue-816j');
+    try {
+      const legacy = [
+        '# Finalization - Summary: ' + fx.project,
+        '',
+        '## Attestation',
+        'claim_planner_attested: attested',
+        'finalize_contractor_attested: attested',
+        'ATTESTATION WARNING: no contractor dispatch found in dispatch-log — finalize seam may have been run inline by main session',
+        ''
+      ].join('\n');
+      fs.writeFileSync(path.join(fx.wtProjDir, 'finalization-summary.md'), legacy);
+      const r = runFinalize816(fx);
+      assert(r.status === 0, '#816(T7b): a legacy attestation section must never block finalize, got ' + JSON.stringify(r.json));
+      const after = fs.readFileSync(
+        path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, 'finalization-summary.md'), 'utf8');
+      assert(after.indexOf(legacy.trimEnd()) === 0,
+        '#816(T7b): a legacy ## Attestation section is tolerated VERBATIM, never rewritten. Got:\n' + after);
+    } finally { cleanup816(fx); }
+  }
+
+  // --- T8: --attest-contractor-spawn is a retired warn-and-ignore shim (never a refusal) -------
+  {
+    const fx = mk816('issue-816k');
+    try {
+      const r = runFinalize816(fx, ['--attest-contractor-spawn']);
+      assert(r.status === 0,
+        '#816(T8): the retired flag must warn-and-ignore, never refuse, got ' + r.status
+        + ' json=' + JSON.stringify(r.json));
+      const receipt = r.json && r.json.closure_receipt;
+      assert(receipt && !('finalize_contractor_attested' in receipt),
+        '#816(T8): the retired flag must back-fill nothing');
+      const archivedLog = path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project, '.cache', 'dispatch-log.jsonl');
+      assert(!fs.existsSync(archivedLog) || !/"agent_type":"contractor"/.test(fs.readFileSync(archivedLog, 'utf8')),
+        '#816(T8): no contractor dispatch marker may be back-filled');
+    } finally { cleanup816(fx); }
+  }
+}
+
 // --- #536: classifier decoupled from global parallel_mode (KAOLA_FORCE_CLASSIFY override) --------
 // The classifier BYPASSES to verdict:'green' whenever ~/.config/kaola-workflow/config.json sets
 // parallel_mode !== 'auto' — a contributor's GLOBAL setting the test cannot own. #531's hermetic

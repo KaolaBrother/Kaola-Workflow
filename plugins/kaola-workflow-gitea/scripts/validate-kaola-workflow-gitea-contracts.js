@@ -206,7 +206,7 @@ assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-sta
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea phantom-advisor hook must be removed (#372)');
 // #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired). #463: +synthesizer = 15.
 // #634: +metric-optimizer = 16.
-assert(agentFiles.length === 15, 'expected 15 Gitea agent profiles (13 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789), got ' + agentFiles.length);
+assert(agentFiles.length === 14, 'expected 14 Gitea agent profiles (12 base + synthesizer #463 + metric-optimizer #634; <role>-max retired #451, issue-scout retired #789, contractor retired #816), got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -340,15 +340,23 @@ assert(
   read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('metadata captured before'),
   'Gitea Finalization command must capture sink metadata before archive and preserve worktree for the final commit'
 );
-// #277 M3: contractor-dispatch HANDLE lock — mechanical finalization body moved to
-// agents/contractor.md; finalize retains only the Agent(...) dispatch handle.
+// #816: ownership-inversion lock — the finalize seam is orchestrator-owned and its mechanical
+// residue is ONE script transaction, so no finalize surface may dispatch a bookkeeping role and
+// every one MUST carry the transaction call. Pinned in BOTH directions.
 assert(
-  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('subagent_type="contractor"'),
-  'Gitea Finalization command must dispatch the mechanical finalization to the contractor subagent'
+  !read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('contractor') &&
+  !read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('contractor'),
+  'Gitea Finalization surfaces must carry NO dispatchable bookkeeping role'
 );
-// #725: the fast/full command + SKILL surfaces (#456/#457/#458 migrated mechanics) are retired, so
-// the #459 contractor-free guards over those deleted surfaces are removed. Finalization (asserted
-// just above) stays the SOLE contractor-owned transition.
+assert(
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('ONE resumable script transaction') &&
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('implementation_commit_missing') &&
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('staging_guard_multi_project') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('ONE resumable script transaction') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('implementation_commit_missing') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('staging_guard_multi_project'),
+  'Gitea Finalization surfaces must carry the one-call finalize transaction and its typed refusals'
+);
 assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
   'Gitea finalize skill must dispatch canonical pr sink (mr|pr) case)'
@@ -747,10 +755,10 @@ assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'
 // (not byte-checked by validate-script-sync; this pin is the anti-drift guard).
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'would_orphan_in_progress');
 
-// #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
+// #338: anti-drift pin — the finalize sink row is main-session-direct.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'main-session-direct');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-direct');
-// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
+// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the agent lockstep.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'clear-halt');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
 for (const token of ['review-attempts.json', 'review_failed', 'lifecycle_settled',
@@ -777,7 +785,16 @@ for (const token of ['candidate_declared', 'candidate_residue_digest', 'review_j
 // DEFINED via the kaola_script() resolver before its first use — undefined in a consumer install.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitea-workflow-adaptive-node.js)")"');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-contractor-spawn');
+// #816: the finalize seam records no attestation — pinned as an ABSENCE so a revival reds the chain.
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_contractor_attested');
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'attestContractorSpawn');
+// #816: the folded transaction + the two typed guardrails that carry over.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "reason: 'implementation_commit_missing',");
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'staging_guard_foreign_archive');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'staging_guard_multi_project');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "reason: 'finalize_mirror_refused',");
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'if (!verdict.safe) {');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_transaction');
 // #347: the planner self-attest back-fill flag must be ported to the forge claim (the #280 producer
 // was canonical-only while #300 ported its consumer — without this pin the asymmetry is invisible).
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-planner-spawn');
@@ -787,16 +804,15 @@ assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--attest-p
 // #359: producer-attested evidence-token vocabulary in the forge agent profiles.
 assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
 assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'non-empty column-0 `RED:`');
-assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
 // #634: producer-attested evidence-token vocabulary in the metric-optimizer forge agent profile.
 assertIncludes(pluginRoot + '/agents/metric-optimizer.toml', 'iterations_used');
 
 // Codex 0.144 durable-result wall. Every DAG node profile writes its complete result directly to
-// the exact seeded cache path, including roles that are logically read-only. Workflow-planner and
-// contractor run outside the Node Ledger, so their canonical workflow artifacts are the durable
+// the exact seeded cache path, including roles that are logically read-only. The workflow-planner
+// runs outside the Node Ledger, so its canonical workflow artifacts are the durable
 // full result (and they mirror into a seeded cache when supplied). Every parent-facing return is compact.
 {
-  const orchestrationRoles = new Set(['contractor', 'workflow-planner']);
+  const orchestrationRoles = new Set(['workflow-planner']);
   const roleTomls = agentFiles
     .map(file => path.basename(file, '.toml'))
     .sort();
@@ -1164,10 +1180,11 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   ]) assertIncludes(file, '<!-- PIN: reviewer-contract-v2-finalization -->');
 }
 
-// #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the Gitea finalize command so a silent
-// drop (the #294 fail-open class) turns this chain RED. Pins own edition's file only.
-assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');
-assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
+// #505 ITEM 1 / #816: the foreign-archive staging guard moved from bash prose INTO the finalize
+// transaction as a typed refusal. Pin the refusal in this edition's producer script (a silent drop
+// is the #294 fail-open class) and the surviving pointer in the command, so neither half can vanish.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
+assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'staging_guard_foreign_archive');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', '## Staging Guard');
 
 // #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier/

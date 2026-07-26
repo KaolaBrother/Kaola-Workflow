@@ -898,8 +898,8 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
     const parsed = JSON.parse(lastLine);
     assert.strictEqual(parsed.closure_receipt.claim_planner_attested, 'missing',
       'attestation test: claim_planner_attested must be "missing" (not "failed") — checkDispatchAttestations not called');
-    assert.strictEqual(parsed.closure_receipt.finalize_contractor_attested, 'missing',
-      'attestation test: finalize_contractor_attested must be "missing" (not "failed") — checkDispatchAttestations not called');
+    assert.ok(!('finalize_contractor_attested' in parsed.closure_receipt),
+      '#816: the retired finalize-seam attestation field must not be emitted');
     console.log('attestation fields populated by checkDispatchAttestations: PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

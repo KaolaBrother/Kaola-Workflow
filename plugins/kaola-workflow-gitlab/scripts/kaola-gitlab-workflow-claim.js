@@ -48,6 +48,11 @@ function deriveRunPosture(worktreePath) {
 // dispatch-log.jsonl; the first existing file wins. Mutates receipt
 // fields + receipt.warnings in-place; never throws; never modifies
 // closure_invariants.violations (warn-first contract).
+//
+// #816: the CLAIM/AUTHOR seam is the only attested seam. The finalize seam is orchestrator-owned
+// by design — inline execution there is the design, not a bypass — so no finalize-side field,
+// back-fill, or warning is produced. A LEGACY archive that already carries the retired field is
+// read and left verbatim; nothing here rewrites it.
 function checkDispatchAttestations(logDirCandidates, receipt) {
   let logPath = null;
   for (const dir of (logDirCandidates || [])) {
@@ -60,36 +65,28 @@ function checkDispatchAttestations(logDirCandidates, receipt) {
   if (!logPath) {
     // Detector inactive: Codex, pre-hook installs, and this repo's own runs all hit here.
     receipt.claim_planner_attested = 'missing';
-    receipt.finalize_contractor_attested = 'missing';
     receipt.warnings.push('attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive');
     return;
   }
-  // Log found — parse and check each seam.
+  // Log found — parse and check the claim/author seam.
   let lines = [];
   try {
     lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
   } catch (e) {
     receipt.claim_planner_attested = 'failed';
-    receipt.finalize_contractor_attested = 'failed';
     receipt.warnings.push('attestation: failed to read dispatch-log (' + String(e && e.message) + ')');
     return;
   }
   let sawPlanner = false;
-  let sawContractor = false;
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
       if (entry && entry.agent_type === 'workflow-planner') sawPlanner = true;
-      if (entry && entry.agent_type === 'contractor') sawContractor = true;
     } catch (_) {}
   }
   receipt.claim_planner_attested = sawPlanner ? 'attested' : 'missing';
-  receipt.finalize_contractor_attested = sawContractor ? 'attested' : 'missing';
   if (!sawPlanner) {
     receipt.warnings.push('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log — claim/author seam may have been run inline by main session');
-  }
-  if (!sawContractor) {
-    receipt.warnings.push('ATTESTATION WARNING: no contractor dispatch found in dispatch-log — finalize seam may have been run inline by main session');
   }
 }
 
@@ -124,6 +121,11 @@ function resolveCodexDispatchModeFlag(args) {
 // check, once again inside the dispatched subcommand handler).
 let workflowPathRetiredWarned = false;
 
+// #816: same latch shape for the retired finalize-seam attest flag.
+const FINALIZE_ATTEST_FLAG_RETIRED_NOTE = 'note: --attest-contractor-spawn has no effect; the '
+  + 'finalize seam is orchestrator-owned and records no dispatch attestation. Ignoring.';
+let finalizeAttestFlagRetiredWarned = false;
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -140,7 +142,7 @@ function parseArgs(argv) {
     if (key === '--keep-open') { args.keepOpen = true; continue; }
     // #336: --keep-issue-open is the design-specified cmdFinalize keep-open flag; the
     // implementation reuses args.keepOpen internally, so alias it here. Every prose surface
-    // (contractor.md/.toml ×3, finalize.md/SKILL.md ×6, README, SKILL.md) dispatches
+    // (finalize.md/SKILL.md ×6, README, SKILL.md) dispatches
     // --keep-issue-open; without this alias it is an inert no-op on cmdFinalize and the
     // crash-resume keep-open path (live state archived, state-derivation unavailable) silently
     // close-modes — false-failed closure receipt + roadmap-source-absent invariant fire.
@@ -152,8 +154,17 @@ function parseArgs(argv) {
     // #280/#347: planner self-attest back-fill flag (the planner's own claim creates the .cache
     // the SubagentStart hook would log to, so the hook cannot catch it). Boolean flag.
     if (key === '--attest-planner-spawn') { args.attestPlannerSpawn = true; continue; }
-    // #338: contractor self-attest flag at the finalize seam; a boolean flag like --json/--force.
-    if (key === '--attest-contractor-spawn') { args.attestContractorSpawn = true; continue; }
+    // #816: the finalize-seam self-attest flag is RETIRED — the finalize seam is orchestrator-owned
+    // by design, so inline execution is no longer suspect and there is nothing to back-fill. Kept as
+    // a warn-and-ignore shim (the --workflow-path precedent): a stale caller still passing it is
+    // never hit with an unknown_flag refusal, and the flag selects, validates, and records nothing.
+    if (key === '--attest-contractor-spawn') {
+      if (!finalizeAttestFlagRetiredWarned) {
+        finalizeAttestFlagRetiredWarned = true;
+        process.stderr.write(FINALIZE_ATTEST_FLAG_RETIRED_NOTE + '\n');
+      }
+      continue;
+    }
     if (key.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       if (KNOWN_VALUE_FLAGS.has(name)) {
@@ -1651,8 +1662,7 @@ function appendClosureBlock(destDir, fields) {
       'claim_label_removed: ' + fields.claimLabelRemoved + '\n' +
       'worktree_removed: ' + fields.worktreeRemoved + '\n' +
       'closure_invariants: ' + fields.closureInvariants + '\n' +
-      'claim_planner_attested: ' + fields.claimPlannerAttested + '\n' +
-      'finalize_contractor_attested: ' + fields.finalizeContractorAttested + '\n';
+      'claim_planner_attested: ' + fields.claimPlannerAttested + '\n';
     // Atomic: this is the same workflow-state.md whose torn form readActiveFolders silently skips.
     writeFile(p, s);
     return true;
@@ -1662,9 +1672,10 @@ function appendClosureBlock(destDir, fields) {
 // n2 (#653 finding A): durably persist a non-empty attestation warning into the archived
 // finalization-summary.md. checkDispatchAttestations only surfaced the warning on stdout JSON —
 // an archive-only audit could never see it. Presence-guarded on /^## Attestation$/m (idempotent
-// across crash-resume re-runs); creates the file when absent; swallow-on-error. Always writes the
-// two column-0 status fields, even when both are attested — a clean result is a positive
-// statement, not an absence.
+// across crash-resume re-runs, and the reason a LEGACY section — including one carrying the
+// retired finalize-seam field — is left VERBATIM, never rewritten); creates the file when absent;
+// swallow-on-error. Always writes the column-0 status field, even when attested — a clean result
+// is a positive statement, not an absence.
 function persistAttestationToSummary(destDir, receipt) {
   try {
     const p = path.join(destDir, 'finalization-summary.md');
@@ -1674,8 +1685,7 @@ function persistAttestationToSummary(destDir, receipt) {
     const attestationWarnings = (receipt.warnings || []).filter(w =>
       typeof w === 'string' && (w.indexOf('ATTESTATION WARNING') === 0 || w.indexOf('attestation:') === 0));
     let block = '## Attestation\n' +
-      'claim_planner_attested: ' + receipt.claim_planner_attested + '\n' +
-      'finalize_contractor_attested: ' + receipt.finalize_contractor_attested + '\n';
+      'claim_planner_attested: ' + receipt.claim_planner_attested + '\n';
     for (const w of attestationWarnings) block += w + '\n';
     writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
     return true;
@@ -2588,10 +2598,198 @@ function findArchiveAuthorities(root, project) {
   return authorities;
 }
 
+// ─── #816: the mechanical finalization transaction ────────────────────────────────────────────
+// cmdFinalize owns the whole mechanical residue end-to-end — artifact mirror, archive + status
+// close, roadmap staging, and the `chore: finalize` commit gate — as ONE typed, crash-resumable
+// transaction. The orchestrator issues one command and reasons over whatever typed emit comes back.
+// No judgment-forbidden agent sits in between; these helpers are the mechanical floor.
+
+// Merge-copy `src/.` into `dest/` (the `cp -R src/. dest/` shape): existing dest entries the source
+// does not carry survive, so a worktree-only artifact (a chain receipt, per-leg evidence) is never
+// dropped by the mirror. `keepExisting` names top-level entries the dest OWNS: when the dest already
+// has one, the source copy is skipped rather than written over.
+function mergeCopyDir(src, dest, keepExisting) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isSymbolicLink()) continue;      // never follow a link out of the tree
+    if (keepExisting && keepExisting.has(entry.name) && fs.existsSync(d)) continue;
+    if (entry.isDirectory()) mergeCopyDir(s, d);
+    else if (entry.isFile()) fs.copyFileSync(s, d);
+  }
+}
+
+// The durable RUN AUTHORITY the branch owns. The worktree holds the complete record and the main
+// checkout is the stale one, so the mirror carries Finalization ARTIFACTS into the worktree and
+// never pushes a staler authority backwards over it. `workflow-plan.md` is deliberately absent —
+// the ledger-regression guard adjudicates that file explicitly (refuse, or copy a source that is at
+// least as complete), which is a stronger check than skip-if-present.
+const FINALIZE_MIRROR_DEST_OWNED = new Set(['workflow-state.md', 'workflow-tasks.json']);
+
+// Step 8a — artifact mirror. Direction is ALWAYS main checkout → linked worktree: the worktree
+// holds the complete ledger and the main copy is the one carrying the Finalization artifacts the
+// orchestrator just authored. Before copying, the ledger-regression guard refuses to push a STALER
+// main plan over a MORE-COMPLETE worktree ledger — a refusal means sync worktree→main first, never
+// bypass. Returns one of:
+//   { mirror: 'not_needed' | 'source_absent' | 'mirrored', ledger_compare: <token> }
+//   { refused: true, inner_reason: 'ledger_regression', detail }
+function mirrorFinalizationArtifacts(root, project) {
+  let mainRoot = null;
+  try {
+    mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', ledger_compare: 'not_needed' };
+  } catch (_) { return { mirror: 'not_needed', ledger_compare: 'not_needed' }; }
+  const srcDir = path.join(mainRoot, 'kaola-workflow', project);
+  const destDir = path.join(root, 'kaola-workflow', project);
+  // Crash-resume: once the archive step has run, the live folder is GONE on purpose. Re-mirroring
+  // would resurrect it from a main copy the archive already superseded, and the transaction would
+  // re-enter at the wrong step. A re-entry past the archive skips straight to the commit gate.
+  if (!fs.existsSync(destDir) && findArchiveAuthorities(root, project).length > 0) {
+    return { mirror: 'skipped_post_archive', ledger_compare: 'not_needed' };
+  }
+  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', ledger_compare: 'not_needed' };
+  // Ledger-regression guard (fail-open on a first sync — the compare module owns that semantics).
+  let ledgerCompare = 'skipped_no_plan';
+  const srcPlan = path.join(srcDir, adaptiveSchema.PLAN_FILE);
+  if (fs.existsSync(srcPlan)) {
+    try {
+      const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
+      let destText = null;
+      try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.PLAN_FILE), 'utf8'); } catch (_) {}
+      const verdict = compareLedgers(fs.readFileSync(srcPlan, 'utf8'), destText);
+      if (!verdict.safe) {
+        return {
+          refused: true,
+          inner_reason: 'ledger_regression',
+          detail: 'main copy carries ' + verdict.sourceComplete + ' complete node(s); the worktree ledger carries '
+            + verdict.destComplete
+        };
+      }
+      ledgerCompare = 'pass';
+    } catch (e) {
+      // A programmer error (missing/renamed export — the cross-edition drift class) must not be
+      // swallowed into a silent bypass of the guard.
+      if (e instanceof TypeError || e instanceof ReferenceError) throw e;
+      ledgerCompare = 'skipped_no_script';
+    }
+  }
+  mergeCopyDir(srcDir, destDir, FINALIZE_MIRROR_DEST_OWNED);
+  // Finalization residue the orchestrator authored OUTSIDE kaola-workflow/ in the main checkout
+  // (CHANGELOG, docs, .env.example …) belongs on the branch too. Mirror those dirty files as well.
+  try {
+    const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    for (const rel of parsePorcelainPaths(status)) {
+      if (rel.startsWith('kaola-workflow/')) continue;
+      const from = path.join(mainRoot, rel);
+      let st = null;
+      try { st = fs.lstatSync(from); } catch (_) { continue; }
+      if (!st.isFile()) continue;
+      const to = path.join(root, rel);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+    }
+  } catch (_) { /* no git / unreadable status — the project-dir mirror above still stands */ }
+  return { mirror: 'mirrored', ledger_compare: ledgerCompare };
+}
+
+// The machinery NEVER authors the implementation commit — that is the operator/orchestrator's job.
+// A missing/uncommitted implementation is SURFACED and the transaction stops; it is never repaired
+// by sweeping the change into `chore: finalize`. Positive proof is required in BOTH directions:
+// only implementation-shaped dirt (a non-`kaola-workflow/` path) that sits beside a branch carrying
+// NO committed non-`kaola-workflow/` change is a missing implementation commit. Anything the probe
+// cannot determine reads `indeterminate` and never refuses.
+// Returns { state: 'committed' | 'missing' | 'indeterminate' | 'not_applicable', paths }.
+function probeImplementationCommit(root, baseBranch) {
+  let dirty = [];
+  try {
+    const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    dirty = parsePorcelainPaths(status).filter(p => !p.startsWith('kaola-workflow/'));
+  } catch (_) { return { state: 'indeterminate', paths: [] }; }
+  if (dirty.length === 0) return { state: 'not_applicable', paths: [] };
+  const base = (baseBranch || '').trim() || 'main';
+  if (!isSafeBranchArg(base)) return { state: 'indeterminate', paths: dirty };
+  let committed = [];
+  try {
+    const diff = execFileSync('git', ['-C', root, 'diff', '--name-only', base + '...HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    committed = diff.split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return { state: 'indeterminate', paths: dirty }; }
+  const implCommitted = committed.some(p => !p.startsWith('kaola-workflow/'));
+  return { state: implCommitted ? 'committed' : 'missing', paths: dirty.slice(0, 20) };
+}
+
+// The single-project staging rule, moved out of command prose and into the transaction. Compare
+// the project name as a FIXED STRING (never a regex): a foreign project's `archive/` band or more
+// than one live `kaola-workflow/<project>/` in the index means the commit must be split.
+// Returns { ok: true } or { ok: false, reason, detail }.
+function checkFinalizeStagingGuard(root, project) {
+  let staged = [];
+  try {
+    const out = execFileSync('git', ['-C', root, 'diff', '--cached', '--name-only'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    staged = out.split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return { ok: true }; }   // unprobeable index — the guard has nothing to assert
+  const foreignArchive = new Set();
+  const projects = new Set();
+  for (const rel of staged) {
+    if (!rel.startsWith('kaola-workflow/')) continue;
+    const seg = rel.split('/');
+    if (seg[1] === 'archive') {
+      const band = seg[2] || '';
+      if (band && band !== project && band.indexOf(project + '.archived-') !== 0) foreignArchive.add(band);
+      continue;
+    }
+    if (seg[1] === '.roadmap' || seg[1] === 'ROADMAP.md' || seg.length < 3) continue;
+    projects.add(seg[1]);
+  }
+  if (foreignArchive.size > 0) {
+    return { ok: false, reason: 'staging_guard_foreign_archive', detail: Array.from(foreignArchive).sort() };
+  }
+  if (projects.size > 1) {
+    return { ok: false, reason: 'staging_guard_multi_project', detail: Array.from(projects).sort() };
+  }
+  return { ok: true };
+}
+
 function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
+  // #816: the transaction ledger — one object recording every step of the mechanical residue, so
+  // a crash-resumed re-entry (pre-archive / post-archive-pre-commit / post-commit) is observable
+  // from the emit alone.
+  const finalizeTx = {
+    mirror: 'not_needed',
+    ledger_compare: 'not_needed',
+    impl_commit: 'not_checked',
+    roadmap_staged: false,
+    archive_commit: 'skipped',
+    finalize_commit: 'skipped'
+  };
+  // Step 8a — artifact mirror, BEFORE any gate reads the authority and before any side effect.
+  // A ledger regression is a typed refusal: the transaction never overwrites a complete worktree
+  // ledger with a staler main copy.
+  {
+    const mirror = mirrorFinalizationArtifacts(root, args.project);
+    if (mirror.refused) {
+      output({
+        result: 'refuse',
+        reason: 'finalize_mirror_refused',
+        inner_reason: mirror.inner_reason,
+        project: args.project,
+        detail: mirror.detail,
+        operator_hint: 'The main checkout carries a staler ledger than the linked worktree. Sync '
+          + 'worktree→main FIRST, then re-run finalize. No archive or closure side effect was made.',
+        errors: [mirror.inner_reason]
+      }, 1);
+      return;
+    }
+    finalizeTx.mirror = mirror.mirror;
+    finalizeTx.ledger_compare = mirror.ledger_compare;
+  }
   const folder = activeByProject(root, args.project);
   const finalizeLiveDir = projectDir(root, args.project);
   let finalizeLiveSourcePresent = false;
@@ -2696,7 +2894,7 @@ function cmdFinalize() {
   }
   const projectInfo = folder ? { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace } : discoverProjectSafe();
   // #336: keep-open terminal mode — explicit flag OR the durable ## Sink issue_action field.
-  // State-field derivation makes the durable record the source of truth (a contractor that
+  // State-field derivation makes the durable record the source of truth (a caller that
   // forgets the flag cannot silently close-mode the run); the flag covers the crash-resume case
   // where the live state file is already archived (archiveProjectDir returns source-missing
   // without reading state).
@@ -2719,6 +2917,48 @@ function cmdFinalize() {
     try {
       mergeLaneDeferred = field(fs.readFileSync(stateFile(root, args.project), 'utf8'), 'sink') !== 'mr';
     } catch (_) { mergeLaneDeferred = true; }
+  }
+  // #816: the machinery never authors the IMPLEMENTATION commit. Probed here — before the archive
+  // rename, the closure, and the commit gate — so a missing implementation commit is SURFACED with
+  // zero side effect and never quietly swept into `chore: finalize`. Scoped to the lane that owns
+  // the commit gate (a linked-worktree run); an in-place run's dirt belongs to the orchestrator.
+  if (args.keepWorktree) {
+    let linkedForImplProbe = false;
+    try { linkedForImplProbe = fs.realpathSync(mainRootFromCoord(getCoordRoot(root))) !== fs.realpathSync(root); }
+    catch (_) { linkedForImplProbe = false; }
+    if (linkedForImplProbe) {
+      const implProbe = probeImplementationCommit(root, field(finalizeAuthorityState, 'base_branch'));
+      finalizeTx.impl_commit = implProbe.state;
+      if (implProbe.state === 'missing') {
+        output({
+          result: 'refuse',
+          reason: 'implementation_commit_missing',
+          project: args.project,
+          uncommitted_paths: implProbe.paths,
+          operator_hint: 'The branch carries no implementation commit while implementation-shaped '
+            + 'changes are uncommitted. Author the implementation commit yourself, then re-run '
+            + 'finalize. The machinery authors only the finalize bookkeeping commit; no archive or '
+            + 'closure side effect was made.',
+          errors: ['implementation_commit_missing']
+        }, 1);
+        return;
+      }
+      // The single-project staging rule, checked BEFORE any side effect (a pure index read) so a
+      // commit that would have to be split is surfaced with nothing yet archived or closed.
+      const guard = checkFinalizeStagingGuard(root, args.project);
+      if (!guard.ok) {
+        output({
+          result: 'refuse',
+          reason: guard.reason,
+          project: args.project,
+          staged: guard.detail,
+          operator_hint: 'Split the commit: the index carries workflow state that does not belong '
+            + 'to this project. Unstage it, then re-run finalize. No archive or closure side effect was made.',
+          errors: [guard.reason]
+        }, 1);
+        return;
+      }
+    }
   }
   // #522: FINALIZE GATE — BEFORE any irreversible side effect (archive rename, worktree removal,
   // issue close). When a workflow-plan.md is present (adaptive run), shell the plan-validator's
@@ -3100,24 +3340,9 @@ function cmdFinalize() {
   // so the live cache is gone; check the archive candidate first, then live as fallback.
   const liveCacheDir = path.join(root, 'kaola-workflow', args.project, '.cache');
   const archiveCacheDir = result.dest ? path.join(result.dest, '.cache') : null;
-  // #338: contractor self-attest back-fill (mirror of #280 --attest-planner-spawn).
-  // The SubagentStart hook can miss a contractor dispatched into a linked worktree, and some
-  // harnesses have no hook at all. When the contractor's OWN Step 8b invocation passes
-  // --attest-contractor-spawn, back-fill a contractor entry so checkDispatchAttestations sees
-  // it. Gated strictly on the flag: an inline main-session finalize (no flag) writes nothing —
-  // the inline-bypass detector still fires. Warn-first: must NEVER block finalize.
-  if (args.attestContractorSpawn) {
-    try {
-      const attestDir = archiveCacheDir || liveCacheDir; // archive rename already happened
-      fs.mkdirSync(attestDir, { recursive: true });
-      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-      const entry = JSON.stringify({ ts, agent_type: 'contractor', agent_id: 'finalize-backfill', cwd: root });
-      fs.appendFileSync(path.join(attestDir, 'dispatch-log.jsonl'), entry + '\n');
-    } catch (_) { /* fail-open: attestation is warn-first */ }
-  }
   checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
   // n2 (#653 finding A): a non-empty ATTESTATION WARNING must not live only in stdout JSON —
-  // transcribe it (and the two status fields) into the archived finalization-summary.md.
+  // transcribe it (and the status field) into the archived finalization-summary.md.
   if (result.dest) persistAttestationToSummary(result.dest, closureReceipt);
   // #763: the per-run expansion-efficiency rollup line (absent on a plan with no discharged
   // expansion point — presence-guarded inside the writer).
@@ -3144,8 +3369,7 @@ function cmdFinalize() {
       claimLabelRemoved: claimLabelRemoved,
       worktreeRemoved: worktreeRemoved,
       closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length),
-      claimPlannerAttested: closureReceipt.claim_planner_attested,
-      finalizeContractorAttested: closureReceipt.finalize_contractor_attested
+      claimPlannerAttested: closureReceipt.claim_planner_attested
     });
   }
   // #333: keep-worktree commit block MOVED here (commit-last) — after the ## Closure append so the
@@ -3164,12 +3388,74 @@ function cmdFinalize() {
         execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
           { encoding: 'utf8', stdio: 'inherit' });
       } catch (_) { /* staging failure — do NOT cascade into a commit */ }
+      finalizeTx.roadmap_staged = fs.existsSync(path.join(root, 'kaola-workflow', '.roadmap'))
+        || fs.existsSync(path.join(root, 'kaola-workflow', 'ROADMAP.md'));
       let hasStaged = false;
       try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
       catch (e) { if (e && e.status === 1) hasStaged = true; }
       if (hasStaged) {
         execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
           { encoding: 'utf8', stdio: 'inherit' });
+        finalizeTx.archive_commit = 'committed';
+      } else {
+        finalizeTx.archive_commit = 'nothing_to_commit';
+      }
+      // #816 Step 8 — the commit gate. The sink receives only committed work, so whatever the
+      // mirror + Finalization left in the worktree lands in ONE `chore: finalize <project>` commit.
+      // The staged set is SCOPED, never a blind `-A`: this project's own bookkeeping plus the
+      // Finalization residue outside kaola-workflow/. A foreign project's paths are never staged
+      // by the transaction, and the single-project guard re-runs against the whole index so an
+      // operator's pre-staged foreign content still refuses instead of riding along.
+      const residue = [];
+      try {
+        const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+        for (const rel of parsePorcelainPaths(status)) {
+          // sink-receipt.json / sink-fallback.json are transaction JOURNALS owned by the sink
+          // script — never part of the deliverable, never committed.
+          if (/(^|\/)sink-(receipt|fallback)\.json$/.test(rel)) continue;
+          if (!rel.startsWith('kaola-workflow/')) { residue.push(rel); continue; }
+          const seg = rel.split('/');
+          if (seg[1] === '.roadmap' || seg[1] === 'ROADMAP.md') { residue.push(rel); continue; }
+          if (seg[1] === 'archive') {
+            const band = seg[2] || '';
+            if (band === args.project || band.indexOf(args.project + '.archived-') === 0) residue.push(rel);
+            continue;
+          }
+          if (seg[1] === args.project) residue.push(rel);
+        }
+      } catch (_) { /* unprobeable status — nothing to stage beyond the archive commit */ }
+      if (residue.length > 0) {
+        try {
+          execFileSync('git', ['-C', root, 'add', '-A', '--', ...residue],
+            { encoding: 'utf8', stdio: 'inherit' });
+        } catch (_) { /* staging failure — do NOT cascade into a commit */ }
+      }
+      const finalGuard = checkFinalizeStagingGuard(root, args.project);
+      if (!finalGuard.ok) {
+        output({
+          result: 'refuse',
+          reason: finalGuard.reason,
+          project: args.project,
+          staged: finalGuard.detail,
+          finalize_transaction: finalizeTx,
+          operator_hint: 'Split the commit: the index carries workflow state that does not belong '
+            + 'to this project. Unstage it, then re-run finalize — the archive is already recorded, '
+            + 'so the re-run resumes at the commit step.',
+          errors: [finalGuard.reason]
+        }, 1);
+        return;
+      }
+      let hasFinalStaged = false;
+      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
+      catch (e) { if (e && e.status === 1) hasFinalStaged = true; }
+      if (hasFinalStaged) {
+        execFileSync('git', ['-C', root, 'commit', '-m', 'chore: finalize ' + args.project],
+          { encoding: 'utf8', stdio: 'inherit' });
+        finalizeTx.finalize_commit = 'committed';
+      } else {
+        // Nothing left to commit — the branch already carries the final candidate commit.
+        finalizeTx.finalize_commit = 'nothing_to_commit';
       }
     }
   }
@@ -3180,7 +3466,8 @@ function cmdFinalize() {
     archive_state_stamped: archiveStateStamped,
     issue_disposition: issueDisposition,
     closure_receipt: closureReceipt,
-    closure_invariants: invariantResult
+    closure_invariants: invariantResult,
+    finalize_transaction: finalizeTx
   }), strictFailCode);
 }
 
@@ -3666,8 +3953,7 @@ function watchMergeRequests(root, args) {
           claimLabelRemoved: claimLabelStatus,
           worktreeRemoved: worktreeRemoved,
           closureInvariants: folderInvariants.ok ? 'ok' : ('violations:' + folderInvariants.violations.length),
-          claimPlannerAttested: folderReceipt.claim_planner_attested,
-          finalizeContractorAttested: folderReceipt.finalize_contractor_attested
+          claimPlannerAttested: folderReceipt.claim_planner_attested
         });
       }
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
@@ -4473,7 +4759,7 @@ const USAGE = 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|re
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--mr-iid N]\n'
   + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr] [--workflow-path VALUE (retired, ignored)]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
-  + '         [--attest-planner-spawn] [--attest-contractor-spawn]\n'
+  + '         [--attest-planner-spawn]\n'
   + '  --help, -h   print this usage and exit (no side effects).';
 
 function main() {
@@ -4578,6 +4864,12 @@ module.exports = {
   sweepBarrierRefs,
   cmdBarrierRefSweep,
   // #700: terminal archive-metadata writers reused by sink-merge's SOLE-archiver finalize path.
+  // #816: the finalize-transaction primitives — exported for direct unit coverage of the three
+  // behaviors that used to live as executable prose (artifact mirror incl. rename handling, the
+  // ledger-regression guard's fail-open, and the single-project staging rule).
+  mirrorFinalizationArtifacts,
+  probeImplementationCommit,
+  checkFinalizeStagingGuard,
   appendClosureBlock,
   persistAttestationToSummary,
   // #763: the per-run expansion-efficiency archive rollup writer — exported for direct unit

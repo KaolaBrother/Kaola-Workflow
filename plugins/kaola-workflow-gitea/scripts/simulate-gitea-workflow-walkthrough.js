@@ -898,7 +898,7 @@ function testGiteaAdaptive() {
     assert.strictEqual(gateVal(['| impl | tdd-guide | — | src/environment.js, lib/Dockerfileutil.js | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |'], 'chore').result, 'in-grammar', 'gitea #501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2)');
 
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
-    // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
+    // claim_planner_attested; 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
     // #522: init a git repo in tmp so the finalize gate's attribution sweep can resolve
     // `git diff main...HEAD` (empty diff on main → sweep passes vacuously).
@@ -945,18 +945,13 @@ function testGiteaAdaptive() {
       'M2 (#277): gitea closure_receipt must have claim_planner_attested field'
     );
     assert.ok(
-      m2Result.closure_receipt && 'finalize_contractor_attested' in m2Result.closure_receipt,
-      'M2 (#277): gitea closure_receipt must have finalize_contractor_attested field'
+      m2Result.closure_receipt && !('finalize_contractor_attested' in m2Result.closure_receipt),
+      '#816: gitea closure_receipt must NOT carry a retired finalize-seam attestation field'
     );
     assert.ok(
       m2Result.closure_receipt.claim_planner_attested === 'missing' ||
       m2Result.closure_receipt.claim_planner_attested === 'attested',
       'M2 (#277): gitea claim_planner_attested must be missing or attested, got ' + m2Result.closure_receipt.claim_planner_attested
-    );
-    assert.ok(
-      m2Result.closure_receipt.finalize_contractor_attested === 'missing' ||
-      m2Result.closure_receipt.finalize_contractor_attested === 'attested',
-      'M2 (#277): gitea finalize_contractor_attested must be missing or attested, got ' + m2Result.closure_receipt.finalize_contractor_attested
     );
     assert.ok(
       m2Result.closure_invariants && m2Result.closure_invariants.ok === true,
@@ -981,8 +976,8 @@ function testGiteaAdaptive() {
     assert.ok(!m2State.includes('plan_hash: ' + STALE_HASH_970), '#333: gitea archived plan_hash drops the stale claim-time hash');
     assert.ok(!m2State.includes('2020-01-01T00:00:00.000Z'), '#333: gitea archived ## Last Updated refreshed');
 
-    // #338: contractor self-attest back-fill — finalize --attest-contractor-spawn must make
-    // finalize_contractor_attested:attested even with no hook/dispatch-log present.
+    // #816: --attest-contractor-spawn is a RETIRED warn-and-ignore shim — it must never refuse
+    // and must record NOTHING (no receipt field, no back-filled dispatch marker).
     const csDir = path.join(tmp, 'kaola-workflow', 'issue-9701');
     fs.mkdirSync(csDir, { recursive: true });
     fs.writeFileSync(path.join(csDir, 'workflow-state.md'),
@@ -998,11 +993,13 @@ function testGiteaAdaptive() {
       '#338: gitea finalize command must exit 0, stdout: ' + csRun.stdout + ' stderr: ' + csRun.stderr);
     const csResult = JSON.parse(csRun.stdout);
     assert.strictEqual(csResult.status, 'closed', '#338: gitea finalize --attest-contractor-spawn returns status:closed');
-    assert.strictEqual(csResult.closure_receipt.finalize_contractor_attested, 'attested',
-      '#338: gitea --attest-contractor-spawn must make finalize_contractor_attested attested, got ' + csResult.closure_receipt.finalize_contractor_attested);
+    assert.ok(!('finalize_contractor_attested' in csResult.closure_receipt),
+      '#816: the retired flag must record no attestation field');
     const csArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-9701'));
-    const csLog = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', csArchived[0], '.cache', 'dispatch-log.jsonl'), 'utf8');
-    assert.ok(csLog.includes('finalize-backfill'), '#338: gitea archived dispatch-log carries the finalize-backfill marker');
+    const csLogPath = path.join(tmp, 'kaola-workflow', 'archive', csArchived[0], '.cache', 'dispatch-log.jsonl');
+    const csLog = fs.existsSync(csLogPath) ? fs.readFileSync(csLogPath, 'utf8') : '';
+    assert.ok(!csLog.includes('finalize-backfill'),
+      '#816: the retired flag must back-fill no dispatch marker');
 
     // #333: --keep-open stamp — last_result: closed_keep_open + issue_disposition: kept-open.
     const koDir = path.join(tmp, 'kaola-workflow', 'issue-971');
@@ -1346,12 +1343,12 @@ function testGiteaAttestationWarningPersistence() {
     // This fixture jumps directly from claim state to finalize and intentionally
     // does not author an adaptive plan.
     seedAdaptiveFinalizeFixture(tmp, project);
-    // Seed .cache/dispatch-log.jsonl with ONLY a contractor entry (no workflow-planner entry) —
+    // Seed .cache/dispatch-log.jsonl with ONLY a role entry (no workflow-planner entry) —
     // the exact inline-bypass scenario the ATTESTATION WARNING exists to catch.
     const cacheDir = path.join(tmp, 'kaola-workflow', project, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'contractor', agent_id: 'test-seed', cwd: tmp }) + '\n');
+      JSON.stringify({ ts: new Date().toISOString(), agent_type: 'tdd-guide', agent_id: 'test-seed', cwd: tmp }) + '\n');
 
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
       cwd: tmp, encoding: 'utf8', timeout: 60000,

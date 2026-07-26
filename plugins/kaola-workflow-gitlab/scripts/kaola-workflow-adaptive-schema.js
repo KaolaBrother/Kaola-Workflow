@@ -90,7 +90,6 @@ const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'tdd-guide',
   'implementer',
   'doc-updater',
-  'contractor',
   'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([

@@ -156,7 +156,7 @@ try {
     'code-architect': 'haiku',       // would LOWER if honored
     'security-reviewer': 'haiku',    // would LOWER if honored
     'code-explorer': 'opus',         // would RAISE if honored
-    contractor: 'opus',              // would RAISE if honored
+    implementer: 'opus',             // would RAISE if honored
     planner: 'haiku'                 // would LOWER if honored
   });
   // inherit frontmatter + planted manifest -> the static default answers, not the manifest
@@ -166,7 +166,7 @@ try {
   assert.strictEqual(resolver.resolveAgentModel('security-reviewer', { agentDir: tmpManifest }), 'opus');
   // no agent file at all + planted manifest -> still the static default
   assert.strictEqual(resolver.resolveAgentModel('code-explorer', { agentDir: tmpManifest }), 'sonnet');
-  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpManifest }), 'sonnet');
+  assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpManifest }), 'sonnet');
   // a real frontmatter value still wins over the static default, and the manifest is still inert
   writeAgent(tmpManifest, 'planner', 'opus');
   assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmpManifest }), 'opus');
@@ -197,12 +197,21 @@ try {
   fs.rmSync(tmpBadManifest, { recursive: true, force: true });
 }
 
-// CONTRACTOR: no agent file → DEFAULT fallback must return 'sonnet'.
-const tmpContractorDefault = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-contractor-'));
+// STANDARD-TIER ROLE: no agent file → DEFAULT fallback must return 'sonnet'.
+const tmpStandardDefault = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-standard-'));
 try {
-  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpContractorDefault }), 'sonnet');
+  assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpStandardDefault }), 'sonnet');
 } finally {
-  fs.rmSync(tmpContractorDefault, { recursive: true, force: true });
+  fs.rmSync(tmpStandardDefault, { recursive: true, force: true });
+}
+
+// #816: the RETIRED bookkeeping role is not in DEFAULT_AGENT_MODELS — the resolver must return the
+// empty string (unknown role), not a fabricated tier.
+const tmpRetiredRole = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-retired-'));
+try {
+  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpRetiredRole }), '');
+} finally {
+  fs.rmSync(tmpRetiredRole, { recursive: true, force: true });
 }
 
 // #463 Slice 1 (AC14): reasoning-class floor ENFORCEMENT. The synthesizer (a REASONING_FLOOR_ROLE)

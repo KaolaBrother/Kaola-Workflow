@@ -7468,7 +7468,7 @@ function removeDurableConsentHalt(planContent) {
 // ---------------------------------------------------------------------------
 // runClearHalt (#360) — the script-owned inverse of write-halt. Removes the ledger
 // `consent_halt: pending` marker AND the matching `escalated_to_full` state marker(s) in ONE
-// typed transaction, replacing the prior two-file PROSE lockstep (contractor-driven) that ADR
+// typed transaction, replacing the prior two-file PROSE lockstep (agent-driven) that ADR
 // 0004/0005 eliminated elsewhere. Typed refusal with ZERO mutation when no durable halt is present.
 // ---------------------------------------------------------------------------
 // hasEscalatedMarker (#391a) — true when workflow-state.md carries a durable `escalated_to_full:`

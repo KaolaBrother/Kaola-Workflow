@@ -11,6 +11,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 
 const root = path.resolve(__dirname, '..');
 
@@ -183,15 +184,41 @@ try {
       'install.sh ' + flag + ' must fail with the generic unknown-argument error, got: ' + (threw.stderr || ''));
   }
 
-  // The contractor resolves to the standard tier from the static defaults alone (no manifest).
+  // A standard-tier role resolves from the static defaults alone (no manifest).
   {
-    const h = freshHome('contractor-default'); homes.push(h);
+    const h = freshHome('implementer-default'); homes.push(h);
     runInstall(h, []);
     const resolved = execFileSync('node',
-      [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), 'contractor',
+      [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), 'implementer',
         '--agent-dir', path.join(h, '.claude', 'agents'), '--raw'],
       { cwd: root, encoding: 'utf8' }).trim();
-    assert(resolved === 'sonnet', 'contractor must resolve to sonnet from the static defaults; got ' + resolved);
+    assert(resolved === 'sonnet', 'implementer must resolve to sonnet from the static defaults; got ' + resolved);
+  }
+
+  // #816: the RETIRED bookkeeping role must be swept from a previously-installed box — by the
+  // installer on upgrade (manifest-driven sweep_retired_agents) AND by uninstall (RETIRED_AGENTS).
+  {
+    const h = freshHome('retired-contractor-sweep'); homes.push(h);
+    runInstall(h, []);
+    const agentsDir = path.join(h, '.claude', 'agents');
+    const stale = path.join(agentsDir, 'contractor.md');
+    const manifest = path.join(agentsDir, '.kaola-workflow-agent-manifest');
+    // Simulate a box that installed the role on a PREVIOUS release: the file plus its manifest row.
+    const staleBody = '---\nname: contractor\nmodel: sonnet\n---\n<!--\nkaola-workflow-managed-agent: true\n-->\nbody\n';
+    fs.writeFileSync(stale, staleBody);
+    const sha = crypto.createHash('sha256').update(fs.readFileSync(stale)).digest('hex');
+    fs.appendFileSync(manifest, 'contractor.md\t' + sha + '\n');
+    const upgradeOut2 = String(runInstall(h, []) || '');
+    assert(!fs.existsSync(stale),
+      '#816: install.sh must sweep a previously-installed contractor.md (retired role)');
+    assert(upgradeOut2.includes('Removed retired agent'),
+      '#816: the sweep must name the removal on stdout, got: ' + upgradeOut2);
+    // uninstall path: plant it again (no manifest row needed — RETIRED_AGENTS removes by name).
+    fs.writeFileSync(stale, staleBody);
+    execFileSync('bash', ['uninstall.sh', '--forge=github'],
+      { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert(!fs.existsSync(stale),
+      '#816: uninstall.sh must remove a previously-installed contractor.md (RETIRED_AGENTS)');
   }
 
   // #2: opencode install-time parity — install-opencode.sh seeds the shared

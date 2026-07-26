@@ -755,7 +755,6 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       worktree_removed: 'missing',
       branch_removed: 'kept',
       claim_planner_attested: 'missing',
-      finalize_contractor_attested: 'missing',
       warnings: []
     };
 
@@ -812,7 +811,6 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       worktree_removed: 'missing',
       branch_removed: 'kept',
       claim_planner_attested: 'missing',
-      finalize_contractor_attested: 'missing',
       warnings: []
     };
 
@@ -1434,7 +1432,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       archive: 'closed', roadmap_source_removed: 'absent', roadmap_regenerated: 'skipped',
       remote_issue_closed: 'closed', claim_label_removed: 'removed',
       worktree_removed: 'missing', branch_removed: 'kept',
-      claim_planner_attested: 'missing', finalize_contractor_attested: 'missing', warnings: []
+      claim_planner_attested: 'missing', warnings: []
     };
 
     // Not yet merged — the invariant must fire.
