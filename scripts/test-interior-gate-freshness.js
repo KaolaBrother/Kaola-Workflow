@@ -117,7 +117,7 @@ try {
   git(tmp, ['commit', '-m', 'freeze']);
 
   const writerEvidence = (id, nonce, tag) => 'evidence-binding: ' + id + ' ' + nonce
-    + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+    + '\nRED: ' + tag + ' reproduced\nred_baseline: ' + nonce + '\n';
   const gateEvidence = (id, nonce, dispatch, outcome, extraRows) => [
     'evidence-binding: ' + id + ' ' + nonce,
     'contract_version: 2',
@@ -192,7 +192,7 @@ try {
 
 // ---- shared evidence writers (blocks 3-5) ----
 const writerEvidence = (id, nonce, tag) => 'evidence-binding: ' + id + ' ' + nonce
-  + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+  + '\nRED: ' + tag + ' reproduced\nred_baseline: ' + nonce + '\n';
 const gateEvidence = (id, nonce, dispatch, outcome, extraRows) => [
   'evidence-binding: ' + id + ' ' + nonce,
   'contract_version: 2',

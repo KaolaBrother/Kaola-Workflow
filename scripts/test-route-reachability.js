@@ -1324,6 +1324,56 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
 }
 
+// --- NON-VACUITY FLOOR (manifest-wide) — every marker-led block must carry at least ONE
+//     distinctive token that is not a substring of its own marker.
+//
+//     WHY A FLOOR AND NOT A PER-BLOCK RULE: the #637 lesson was, until now, re-applied by hand,
+//     one bespoke assert per block (the three that follow). A block nobody wrote an assert for
+//     was unguarded — and two such blocks had in fact gone vacuous: `pr-frontier-unit` ('frontier
+//     unit' is a substring of `<!-- PIN: frontier unit -->`) and `pr-gate-instrumentation` (marker
+//     ONLY, zero distinctive tokens). Both passed every check while pinning nothing: the marker's
+//     mere presence satisfied the block even if the prose under it were rewritten to say the
+//     opposite. This floor is the general form, so the class cannot return via a new block.
+//
+//     FLOOR, NOT CEILING: it demands >=1 distinctive token, not that EVERY token be distinctive —
+//     a vacuous token may legitimately ride along when a legacy proof still names it (the T5
+//     SUPERSET-PROOF names the 'frontier unit' literal). The three bespoke asserts below are the
+//     stricter no-vacuous-token-at-all rule and are deliberately KEPT: replacing them with this
+//     weaker floor would be a regression, not a simplification.
+//     FAILS CLOSED: a floor that `continue`s past shapes it does not recognize is itself vacuous.
+//     Three degenerate shapes must RED rather than be skipped: an empty/absent content_tokens array
+//     (demands nothing, and checkManifest's per-token loop over [] is a no-op, so nothing else reds
+//     it either), and a comment-shaped first token that is not a PIN/CARD marker — `<!-- pin: x -->`
+//     (isMarker is case-SENSITIVE) or `<!-- NOTE: ... -->` — which would otherwise slip past both
+//     this floor and the reverse orphan-sentinel that keys on recognized markers.
+//     Blocks legitimately led by a plain content token (9 of the 30 today) are NOT marker-led and
+//     need no distinctive sibling: their first token is itself the distinctive one.
+{
+  const violations = [];
+  for (const b of REQUIRED_BLOCKS) {
+    const toks = b.content_tokens;
+    if (!Array.isArray(toks) || toks.length === 0) {
+      violations.push(b.block_id + ' (no content_tokens — the block demands nothing)');
+      continue;
+    }
+    const first = toks[0];
+    if (/^\s*<!--/.test(String(first)) && !isMarker(first)) {
+      violations.push(b.block_id + ' (comment-shaped first token is not a PIN/CARD marker: '
+        + JSON.stringify(String(first)) + ')');
+      continue;
+    }
+    if (!isMarker(first)) continue;             // content-led block: first token is itself distinctive
+    const marker = norm(first);
+    if (!toks.slice(1).some(t => !marker.includes(norm(t)))) {
+      violations.push(b.block_id + ' (marker-only or substring-only — pins nothing)');
+    }
+  }
+  assert(violations.length === 0,
+    'NON-VACUITY FLOOR: every marker-led block needs >=1 token that is not a substring of its own '
+      + 'marker, every block needs >=1 token, and a comment-shaped first token must be a recognized '
+      + 'PIN/CARD marker; offenders: ' + JSON.stringify(violations));
+}
+
 // --- #634: pr-metric-optimizer-card block sanity — the new block exists, obligates all 6
 //     plan-run surfaces (both/both), and its distinctive tokens are not vacuous substrings of
 //     its own marker (the #637 lesson applied PROACTIVELY, before any bug is ever observed). The

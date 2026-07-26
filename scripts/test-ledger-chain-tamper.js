@@ -329,7 +329,7 @@ function e2eHonestAndTamper() {
     // honest linear advance: record evidence + close writer -> reviewer opens.
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
     cli([adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], tmp,
-      'evidence-binding: writer ' + open1.nonce + '\nRED: writer failed before impl\nGREEN: writer passes after impl\n');
+      'evidence-binding: writer ' + open1.nonce + '\nRED: writer failed before impl\nred_baseline: ' + open1.nonce + '\n');
     const close1 = lastJson(cli([adaptiveNodeScript, 'close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp));
     check(close1.result !== 'refuse' && close1.opened && close1.opened.id === 'reviewer',
       'D3 honest close-and-open-next advances writer->reviewer, got ' + JSON.stringify(close1));

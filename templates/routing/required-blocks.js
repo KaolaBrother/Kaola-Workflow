@@ -68,7 +68,13 @@ const REQUIRED_BLOCKS = [
     topic: 'plan-run',
     runtime_tag: 'both',
     surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: frontier unit -->', 'frontier unit'],
+    // 'frontier unit' alone is a substring of its own marker (self-satisfying — the marker's
+    // continued presence would pass this token even if the pointer paragraph below it were
+    // deleted; kept only because the legacy T5 SUPERSET-PROOF still names it). The pointer path
+    // is the distinctive token: ALL content_tokens are required (AND), so deleting the pointer
+    // paragraph while leaving the marker + legacy literal in place still reds.
+    content_tokens: ['<!-- PIN: frontier unit -->', 'frontier unit',
+      'docs/plan-run-cards/frontier-batch.md'],
   },
   {
     block_id: 'pr-leg-isolation-recipe',
@@ -108,7 +114,11 @@ const REQUIRED_BLOCKS = [
     topic: 'plan-run',
     runtime_tag: 'both',
     surface_type_tag: 'both',
-    content_tokens: ['<!-- PIN: gate-instrumentation-provisioning -->'],
+    // The marker alone is not distinctive — the marker's continued presence would pass this
+    // block even if the interior rule were rewritten to say the opposite. Pin the actual rule.
+    content_tokens: ['<!-- PIN: gate-instrumentation-provisioning -->',
+      'never instructs authoring files — it verifies',
+      "provisions it inside that node's own declared write set"],
   },
   {
     block_id: 'pr-dispatch-card-visibility',

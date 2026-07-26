@@ -6,6 +6,7 @@ AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
 REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "investigator" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "workflow-planner" "synthesizer" "metric-optimizer")
+RETIRED_AGENTS=("contractor")
 
 usage() {
   echo "Usage: ./uninstall.sh [--forge=github|gitlab|gitea|all]"

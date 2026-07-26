@@ -42,7 +42,7 @@ Everything under `.kimi/` is **generated from canonical** by
 | Canonical source | kimi edition output | Notes |
 | ---------------- | ------------------- | ----- |
 | `commands/<file>.md` | `.kimi/skills/<command>/SKILL.md` | Directory-form Skill (5 commands). Kimi auto-registers an activated directory skill as the slash command `/<name>`, so command skills keep their canonical basenames (`/workflow-next` works). Claude install-time `model="{...}"` placeholders and all "pass `model=`" instructions are rewritten to inherit-the-session-model prose; the canonical Path Intent section is stripped (see [Path selection](#path-selection) below). |
-| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (16 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. |
+| `agents/<name>.md` | `.kimi/skills/kaola-role-<name>/SKILL.md` | Role-contract Skill (15 roles). Frontmatter is `name` + `description` only — **no `model:`/`tools:` fields**. Generated reviewers preserve their canonical normalized behavior core and identity; reviewer gate roles additionally carry their schema-2 identity — `behavior_contract_version` / `behavior_contract_hash` preserved from canonical and a fresh `resolved_profile_hash` re-stamped over the final kimi bytes — in a body `<!-- kimi-reviewer-identity -->` comment block, so the frontmatter stays `name` + `description` only. |
 | `hooks/<script>.sh` | `.kimi/hooks/<script>.sh` | The 1 runtime-neutral hook script — payload-adapted at generation time where the Kimi payload field name differs (dispatch-log; see [Hooks](#hooks)). |
 | `hooks/hooks.json` (the mapping) | `.kimi/hooks/kimi-hooks.toml` | The two canonical hook entries re-expressed as a Kimi `[[hooks]]` TOML fragment with a `__KIMI_HOME__` placeholder, merged by the installer into the global Kimi `config.toml` as a managed block (see [Hooks](#hooks)). `hooks.json` itself is Claude-shaped and is never copied. |
 
@@ -154,7 +154,7 @@ surface inherits the canonical repair loop verbatim.
 
 `install-kimi.sh` is a standalone installer — it has its own `--forge` flag and does not run
 through `install.sh --forge`. It deploys the workflow command skills — adapt, finalize, plan-run,
-workflow-init, workflow-next — plus all 16 `kaola-role-*` skills. `copy_skills` is
+workflow-init, workflow-next — plus all 15 `kaola-role-*` skills. `copy_skills` is
 **self-healing**: before re-copying it prunes every kaola-owned skill dir not in that set, so a
 reinstall converges to exactly the workflow skill set on disk. Support scripts come from the
 selected forge's script tree, and the installer fails closed if an allowlisted script is missing
@@ -261,7 +261,7 @@ token anywhere in the generated tree (the kimi twin of the opencode #544 path-le
 ./install-kimi.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-Add `--yes` for non-interactive use. The install deploys the workflow command skills plus all 16
+Add `--yes` for non-interactive use. The install deploys the workflow command skills plus all 15
 `kaola-role-*` skills.
 
 ### Deploy layout — project vs global (scope-dependent)
@@ -332,7 +332,7 @@ opencode precedent).
 The edition is covered by `scripts/test-kimi-edition.js`, which regenerates the tree itself
 (`--write`) before asserting:
 
-- **K1 — count/structure parity:** exactly 5 command skills + 16 `kaola-role-*` skills;
+- **K1 — count/structure parity:** exactly 5 command skills + 15 `kaola-role-*` skills;
   every `SKILL.md` carries `name` + `description`; role skills are named `kaola-role-*`.
 - **K2 — no transform residue:** no `{X_MODEL}` placeholders, no `model="{`, no "MUST pass
   `model=`" prose, no `,,` collapse artifacts; `--runtime kimi` present.

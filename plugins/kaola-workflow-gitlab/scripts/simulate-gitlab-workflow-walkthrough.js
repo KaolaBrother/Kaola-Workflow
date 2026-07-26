@@ -2199,17 +2199,24 @@ function testGitlabBundle424432433NodeSeeding() {
       assert.ok(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
         'gitlab #433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
 
-      // (6c) tdd-guide role stubs present.
+      // (6c) tdd-guide role stubs follow CUSTODY: the seed carries BOTH `RED` and its `red_baseline`
+      // receipt, and must NOT carry `GREEN` — GREEN authority is gate-side, and asserting its ABSENCE
+      // is what keeps the seed from quietly re-acquiring the retired self-grading token.
       assert.ok(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
         'gitlab #433 (6c): tdd-guide stub must contain RED token');
-      assert.ok(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
-        'gitlab #433 (6c): tdd-guide stub must contain GREEN token');
+      assert.ok(/^red_baseline: /m.test(evidenceContent) || /^<!-- red_baseline/.test(evidenceContent),
+        'gitlab #433 (6c): tdd-guide stub must contain the red_baseline receipt token');
+      assert.ok(!/^GREEN\b/m.test(evidenceContent) && !/^<!-- GREEN/m.test(evidenceContent),
+        'gitlab #433 (6c): tdd-guide stub must NOT seed a GREEN token');
 
       // (6d) JSON response carries evidence_file + required_tokens.
       assert.strictEqual(onOut.opened.evidence_file, '.cache/n1.md',
         'gitlab #433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
-      assert.ok(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
-        'gitlab #433 (6d): required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+      assert.ok(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED')
+        && onOut.opened.required_tokens.includes('red_baseline')
+        && !onOut.opened.required_tokens.includes('GREEN'),
+        'gitlab #433 (6d): required_tokens must be the custody set for tdd-guide — RED + red_baseline, no GREEN, got '
+          + JSON.stringify(onOut.opened.required_tokens));
 
       // (6e) Crash-resume: a second open-next must not overwrite the evidence file.
       const contentBefore = fs.readFileSync(evidencePath, 'utf8');

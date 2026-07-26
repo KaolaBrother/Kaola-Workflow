@@ -21,7 +21,7 @@
 #   ./install-kimi.sh --regenerate            # refresh the generated tree from canonical here
 #
 # COMMAND SKILLS: the install deploys the workflow command skills (kaola-workflow-adapt,
-# kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next) plus all 16
+# kaola-workflow-finalize, kaola-workflow-plan-run, workflow-init, workflow-next) plus all 15
 # kaola-role-* skills into the skills/ dir. The generated .kimi/ tree is produced by
 # sync-kimi-edition.js from the canonical sources.
 #
