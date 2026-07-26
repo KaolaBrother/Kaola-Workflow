@@ -27,7 +27,9 @@
 //   C6  evidence shape          — checkEvidenceShape enforces C5: a tdd-guide evidence file with no
 //                                  GREEN closes, one whose red_baseline does not match this open's
 //                                  baseline refuses, and a legacy implementer file carrying the old
-//                                  non_tdd_reason + tier still closes (tolerated on read).
+//                                  non_tdd_reason + tier still closes (tolerated on read). A legacy
+//                                  tdd-guide file is tolerated only on a NONCE-LESS offline read; the
+//                                  same bytes in flight refuse on the missing baseline receipt.
 //   C7  route-findings          — a behavior / coverage / test-defect finding infers
 //                                  fix_role=tdd-guide (the test author owns the oracle); an ordinary
 //                                  finding still routes to implementer and a security finding still
@@ -213,10 +215,18 @@ function plan(rows, metaExtra) {
 // ---------------------------------------------------------------------------
 {
   const legacy = plan([{ id: 'impl', role: 'implementer', ws: 'src/app.js, test/app.test.js' }]);
-  const stamped = legacy.replace('## Meta\n', '## Meta\n') + '\n<!-- plan_hash: ' + pv.computePlanHash(legacy) + ' -->\n';
+  // CONTROL first: this exact plan is one the wall REFUSES at freeze. Without it the resume assertion
+  // could pass on a plan the custody wall never had an opinion about — proving nothing about the
+  // freeze-only boundary.
+  const atFreeze = pv.validatePlan(legacy, { root: repoRoot });
+  assert(atFreeze.result === 'refuse' && hasError(atFreeze, 'test_custody_violation'),
+    'C4-control: the legacy fixture must be a plan the custody wall REFUSES at freeze, got '
+    + JSON.stringify(atFreeze.result) + ' ' + JSON.stringify(atFreeze.errors));
+  const stamped = legacy + '\n<!-- plan_hash: ' + pv.computePlanHash(legacy) + ' -->\n';
   const rv = pv.revalidateForResume(stamped, { root: repoRoot });
-  assert(rv.result !== 'refuse' || !hasError(rv, 'test_custody_violation'),
-    'C4: revalidateForResume must NOT apply the custody wall (a legacy frozen plan still resumes), got ' + JSON.stringify(rv));
+  // Assert the POSITIVE outcome, not the absence of one error code: the same plan RESUMES.
+  assert(rv.ok === true && rv.result === 'pass',
+    'C4: the SAME plan still resumes — revalidateForResume never applies the custody wall, got ' + JSON.stringify(rv));
 }
 
 // ---------------------------------------------------------------------------
@@ -277,9 +287,19 @@ function plan(rows, metaExtra) {
     assert(shape('tdd-guide', 'n1', fullSha, { expectedNonce: NONCE, expectedNodeId: 'n1' }).ok === true,
       'C6-c2: the full baseline sha satisfies red_baseline');
 
-    // C6-d: a LEGACY tdd-guide artifact (no expectedNonce — the offline / pre-rule caller) is exempt.
-    assert(shape('tdd-guide', 'n1', 'RED: x\nGREEN: y\n', {}).ok === true,
-      'C6-d: a legacy tdd-guide artifact read without a nonce is tolerated');
+    // C6-d: the no-expectedNonce escape hatch reaches only a read with NO recorded barrier baseline
+    // (a 3-arg unit caller, an offline read of a never-opened node). It is NOT a grandfather clause
+    // for an in-flight node: an in-flight node always carries this open's nonce, so the receipt check
+    // always runs and the same bytes REFUSE. Both halves are asserted here so the pair cannot drift
+    // into "a legacy artifact always closes".
+    const legacyTdd = 'RED: x\nGREEN: y\n';
+    assert(shape('tdd-guide', 'n1', legacyTdd, {}).ok === true,
+      'C6-d: a legacy tdd-guide artifact read WITHOUT a nonce (offline read) is tolerated');
+    const legacyInFlight = shape('tdd-guide', 'n1', 'evidence-binding: n1 ' + NONCE + '\n' + legacyTdd,
+      { expectedNonce: NONCE, expectedNodeId: 'n1' });
+    assert(legacyInFlight.ok === false && legacyInFlight.missingTokenClass === 'red_baseline',
+      'C6-d2: the SAME legacy artifact IN FLIGHT (this open\'s nonce) refuses on the missing baseline '
+      + 'receipt — the recovery is reopen-node + re-run, not tolerance, got ' + JSON.stringify(legacyInFlight));
 
     // C6-e: a LEGACY implementer artifact carrying the retired non_tdd_reason + an old tier closes.
     const legacyImpl = bind + 'non_tdd_reason: scaffolding\nbuild-green: tsc clean\n';

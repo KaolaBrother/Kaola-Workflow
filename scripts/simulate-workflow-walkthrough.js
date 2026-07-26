@@ -4164,17 +4164,28 @@ function testBundle424432433NodeSeeding() {
       assert(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
         '#433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
 
-      // (6c) tdd-guide role stubs: RED and GREEN must be present as stub keys.
+      // (6c) tdd-guide role stubs follow CUSTODY: the test author proves RED and BINDS it to the
+      // baseline it was captured on, so the seed carries BOTH `RED` and its `red_baseline` receipt.
+      // GREEN is absent by contract — a passing suite is a verdict about the implementation and the
+      // test author is not the grader of the code, so GREEN authority sits gate-side. Asserting its
+      // ABSENCE is what keeps the seed from quietly re-acquiring the retired self-grading token.
       assert(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
         '#433 (6c): tdd-guide evidence stub must contain RED token, got:\n' + evidenceContent);
-      assert(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
-        '#433 (6c): tdd-guide evidence stub must contain GREEN token, got:\n' + evidenceContent);
+      assert(/^red_baseline: /m.test(evidenceContent) || /^<!-- red_baseline/.test(evidenceContent),
+        '#433 (6c): tdd-guide evidence stub must contain the red_baseline receipt token (RED is bound '
+        + 'to the baseline it was captured on, not asserted), got:\n' + evidenceContent);
+      assert(!/^GREEN\b/m.test(evidenceContent) && !/^<!-- GREEN/m.test(evidenceContent),
+        '#433 (6c): tdd-guide evidence stub must NOT seed a GREEN token — GREEN authority is gate-side, '
+        + 'got:\n' + evidenceContent);
 
       // (6d) The JSON response carries evidence_file + required_tokens metadata.
       assert(onOut.opened.evidence_file === '.cache/n1.md',
         '#433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
-      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
-        '#433 (6d): opened.required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED')
+        && onOut.opened.required_tokens.includes('red_baseline')
+        && !onOut.opened.required_tokens.includes('GREEN'),
+      '#433 (6d): opened.required_tokens must be the custody set for tdd-guide — RED + red_baseline, no GREEN, got '
+        + JSON.stringify(onOut.opened.required_tokens));
 
       // (6f) #611 AC2: the dispatch card carries a concrete per-node wait budget (the Codex join
       // protocol's non-interrupt floor) — never left to model improvisation. n1's untiered cell resolves
@@ -15782,9 +15793,41 @@ function testGateEvidenceNonceRotation654() {
 
     const openWriter = json(runNode(adaptiveNodeScript, ['open-next', '--project', project, '--json'], tmp));
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 1;\n');
-    const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+
+    // ---- CUSTODY UPGRADE PATH (the deliberate NON-tolerance). A pre-custody in-flight artifact —
+    //      `RED` plus the retired `GREEN`, no `red_baseline` receipt — must REFUSE at close. An
+    //      in-flight node ALWAYS carries this open's nonce, so the receipt check always runs; there is
+    //      no grandfather clause and that is the point, because closing on a RED nobody can bind to a
+    //      baseline is exactly what the receipt exists to prevent. The escape hatch in
+    //      checkEvidenceShape is a no-expectedNonce OFFLINE read, never a close. Recovery is
+    //      reopen-node + re-run, and the operator hint must SAY so — an operator who is refused
+    //      without being told the recovery will paste a baseline in by hand, which launders the
+    //      receipt back into the self-description it replaced.
+    const legacyRec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
         + '\nRED: writer failed before implementation\nGREEN: writer passes after implementation\n',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
+    });
+    assert(legacyRec.status === 0,
+      'custody: record-evidence stays a verbatim transport for pre-custody bytes: ' + legacyRec.stderr + legacyRec.stdout);
+    const legacyClose = runNode(adaptiveNodeScript, ['close-and-open-next', '--project', project, '--node-id', 'writer', '--json'], tmp);
+    assert(legacyClose.status === 1,
+      'custody: a pre-custody tdd-guide artifact (RED + GREEN, no red_baseline) must REFUSE the close, got exit '
+      + legacyClose.status + '\n' + legacyClose.stdout + legacyClose.stderr);
+    const legacyOut = JSON.parse(legacyClose.stdout);
+    assert(legacyOut.result === 'refuse' && legacyOut.reason === 'evidence_shape_failed'
+      && legacyOut.missingTokenClass === 'red_baseline',
+    'custody: the refusal is typed evidence_shape_failed / missingTokenClass red_baseline, got ' + JSON.stringify(legacyOut));
+    assert(/reopen-node/.test(String(legacyOut.operator_hint || '')),
+      'custody: the operator hint must name the reopen-node recovery for a pre-custody artifact, got '
+      + JSON.stringify(legacyOut.operator_hint));
+    assert(/\| writer \| in_progress \|/.test(fs.readFileSync(planPath, 'utf8')),
+      'custody: the refusal precedes any ledger advance — writer must still be in_progress');
+
+    // ---- the CUSTODY-shaped artifact closes: RED bound to this open's recorded baseline, no GREEN. ----
+    const rec = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
+      cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
+        + '\nRED: writer failed before implementation\nred_baseline: ' + openWriter.nonce + '\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(rec.status === 0, '#654 writer evidence records: ' + rec.stderr + rec.stdout);
@@ -15813,7 +15856,7 @@ function testGateEvidenceNonceRotation654() {
     fs.writeFileSync(path.join(tmp, 'lib', 'impl.js'), 'module.exports = 2;\n');
     const repairedEvidence = spawnSync(process.execPath, [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
       cwd: tmp, encoding: 'utf8', input: 'evidence-binding: writer ' + openWriter.nonce
-        + '\nRED: repair regression reproduced\nGREEN: repair regression passes\n',
+        + '\nRED: repair regression reproduced\nred_baseline: ' + openWriter.nonce + '\n',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV }
     });
     assert(repairedEvidence.status === 0, '#654 repaired writer evidence records');
@@ -15875,7 +15918,7 @@ function testMixedRepairReplayJournal748() {
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
     const writerBody = (nodeId, nonce, tag) => 'evidence-binding: ' + nodeId + ' ' + nonce
-      + '\nRED: ' + tag + ' reproduced\nGREEN: ' + tag + ' passes\n';
+      + '\nRED: ' + tag + ' reproduced\nred_baseline: ' + nonce + '\n';
     const failBody = (nonce, file) => 'evidence-binding: reviewer ' + nonce
       + '\nverdict: fail\nfindings_blocking: 1\n'
       + 'finding: id=F-1 scope=in_scope action=fix status=open severity=high file=' + file + '\n';
@@ -16706,7 +16749,7 @@ function testReviewerContractV2Conformance() {
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
         input: 'evidence-binding: writer ' + openedWriter.nonce
-          + '\nRED: old behavior reproduced\nGREEN: new behavior passes\n',
+          + '\nRED: old behavior reproduced\nred_baseline: ' + openedWriter.nonce + '\n',
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
     assert(writerRecord.status === 0, 'review-v2 writer evidence records: ' + writerRecord.stdout + writerRecord.stderr);
@@ -16784,7 +16827,7 @@ function testReviewerContractV2Conformance() {
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
         input: 'evidence-binding: writer ' + openedWriter.nonce
-          + '\nRED: review regression reproduced\nGREEN: repair passes\n',
+          + '\nRED: review regression reproduced\nred_baseline: ' + openedWriter.nonce + '\n',
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
     assert(repairedWriterRecord.status === 0, 'review-v2 repaired writer evidence records');
@@ -18583,7 +18626,10 @@ function testSerializationInversion760() {
     // back to the parent) — resolveEvidenceCachePath prefers the leg's own copy over the parent's.
     for (const id of ['m1-r1-w1', 'm1-r1-w2']) {
       const evPath = path.join(legRoot(id), 'kaola-workflow', 'issue-760', '.cache', id + '.md');
-      fs.appendFileSync(evPath, '\nRED: a failing test named the shared helper first\nGREEN: the implementation makes it pass\n');
+      // The RED receipt binds to THIS open's recorded baseline. Read the nonce back out of the seeded
+      // line-1 binding instead of restating it, so the fixture cannot drift from what the opener wrote.
+      const legNonce = (fs.readFileSync(evPath, 'utf8').match(/^evidence-binding:[ \t]*\S+[ \t]+(\S+)/) || [])[1];
+      fs.appendFileSync(evPath, '\nRED: a failing test named the shared helper first\nred_baseline: ' + legNonce + '\n');
     }
 
     // ---- #813 (the loophole this fixture used to depend on, now proven CLOSED): a stray TEST file
@@ -22386,7 +22432,7 @@ function testAcceptanceSurfaceEndToEnd() {
       [adaptiveNodeScript, 'record-evidence', '--project', project, '--node-id', 'writer', '--stdin', '--json'], {
         cwd: tmp, encoding: 'utf8',
         input: 'evidence-binding: writer ' + openedWriter.nonce
-          + '\nRED: the placeholder export reproduced\nGREEN: the parsed record is exported\n'
+          + '\nRED: the placeholder export reproduced\nred_baseline: ' + openedWriter.nonce + '\n'
           + 'covers: A1 — the export now returns the parsed record (advisory hint for the judge, never diffed)\n',
         env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', ...GIT_ISOLATION_ENV },
       });
@@ -22427,7 +22473,7 @@ function testAcceptanceSurfaceEndToEnd() {
     const gateNode = nodes.find(n => n.gateClaim && n.gateClaim !== '—');
     const writerEvidence = fs.readFileSync(path.join(projectDir, '.cache', 'writer.md'), 'utf8');
     assert(declaredWrites.includes('lib/impl.js') && validationCommand && gateNode
-      && /^RED:/m.test(writerEvidence) && /^GREEN:/m.test(writerEvidence),
+      && /^RED:/m.test(writerEvidence) && /^red_baseline:/m.test(writerEvidence),
       'acceptance-e2e: the binding SOURCES are the run\'s own frozen declarations and recorded '
         + 'evidence, not test literals');
     const bindings = sinkItems.map(item => ({

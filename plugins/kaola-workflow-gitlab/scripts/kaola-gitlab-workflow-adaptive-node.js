@@ -341,8 +341,21 @@ const OPERATOR_HINT_REGISTRY = {
   // --- evidence (#319/#359/#392) ---
   evidence_absent: (ctx) =>
     'No evidence file for ' + (ctx.nodeId || '<id>') + ' (' + (ctx.role || 'role') + '). Have the role agent write ' + (ctx.evidence_file || '.cache/<node-id>.md') + ' with the required tokens, then re-run record-evidence --verify.',
-  evidence_shape_failed: (ctx) =>
-    'Evidence for ' + (ctx.nodeId || '<id>') + ' is missing a required token' + (ctx.missingTokenClass ? ' (' + ctx.missingTokenClass + ')' : '') + '. Add the missing token(s) — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
+  evidence_shape_failed: (ctx) => {
+    const base = 'Evidence for ' + (ctx.nodeId || '<id>') + ' is missing a required token' + (ctx.missingTokenClass ? ' (' + ctx.missingTokenClass + ')' : '') + '. Add the missing token(s) — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.';
+    // `red_baseline` is the ONE token class the operator must NOT simply paste in. The receipt
+    // asserts the authored tests FAILED on THIS open's baseline; writing it after the fact restates
+    // the self-description the receipt exists to replace. This is exactly the shape a pre-custody
+    // in-flight artifact lands in (RED, no baseline receipt) — and its recovery is a re-run on a
+    // fresh baseline, never an edit of the artifact.
+    if (ctx.missingTokenClass === 'red_baseline') {
+      return base + ' Do NOT paste a baseline in after the fact — a RED nobody ran against this'
+        + ' baseline proves nothing. Re-run the node on a fresh baseline: ' + ADAPTIVE_NODE_SCRIPT
+        + ' reopen-node --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json, re-dispatch the'
+        + ' test author, and have it record `red_baseline:` from the RED run itself.';
+    }
+    return base;
+  },
   evidence_stale: (ctx) =>
     'Evidence for ' + (ctx.nodeId || '<id>') + ' carries a stale evidence-binding nonce (replayed from a prior open). Re-author the evidence with this open\'s nonce — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
   evidence_unbound: (ctx) =>
@@ -2642,9 +2655,17 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
   // name the baseline the failing test was captured on, and the runtime checks it against THIS
   // open's recorded barrier baseline (the nonce is that baseline's 12-char SHA prefix). That turns
   // fail-on-baseline from a self-description into a checkable value, and makes a RED signature
-  // non-transferable across reopens. A legacy artifact still carrying GREEN closes unchanged
-  // (nothing forbids the extra token); a legacy/offline read with no expectedNonce skips the
-  // baseline check entirely, so an in-flight pre-rule artifact is never bricked.
+  // non-transferable across reopens. An EXTRA `GREEN` line is still tolerated (nothing forbids the
+  // retired token), but a legacy artifact carrying ONLY `RED` REFUSES at close: an in-flight node
+  // ALWAYS carries this open's nonce, so the receipt check always runs and a missing `red_baseline`
+  // fails closed (`evidence_shape_failed`, missingTokenClass `red_baseline`). That refusal is the
+  // rule, not a gap — grandfathering would close a node on a RED nobody can bind to a baseline.
+  // The recovery for an in-flight pre-rule artifact is `reopen-node` (fresh baseline) then re-run,
+  // and the operator hint names it. The no-expectedNonce skip reaches only a read with NO recorded
+  // barrier baseline (readNonce found no .cache/barrier-base-<id>) — the 3-arg unit callers and an
+  // offline read of a never-opened node — never a close, which already fails closed on a missing
+  // baseline (`no_barrier_base`). A legacy frozen PLAN is untouched by all of this: the custody wall
+  // is freeze-only, so revalidateForResume still resumes it byte-for-byte.
   if (role === 'tdd-guide') {
     const expectedTokens = ['RED', 'red_baseline'];
     if (!content) {

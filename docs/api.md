@@ -609,8 +609,19 @@ the baseline SHA the failure was captured on, checked by `checkEvidenceShape` ag
 recorded baseline (the nonce is that baseline's 12-character prefix), which makes a RED signature
 non-transferable across reopens. `ROLE_TOKEN_REGISTRY['implementer']` is `['evidence-binding',
 'tests-green|regression-green|build-green|smoke-integration']` — `non_tdd_reason` is retired with the
-dichotomy that justified it. A legacy artifact carrying the old tokens still closes (tolerated on
-read); a legacy/offline read with no expected nonce skips the baseline check entirely.
+dichotomy that justified it.
+
+**What "tolerated on read" does and does not mean.** An **extra** retired token is ignored in both
+directions: a stray `GREEN` on a `tdd-guide` artifact and a stray `non_tdd_reason` on an `implementer`
+artifact change nothing, so a pre-custody `implementer` artifact (which already carried the
+verification-tier token the new contract requires) closes unchanged. A pre-custody `tdd-guide`
+artifact does **not**: an in-flight node always carries this open's nonce, so the `red_baseline` check
+always runs and evidence with `RED` but no baseline receipt refuses with `evidence_shape_failed` /
+`missingTokenClass: red_baseline`. The no-expected-nonce skip reaches only a read with **no recorded
+barrier baseline** (`readNonce` found no `.cache/barrier-base-<node-id>`) — a 3-arg unit caller or an
+offline read of a never-opened node — never a close, which already fails closed on a missing baseline
+(`no_barrier_base`). Recovery for such an in-flight node is `reopen-node` (fresh baseline) then
+re-run, which the refusal's `operator_hint` names.
 
 **Finding routing.** `route-findings` infers `fix_role=tdd-guide` for behaviour / coverage /
 test-defect findings (the test author owns the oracle). Precedence: `security` still wins; then a
