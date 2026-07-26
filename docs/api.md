@@ -1088,8 +1088,10 @@ New READ-ONLY mode of the `record-evidence` subcommand. Verifies on-disk `.cache
 Execution mode — dispatch a role agent versus run the unit inline — is the orchestrator's per-unit
 judgment, not a contract. The optional boolean `--main-session-direct` records that judgment: the
 node's `## Required Agent Compliance` row is written `main-session-direct` instead of the default
-`subagent-invoked`. The non-delegable `finalize` sink is `main-session-direct` unconditionally, with
-or without the flag.
+`subagent-invoked`. The two **non-delegable** roles — the `finalize` sink and a `main-session-gate`
+— are `main-session-direct` unconditionally, with or without the flag: the plan-validator refuses to
+let either carry a model precisely because neither is ever dispatched as a subagent, so recording
+`subagent-invoked` for them would be a false delegation claim.
 
 It is a **record, never a gate**. There is no new reason token, refusal, justifier field, or
 approval attached to it; omitting it on an inline run is untidy bookkeeping, not an error; and the

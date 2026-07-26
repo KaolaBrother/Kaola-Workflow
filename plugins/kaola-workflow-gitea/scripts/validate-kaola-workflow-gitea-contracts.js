@@ -1082,6 +1082,15 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
     assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
     assertIncludes(planRunSurface, 'write-halt --reason consent');
+    // #817: the fence's ROLE LIST is itself the contract — every REVIEW_GATE_ROLES member that
+    // reviews someone else's work must sit inside it. `main-session-gate` is deliberately absent:
+    // it is non-delegable and REQUIRED to run inline, so fencing it would be a contradiction.
+    // Pinning the exact list is bidirectional — dropping a role, or adding `main-session-gate`,
+    // breaks this needle.
+    assertIncludes(planRunSurface, 'For `adversarial-verifier`, `code-reviewer`, and `security-reviewer`,');
+    // #817: the mode-refused-spawn trigger must stay NAMED. Without it a runtime that refuses every
+    // spawn is reclassified as ordinary judged-inline and the prominent run-start notice never fires.
+    assertIncludes(planRunSurface, 'the runtime mode-refuses the spawn');
   }
   // #451/#582: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the
   // per-node tier maps to per-spawn reasoning-effort on the dispatch descriptor, and unproven

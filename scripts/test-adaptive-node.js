@@ -5702,6 +5702,172 @@ scenario(() => {
 });
 
 // ---------------------------------------------------------------------------
+// T14e (#817 repair): the two NON-DELEGABLE roles record `main-session-direct`
+// UNCONDITIONALLY — with NO `--main-session-direct` flag anywhere in the call.
+// `finalize` already did. `main-session-gate` did NOT, so a gate node defaulted to
+// `subagent-invoked` — a false delegation claim on a role the plan-validator refuses
+// to let carry a model precisely because "it is never dispatched as a subagent", and
+// which the plan-run surfaces call non-delegable. Both roles are pinned in ONE loop
+// so neither can silently regress alone.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const cases = [
+    {
+      id: 'done', role: 'finalize',
+      nodes: [
+        '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+        '| review | code-reviewer | impl-core | — | 1 | sequence |',
+        '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+      ],
+      ledger: ['| impl-core | complete | |', '| review | complete | |', '| done | in_progress | |'],
+      evidence: 'finalize bookkeeping: docs + state recorded.',
+    },
+    {
+      id: 'gate', role: 'main-session-gate',
+      nodes: [
+        '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+        '| gate | main-session-gate | impl-core | — | 1 | sequence |',
+        '| done | finalize | gate | CHANGELOG.md | 1 | sequence |',
+      ],
+      ledger: ['| impl-core | complete | |', '| gate | in_progress | |', '| done | pending | |'],
+      evidence: 'verdict: pass\nfindings_blocking: 0\ninstrumentation: none\n',
+    },
+  ];
+
+  for (const c of cases) {
+    let planContent = makePlan(c.ledger, c.nodes);
+    const written = {};
+    const evidencePath = '/fake/kaola-workflow/test-project/.cache/' + c.id + '.md';
+
+    const result = runCloseAndOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project',
+      nodeId: c.id,
+      // DELIBERATELY no mainSessionDirect — these two roles must not need the flag.
+      shell: (scriptPath, args) => {
+        const base = path.basename(scriptPath);
+        const argsArr = args || [];
+        if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+          return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: c.id,
+            overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+        }
+        if (base === 'kaola-workflow-next-action.js') {
+          return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+        }
+        return { exitCode: 1 };
+      },
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return planContent;
+        if (fpath.endsWith('workflow-state.md')) return makeState();
+        if (fpath === evidencePath) return c.evidence;
+        throw new Error('ENOENT: ' + fpath);
+      },
+      writeFile: (fpath, content) => {
+        written[fpath] = content;
+        if (fpath.endsWith('workflow-plan.md')) planContent = content;
+      },
+      cacheExists: (fpath) => fpath === evidencePath,
+    });
+
+    assert(result.result === 'ok',
+      'T14e: the non-delegable ' + c.role + ' node closes ok, got ' + JSON.stringify(result));
+    const plan = written['/fake/kaola-workflow/test-project/workflow-plan.md'];
+    assert(plan !== undefined, 'T14e: ' + c.role + ' close writes the plan');
+    assert(plan.includes('| ' + c.role + ' (' + c.id + ') | main-session-direct |'),
+      'T14e: ' + c.role + ' is non-delegable — it records main-session-direct with NO flag passed');
+    assert(!plan.includes('| ' + c.role + ' (' + c.id + ') | subagent-invoked'),
+      'T14e: ' + c.role + ' never falsely certifies a delegation that cannot happen');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T14f (#817 repair): pin the `--main-session-direct` ARGV SURFACE. T14d drives the
+// close functions in-process, so the literal flag string never crossed the CLI parse
+// — replacing `args.includes('--main-session-direct')` with `false` in either
+// subcommand branch broke the flag with the whole suite still green. This drives the
+// REAL subprocess for BOTH close subcommands, twice each on fresh fixtures (with and
+// without the flag), and asserts the RECORDED compliance differs. Bidirectional: a
+// parse forced to false reds the with-flag half; one forced to true reds the other.
+// ---------------------------------------------------------------------------
+scenario(() => {
+  const { execFileSync: exec817 } = require('child_process');
+  const NODE_CLI_817 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_817 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  // Build a fresh frozen fixture, open `impl` through the real CLI, record its bound
+  // evidence, then close it through the real CLI with `extraCloseArgs`. Returns the
+  // compliance status the close actually WROTE to the plan.
+  const closeViaCli = (closeSub, openSub, extraCloseArgs) => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-817-argv-'));
+    try {
+      const project = 'test-project';
+      const projDir = path.join(repoRoot, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| impl     | tdd-guide     | —      | scripts/a.js | 1 | sequence |',
+        '| review   | code-reviewer | impl   | —            | 1 | sequence |',
+        '| finalize | finalize      | review | —            | 1 | sequence |', '',
+        '## Design', '',
+        'Decompose: impl builds scripts/a.js; review gates; finalize sinks. sequence impl→review: '
+          + 'S1 — review consumes impl\'s change. Done: validation passes and review clears.', '',
+        '## Node Ledger', '', '| id | status |', '| --- | --- |',
+        '| impl | pending |', '| review | pending |', '| finalize | pending |', '',
+      ].join('\n') + '\n');
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (a) => exec817('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      freezeLegacyFixture(exec817, 'node', VALIDATOR_817, planPath, { cwd: repoRoot, stdio: 'pipe' });
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']); g(['commit', '-m', 'seed']);
+
+      const run = (args) => {
+        let out = {}; let exit = 0;
+        try { out = JSON.parse(exec817('node', [NODE_CLI_817, ...args], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); }
+        catch (err) { exit = (err.status == null) ? 1 : err.status; try { out = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+        return { out, exit };
+      };
+
+      const opened = run([openSub, '--project', project, '--json']);
+      const openedList = Array.isArray(opened.out.opened) ? opened.out.opened
+        : (opened.out.opened ? [Object.assign({ nonce: opened.out.nonce }, opened.out.opened)] : []);
+      const impl = openedList.find(n => n && n.id === 'impl');
+      assert(impl, 'T14f: ' + openSub + ' opens impl, got ' + JSON.stringify(opened.out));
+      fs.writeFileSync(path.join(projDir, '.cache', 'impl.md'),
+        'evidence-binding: impl ' + impl.nonce
+        + '\nRED: impl failed before implementation\nGREEN: impl passes after implementation\n');
+
+      const closed = run([closeSub, '--project', project, '--node-id', 'impl', '--json', ...extraCloseArgs]);
+      const finalPlan = fs.readFileSync(planPath, 'utf8');
+      const row = finalPlan.match(/^\|\s*tdd-guide \(impl\)\s*\|\s*([a-z-]+)\s*\|/m);
+      return { closed, status: row ? row[1] : null };
+    } finally { try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch (_) {} }
+  };
+
+  for (const [closeSub, openSub] of [['close-node', 'open-ready'], ['close-and-open-next', 'open-next']]) {
+    const withFlag = closeViaCli(closeSub, openSub, ['--main-session-direct']);
+    const without = closeViaCli(closeSub, openSub, []);
+
+    assert(withFlag.closed.out.result === 'ok',
+      'T14f: real `' + closeSub + ' --main-session-direct` closes ok, got ' + JSON.stringify(withFlag.closed.out));
+    assert(without.closed.out.result === 'ok',
+      'T14f: real `' + closeSub + '` closes ok, got ' + JSON.stringify(without.closed.out));
+    assert(withFlag.status === 'main-session-direct',
+      'T14f: `' + closeSub + '` ARGV parse honours --main-session-direct, recorded ' + withFlag.status);
+    assert(without.status === 'subagent-invoked',
+      'T14f: `' + closeSub + '` without the flag still records subagent-invoked, recorded ' + without.status);
+    assert(withFlag.status !== without.status,
+      'T14f (mutation proof): the flag CHANGES the recorded compliance across the `' + closeSub + '` CLI boundary');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // T15: runCloseAndOpenNext — barrier exit1 → refuse, NO close/advance
 // ---------------------------------------------------------------------------
 scenario(() => {

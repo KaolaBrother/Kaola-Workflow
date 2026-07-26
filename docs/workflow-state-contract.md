@@ -665,9 +665,12 @@ non-Codex-role workflow gates such as advisor review, final validation,
 documentation docking, roadmap refresh, archive, and final commit.
 
 **Adaptive inline rows — `main-session-direct` (issues #338, #817).** The adaptive plan's
-mandatory `finalize` DAG sink node is, by the plan-run contract, executed by the main session
-directly (no `Agent()` dispatch), so its Required Agent Compliance row always carries the status
-`main-session-direct`. Execution mode for every OTHER node is the orchestrator's per-unit
+mandatory `finalize` DAG sink node and any `main-session-gate` node are, by the plan-run contract,
+NON-DELEGABLE — executed by the main session directly (no `Agent()` dispatch) — so their Required
+Agent Compliance rows always carry the status `main-session-direct`, flag or no flag. Recording
+either as `subagent-invoked` would be a false delegation claim, which is why the plan-validator
+also refuses to let either role declare a model. Execution mode for every OTHER node is the
+orchestrator's per-unit
 judgment, and the same status records it: passing `--main-session-direct` to `close-node` /
 `close-and-open-next` writes `main-session-direct` for that node instead of the default
 `subagent-invoked`. The flag is a **record, never a gate** — nothing validates, justifies, or

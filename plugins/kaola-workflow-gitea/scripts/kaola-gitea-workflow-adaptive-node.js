@@ -2334,13 +2334,16 @@ function addCloseCompliance(planContent, nodeId, role, evidenceContent, barrierM
     ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
   if (barrierMarker) evidenceSummary += '; barrier: ' + barrierMarker;
   // Execution mode is the orchestrator's per-unit judgment, so the row records what actually ran
-  // it: `main-session-direct` for the non-delegable `finalize` sink, and for ANY node the caller
-  // says it ran inline (`--main-session-direct`). A record, never a gate — the status is already in
-  // the validator's accepted vocabulary, nothing refuses on it, and the fail-closed anchors (the
-  // seeded evidence-binding nonce, `record-evidence --verify`, the exact-path write-set barrier)
-  // are author-agnostic and bind identically either way. Absent flag ⇒ `subagent-invoked`.
-  const complianceStatus = (role === 'finalize' || mainSessionDirect === true)
-    ? 'main-session-direct' : 'subagent-invoked';
+  // it: `main-session-direct` for the two NON-DELEGABLE roles — the `finalize` sink and a
+  // `main-session-gate` (the validator refuses a model on either; neither is ever dispatched as a
+  // subagent, so `subagent-invoked` would be a false delegation claim on a GATE) — and for ANY node
+  // the caller says it ran inline (`--main-session-direct`). A record, never a gate — the status is
+  // already in the validator's accepted vocabulary, nothing refuses on it, and the fail-closed
+  // anchors (the seeded evidence-binding nonce, `record-evidence --verify`, the exact-path write-set
+  // barrier) are author-agnostic and bind identically either way. Absent flag ⇒ `subagent-invoked`.
+  const complianceStatus =
+    (role === 'finalize' || role === 'main-session-gate' || mainSessionDirect === true)
+      ? 'main-session-direct' : 'subagent-invoked';
 
   // Schema-2 plans pre-seed the exact one-row-per-node compliance set at
   // freeze time.  Presence is therefore not proof of completion: advance the
